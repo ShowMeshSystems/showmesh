@@ -32,6 +32,13 @@ type ConfigAudioSettingsPayload struct {
 	// not measurements; see config.AudioSettingsPayload.
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
+
+	// MultisyncFallbackWindowMs is also read by the coordinator only
+	// (ADR-051 decision 4): after dispatching an activation, how long it
+	// waits from the FPP entry observation for a node's own evidence
+	// that a MultiSync START packet already started that cue's audio
+	// before it dispatches with no scheduled instant instead.
+	MultisyncFallbackWindowMs int `json:"multisyncFallbackWindowMs"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

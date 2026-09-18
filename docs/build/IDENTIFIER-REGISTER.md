@@ -1040,6 +1040,11 @@ rest reserved rather than released.
 | `audio_session.ltc.claim.state` | shipped | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
 | `audio_session.ltc.claim.reason` | shipped | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
 | `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+| `audio_session.start.trigger` | shipped | ADR-051 decision 6 (`multisync` or `coordinator`: how this session started) |
+| `audio_session.start.trigger_sequence_filename` | shipped | ADR-051 decision 6 (the FPP sequence filename a MultiSync START answered; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.trigger_arrival_ns` | shipped | ADR-051 decision 6 (the MultiSync START packet's arrival on the node's media clock; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.lead_ms` | shipped | ADR-051 decision 6 (the fixed lead applied after arrival; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.prepared_late` | shipped | ADR-051 decision 6 (true when prepare ran on the OPEN packet instead of ahead of time) |
 
 **A refused LTC claim's own shape, 2026-08-28.** The session-level pair
 above ships; `node.audio.ltc.owner_session_id` stays reserved. A session
@@ -1382,7 +1387,8 @@ The store schema version, bumped by migrations in
 | v36 | shipped | cue-catalog deploy operator override (SM-632): `node_cue_catalog_override`, one row per node recording an operator's accepted H0.5 exclusive-claim conflict, scoped to the revision it was accepted for |
 | v37 | unallocated | free |
 | v38 | shipped | PCM show audio (owner ruling 2026-09-18): adds `audio_renditions`, one row per original audio asset content hash recording its 48kHz/16-bit/stereo WAV rendition status (rendering/ready/failed) and, once ready, the rendition's own content hash, size, duration, and format string (`audio_renditions.go`'s own doc comment). A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no existing table is touched, and an audio asset with no row yet simply has no rendition, which the expected-set computation treats as "keep naming the original" rather than an error |
-| v39+ | unallocated | free |
+| v39 | shipped | ADR-051 decision 4: backfills audio.settings' `multisyncFallbackWindowMs` key into every stored revision written before it was required (`migrateV39AudioSettingsBackfillMultisyncFallbackWindow`'s own doc comment, `migration_v39.go`), the same defect class v20/v34 already fix for earlier fields |
+| v40+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

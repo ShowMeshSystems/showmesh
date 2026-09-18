@@ -308,6 +308,23 @@ const (
 	// tick's own poll is genuine evidence about staleness even when the
 	// underlying session data it describes is not.
 	SignalSessionStale observation.SignalID = "audio_session.stale"
+
+	// SignalSessionStartTrigger, SignalSessionTriggerSequenceFilename,
+	// SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs and
+	// SignalSessionPreparedLate are ADR-051 decision 6's own "every start
+	// records how it started": "multisync" or "coordinator", the FPP
+	// sequence filename a MultiSync START answered (multisync only), that
+	// packet's arrival on the node's own media clock (multisync only), the
+	// fixed lead applied after it (multisync only), and whether prepare ran
+	// on the OPEN packet instead of ahead of time. All five are
+	// [observation.StateNotCollected], never a fabricated zero or empty
+	// string, whenever the session has not started or the node's own build
+	// predates this reporting.
+	SignalSessionStartTrigger            observation.SignalID = "audio_session.start.trigger"
+	SignalSessionTriggerSequenceFilename observation.SignalID = "audio_session.start.trigger_sequence_filename"
+	SignalSessionTriggerArrivalNs        observation.SignalID = "audio_session.start.trigger_arrival_ns"
+	SignalSessionStartLeadMs             observation.SignalID = "audio_session.start.lead_ms"
+	SignalSessionPreparedLate            observation.SignalID = "audio_session.start.prepared_late"
 )
 
 // SessionSignalIDs is every audio_session.* signal this package ever
@@ -339,6 +356,11 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
 	SignalSessionStale,
+	SignalSessionStartTrigger,
+	SignalSessionTriggerSequenceFilename,
+	SignalSessionTriggerArrivalNs,
+	SignalSessionStartLeadMs,
+	SignalSessionPreparedLate,
 }
 
 // StateUsable and StateUnavailable are the two values SignalEngineState,

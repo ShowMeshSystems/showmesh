@@ -775,6 +775,34 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	// (the signals above) is not.
 	obs = append(obs, buildSessionValue(res, source, SignalSessionStale, sess.Stale, observedAt, rep))
 
+	if sess.StartTrigger != "" {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionStartTrigger, sess.StartTrigger, sessionAt, rep))
+		if sess.StartTrigger == "multisync" {
+			obs = append(obs,
+				buildSessionValue(res, source, SignalSessionTriggerSequenceFilename, sess.TriggerSequenceFilename, sessionAt, rep),
+				buildSessionValue(res, source, SignalSessionTriggerArrivalNs, sess.TriggerArrivalNs, sessionAt, rep),
+				buildSessionValue(res, source, SignalSessionStartLeadMs, int64(sess.StartLeadMs), sessionAt, rep),
+			)
+		} else {
+			reason := "this session did not start from a MultiSync START packet"
+			obs = append(obs,
+				notCollected(res, SignalSessionTriggerSequenceFilename, source, reason, rep.receivedAt),
+				notCollected(res, SignalSessionTriggerArrivalNs, source, reason, rep.receivedAt),
+				notCollected(res, SignalSessionStartLeadMs, source, reason, rep.receivedAt),
+			)
+		}
+		obs = append(obs, buildSessionValue(res, source, SignalSessionPreparedLate, sess.PreparedLate, sessionAt, rep))
+	} else {
+		reason := "this session has not started, or this node's build does not report how it started"
+		obs = append(obs,
+			notCollected(res, SignalSessionStartTrigger, source, reason, rep.receivedAt),
+			notCollected(res, SignalSessionTriggerSequenceFilename, source, reason, rep.receivedAt),
+			notCollected(res, SignalSessionTriggerArrivalNs, source, reason, rep.receivedAt),
+			notCollected(res, SignalSessionStartLeadMs, source, reason, rep.receivedAt),
+			notCollected(res, SignalSessionPreparedLate, source, reason, rep.receivedAt),
+		)
+	}
+
 	return obs
 }
 

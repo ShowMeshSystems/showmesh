@@ -14552,11 +14552,18 @@ components:
         DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to
         a node's completed preroll. Together they place a start three
         seconds after the last target reports ready.
+        `multisyncFallbackWindowMs` is also read by the coordinator only
+        (ADR-051 decision 4): after dispatching an activation, how long it
+        waits from the FPP entry observation for a node's own evidence
+        that a MultiSync START packet already started that cue's audio
+        before it dispatches the activation with no scheduled instant
+        instead (start on arrival).
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
          defaultMaxBackgroundGainDb, duckTargetGainDb, duckFadeDurationMs,
          duckRestoreFadeDurationMs, ltcFrameRate, ltcDefaultStartOffset,
-         scheduledStartDeliveryBoundMs, scheduledStartMarginMs]
+         scheduledStartDeliveryBoundMs, scheduledStartMarginMs,
+         multisyncFallbackWindowMs]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -14617,6 +14624,17 @@ components:
             Read by the coordinator, not by a node. Deliberate slack held
             back beyond scheduledStartDeliveryBoundMs. Stays a judgement
             even once the bound is measured. The bounds are a typo guard.
+        multisyncFallbackWindowMs:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: >-
+            Read by the coordinator, not by a node. How long, after
+            dispatching an activation, it waits from the FPP entry
+            observation for a node's own evidence that a MultiSync START
+            packet already started that cue's audio, before dispatching
+            with no scheduled instant instead (start on arrival). The
+            bounds are a typo guard.
     AudioSettingsConfigResponse:
       type: object
       description: >-
@@ -16192,6 +16210,31 @@ components:
         unalignedReason:
           type: string
           description: Set only when this node confirmed but missed the shared start instant and started on arrival instead.
+        startTrigger:
+          type: string
+          enum: ["multisync", "coordinator"]
+          description: >-
+            ADR-051 decision 6. Present only when this activation had an
+            audio output and no ADR-049 shared start instant was ever
+            attempted (a Cue reaching one node, the ordinary case).
+            "multisync" when the coordinator's own evidence showed a
+            MultiSync START packet already started this Cue's audio
+            before cue.activate was dispatched; "coordinator" when the
+            fallback window elapsed first.
+        triggerSequenceFilename:
+          type: string
+          description: The FPP sequence filename a MultiSync START answered. Present only alongside startTrigger "multisync".
+        triggerArrivalNs:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The MultiSync START packet's arrival on the node's own media clock. Present only alongside startTrigger "multisync".
+        startLeadMs:
+          type: integer
+          description: The fixed lead applied after arrival before the first sample. Present only alongside startTrigger "multisync".
+        preparedLate:
+          type: boolean
+          description: True when this node's prepare ran on the OPEN packet instead of ahead of time. Present alongside either startTrigger value.
     MacroRunsListResponse:
       type: object
       description: The body of GET /macro-runs.

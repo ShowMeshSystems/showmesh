@@ -1427,6 +1427,17 @@ type AudioSessionReport struct {
 	// time and is nil whenever PositionKnown is false. Nil only for a
 	// session that has never produced one successful snapshot.
 	CollectedAt *time.Time `json:"collectedAt"`
+
+	// StartTrigger names what started this session: "multisync" or "coordinator".
+	StartTrigger string `json:"startTrigger,omitempty"`
+	// TriggerSequenceFilename is the FPP sequence filename a MultiSync start answered.
+	TriggerSequenceFilename string `json:"triggerSequenceFilename,omitempty"`
+	// TriggerArrivalNs is the START packet arrival on this node's media clock.
+	TriggerArrivalNs int64 `json:"triggerArrivalNs,omitempty"`
+	// StartLeadMs is the fixed lead applied after arrival before the first sample.
+	StartLeadMs int `json:"startLeadMs,omitempty"`
+	// PreparedLate is true when prepare ran on the OPEN packet instead of ahead.
+	PreparedLate bool `json:"preparedLate,omitempty"`
 }
 
 // AudioPayload is the payload of the showmesh.node.audio/v1 schema,

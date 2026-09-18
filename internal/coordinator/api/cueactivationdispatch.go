@@ -153,6 +153,23 @@ type cueActivationDispatchOutcome struct {
 	// startUnalignedOnArrival fallback). Empty on every other outcome.
 	UnalignedReason string
 
+	// StartTrigger, TriggerSequenceFilename, TriggerArrivalNs, StartLeadMs
+	// and PreparedLate are ADR-051 decision 6's own "every start records
+	// how it started" — this coordinator's OWN evidence, gathered by
+	// [handlers.waitForMultiSyncStart] against nodeID's audio session
+	// observations before dispatch, for an audio-bearing activation only.
+	// StartTrigger is "multisync" or "coordinator"; the other four are
+	// meaningful only alongside "multisync" (TriggerSequenceFilename,
+	// TriggerArrivalNs, StartLeadMs are always their zero value alongside
+	// "coordinator" — PreparedLate is real either way). StartTrigger is
+	// empty for a render-only activation, which this bookkeeping never
+	// runs for at all.
+	StartTrigger            string
+	TriggerSequenceFilename string
+	TriggerArrivalNs        int64
+	StartLeadMs             int
+	PreparedLate            bool
+
 	Err error
 }
 
@@ -256,6 +273,38 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	if !ok {
 		h.writeCueActivationRefusalAudit(ctx, now, nodeID, act, issuer, refusalOutcome, refusalReason)
 		return cueActivationDispatchOutcome{NodeID: nodeID, AuthorizeOutcome: refusalOutcome, AuthorizeReason: refusalReason, RefusedCueOutputs: cueOutputs}
+	}
+
+	// ADR-051 decision 4's own fallback timer, only for an audio-bearing
+	// activation with no ADR-049 shared start instant already chosen
+	// (act.ScheduledAtNs != nil means cuefire.go's own direct-fire route
+	// already ran [handlers.scheduleCueActivations] before this call, and
+	// that mechanism's own verdict governs — this fallback is decision 4's
+	// own narrowing of decisions 3/6 to the case where no shared instant
+	// was ever attempted, never a second, competing answer for one that
+	// was), and only for the FIRST tick that ever reaches this point for
+	// act.ActivationID: peeking the commands table here, before the wait,
+	// means a repeat tick over an already-dispatched activation never pays
+	// this wait a second time — it falls straight through to the identical
+	// "already dispatched" replay path InsertCommand's own conflict
+	// handles below, exactly as it always has.
+	var startEvidence multiSyncStartEvidence
+	if cueOutputs.Audio != nil && act.ScheduledAtNs == nil {
+		if existing, peekErr := h.deps.Commands.GetCommandByIdempotencyKey(ctx, act.ActivationID); peekErr == nil {
+			replayed := cueActivationOutcomeFromRecord(nodeID, existing)
+			replayed.RefusedCueOutputs = cueOutputs
+			return replayed
+		} else if !errors.Is(peekErr, store.ErrCommandNotFound) {
+			return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("look up cue.activate for node %q by idempotency key: %w", nodeID, peekErr)}
+		}
+
+		window := h.multiSyncFallbackWindow(ctx)
+		startEvidence = h.waitForMultiSyncStart(ctx, nodeID, now, window)
+		if startEvidence.Triggered {
+			act.UnalignedReason = ""
+		} else {
+			act.UnalignedReason = "no MultiSync START packet arrived within the fallback window"
+		}
 	}
 
 	raw, err := json.Marshal(act)
@@ -402,8 +451,13 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 
 	nodeOutcome := cueActivationNodeOutcomeFromResult(res)
 	nodeUnalignedReason := cueActivationNodeUnalignedReasonFromResult(res)
+	startTrigger := multiSyncStartTriggerLabel(act, cueOutputs, startEvidence)
 	resolvedAt := h.now()
-	resultJSON, _ := json.Marshal(cueActivationResultPayload{Outcome: res.Outcome, Reason: res.Reason, NodeOutcome: nodeOutcome, UnalignedReason: nodeUnalignedReason})
+	resultJSON, _ := json.Marshal(cueActivationResultPayload{
+		Outcome: res.Outcome, Reason: res.Reason, NodeOutcome: nodeOutcome, UnalignedReason: nodeUnalignedReason,
+		StartTrigger: startTrigger, TriggerSequenceFilename: startEvidence.TriggerSequenceFilename,
+		TriggerArrivalNs: startEvidence.TriggerArrivalNs, StartLeadMs: startEvidence.StartLeadMs, PreparedLate: startEvidence.PreparedLate,
+	})
 	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
 		DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: strPtr(res.Outcome), OutcomeReason: strPtr(res.Reason),
@@ -423,7 +477,27 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	return cueActivationDispatchOutcome{
 		NodeID: nodeID, Dispatched: true, Confirmed: confirmed, NodeOutcome: nodeOutcome,
 		UnalignedReason: nodeUnalignedReason, RefusedCueOutputs: cueOutputs,
+		StartTrigger: startTrigger, TriggerSequenceFilename: startEvidence.TriggerSequenceFilename,
+		TriggerArrivalNs: startEvidence.TriggerArrivalNs, StartLeadMs: startEvidence.StartLeadMs, PreparedLate: startEvidence.PreparedLate,
 	}
+}
+
+// multiSyncStartTriggerLabel is ADR-051 decision 6's own "multisync" or
+// "coordinator" label for one activation's outcome: empty for an
+// activation with no audio output, or one that already carries an
+// ADR-049 shared start instant (cuefire.go's own direct-fire route ran
+// [handlers.scheduleCueActivations] before this call, a different, older
+// reporting concept this label never speaks for), "multisync" when
+// [handlers.waitForMultiSyncStart] found matching evidence before
+// dispatch, "coordinator" otherwise.
+func multiSyncStartTriggerLabel(act cueactivation.Activation, cueOutputs cuecatalog.Outputs, ev multiSyncStartEvidence) string {
+	if cueOutputs.Audio == nil || act.ScheduledAtNs != nil {
+		return ""
+	}
+	if ev.Triggered {
+		return multiSyncStartTriggerValue
+	}
+	return "coordinator"
 }
 
 // cueActivationResultPayload is the JSON this file persists into
@@ -435,6 +509,18 @@ type cueActivationResultPayload struct {
 	Reason          string `json:"reason,omitempty"`
 	NodeOutcome     string `json:"nodeOutcome,omitempty"`
 	UnalignedReason string `json:"unalignedReason,omitempty"`
+
+	// StartTrigger, TriggerSequenceFilename, TriggerArrivalNs, StartLeadMs
+	// and PreparedLate are ADR-051 decision 6's own reporting fields — see
+	// [cueActivationDispatchOutcome]'s identical fields for what each one
+	// means. Persisted here so a replayed tick answers with the SAME
+	// evidence the first tick recorded, never a fresh (and possibly
+	// different) read of the node's current session state.
+	StartTrigger            string `json:"startTrigger,omitempty"`
+	TriggerSequenceFilename string `json:"triggerSequenceFilename,omitempty"`
+	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
+	StartLeadMs             int    `json:"startLeadMs,omitempty"`
+	PreparedLate            bool   `json:"preparedLate,omitempty"`
 }
 
 // cueActivationResultCorrelates mirrors cueCatalogDeployResultCorrelates
@@ -506,6 +592,8 @@ func cueActivationOutcomeFromRecord(nodeID string, existing store.CommandRecord)
 	return cueActivationDispatchOutcome{
 		NodeID: nodeID, Dispatched: existing.DispatchedAt != nil, Confirmed: confirmed, NodeOutcome: res.NodeOutcome,
 		UnalignedReason: res.UnalignedReason,
+		StartTrigger:    res.StartTrigger, TriggerSequenceFilename: res.TriggerSequenceFilename,
+		TriggerArrivalNs: res.TriggerArrivalNs, StartLeadMs: res.StartLeadMs, PreparedLate: res.PreparedLate,
 	}
 }
 

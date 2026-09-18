@@ -203,6 +203,43 @@ func TestReportCueActivateResponsePrintsUnalignedReason(t *testing.T) {
 	}
 }
 
+// TestReportCueActivateResponsePrintsMultiSyncStartLine proves ADR-051
+// decision 6's own operator copy: a node started by its own MultiSync
+// handling prints "Started by MultiSync" with the reported lead.
+func TestReportCueActivateResponsePrintsMultiSyncStartLine(t *testing.T) {
+	resp := cueActivateResponse{
+		CueID: "thriller", Aligned: true,
+		Nodes: []cueActivationNodeOutcome{
+			{NodeID: "audio-01", Dispatched: true, Confirmed: true, Outcome: "confirmed", StartTrigger: "multisync", StartLeadMs: 100},
+		},
+	}
+	var stdout bytes.Buffer
+	reportCueActivateResponse(&stdout, resp)
+	got := stdout.String()
+	if !strings.Contains(got, "Started by MultiSync, 100 ms lead") {
+		t.Fatalf("output = %q, want the MultiSync start line naming the lead", got)
+	}
+}
+
+// TestReportCueActivateResponsePrintsCoordinatorFallbackStartLine proves
+// the complementary fallback case: a node started by the coordinator's
+// own dispatch, after no MultiSync packet arrived, prints the fallback
+// line naming that fact.
+func TestReportCueActivateResponsePrintsCoordinatorFallbackStartLine(t *testing.T) {
+	resp := cueActivateResponse{
+		CueID: "thriller", Aligned: true,
+		Nodes: []cueActivationNodeOutcome{
+			{NodeID: "audio-01", Dispatched: true, Confirmed: true, Outcome: "confirmed", StartTrigger: "coordinator"},
+		},
+	}
+	var stdout bytes.Buffer
+	reportCueActivateResponse(&stdout, resp)
+	got := stdout.String()
+	if !strings.Contains(got, "Started by coordinator (fallback: no MultiSync packet)") {
+		t.Fatalf("output = %q, want the coordinator fallback start line", got)
+	}
+}
+
 // TestCmdCueUnknownSubcommandIsUsageError matches
 // TestCmdSurfaceUnknownSubcommandIsUsageError (cmd_surface_test.go).
 func TestCmdCueUnknownSubcommandIsUsageError(t *testing.T) {

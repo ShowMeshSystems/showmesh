@@ -913,10 +913,27 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
         <p key={n.nodeId} className="sm-small">
           <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
           {n.outcomeReason !== undefined && n.outcomeReason !== '' ? `: ${n.outcomeReason}` : ''}
+          {describeStartTrigger(n) !== null ? ` ${describeStartTrigger(n)}` : ''}
         </p>
       ))}
     </div>
   )
+}
+
+/**
+ * ADR-051 decision 6's own operator copy for one node's start: fact
+ * first, then the action, matching the copy standard. Null when the node
+ * carries no startTrigger at all (a render-only cue, or one that used the
+ * shared start instant instead).
+ */
+function describeStartTrigger(n: CueActivationNodeOutcome): string | null {
+  if (n.startTrigger === 'multisync') {
+    return `Started by MultiSync, ${n.startLeadMs ?? 0} ms lead.`
+  }
+  if (n.startTrigger === 'coordinator') {
+    return 'Started by coordinator (fallback: no MultiSync packet).'
+  }
+  return null
 }
 
 function Announcements({ show }: { show: string | null }) {

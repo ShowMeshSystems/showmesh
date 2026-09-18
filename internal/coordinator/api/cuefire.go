@@ -235,7 +235,12 @@ func cueActivateWireOutcome(o cueActivationDispatchOutcome) v1.CueActivationNode
 	case o.Dispatched && o.Confirmed:
 		return v1.CueActivationNodeOutcome{
 			NodeID: o.NodeID, Dispatched: true, Confirmed: true, Outcome: outcomeWordConfirmed,
-			UnalignedReason: o.UnalignedReason,
+			UnalignedReason:         o.UnalignedReason,
+			StartTrigger:            o.StartTrigger,
+			TriggerSequenceFilename: o.TriggerSequenceFilename,
+			TriggerArrivalNs:        o.TriggerArrivalNs,
+			StartLeadMs:             o.StartLeadMs,
+			PreparedLate:            o.PreparedLate,
 		}
 	case o.Dispatched && o.NodeOutcome != "":
 		return v1.CueActivationNodeOutcome{NodeID: o.NodeID, Dispatched: true, Outcome: outcomeWordRefused, OutcomeReason: o.NodeOutcome}

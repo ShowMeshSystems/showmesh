@@ -15,6 +15,7 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file proves this seam's own fix: dispatchOneCueActivation must
@@ -411,6 +412,132 @@ func dispatchedActionsToSession(setup *audioDispatchTestSetup, sessionID string)
 		}
 	}
 	return out
+}
+
+// putAudioSettingsWithFallbackWindowForTest writes audio.settings with
+// MultisyncFallbackWindowMs set to windowMs, every other field the shipped
+// default, so a fallback-timer test controls exactly how long
+// [handlers.waitForMultiSyncStart] can block without paying the shipped
+// 1.5s default on every run.
+func putAudioSettingsWithFallbackWindowForTest(t *testing.T, st *store.Store, windowMs int) {
+	t.Helper()
+	payload := config.AudioSettingsDefaultPayload
+	payload.MultisyncFallbackWindowMs = windowMs
+	raw, err := config.EncodeAudioSettingsPayload(payload)
+	if err != nil {
+		t.Fatalf("encode audio.settings payload: %v", err)
+	}
+	putConfigForTest(t, st, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, raw)
+}
+
+// sessionStartTriggerObservation builds one audio_session.start.* signal
+// observation, mirroring nightaudioreadiness_test.go's
+// nodeAudioEngineStateObservation one resource kind over.
+func sessionStartTriggerObservation(sig observation.SignalID, value any, observedAt time.Time) observation.Observation {
+	return observation.Observation{
+		Resource:   observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: cueactivation.AudioSessionID},
+		Signal:     sig,
+		Value:      value,
+		ObservedAt: &observedAt,
+	}
+}
+
+// TestDispatchOneCueActivationRecordsAlignedByMultiSyncWithinWindow proves
+// ADR-051 decision 4's own aligned case: when nodeID's own audio session
+// observations already show a MultiSync start for this activation before
+// the fallback window elapses, cue.activate is still dispatched (so the
+// node confirms and records it), carries no unalignedReason, and the
+// returned outcome reports StartTrigger "multisync" with the reported
+// arrival, lead, and trigger filename.
+func TestDispatchOneCueActivationRecordsAlignedByMultiSyncWithinWindow(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 500)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	audio := &fakeNodeAudioLister{}
+	audio.setObservations(nodeID, []observation.Observation{
+		sessionStartTriggerObservation(audioSessionStartTriggerSignal, "multisync", now),
+		sessionStartTriggerObservation(audioSessionTriggerSequenceFilenameSignal, "wake-up.fseq", now),
+		sessionStartTriggerObservation(audioSessionTriggerArrivalNsSignal, int64(1_700_000_000_000_000_000), now),
+		sessionStartTriggerObservation(audioSessionStartLeadMsSignal, int64(100), now),
+		sessionStartTriggerObservation(audioSessionPreparedLateSignal, false, now),
+	})
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.Audio = audio
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	if outcome.StartTrigger != "multisync" {
+		t.Errorf("StartTrigger = %q, want %q", outcome.StartTrigger, "multisync")
+	}
+	if outcome.TriggerSequenceFilename != "wake-up.fseq" {
+		t.Errorf("TriggerSequenceFilename = %q, want %q", outcome.TriggerSequenceFilename, "wake-up.fseq")
+	}
+	if outcome.TriggerArrivalNs != 1_700_000_000_000_000_000 {
+		t.Errorf("TriggerArrivalNs = %d, want %d", outcome.TriggerArrivalNs, int64(1_700_000_000_000_000_000))
+	}
+	if outcome.StartLeadMs != 100 {
+		t.Errorf("StartLeadMs = %d, want 100", outcome.StartLeadMs)
+	}
+
+	dispatched := setup.pub.dispatchedSnapshot()
+	if len(dispatched) != 1 || dispatched[0].Action != "cue.activate" {
+		t.Fatalf("dispatched = %+v, want exactly one cue.activate", dispatched)
+	}
+	if _, present := dispatched[0].Params["unalignedReason"]; present {
+		t.Errorf("cue.activate params carried unalignedReason, want none: a MultiSync-triggered start is aligned")
+	}
+}
+
+// TestDispatchOneCueActivationFallsBackAfterMultiSyncWindowElapses proves
+// ADR-051 decision 4's own fallback case: when no MultiSync evidence
+// appears before the configured window elapses, cue.activate is
+// dispatched with no scheduled instant, carries unalignedReason naming
+// the fallback, and the outcome reports StartTrigger "coordinator".
+func TestDispatchOneCueActivationFallsBackAfterMultiSyncWindowElapses(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 20)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.Audio = &fakeNodeAudioLister{}
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	if outcome.StartTrigger != "coordinator" {
+		t.Errorf("StartTrigger = %q, want %q", outcome.StartTrigger, "coordinator")
+	}
+
+	dispatched := setup.pub.dispatchedSnapshot()
+	if len(dispatched) != 1 || dispatched[0].Action != "cue.activate" {
+		t.Fatalf("dispatched = %+v, want exactly one cue.activate", dispatched)
+	}
+	reason, _ := dispatched[0].Params["unalignedReason"].(string)
+	if reason != "no MultiSync START packet arrived within the fallback window" {
+		t.Errorf("cue.activate params unalignedReason = %q, want the fallback reason", reason)
+	}
+	if _, present := dispatched[0].Params["scheduledAtNs"]; present {
+		t.Errorf("cue.activate params carried scheduledAtNs, want none: the fallback starts on arrival")
+	}
 }
 
 // TestDispatchArmCurrentAudioArmsCurrentCue proves ADR-051 decision 3's own
