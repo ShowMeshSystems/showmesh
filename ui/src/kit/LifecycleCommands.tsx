@@ -26,13 +26,13 @@ export type LifecycleCommandGroup = {
   commands: readonly LifecycleCommandSpec[]
 }
 
-function LifecycleCommandCell({ command, label, detail, disabled = false, disabledReason, onRun, options, dense = false }: LifecycleCommandSpec & { dense?: boolean }) {
+function LifecycleCommandCell({ command, label, detail, disabled = false, disabledReason, onRun, options }: LifecycleCommandSpec) {
   return (
     <div className={`sm-lifecycle-command sm-lifecycle-command--${command}`}>
-      <Button size="gloved" disabled={disabled} title={disabled ? disabledReason : dense ? detail : undefined} onClick={onRun}>
+      <Button size="gloved" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={onRun}>
         {label}
       </Button>
-      {!dense && <p className="sm-small sm-muted">{disabled && disabledReason !== undefined ? disabledReason : detail}</p>}
+      <p className="sm-small sm-muted">{disabled && disabledReason !== undefined ? disabledReason : detail}</p>
       {options !== undefined && <div className="sm-lifecycle-command__options">{options}</div>}
     </div>
   )
@@ -43,14 +43,14 @@ function LifecycleCommandCell({ command, label, detail, disabled = false, disabl
  * render inside its own cell, under its consequence line, never beside
  * the button.
  */
-export function LifecycleCommands({ groups, dense = false }: { groups: readonly LifecycleCommandGroup[]; dense?: boolean }) {
+export function LifecycleCommands({ groups }: { groups: readonly LifecycleCommandGroup[] }) {
   return (
     <>
       {groups.map((group) =>
         group.title === undefined ? (
-          <div key={group.id} className={`sm-grid sm-grid--auto sm-lifecycle-commands${dense ? ' sm-lifecycle-commands--dense' : ''}`}>
+          <div key={group.id} className="sm-grid sm-grid--auto sm-lifecycle-commands">
             {group.commands.map((spec) => (
-              <LifecycleCommandCell key={spec.command} {...spec} dense={dense} />
+              <LifecycleCommandCell key={spec.command} {...spec} />
             ))}
           </div>
         ) : (

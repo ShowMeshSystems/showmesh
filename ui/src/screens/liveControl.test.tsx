@@ -548,13 +548,10 @@ describe('Live Control', () => {
     expect(pause).toHaveAttribute('title', expect.stringContaining('fpp:command'))
   })
 
-  it('renders the lifecycle commands as one flat row in run order, with no group subheadings', () => {
+  it('groups the lifecycle commands into Prepare, Start, End the night', () => {
     renderScreen({})
     const region = screen.getByRole('region', { name: 'Night lifecycle' })
-    expect(within(region).queryAllByRole('heading', { level: 3 })).toHaveLength(0)
-    const order = ['Prepare site', 'Run readiness', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
-    const buttons = within(region).getAllByRole('button').filter((b) => order.includes(b.textContent ?? ''))
-    expect(buttons.map((b) => b.textContent)).toEqual(order)
+    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
   })
 
   it('opens a confirm dialog carrying the skip-lead option when Start night is pressed', () => {

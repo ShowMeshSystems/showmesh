@@ -443,15 +443,9 @@ export function ShowNight() {
         }
       >
         <LifecycleCommands
-          dense
-          groups={[
-            {
-              id: 'sn-lifecycle',
-              commands: nightLifecycleGroups(gate, (command) =>
-                command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
-              ).flatMap((group) => group.commands),
-            },
-          ]}
+          groups={nightLifecycleGroups(gate, (command) =>
+            command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
+          )}
         />
         <ConfirmDialog
           open={startNightConfirmOpen}

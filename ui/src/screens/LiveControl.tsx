@@ -811,15 +811,9 @@ export function LiveControl() {
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <LifecycleCommands
-          dense
-          groups={[
-            {
-              id: 'lc-lifecycle-row',
-              commands: nightLifecycleGroups(nightGate, (command) =>
-                command === 'start-night' ? setStartNightConfirmOpen(true) : night(command),
-              ).flatMap((group) => group.commands),
-            },
-          ]}
+          groups={nightLifecycleGroups(nightGate, (command) =>
+            command === 'start-night' ? setStartNightConfirmOpen(true) : night(command),
+          )}
         />
         <ConfirmDialog
           open={startNightConfirmOpen}

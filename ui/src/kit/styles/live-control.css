@@ -38,11 +38,12 @@
    wrap within it. */
 .sm-lc-output-when {
   width: 150px;
+  text-align: center;
 }
 
 .sm-lc-output-when .sm-status {
   width: 9rem;
-  justify-content: flex-start;
+  justify-content: center;
   white-space: normal;
 }
 
@@ -115,6 +116,7 @@
 .sm-lc-emergency {
   display: grid;
   gap: var(--s-3);
+  margin-top: var(--s-3);
 }
 
 /* Separates the deliberate-intent gate from Stop/Stop and power down above it. */
