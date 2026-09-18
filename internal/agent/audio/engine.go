@@ -144,13 +144,8 @@ type Engine interface {
 	// playback capability while it is false.
 	Available() (ok bool, reason string)
 
-	// LiveHandles reports every handle this Engine currently holds a live
-	// resource for, regardless of whether any session's own bookkeeping
-	// still references it. This is the one way anything outside Engine
-	// can ever learn about a handle its own session-level owner lost
-	// track of — a branch [Manager.Promote] or an engine rebind failed to
-	// release, still consuming a mixer input and still audible. See
-	// [Manager]'s own watcher, which compares this against every
-	// session's owned handles to find and release exactly that.
+	// LiveHandles reports every handle this Engine currently holds live,
+	// regardless of whether any session still references it — see
+	// [Manager]'s own watcher, which sweeps whatever this reports orphaned.
 	LiveHandles(ctx context.Context) ([]EngineHandle, error)
 }

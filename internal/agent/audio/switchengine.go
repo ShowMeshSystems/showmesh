@@ -205,10 +205,8 @@ func (e *SwitchableEngine) Observe(ctx context.Context, handle EngineHandle) (En
 	return cur.Observe(ctx, handle)
 }
 
-// LiveHandles forwards to whatever engine is currently bound. A never-
-// bound (or mid-rebind) engine reports no live handles at all: there is
-// nothing here for [Manager]'s watcher to sweep, matching Release's own
-// no-op-on-unbound contract rather than Available's failure shape.
+// LiveHandles forwards to whatever engine is currently bound; an unbound
+// engine reports no live handles, matching Release's own no-op contract.
 func (e *SwitchableEngine) LiveHandles(ctx context.Context) ([]EngineHandle, error) {
 	cur, ok := e.get()
 	if !ok {

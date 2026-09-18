@@ -468,10 +468,7 @@ func (e *Engine) Observe(ctx context.Context, handle agentaudio.EngineHandle) (a
 }
 
 // LiveHandles returns every handle this pipeline currently has a branch
-// for, in no particular order — the real evidence [Manager]'s watcher
-// needs, since a branch feeding the shared mixer is otherwise invisible
-// from outside this Engine (PipeWire sees one output stream regardless of
-// how many branches are mixed into it).
+// for: the mixer's single output stream otherwise hides them all.
 func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

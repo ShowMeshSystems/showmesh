@@ -120,6 +120,11 @@ type Manager struct {
 	// m.mu.
 	outputLatencyUs atomic.Int64
 
+	// lastTickUnownedHandles is releaseOrphanEngineHandles's own memory of
+	// which live engine handles it saw owned by no session on the
+	// previous tick. Only RunWatcher's single goroutine ever touches it.
+	lastTickUnownedHandles map[EngineHandle]struct{}
+
 	// duckFadeWait, when set, replaces [Manager.waitDuckFade]'s own real,
 	// context-cancelable timer with a test's own function, so a test can
 	// observe or deterministically control the duck-then-start wait
@@ -795,11 +800,9 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 			relCancel()
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The content changed while promoting, so the staged session was released. Prepare and start it again."}
 		}
-		// to may already be holding a handle of its own (a prior item this
-		// session never released, e.g. one [Manager.watchTick] has not yet
-		// observed as complete) — release it before the staged handle takes
-		// its place, or it survives, unaddressable by anything, as a
-		// mixer branch nobody's bookkeeping can stop.
+		// Release whatever handle to already holds before taking the
+		// staged one, or it survives in the engine, unaddressable by
+		// any session.
 		if to.handleLoaded {
 			to.releaseEngineLocked(ctx)
 		}

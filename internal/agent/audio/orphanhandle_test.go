@@ -100,12 +100,10 @@ func TestPromoteReleasesHandleAlreadyHeldByDestinationSession(t *testing.T) {
 	}
 }
 
-// TestWatchTickReleasesOrphanEngineHandle proves the safety net behind
-// whatever root cause ever again leaves a handle no session owns: a
-// handle injected straight into the engine, bypassing the session layer
-// entirely, is detected and released by a single watchTick -- and a
-// handle a session genuinely owns is left alone by that same tick.
-func TestWatchTickReleasesOrphanEngineHandle(t *testing.T) {
+// TestWatchTickReleasesOrphanEngineHandleAfterTwoTicks proves an injected
+// orphan handle survives one tick and is only released once a second
+// consecutive tick still finds it unowned; an owned handle is untouched.
+func TestWatchTickReleasesOrphanEngineHandleAfterTwoTicks(t *testing.T) {
 	c := newClock(time.Unix(1_700_000_000, 0))
 	dir := t.TempDir()
 	engine := NewFakeEngine(c.now)
@@ -144,9 +142,66 @@ func TestWatchTickReleasesOrphanEngineHandle(t *testing.T) {
 
 	live, err = engine.LiveHandles(ctx)
 	if err != nil {
-		t.Fatalf("LiveHandles after tick: %v", err)
+		t.Fatalf("LiveHandles after first tick: %v", err)
+	}
+	if len(live) != 2 {
+		t.Fatalf("LiveHandles after first tick = %v, want both handles still live (one sighting is not enough to release)", live)
+	}
+
+	m.watchTick(ctx)
+
+	live, err = engine.LiveHandles(ctx)
+	if err != nil {
+		t.Fatalf("LiveHandles after second tick: %v", err)
 	}
 	if len(live) != 1 || live[0] != ownedHandle {
-		t.Fatalf("LiveHandles after tick = %v, want exactly [%q] (orphan released, owned handle untouched)", live, ownedHandle)
+		t.Fatalf("LiveHandles after second tick = %v, want exactly [%q] (orphan released, owned handle untouched)", live, ownedHandle)
+	}
+}
+
+// TestWatchTickNeverReleasesHandleThatBecomesOwnedBetweenTicks proves a
+// handle unowned on one tick but claimed by a session before the next
+// tick runs is never released.
+func TestWatchTickNeverReleasesHandleThatBecomesOwnedBetweenTicks(t *testing.T) {
+	c := newClock(time.Unix(1_700_000_000, 0))
+	dir := t.TempDir()
+	engine := NewFakeEngine(c.now)
+	m := NewManager(availableFakeEngine{engine}, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	const claimant = pkgaudio.SessionID("claimant")
+	const handle = EngineHandle("about-to-be-claimed/track")
+	ref := writeTestAsset(t, m.assetDir, "c.wav", "asset-c", []byte("claimed content"))
+	if _, err := engine.Load(ctx, handle, ref, time.Hour); err != nil {
+		t.Fatalf("injecting handle: %v", err)
+	}
+	if _, err := engine.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("starting handle: %v", err)
+	}
+
+	m.watchTick(ctx)
+
+	live, err := engine.LiveHandles(ctx)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("LiveHandles after first tick = %v, %v, want exactly 1 (still unowned, not yet released)", live, err)
+	}
+
+	// A session claims the handle between ticks, exactly as Promote does
+	// when it assigns a staged handle onto its destination session.
+	s := m.getOrCreate(claimant)
+	s.mu.Lock()
+	s.handle = handle
+	s.handleLoaded = true
+	s.state = pkgaudio.StateReady
+	s.mu.Unlock()
+
+	m.watchTick(ctx)
+
+	live, err = engine.LiveHandles(ctx)
+	if err != nil {
+		t.Fatalf("LiveHandles after second tick: %v", err)
+	}
+	if len(live) != 1 || live[0] != handle {
+		t.Fatalf("LiveHandles after second tick = %v, want [%q] still live (now owned, never released)", live, handle)
 	}
 }
