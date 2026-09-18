@@ -37,6 +37,11 @@ type fakeClockSource struct {
 	lastStatus   agentclock.Status
 	lastPolledAt time.Time
 	lastKnown    bool
+
+	// pollEntered and pollGate, when armed by blockNextPoll, make Poll
+	// close pollEntered and then block until pollGate is closed.
+	pollEntered chan struct{}
+	pollGate    chan struct{}
 }
 
 func newFakeClockSource(mediaStart time.Time) *fakeClockSource {
@@ -49,8 +54,20 @@ func newFakeClockSource(mediaStart time.Time) *fakeClockSource {
 
 func (f *fakeClockSource) Poll(context.Context) agentclock.Status {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.pollCalls++
+	entered, gate := f.pollEntered, f.pollGate
+	f.pollEntered, f.pollGate = nil, nil
+	f.mu.Unlock()
+
+	if entered != nil {
+		close(entered)
+	}
+	if gate != nil {
+		<-gate
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastStatus = f.status
 	if f.wallNow != nil {
 		f.lastPolledAt = f.wallNow()
@@ -59,6 +76,15 @@ func (f *fakeClockSource) Poll(context.Context) agentclock.Status {
 	}
 	f.lastKnown = true
 	return f.status
+}
+
+// blockNextPoll arms this fake so its NEXT Poll call (and only that one)
+// closes entered, proving Poll was actually reached, and then blocks
+// until release is closed.
+func (f *fakeClockSource) blockNextPoll(entered, release chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pollEntered, f.pollGate = entered, release
 }
 
 // Last reports the status from this fake's most recent Poll call. ok is
@@ -612,7 +638,9 @@ func TestLargeErrorWithNoCauseIsReportedAndNeverSeeked(t *testing.T) {
 
 // TestPTPStepWithLargeErrorSeeksExactlyOnce is the other side: with a
 // cause established from the tracker's own step evidence, the same error
-// earns one flushing seek and is reported as a resync.
+// earns one flushing seek and is reported as a resync. f.media.Poll(ctx)
+// after recordStep stands in for the agent's own clock report loop
+// refreshing evaluateTimelineLocked's cached status.
 func TestPTPStepWithLargeErrorSeeksExactlyOnce(t *testing.T) {
 	f := newScheduledFixture(t, 20)
 	ctx := context.Background()
@@ -620,6 +648,7 @@ func TestPTPStepWithLargeErrorSeeksExactlyOnce(t *testing.T) {
 
 	f.engine.SetPresentedAdjust(-200 * time.Millisecond)
 	f.media.recordStep(f.clk.now().Add(time.Second))
+	f.media.Poll(ctx)
 	f.tick(ctx, 3*time.Second)
 
 	if got := f.engine.seekCount(); got != 1 {
@@ -643,7 +672,8 @@ func TestPTPStepWithLargeErrorSeeksExactlyOnce(t *testing.T) {
 
 // TestProviderRestartIsACause covers the second cause: the lock episode
 // broken and remade, which is what a ptp4l owner stopping and restarting
-// it looks like from this node.
+// it looks like from this node. The pollCount assertion proves
+// consumeCause detected it from the cache alone, with no live Poll.
 func TestProviderRestartIsACause(t *testing.T) {
 	f := newScheduledFixture(t, 20)
 	ctx := context.Background()
@@ -651,12 +681,15 @@ func TestProviderRestartIsACause(t *testing.T) {
 	f.engine.SetPresentedAdjust(-200 * time.Millisecond)
 
 	f.media.setState(agentclock.StateFailed, "ptp4l is not running")
+	f.media.Poll(ctx)
 	f.tick(ctx, time.Second)
 	if got := f.engine.seekCount(); got != 0 {
 		t.Fatalf("seeks while the clock was unlocked = %d, want 0: an unlocked clock is not a measurement to correct against", got)
 	}
 
 	f.media.setState(agentclock.StateLocked, "")
+	f.media.Poll(ctx)
+	pollsBefore := f.media.pollCount()
 	f.tick(ctx, time.Second)
 
 	if got := f.engine.seekCount(); got != 1 {
@@ -664,6 +697,9 @@ func TestProviderRestartIsACause(t *testing.T) {
 	}
 	if snap := f.timeline(t); snap.LastResyncReason != ResyncReasonProviderRestart {
 		t.Fatalf("last_resync_reason = %q, want %q", snap.LastResyncReason, ResyncReasonProviderRestart)
+	}
+	if got := f.media.pollCount(); got != pollsBefore {
+		t.Fatalf("evaluateTimelineLocked polled the clock source %d extra time(s) despite a fresh cache, want 0: it must detect the provider restart from cache alone", got-pollsBefore)
 	}
 }
 
@@ -680,6 +716,7 @@ func TestErrorExactlyAtTheThresholdDoesNotSeek(t *testing.T) {
 
 	f.engine.SetPresentedAdjust(-20 * time.Millisecond)
 	f.media.recordStep(f.clk.now().Add(time.Second))
+	f.media.Poll(ctx)
 	f.tick(ctx, 3*time.Second)
 
 	if got := f.engine.seekCount(); got != 0 {
@@ -690,6 +727,7 @@ func TestErrorExactlyAtTheThresholdDoesNotSeek(t *testing.T) {
 	// comparison runs at full precision, not at millisecond resolution.
 	f.engine.SetPresentedAdjust(-20*time.Millisecond - time.Nanosecond)
 	f.media.recordStep(f.clk.now().Add(2 * time.Second))
+	f.media.Poll(ctx)
 	f.tick(ctx, time.Second)
 	if got := f.engine.seekCount(); got != 1 {
 		t.Fatalf("an error one nanosecond past the threshold caused %d seek(s), want 1", got)
@@ -760,6 +798,69 @@ func TestCommandedSeekEndsTheScheduledRun(t *testing.T) {
 	f.m.Seek(ctx, f.id, "inv-seek", 3, 30*time.Second)
 	if snap := f.timeline(t); snap.Scheduled {
 		t.Fatalf("timeline survived a commanded seek: %+v", snap)
+	}
+}
+
+// TestWatcherClockPollDoesNotDelayAConcurrentPromote reproduces the rig
+// defect this fix answers: a watcher tick forced into a live clock Poll
+// must not hold the session lock a concurrent Promote needs. Plain
+// Promote (no scheduledAtNs) keeps this test clear of
+// resolveScheduleLocked's own cache, which is covered elsewhere.
+func TestWatcherClockPollDoesNotDelayAConcurrentPromote(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+	f.startScheduled(t, 50*time.Millisecond)
+
+	const stagingID = pkgaudio.SessionID("staging-1")
+	ref := writeTestAsset(t, f.m.assetDir, "a.wav", "asset-1", []byte("x"))
+	if out := f.m.Apply(ctx, stagingID, "inv-stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); out.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging Apply refused: %s", out.Reason)
+	}
+	if out := f.m.Prepare(ctx, stagingID, "inv-stage-prepare", 2); out.Outcome != pkgaudio.OutcomePosition {
+		t.Fatalf("staging Prepare = %q (%s), want position (ready)", out.Outcome, out.Reason)
+	}
+
+	// Age the cache past clockStatusFreshnessBound so the watcher tick
+	// below is forced into evaluateTimelineLocked's live-Poll fallback.
+	// Plain Promote never reads the clock, so this cannot affect it.
+	f.clk.advance(clockStatusFreshnessBound + time.Second)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	f.media.blockNextPoll(entered, release)
+
+	s, ok := f.m.get(f.id)
+	if !ok {
+		t.Fatal("session not found")
+	}
+
+	tickDone := make(chan struct{})
+	go func() {
+		defer close(tickDone)
+		s.mu.Lock()
+		f.m.evaluateTimelineLocked(ctx, s)
+		s.mu.Unlock()
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher tick never reached the clock source's Poll")
+	}
+
+	const lockBudget = 50 * time.Millisecond
+	promoteBegin := time.Now()
+	out := f.m.Promote(ctx, stagingID, f.id, "inv-promote", 5)
+	elapsed := time.Since(promoteBegin)
+
+	close(release)
+	<-tickDone
+
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("Promote = %q (%s), want started", out.Outcome, out.Reason)
+	}
+	if elapsed > lockBudget {
+		t.Fatalf("Promote took %v while the watcher's own clock poll was in flight, want at most %v", elapsed, lockBudget)
 	}
 }
 

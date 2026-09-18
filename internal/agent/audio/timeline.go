@@ -187,6 +187,10 @@ func (s *Session) timelineSnapshotLocked() (TimelineSnapshot, bool) {
 // scheduled session: measure, establish whether a discontinuity CAUSE
 // occurred since the last evaluation, and seek only when one did and the
 // error exceeds the configured threshold. Caller holds s.mu.
+//
+// Reads a cached clock status instead of polling live, the same way
+// resolveScheduleLocked does: this runs every watcher tick under s.mu,
+// and a live Poll here would block a concurrent START on this session.
 func (m *Manager) evaluateTimelineLocked(ctx context.Context, s *Session) {
 	t := s.timeline
 	if t == nil || s.state != pkgaudio.StatePlaying {
@@ -199,7 +203,18 @@ func (m *Manager) evaluateTimelineLocked(ctx context.Context, s *Session) {
 		return
 	}
 
-	status := source.Poll(ctx)
+	status, polledAt, ok := source.Last()
+	if !ok || m.now().Sub(polledAt) > clockStatusFreshnessBound {
+		s.mu.Unlock()
+		status = source.Poll(ctx)
+		s.mu.Lock()
+		// A command may have stopped this session or re-anchored its
+		// timeline while unlocked; the next tick handles that case.
+		t = s.timeline
+		if t == nil || s.state != pkgaudio.StatePlaying {
+			return
+		}
+	}
 	cause := t.consumeCause(status, m.engineEpoch.Load())
 
 	mediaNow := source.Now(ctx)
