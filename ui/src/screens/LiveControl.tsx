@@ -527,13 +527,94 @@ export function LiveControl() {
         )}
       </Section>
   )
+  const emergencySection = (
+      <Section id="lc-emergency" title="Emergency stop">
+        <div className="sm-lc-emergency">
+          <ButtonRow>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? 'Stops every configured FPP instance and any configured stop actions, such as stopping audio or blacking out Resolume.' : emergencyGate.reason}
+              onClick={() => {
+                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
+                runEmergencyStop('stop', emergencyStop)
+              }}
+            >
+              Stop
+            </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? 'Stop, plus forces an active night session into its power-down sequence immediately.' : emergencyGate.reason}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
+                  )
+                )
+                  return
+                runEmergencyStop('stop-power-down', emergencyStopPowerDown)
+              }}
+            >
+              Stop and power down
+            </Button>
+          </ButtonRow>
+
+          <div className="sm-lc-emergency__hardstop">
+            <ButtonRow>
+              <Button
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArmBusy}
+                title={emergencyGate.allowed ? 'Hard stop does everything Stop and power down does, plus abandons an active night session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it.' : emergencyGate.reason}
+                onClick={armHardStop}
+              >
+                Arm hard stop
+              </Button>
+              <Button
+                variant="danger"
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
+                title={
+                  !emergencyGate.allowed
+                    ? emergencyGate.reason
+                    : hardStopArm === null
+                      ? 'Arm hard stop first.'
+                      : armExpired
+                        ? 'The arm token expired. Arm again, then fire promptly.'
+                        : undefined
+                }
+                onClick={fireHardStop}
+              >
+                Fire hard stop
+              </Button>
+            </ButtonRow>
+            {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
+            {hardStopArm !== null && armRemainingMs !== null && (
+              <Notice
+                tone="warn"
+                live="status"
+                headline={
+                  armExpired
+                    ? 'The arm token expired. Arm again, then fire promptly.'
+                    : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
+                }
+              />
+            )}
+          </div>
+
+          <EmergencyStopOutcome outcome={emergencyOutcome} />
+        </div>
+      </Section>
+  )
   return (
     <>
       <PageHeader />
 
       <Workbench
-        sideLabel="What each output is doing"
-        side={outputsSection}
+        sideLabel="Emergency stop and output status"
+        side={<>{emergencySection}{outputsSection}</>}
         main={<>
 
       <Section
@@ -712,101 +793,6 @@ export function LiveControl() {
           <strong>Stop now</strong> halts this player only; projection and audio hold their last state until their own
           cues run.
         </p>
-      </Section>
-
-      <Section
-        id="lc-emergency"
-        title="Emergency stop"
-        detail="Stops every configured FPP instance, independent of which one is selected above, plus any stop actions your site configured for this level, such as stopping audio or blacking out Resolume. The Resolume blackout button below fires that same blackout, not a separate one."
-      >
-        <div className="sm-lc-emergency">
-          <ButtonRow>
-            <Button
-              variant="danger"
-              size="gloved"
-              disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-              onClick={() => {
-                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
-                runEmergencyStop('stop', emergencyStop)
-              }}
-            >
-              Stop
-            </Button>
-            <Button
-              variant="danger"
-              size="gloved"
-              disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
-                  )
-                )
-                  return
-                runEmergencyStop('stop-power-down', emergencyStopPowerDown)
-              }}
-            >
-              Stop and power down
-            </Button>
-          </ButtonRow>
-          <p className="sm-small sm-muted">
-            <strong>Stop</strong> halts every configured FPP instance, plus any stop actions your site configured for
-            this level, such as stopping audio or blacking out Resolume. <strong>Stop and power down</strong> does the
-            same, plus forces an active night session into the standard power-down sequence immediately rather than
-            waiting for it.
-          </p>
-
-          <div className="sm-lc-emergency__hardstop">
-            <ButtonRow>
-              <Button
-                size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArmBusy}
-                title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-                onClick={armHardStop}
-              >
-                Arm hard stop
-              </Button>
-              <Button
-                variant="danger"
-                size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
-                title={
-                  !emergencyGate.allowed
-                    ? emergencyGate.reason
-                    : hardStopArm === null
-                      ? 'Arm hard stop first.'
-                      : armExpired
-                        ? 'The arm token expired. Arm again, then fire promptly.'
-                        : undefined
-                }
-                onClick={fireHardStop}
-              >
-                Fire hard stop
-              </Button>
-            </ButtonRow>
-            {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
-            {hardStopArm !== null && armRemainingMs !== null && (
-              <Notice
-                tone="warn"
-                live="status"
-                headline={
-                  armExpired
-                    ? 'The arm token expired. Arm again, then fire promptly.'
-                    : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
-                }
-              />
-            )}
-            <p className="sm-small sm-muted">
-              <strong>Hard stop</strong> does everything Stop and power down does, plus abandons an active night
-              session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it. No
-              confirmation dialog: arm, then fire.
-            </p>
-          </div>
-
-          <EmergencyStopOutcome outcome={emergencyOutcome} />
-        </div>
       </Section>
 
       <ResolumeQuickStrip gate={resolumeGate} />
