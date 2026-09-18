@@ -55,10 +55,11 @@ func NewNightLoop(deps Dependencies, opts Options) *NightLoop {
 	}
 }
 
-// Run ticks until ctx is done, then waits for any in-flight tick to finish
-// before returning - the caller (coordinator.go) treats Run's return as
-// "this loop no longer touches the store," and a detached goroutine still
-// writing after that would violate it.
+// Run ticks until ctx is done, then waits for any in-flight tick AND every
+// still-running nightKickOffFirstCueStage goroutine to finish before
+// returning - the caller (coordinator.go) treats Run's return as "this loop
+// no longer touches the store," and a detached goroutine still writing
+// after that would violate it.
 func (l *NightLoop) Run(ctx context.Context) {
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
@@ -66,6 +67,9 @@ func (l *NightLoop) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			l.inFlight <- struct{}{} // wait for any in-flight tick to release.
+			if l.h != nil {
+				l.h.nightFirstCueStageWG.Wait()
+			}
 			return
 		case <-ticker.C:
 			select {
@@ -663,6 +667,15 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// hold AND every barrier cue's own resolved outcome.
 	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, nightPhaseEnterShow, payload.EnterShow.Cues, payload)
 
+	// The bound show playlist's own first audio-bearing cue is kicked off
+	// staging, on every audio node it resolves to, the same tick the
+	// enterShow cues above first become due - the pre-show announcement
+	// cue's own release moment (owner ruling 2026-09-18), not the launch
+	// moment below: a Raspberry Pi 3B+ needs about 8s to cold-prepare a
+	// large WAV, so this must start as early as possible, and it runs off
+	// this tick's own critical path so a slow node can never delay launch.
+	h.nightKickOffFirstCueStage(ctx, now, rec, payload)
+
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Before(boundaryE.Add(hold)) {
 		return
@@ -671,6 +684,15 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: blockedReason})
 		return
 	}
+	// The launch itself never waits on staging: it reads back whatever
+	// nightKickOffFirstCueStage's own goroutine has confirmed so far and
+	// starts the player on time regardless.
+	if unstaged, done := h.nightFirstCueStageStatus(rec); !done {
+		h.logWarn("night loop: starting the show before first-cue staging confirmed on any node", "sessionId", rec.ID)
+	} else if len(unstaged) > 0 {
+		h.logWarn("night loop: starting the show without confirmed first-cue staging on every node", "sessionId", rec.ID, "nodeIds", unstaged)
+	}
+
 	// ifBusy is decided ONCE here, from a snapshot read; the dispatch is a
 	// separate moment and is not re-checked a second time before it - see
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is

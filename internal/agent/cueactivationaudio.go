@@ -193,6 +193,13 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		sizeBytes = info.Size()
 	}
 
+	// A resting or preshow bed must never keep playing once any show
+	// cue starts, cut immediately rather than wait on a later
+	// night-controller pause command. Announcement sessions never cut it.
+	if announcement == nil {
+		mgr.CutBackgroundBed(ctx)
+	}
+
 	id := cueActivationAudioSessionID
 	sourceRole := pkgaudio.SourceRoleShow
 	var mixPolicy *pkgaudio.MixPolicy

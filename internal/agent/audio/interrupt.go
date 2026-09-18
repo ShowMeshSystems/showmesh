@@ -7,6 +7,71 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
+// CutBackgroundBed immediately suspends every currently Playing session
+// whose source role is background, whatever its session id, capturing a
+// resume bookmark exactly as a commanded [Manager.Pause] would: an
+// Engine.Pause, never a fade. A node may carry a background session under
+// more than one id over a night (a resting/preshow bed's session id
+// changes with the night session that started it), so this scans every
+// session this Manager holds rather than trusting a single fixed id.
+// Announcement and show sessions are never touched, whatever their state.
+//
+// Unlike [Manager.interruptOneLocked] a cut session never joins
+// interruptedByAll, so a later coordinator-issued pause or resume against
+// it still runs through its own ledger unobstructed instead of tripping
+// [Manager.Resume]'s interruptedByAll refusal. It also bypasses
+// [Session.dispatch]'s revState ledger entirely, the same trade
+// [Manager.SilenceAll] already makes, so a coordinator command dispatched
+// afterward is still accepted on its own revision.
+//
+// Reports true only if at least one session was actually cut.
+func (m *Manager) CutBackgroundBed(ctx context.Context) bool {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	var cutAny bool
+	for _, s := range sessions {
+		if m.cutOneBackgroundBedLocked(ctx, s) {
+			cutAny = true
+		}
+	}
+	return cutAny
+}
+
+// cutOneBackgroundBedLocked runs [Manager.CutBackgroundBed]'s own cut
+// against a single session, taking and releasing that session's own lock.
+func (m *Manager) cutOneBackgroundBedLocked(ctx context.Context, s *Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StatePlaying || !s.handleLoaded {
+		return false
+	}
+	if s.desired.SourceRole == nil || *s.desired.SourceRole != pkgaudio.SourceRoleBackground {
+		return false
+	}
+	pauseCtx, cancel := boundedEngineCallContext(ctx)
+	obs, err := m.engine.Pause(pauseCtx, s.handle)
+	cancel()
+	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		return false
+	}
+	s.state = pkgaudio.StatePaused
+	s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Identity: s.loadedIdentity, Index: s.currentIndex, Position: obs.Position}
+	if s.desired.Playlist != nil {
+		s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
+	}
+	s.timingKnown = true
+	s.lastObservedAt = obs.ObservedAt
+	m.stopLTCLocked(ctx, s)
+	s.persistBestEffortLocked("state change")
+	return true
+}
+
 // interruptLowerPriority runs after a session with role interrupterRole and
 // mix policy Interrupt reaches Playing: it suspends every OTHER currently
 // Playing session whose role priority is strictly lower, using the same

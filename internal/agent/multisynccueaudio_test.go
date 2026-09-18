@@ -875,3 +875,88 @@ func TestMultiSyncCueAudioStartSignalsAudioReportTrigger(t *testing.T) {
 		t.Fatal("audioReportTrigger was not signalled after a MultiSync start")
 	}
 }
+
+// TestMultiSyncCueAudioStartCutsPlayingBackgroundBed proves the owner
+// ruling that a resting or preshow bed must never keep playing once any
+// show sequence starts: a background session still Playing when a show
+// cue's START packet arrives is stopped immediately, and is still
+// resumable afterward through the ordinary commanded [audio.Manager.
+// Resume] path (never refused as suspended by an interrupter).
+func TestMultiSyncCueAudioStartCutsPlayingBackgroundBed(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 18, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clk)
+	media := newScriptableClockSource(time.Unix(5_000_000_000, 0))
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 50,
+	})
+	resetTriggerRegistry(t)
+
+	bgHash := writeAssetFixture(t, dir, "bed.wav", []byte("pretend this is bed audio content"))
+	// A night session's own bed session id ("night-bg-<night session id>",
+	// see internal/coordinator/api/nightbackgroundaudio.go's
+	// nightBackgroundAudioSessionID), never the stale, unused
+	// cueactivation.BackgroundSessionID: CutBackgroundBed must cut
+	// whichever session is actually Playing with source role background.
+	bgID := pkgaudio.SessionID("night-bg-night-1")
+	bgMedia := pkgaudio.MediaRef{AssetID: "bed-asset", ContentHash: bgHash, RuntimeFilename: "bed.wav"}
+	if r := mgr.Apply(context.Background(), bgID, "bg-apply", 1, pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleBackground),
+		Media:      pkgaudio.SetField(bgMedia),
+	}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("background apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), bgID, "bg-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("background prepare refused: %+v", r)
+	}
+	if r := mgr.Start(context.Background(), bgID, "bg-start", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("background start refused: %+v", r)
+	}
+	if snap := findSessionSnapshot(t, mgr.Snapshot(context.Background()), bgID); snap.State != pkgaudio.StatePlaying {
+		t.Fatalf("background bed is not playing before the show cue starts: %+v", snap)
+	}
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-first", "first-cue.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	trigger.SetSources(catalogStore, mgr, dir, timeline)
+
+	before := media.reads()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: "first-cue.fseq",
+		})
+	}()
+	media.waitForReads(t, before+2)
+	media.advance(200 * time.Millisecond)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("HandleSequencePacket never returned after the media clock reached T0")
+	}
+
+	if snap := findSessionSnapshot(t, mgr.Snapshot(context.Background()), cueActivationAudioSessionID); snap.State != pkgaudio.StatePlaying {
+		t.Fatalf("show cue session snapshot = %+v, want playing", snap)
+	}
+	if snap := findSessionSnapshot(t, mgr.Snapshot(context.Background()), bgID); snap.State != pkgaudio.StatePaused {
+		t.Fatalf("background bed state = %+v, want paused: it must be cut the instant the show cue starts", snap)
+	}
+
+	resumeOutcome := mgr.Resume(context.Background(), bgID, "bg-resume", 4, nil)
+	if resumeOutcome.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("background bed resume outcome = %+v, want started: the existing resume path must still work against a bed cut this way", resumeOutcome)
+	}
+	if snap := findSessionSnapshot(t, mgr.Snapshot(context.Background()), bgID); snap.State != pkgaudio.StatePlaying {
+		t.Fatalf("background bed state after resume = %+v, want playing", snap)
+	}
+}

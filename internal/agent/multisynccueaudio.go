@@ -427,6 +427,11 @@ func (c *multiSyncCueAudioTrigger) applyAndPrepare(ctx context.Context, mgr *aud
 // decode) so the first sample is presented at T0 on the SAME engine call
 // as position, never a Start-then-Seek pair.
 func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.Manager, assetDir string, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, arrival agentclock.MediaTime) {
+	// A resting or preshow bed must never keep playing once any show
+	// sequence starts: cut it immediately, node-local, rather than wait
+	// for the coordinator's own later pause command to arrive.
+	mgr.CutBackgroundBed(ctx)
+
 	target := c.targetIdentity(entry)
 
 	cueIdentity, cueReady := mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
