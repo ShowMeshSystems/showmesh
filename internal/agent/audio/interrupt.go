@@ -68,6 +68,12 @@ func (m *Manager) cutOneBackgroundBedLocked(ctx context.Context, s *Session) boo
 	s.timingKnown = true
 	s.lastObservedAt = obs.ObservedAt
 	m.stopLTCLocked(ctx, s)
+	// A fade this cut interrupted mid-ramp never reaches its own natural
+	// completion from here: the engine is now paused, not ramping, so
+	// checkFadeCompletionLocked's own FadeActive poll would otherwise
+	// never see it end. Resolved stranded, the same terminal outcome a
+	// commanded stop already gives a fade it cuts short.
+	s.resolveFadePendingStrandedLocked("session was cut by a show cue before its pending fade resolved")
 	s.persistBestEffortLocked("state change")
 	return true
 }

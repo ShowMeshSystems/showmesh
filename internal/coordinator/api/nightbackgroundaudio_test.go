@@ -1001,6 +1001,20 @@ func fadeStateObservation(sessionID, value string, observedAt, collectedAt time.
 	}
 }
 
+// sessionStateObservation is [fadeStateObservation]'s own mirror for
+// audio_session.state - the node's own reported [pkgaudio.State] this
+// package reads via nightBackgroundAudioReportedSessionState, never
+// through the collector package that produces it.
+func sessionStateObservation(sessionID, value string, observedAt, collectedAt time.Time) observation.Observation {
+	return observation.Observation{
+		Resource:    observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: sessionID},
+		Signal:      "audio_session.state",
+		Value:       value,
+		ObservedAt:  &observedAt,
+		CollectedAt: collectedAt,
+	}
+}
+
 // TestNightStopBackgroundAudioIfRunning_FadesDownBeforePausing proves the
 // trap this lane exists to close: dispatching audio.gain.fade and
 // immediately dispatching audio.session.pause still cuts the audio dead,
@@ -1116,6 +1130,45 @@ func TestNightStopBackgroundAudioIfRunning_StaleFadeStateEvidenceWithholdsPause(
 	}
 	if pub.lastAction != "audio.session.pause" {
 		t.Fatalf("dispatched action once settled = %q, want audio.session.pause", pub.lastAction)
+	}
+}
+
+// TestNightStopBackgroundAudioIfRunning_ReportedPausedSessionSettlesAStuckFade
+// reproduces the field defect directly: audio.Manager.CutBackgroundBed
+// (internal/agent/audio/interrupt.go) pauses a session mid-ramp outside
+// this coordinator's own ledger, and before that fix, left its own
+// audio_session.fade.state signal latched at "in_progress" forever, since
+// nothing ever drove the ramp to a natural completion from a paused
+// engine. Run against the code before the node's own reported session
+// state became authoritative over that stuck signal, this node's own
+// suspend never advances past the fadedown step: this proves the pause
+// dispatches anyway once the node reports itself paused, whatever the
+// fade-state signal still claims.
+func TestNightStopBackgroundAudioIfRunning_ReportedPausedSessionSettlesAStuckFade(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // dispatches the fadedown, at testNow
+	countAfterFadeDispatch := pub.count()
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{
+		fadeStateObservation(sessionID, "in_progress", testNow, testNow),
+		sessionStateObservation(sessionID, string(pkgaudio.StatePaused), testNow, testNow),
+	})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.count() != countAfterFadeDispatch+1 {
+		t.Fatalf("publish count once the node reports itself paused = %d, want %d (a paused session settles the fade regardless of its own stuck fade-state signal)", pub.count(), countAfterFadeDispatch+1)
+	}
+	if pub.lastAction != "audio.session.pause" {
+		t.Fatalf("dispatched action once the node reports paused = %q, want audio.session.pause", pub.lastAction)
 	}
 }
 
