@@ -69,6 +69,15 @@ type FakeEngine struct {
 	alignmentKnown  bool
 	alignmentSample AlignmentSample
 	alignmentReason string
+
+	// LoadHook, when set, is called at the very start of Load, for
+	// handle, before Load touches e.mu or any other state -- a test seam
+	// for simulating a slow cold prepare (opening and decoding a large
+	// asset) without holding any lock while it runs, matching gstengine's
+	// own Load, which does all of its slow work (resolving the asset,
+	// building the decode chain, waiting for PAUSED) before it ever
+	// touches its handle map. Never set in production; nil is a no-op.
+	LoadHook func(handle EngineHandle)
 }
 
 // fakeLTCNeverStartedReason is FakeEngine's LTC state before StartLTC is
@@ -228,6 +237,9 @@ func (e *FakeEngine) currentPosition(h *fakeHandle) time.Duration {
 }
 
 func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
+	if e.LoadHook != nil {
+		e.LoadHook(handle)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.takeFailure(handle); err != nil {
