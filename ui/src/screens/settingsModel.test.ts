@@ -42,6 +42,7 @@ describe('nodeClockVerdict', () => {
     fppBaseUrl: '',
     holdoverLimitSecondsText: '',
     priority1Text: '',
+    phcDeviceText: '',
   }
 
   it('accepts a managed provider with an interface and a domain', () => {
@@ -94,6 +95,23 @@ describe('nodeClockVerdict', () => {
 
   it('accepts priority1 within 0-255', () => {
     expect(nodeClockVerdict({ ...base, priority1Text: '128' })).toEqual({ ok: true })
+  })
+
+  it('accepts an external provider with a valid phcDevice', () => {
+    expect(nodeClockVerdict({ ...base, provider: 'external', phcDeviceText: '/dev/ptp0' })).toEqual({ ok: true })
+  })
+
+  it('refuses an external provider phcDevice that does not match /dev/ptpN', () => {
+    expect(nodeClockVerdict({ ...base, provider: 'external', phcDeviceText: 'eno2' }).ok).toBe(false)
+  })
+
+  it('refuses a device path typed into interface, naming an interface name instead', () => {
+    const verdict = nodeClockVerdict({ ...base, interfaceName: '/dev/ptp0' })
+    expect(verdict).toEqual({ ok: false, reason: 'Interface takes an interface name such as eno2, not a device path.' })
+  })
+
+  it('refuses any interface value containing a slash, not only a /dev/ptpN shape', () => {
+    expect(nodeClockVerdict({ ...base, interfaceName: 'some/path' }).ok).toBe(false)
   })
 })
 
