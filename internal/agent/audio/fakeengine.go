@@ -395,6 +395,19 @@ func (e *FakeEngine) Release(_ context.Context, handle EngineHandle) error {
 	return nil
 }
 
+// LiveHandles returns every handle this fake currently holds, in no
+// particular order, exactly like the real engine's own handle map — see
+// [Engine.LiveHandles].
+func (e *FakeEngine) LiveHandles(_ context.Context) ([]EngineHandle, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]EngineHandle, 0, len(e.handles))
+	for h := range e.handles {
+		out = append(out, h)
+	}
+	return out, nil
+}
+
 func (e *FakeEngine) Observe(_ context.Context, handle EngineHandle) (EngineObservation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

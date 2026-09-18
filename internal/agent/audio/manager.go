@@ -723,6 +723,14 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 			relCancel()
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The content changed while promoting, so the staged session was released. Prepare and start it again."}
 		}
+		// to may already be holding a handle of its own (a prior item this
+		// session never released, e.g. one [Manager.watchTick] has not yet
+		// observed as complete) — release it before the staged handle takes
+		// its place, or it survives, unaddressable by anything, as a
+		// mixer branch nobody's bookkeeping can stop.
+		if to.handleLoaded {
+			to.releaseEngineLocked(ctx)
+		}
 		to.handle = handle
 		to.handleLoaded = true
 		to.loadedIdentity = capturedIdentity

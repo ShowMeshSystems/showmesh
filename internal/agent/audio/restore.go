@@ -576,4 +576,78 @@ func (m *Manager) watchTick(ctx context.Context) {
 		m.restoreDucked(ctx, id)
 		m.restoreInterrupted(ctx, id)
 	}
+
+	m.releaseOrphanEngineHandles(ctx, sessions)
+}
+
+// releaseOrphanEngineHandles is the safety net behind whatever root cause
+// ever again leaves a handle no session owns: it compares [Engine.
+// LiveHandles] against every handle this tick's own sessions still hold —
+// s.handle for anything loaded, plus any successor staged ahead of a
+// schedule boundary (itemStage.handle) — and treats whatever engine-side
+// handle is left over as an orphan. A show must never be left with audio
+// nobody can address, so each orphan is logged once at WARN with its own
+// identity (an EngineHandle already names the session and item it was
+// minted for — never a fabricated media reference) and then stopped and
+// released, exactly like a commanded [Manager.Stop] would. sessions is
+// watchTick's own already-collected list; no session's mu is held
+// entering or leaving this call. A LiveHandles failure (most commonly no
+// engine bound yet) is not itself an orphan condition and is silently
+// skipped — there is nothing here to compare against.
+//
+// TRADE: [Manager.promote] briefly holds neither session's lock while
+// moving a handle from fromID to toID (release from, then acquire to —
+// see that method's own doc comment on why it never holds both at once).
+// A tick landing in exactly that instruction-narrow window would see the
+// handle as live but owned by neither session and treat it as an orphan,
+// stopping and releasing a handle a Promote in flight is about to start.
+// Accepted: the odds of a tick's own LiveHandles call landing inside that
+// window are vanishingly small against any real tick cadence, and the
+// failure mode if it ever does is self-healing — the Promote's own
+// Engine.Start then fails against a released handle and reports Failed,
+// exactly as a genuine engine error would, never a corrupted or silently
+// wrong session.
+func (m *Manager) releaseOrphanEngineHandles(ctx context.Context, sessions []*Session) {
+	live, err := m.engine.LiveHandles(ctx)
+	if err != nil || len(live) == 0 {
+		return
+	}
+
+	owned := make(map[EngineHandle]struct{}, len(sessions))
+	for _, s := range sessions {
+		s.mu.Lock()
+		if s.handleLoaded {
+			owned[s.handle] = struct{}{}
+		}
+		if s.stage != nil && s.stage.ready {
+			owned[s.stage.handle] = struct{}{}
+		}
+		s.mu.Unlock()
+	}
+
+	var orphans []EngineHandle
+	for _, h := range live {
+		if _, ok := owned[h]; !ok {
+			orphans = append(orphans, h)
+		}
+	}
+	if len(orphans) == 0 {
+		return
+	}
+
+	// The count itself is the evidence a wire-level audio report cannot
+	// currently carry without a schema change (AudioPayload's fields are
+	// closed vocabulary, not an arbitrary signal bag) — logged instead.
+	m.logf("audio: engine handle sweep found %d live handle(s), %d owned by no session", len(live), len(orphans))
+	for _, h := range orphans {
+		m.logf("audio: orphaned engine handle %q belongs to no session; stopping and releasing it", h)
+		stopCtx, stopCancel := boundedObserveContext(ctx)
+		_, _ = m.engine.Stop(stopCtx, h)
+		stopCancel()
+		relCtx, relCancel := boundedObserveContext(ctx)
+		if err := m.engine.Release(relCtx, h); err != nil {
+			m.logf("audio: releasing orphaned engine handle %q failed: %v", h, err)
+		}
+		relCancel()
+	}
 }

@@ -90,6 +90,12 @@ func (e *Engine) Observe(context.Context, agentaudio.EngineHandle) (agentaudio.E
 	return agentaudio.EngineObservation{}, e.unavailable()
 }
 
+// LiveHandles always fails: this build has no GStreamer backend and so
+// holds no handles at all.
+func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error) {
+	return nil, e.unavailable()
+}
+
 // Close is a no-op: this build holds no pipeline and no device.
 func (e *Engine) Close() error { return nil }
 
