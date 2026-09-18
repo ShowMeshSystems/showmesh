@@ -25,11 +25,13 @@ import {
   NotWiredBanner,
   RailBadge,
   RuledStrip,
+  Section,
   Segmented,
   Select,
   StatusPair,
   Table,
   TableWrap,
+  Workbench,
 } from './index'
 import './styles/index.css'
 import './styles/specimen.css'
@@ -567,6 +569,35 @@ export function Specimen() {
                 ],
               },
             ]}
+          />
+        </SpecSection>
+
+        <SpecSection
+          number="13 · Workbench"
+          id="specimen-workbench"
+          title="Controls left, the state they drive right"
+          detail="A two-column layout for control-heavy pages. The left column holds the driving controls; the right column holds the status, log, or results they act on. It lives inside the page, sets no width, and collapses to one column at the shell breakpoint, main first."
+        >
+          <Workbench
+            sideLabel="Specimen status"
+            main={
+              <>
+                <Section id="specimen-wb-controls" title="Deck">
+                  <ButtonRow>
+                    <Button variant="primary">Front</Button>
+                    <Button variant="secondary">Back</Button>
+                  </ButtonRow>
+                </Section>
+                <Section id="specimen-wb-grid" title="Grid">
+                  <p className="sm-small sm-muted">The driving controls occupy the wider column.</p>
+                </Section>
+              </>
+            }
+            side={
+              <Section id="specimen-wb-status" title="What each dispatch did">
+                <RuledStrip absence="empty" label="No dispatches yet" fact="Fire a control on the left and its outcome lands here." />
+              </Section>
+            }
           />
         </SpecSection>
       </div>
