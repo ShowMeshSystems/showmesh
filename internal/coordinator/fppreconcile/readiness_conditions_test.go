@@ -672,7 +672,16 @@ func TestPlaylistReadinessCueMultisyncTriggerMissingWarns(t *testing.T) {
 func multisyncReadyPlaylistFixture(t *testing.T, st *store.Store) config.ShowPlaylistPayload {
 	t.Helper()
 	ctx := context.Background()
-	putShow(t, st, "show-1", "Show One")
+	// AudioNodes is set explicitly (ADR-049 decision 10) so this fixture
+	// isolates conditions 14/15 from the unrelated audio-nodes-defaulted
+	// warning: without a show-wide list, an audio-bearing Cue defaulting
+	// to the installation's own node would add a second warning neither
+	// test below is about.
+	showPayload, err := config.EncodeShowPayload(config.ShowPayload{Name: "Show One", AudioNodes: []string{"node-1"}})
+	if err != nil {
+		t.Fatalf("encode show payload: %v", err)
+	}
+	putConfig(t, st, config.ShowConfigKind, "show-1", showPayload)
 	putActiveShow(t, st, "show-1")
 	hash := hash64("a1")
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "seq-1.fseq", "")
