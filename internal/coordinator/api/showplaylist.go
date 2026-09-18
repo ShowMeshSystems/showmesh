@@ -138,6 +138,14 @@ func (h *handlers) handlePutShowPlaylist(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if problem, err := h.checkSequenceFilenameClaims(r.Context(), id, payload); err != nil {
+		h.writeInternalError(w, now, "check sequence filename claims for show.playlist write", err)
+		return
+	} else if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	// TRACK-H-cues-and-playlists.md section H5 build item 8's own ruling: an
 	// operator-invisible alphabetical pick between two authored
 	// showmesh-audio playlists is not acceptable for what plays out of a
@@ -248,6 +256,88 @@ func (h *handlers) handleGetShowPlaylistRevisions(w http.ResponseWriter, r *http
 // dangling reference to consider on this side.
 func (h *handlers) handleDeleteShowPlaylist(w http.ResponseWriter, r *http.Request) {
 	h.handleDeleteShowConfigObject(w, r, config.ShowPlaylistConfigKind, nil)
+}
+
+// sequenceFilenameClaimShape is the minimal shape checkSequenceFilenameClaims
+// needs to read another, already-stored-and-validated show.playlist
+// revision's own filename claims, without re-running
+// config.DecodeShowPlaylistPayload's full validation (which needs
+// showExists/resolveCue callbacks this check has no reason to build a
+// second time for a row that was already valid when written) — the same
+// "read only the head" posture listShowPlaylistSummaries above already
+// takes for the identical reason.
+type sequenceFilenameClaimShape struct {
+	Show    string `json:"show"`
+	Runner  string `json:"runner"`
+	Entries []struct {
+		Cue string `json:"cue"`
+		FPP *struct {
+			ExpectedSequenceFilename string `json:"expectedSequenceFilename"`
+		} `json:"fpp"`
+	} `json:"entries"`
+}
+
+// checkSequenceFilenameClaims refuses payload's write when it would make
+// two different Cues in payload.Show claim the identical FPP sequence
+// filename (ADR-051 decision 2: "Two Cues in one show may not claim the
+// same filename"), as [cuecatalog.Entry.Triggers]' playlist-derived half.
+// excludeID is the object id being written: the claims already held by
+// its OWN previously-stored revision are superseded by payload, not
+// compared against it, matching [handlePutShowPlaylist]'s own
+// showmesh-audio-playlist duplicate check one call above.
+//
+// Only fpp-runner playlists carry an entries[].fpp.expectedSequenceFilename
+// at all (decodeShowPlaylistEntryFPP's own required-iff-fpp-runner rule),
+// so a showmesh-audio playlist can neither claim a filename nor collide
+// with one; this check still runs for every payload (rather than being
+// skipped for a non-fpp runner) so a filename claim held by an EXISTING
+// fpp-runner playlist is still checked against.
+func (h *handlers) checkSequenceFilenameClaims(ctx context.Context, excludeID string, payload config.ShowPlaylistPayload) (*v1.Problem, error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list show.playlist config objects: %w", err)
+	}
+
+	claims := make(map[string]string, len(payload.Entries))
+	for _, obj := range objs {
+		if obj.ID == excludeID || obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("get show.playlist config revision for %q: %w", obj.ID, err)
+		}
+		var shape sequenceFilenameClaimShape
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &shape); err != nil {
+			return nil, fmt.Errorf("decode show.playlist config payload for %q: %w", obj.ID, err)
+		}
+		if shape.Show != payload.Show || shape.Runner != config.ShowPlaylistRunnerFPP {
+			continue
+		}
+		for _, e := range shape.Entries {
+			if e.FPP == nil || e.FPP.ExpectedSequenceFilename == "" {
+				continue
+			}
+			claims[e.FPP.ExpectedSequenceFilename] = e.Cue
+		}
+	}
+
+	for _, e := range payload.Entries {
+		if e.FPP == nil || e.FPP.ExpectedSequenceFilename == "" {
+			continue
+		}
+		filename := e.FPP.ExpectedSequenceFilename
+		if holder, held := claims[filename]; held && holder != e.Cue {
+			cueA, cueB := holder, e.Cue
+			if cueB < cueA {
+				cueA, cueB = cueB, cueA
+			}
+			problem := sequenceFilenameClaimConflictProblem(cueA, cueB, filename)
+			return &problem, nil
+		}
+		claims[filename] = e.Cue
+	}
+	return nil, nil
 }
 
 func mapConfigShowPlaylistEntries(entries []config.ShowPlaylistEntry) []v1.ConfigShowPlaylistEntry {

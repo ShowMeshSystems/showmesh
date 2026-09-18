@@ -200,6 +200,17 @@ const (
 	// up, is the plugin installed and publishing definitions) rather than
 	// a coordinator defect.
 	ProblemTypeFPPDefinitionRepublishFailed = problemBaseURI + "fpp-definition-republish-failed"
+
+	// ProblemTypeSequenceFilenameClaimDuplicate is
+	// [sequenceFilenameClaimConflictProblem]'s own type (ADR-051 decision
+	// 2): a show.playlist write whose entries[].fpp.expectedSequenceFilename
+	// values would make two different show.cue objects in the same Show
+	// claim the identical FPP sequence filename as their own
+	// [cuecatalog.Entry.Triggers] source. Two Cues claiming one filename
+	// would make a node's MultiSync START packet ambiguous about which
+	// Cue's audio it starts, so this is refused at write time rather than
+	// left to surface later as a readiness warning.
+	ProblemTypeSequenceFilenameClaimDuplicate = problemBaseURI + "sequence-filename-claim-duplicate"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
@@ -585,6 +596,27 @@ func showmeshAudioPlaylistConflictProblem(existingID, newID string) v1.Problem {
 				"session per node, so a second one (%q) is refused rather than silently choosing between them. Edit "+
 				"%q instead, or change its runner, then retry.",
 			existingID, newID, existingID),
+	}
+}
+
+// sequenceFilenameClaimConflictProblem is
+// [handlers.checkSequenceFilenameClaims]'s own 400 (ADR-051 decision 2):
+// entries in this Show's fpp-runner show.playlist objects declare
+// fpp.expectedSequenceFilename filename for two different Cues, cueA and
+// cueB. Naming both Cues and the filename, on
+// [cueCatalogClaimConflictProblem]'s own precedent, so an operator sees
+// exactly what to change (one Cue's Playlist entry, or its render output)
+// without guessing which of the two colliding entries is "wrong".
+func sequenceFilenameClaimConflictProblem(cueA, cueB, filename string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeSequenceFilenameClaimDuplicate,
+		Title:  "Invalid show configuration",
+		Status: http.StatusBadRequest,
+		Detail: fmt.Sprintf(
+			"cues %q and %q both claim FPP sequence filename %q; a node cannot tell which Cue's audio a MultiSync "+
+				"START packet for that filename starts, so this is refused. Change one Cue's Playlist entry or its "+
+				"render output so the filename is claimed by only one Cue.",
+			cueA, cueB, filename),
 	}
 }
 

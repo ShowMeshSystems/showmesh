@@ -3,6 +3,7 @@ package assetsync
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -915,5 +916,119 @@ func assertRoundTripRevisionAgrees(t *testing.T, catalog Catalog) {
 	}
 	if recomputed != catalog.Revision {
 		t.Fatalf("revision recomputed after a wire round trip = %q, want the original resolved revision %q (node %q)", recomputed, catalog.Revision, catalog.Node)
+	}
+}
+
+// --- MultiSync triggers (ADR-051 decision 2) ---
+
+// TestCueCatalogTriggersCombinePlaylistEntriesAndRenderOutput proves
+// [cuecatalog.Entry.Triggers] is resolved from every bound fpp-runner
+// show.playlist entry naming the Cue whose fpp.expectedSequenceFilename
+// is set (a second entry naming the identical filename must not produce a
+// duplicate; an entry with no expectedSequenceFilename must contribute
+// nothing), PLUS the Cue's own resolved render output filename, sorted.
+func TestCueCatalogTriggersCombinePlaylistEntriesAndRenderOutput(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "render-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putSurface(t, st, "garage", "halloween-2026", "render-01")
+	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "thriller"}},
+	})
+	createAssetWithMediaType(t, st, "halloween-2026", "thriller", store.AssetTargetKindNode, "render-01", "fseq",
+		"sha256:"+strings.Repeat("a", 64), "Thriller.fseq")
+
+	playlist := config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: "11111111-1111-1111-1111-111111111111",
+			PlaylistName: "Main", PlaylistHash: strings.Repeat("a", 64),
+		},
+		Entries: []config.ShowPlaylistEntry{
+			// Two entries naming the same Cue with the SAME declared
+			// filename: the trigger set must still hold it only once.
+			{ID: "e1", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Position: 0, ExpectedSequenceFilename: "Thriller-alt.fseq"}},
+			{ID: "e2", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Position: 1, ExpectedSequenceFilename: "Thriller-alt.fseq"}},
+			// A third entry naming the same Cue with no declared filename
+			// at all: it must contribute nothing.
+			{ID: "e3", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Position: 2}},
+		},
+	}
+	putPlaylist(t, st, "main", playlist)
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := ResolveCueCatalog(ctx, st, active, "render-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	var entry *cuecatalog.Entry
+	for i := range catalog.Entries {
+		if catalog.Entries[i].CueID == "thriller" {
+			entry = &catalog.Entries[i]
+		}
+	}
+	if entry == nil {
+		t.Fatalf("catalog entries = %+v, want thriller present", catalog.Entries)
+	}
+	want := []string{"Thriller-alt.fseq", "Thriller.fseq"}
+	if !reflect.DeepEqual(entry.Triggers, want) {
+		t.Fatalf("thriller entry Triggers = %+v, want %+v (playlist filename de-duplicated, plus the render output's own filename)", entry.Triggers, want)
+	}
+}
+
+// TestCueCatalogRevisionChangesWhenATriggerChanges proves Triggers is
+// hashed, matching every other resolved-output field
+// [cuecatalog.RevisionInput]'s own doc comment requires: a catalog whose
+// only difference is which filename starts a Cue must not collide with
+// one that has no trigger at all.
+func TestCueCatalogRevisionChangesWhenATriggerChanges(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "render-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putSurface(t, st, "garage", "halloween-2026", "render-01")
+	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "thriller"}},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "thriller"))
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	before, err := ResolveCueCatalog(ctx, st, active, "render-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (before): %v", err)
+	}
+	if len(before.Entries) != 1 || len(before.Entries[0].Triggers) != 0 {
+		t.Fatalf("before entries = %+v, want thriller present with no trigger yet", before.Entries)
+	}
+
+	revised := simplePlaylist("halloween-2026", "thriller")
+	revised.Entries[0].FPP.ExpectedSequenceFilename = "Thriller.fseq"
+	revisedRaw, err := config.EncodeShowPlaylistPayload(revised)
+	if err != nil {
+		t.Fatalf("encode revised show.playlist payload: %v", err)
+	}
+	putConfigRev(t, st, config.ShowPlaylistConfigKind, "main", 2, revisedRaw)
+
+	after, err := ResolveCueCatalog(ctx, st, active, "render-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (after): %v", err)
+	}
+	if len(after.Entries) != 1 || len(after.Entries[0].Triggers) != 1 || after.Entries[0].Triggers[0] != "Thriller.fseq" {
+		t.Fatalf("after entries = %+v, want thriller with trigger Thriller.fseq", after.Entries)
+	}
+	if before.Revision == after.Revision {
+		t.Fatalf("catalog revision unchanged after adding a trigger: %q == %q", before.Revision, after.Revision)
 	}
 }

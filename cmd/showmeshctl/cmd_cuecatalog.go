@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -50,6 +51,7 @@ type cueCatalogEntryRecord struct {
 	CueID       string                  `json:"cueId"`
 	CueRevision int64                   `json:"cueRevision"`
 	Outputs     cueCatalogOutputsRecord `json:"outputs"`
+	Triggers    []string                `json:"triggers"`
 }
 
 type cueCatalogResponse struct {
@@ -214,6 +216,7 @@ func printCueCatalogResponse(w io.Writer, resp cueCatalogResponse) {
 		resp.AcknowledgedStatus, emptyOrDash(resp.AcknowledgedRevision), timeOrDash(resp.AcknowledgedAt))
 	for _, e := range resp.Entries {
 		_, _ = fmt.Fprintf(w, "  cue %s (revision %d)\n", e.CueID, e.CueRevision)
+		_, _ = fmt.Fprintf(w, "    triggers: %s\n", joinOrDash(e.Triggers))
 		if e.Outputs.Render != nil {
 			_, _ = fmt.Fprintf(w, "    render: sequence=%s filename=%s assets=%d\n",
 				e.Outputs.Render.Sequence, emptyOrDash(e.Outputs.Render.Filename), len(e.Outputs.Render.AssetHashes))
@@ -229,6 +232,16 @@ func printCueCatalogResponse(w io.Writer, resp cueCatalogResponse) {
 			_, _ = fmt.Fprintf(w, "    announcement: policy=%s fadeMillis=%d\n", e.Outputs.Announcement.Policy, e.Outputs.Announcement.FadeMillis)
 		}
 	}
+}
+
+// joinOrDash renders the FPP sequence filenames that trigger a Cue's
+// audio (ADR-051 decision 2) as a comma-separated list, or "-" when the
+// Cue has none yet.
+func joinOrDash(filenames []string) string {
+	if len(filenames) == 0 {
+		return "-"
+	}
+	return strings.Join(filenames, ", ")
 }
 
 // --- acknowledge ---
