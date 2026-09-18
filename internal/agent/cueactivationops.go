@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -14,6 +15,37 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
+
+// verifiedHashCache caches hashFile's own answer per path, keyed also by
+// size and modification time: a hit only when both are unchanged since the
+// cached hash was computed, shared by assetPresent below and by
+// assetFetchOperation's own post-write verification (assets.go), so a
+// large asset already verified once is never re-hashed whole on every
+// cue.activate.
+type verifiedHashCache struct {
+	mu      sync.Mutex
+	entries map[string]hashCacheEntry
+}
+
+func newVerifiedHashCache() *verifiedHashCache {
+	return &verifiedHashCache{entries: make(map[string]hashCacheEntry)}
+}
+
+func (c *verifiedHashCache) get(path string, size int64, modTime time.Time) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[path]
+	if !ok || e.size != size || !e.modTime.Equal(modTime) {
+		return "", false
+	}
+	return e.hash, true
+}
+
+func (c *verifiedHashCache) set(path string, size int64, modTime time.Time, hash string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[path] = hashCacheEntry{size: size, modTime: modTime, hash: hash}
+}
 
 // This file is TRACK-H-cues-and-playlists.md section H4's node-agent
 // entry point: the "cue.activate" OperationFunc. See this seam's
@@ -37,6 +69,7 @@ type cueActivationOperation struct {
 	render       *renderOperations
 	audioMgr     *audio.Manager
 	nodeID       string
+	hashCache    *verifiedHashCache
 
 	// announcementMu guards announcementActivationID/announcementCueID:
 	// TRACK-H-cues-and-playlists.md section H5 build item 3's own state,
@@ -109,7 +142,8 @@ func (o *cueActivationOperation) assetPresent(filename string, hashes []string) 
 	if filename == "" {
 		return false
 	}
-	got, err := hashFile(filepath.Join(o.assetDir, filename))
+	path := filepath.Join(o.assetDir, filename)
+	got, err := o.hashFileCached(path)
 	if err != nil {
 		return false
 	}
@@ -122,6 +156,30 @@ func (o *cueActivationOperation) assetPresent(filename string, hashes []string) 
 		return true
 	}
 	return got == expected
+}
+
+// hashFileCached answers path's content hash from o.hashCache when its
+// size and modification time still match a prior verification, hashing
+// (and caching the result) only on a miss so a missing or altered file
+// still hashes, and still fails, exactly as before this cache existed.
+func (o *cueActivationOperation) hashFileCached(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if o.hashCache != nil {
+		if hash, ok := o.hashCache.get(path, info.Size(), info.ModTime()); ok {
+			return hash, nil
+		}
+	}
+	hash, err := hashFile(path)
+	if err != nil {
+		return "", err
+	}
+	if o.hashCache != nil {
+		o.hashCache.set(path, info.Size(), info.ModTime(), hash)
+	}
+	return hash, nil
 }
 
 // assetsPresent is [cueauth.CheckLazy]'s assetsPresent callback for entry:

@@ -221,7 +221,7 @@ func Run() int {
 	// its real sources (catalogStore, audioMgr) further down once they
 	// exist. See this type's own doc comment for why that split is
 	// necessary and why HandleSequencePacket tolerates it.
-	cueAudioTrigger := newMultiSyncCueAudioTrigger(logger, time.Now)
+	cueAudioTrigger := newMultiSyncCueAudioTrigger(logger, time.Now, audioReportTrigger)
 
 	multiSyncDone := make(chan struct{})
 	go func() {

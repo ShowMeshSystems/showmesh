@@ -446,6 +446,18 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 
 	nodeOutcome := cueActivationNodeOutcomeFromResult(res)
 	nodeUnalignedReason := cueActivationNodeUnalignedReasonFromResult(res)
+	// The pre-dispatch push-cache poll (waitForMultiSyncStart, above) can
+	// still miss a real MultiSync start that landed well inside its own
+	// window: the node's audio report only elevates to a fast cadence
+	// during a fade, so a start alone does not get republished in time.
+	// The node's own cue.activate result carries the same evidence when
+	// that happened (activateAudio's own item 7 restart guard finding the
+	// session already playing under "multisync"); prefer it over the
+	// pre-dispatch poll's own miss so this activation is never mislabeled
+	// "coordinator" merely because the node reported it late.
+	if resultEvidence, ok := multiSyncStartEvidenceFromResult(res); ok {
+		startEvidence = resultEvidence
+	}
 	startTrigger := multiSyncStartTriggerLabel(act, cueOutputs, startEvidence)
 	resolvedAt := h.now()
 	resultJSON, _ := json.Marshal(cueActivationResultPayload{

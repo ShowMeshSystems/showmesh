@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -129,6 +131,42 @@ func (h *handlers) readMultiSyncStartEvidence(nodeID string, baseline time.Time)
 	if o := latestAudioObservation(obs, audioSessionPreparedLateSignal); o != nil && o.Absence == "" {
 		ev.PreparedLate, _ = o.Value.(bool)
 	}
+	return ev, true
+}
+
+// multiSyncStartEvidenceFromResult reads the SAME "multisync" evidence
+// straight from a node's own cue.activate result, for the case
+// waitForMultiSyncStart's own pre-dispatch poll missed entirely: the node
+// publishes its audio report on defaultAudioReportInterval (15s, elevated
+// only during a fade), so a start that lands well inside the fallback
+// window can still be invisible to the push cache by the time this
+// coordinator gives up waiting. internal/agent/cueactivationops.go writes
+// [pkgaudio.ResultStartTrigger] into the result's own Evidence.Value only
+// when the session was already playing under a MultiSync start, so a hit
+// here is exactly as reliable as the push-cache poll's own "multisync"
+// reading, just observed later, from the wire reply this coordinator
+// already has to decode. ok is false when the result carries no such
+// evidence, or names any trigger other than "multisync".
+func multiSyncStartEvidenceFromResult(res mqttproto.ResultPayload) (multiSyncStartEvidence, bool) {
+	if res.Evidence == nil {
+		return multiSyncStartEvidence{}, false
+	}
+	m, ok := res.Evidence.Value.(map[string]any)
+	if !ok {
+		return multiSyncStartEvidence{}, false
+	}
+	if trigger, _ := m[pkgaudio.ResultStartTrigger].(string); trigger != multiSyncStartTriggerValue {
+		return multiSyncStartEvidence{}, false
+	}
+	ev := multiSyncStartEvidence{Triggered: true}
+	ev.TriggerSequenceFilename, _ = m[pkgaudio.ResultTriggerSequenceFilename].(string)
+	if v, ok := m[pkgaudio.ResultTriggerArrivalNs].(float64); ok {
+		ev.TriggerArrivalNs = int64(v)
+	}
+	if v, ok := m[pkgaudio.ResultStartLeadMs].(float64); ok {
+		ev.StartLeadMs = int(v)
+	}
+	ev.PreparedLate, _ = m[pkgaudio.ResultPreparedLate].(bool)
 	return ev, true
 }
 

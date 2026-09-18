@@ -230,7 +230,11 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // second enforcement path.
 func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, fppConnect *fppConnectState, logger *slog.Logger) map[string]OperationFunc {
 	state := &agentEchoState{}
-	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
+	// hashCache is shared between asset.fetch's own post-write verification
+	// and cue.activate's assetPresent check (cueactivationops.go), so a
+	// large asset already verified once is never re-hashed whole again.
+	hashCache := newVerifiedHashCache()
+	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken, hashCache: hashCache}
 	remove := assetRemoveOperation{dir: assetDir}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
 	inventoryRequest := assetInventoryRequestOperation{}
@@ -258,7 +262,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		// authorized-or-refused against the held catalog, and only the
 		// apply step for a configured output actually executes (see
 		// cueActivationOperation.activate).
-		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr, nodeID: nodeID}
+		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr, nodeID: nodeID, hashCache: hashCache}
 		ops["cue.activate"] = cueActivate.activate
 	}
 	for action, op := range audioSessionOperations(audioMgr) {
