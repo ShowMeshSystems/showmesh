@@ -1854,10 +1854,19 @@ function RunList({
           detail="Shows › Automation is where they are authored."
         />
       ) : (
-        <div className="sm-grid sm-grid--auto sm-control-grid">
+        <ul className="sm-plain-list">
           {list.items.map((item) => (
-            <div key={item.id}>
+            <li key={item.id} className="sm-annc">
+              <div>
+                <p>
+                  <span className="sm-data">{item.label !== '' ? item.label : item.id}</span>
+                </p>
+                <p className="sm-small sm-muted">
+                  <span className="sm-data">{item.id}</span> · rev {item.currentRevision}
+                </p>
+              </div>
               <Button
+                variant="primary"
                 size="gloved"
                 disabled={!gate.allowed}
                 title={gate.allowed ? undefined : gate.reason}
@@ -1875,14 +1884,11 @@ function RunList({
                     )
                 }}
               >
-                {item.label !== '' ? item.label : item.id}
+                Run
               </Button>
-              <p className="sm-small sm-muted">
-                <span className="sm-data">{item.id}</span> · rev {item.currentRevision}
-              </p>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
       <Outcome outcome={outcome} />
     </Section>
