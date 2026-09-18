@@ -280,7 +280,7 @@ func TestNightAnnouncement_NonAudioActionIsDispatchedUntouched(t *testing.T) {
 		Primitive: "startPlaylist", Params: map[string]any{"playlist": "thank-you"},
 	}
 	resolved := nightAnnouncementCueWithResolvedPolicy(cue, payload)
-	got := nightAnnouncementDeclaredTarget(resolved, fpp)
+	got := h.nightAnnouncementDeclaredTarget(context.Background(), rec, resolved, fpp)
 	if len(got.Params) != 1 || got.Params["playlist"] != "thank-you" {
 		t.Fatalf("FPP announcement params = %v, want the authored map unchanged", got.Params)
 	}

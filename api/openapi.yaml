@@ -15586,14 +15586,29 @@ components:
             first listed node. Configuration validation is not a dispatch
             consumer: a binding check verifies that every named node is
             declared, regardless of which node a dispatch would reach.
+            ADR-049 decision 10: absent, or an explicitly empty array, is
+            no longer refused; the target then resolves against the
+            show's own audioNodes list minus excludeNodes
+            (ResolveAudioNodes), falling back to the installation's
+            default node when the show has none.
           oneOf:
             - type: string
               minLength: 1
             - type: array
-              minItems: 1
               items:
                 type: string
                 minLength: 1
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: nodes to remove from the show's own
+            audioNodes list when audioNodeId is absent or empty. Valid
+            only together with an absent or empty audioNodeId - declaring
+            both is refused. Each id must name a node in the show's
+            audioNodes list, and excluding every one of them is refused.
+          type: array
+          items:
+            type: string
+            minLength: 1
         audioSessionId:
           type: string
           description: "audio-only: the target pkg/audio session id."
@@ -15651,16 +15666,24 @@ components:
         audioNodeId:
           description: >-
             audio-only: the target audio node id(s) - a bare string or an
-            array of distinct, non-empty node ids. See ConfigShowActionTarget's
-            own audioNodeId description.
+            array of distinct, non-empty node ids, or absent/empty to
+            resolve against the show's own audioNodes list. See
+            ConfigShowActionTarget's own audioNodeId description.
           oneOf:
             - type: string
               minLength: 1
             - type: array
-              minItems: 1
               items:
                 type: string
                 minLength: 1
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: see ConfigShowActionTarget's own
+            excludeNodes description; the same rules apply here.
+          type: array
+          items:
+            type: string
+            minLength: 1
         audioSessionId:
           type: string
           minLength: 1
@@ -17116,6 +17139,24 @@ components:
             type: string
             minLength: 1
             maxLength: 64
+        audioNodes:
+          description: >-
+            ADR-049 decision 10's show-wide audio node list: every
+            audio.node id this show plays on by default. An audio-bearing
+            object with no explicit node list of its own (a Cue's
+            outputs.audio/outputs.announcement, a night background bed, or
+            a show.action audio target) resolves against this list minus
+            its own excludeNodes. Absent or an empty array both mean
+            unset, unlike fppInstances/resolumeInstances: there is no
+            operator-visible distinction between "never configured" and
+            "explicitly no audio nodes", since either way an
+            audio-bearing object falls back to the installation's default
+            node.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
     ConfigShowWrite:
       type: object
       description: >-
@@ -17164,6 +17205,17 @@ components:
             with the identical absent / empty / populated meaning
             fppInstances carries. An empty array is an ordinary night with
             no projection, not a misconfiguration.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        audioNodes:
+          description: >-
+            ADR-049 decision 10's show-wide audio node list. Absent or an
+            empty array both mean unset; see ConfigShow's own
+            audioNodes description for what that means for every
+            audio-bearing object in this show.
           type: array
           items:
             type: string
@@ -17384,6 +17436,18 @@ components:
           description: >-
             Deprecated one-element compatibility form of targets (ADR-049).
             Declaring both target and targets on one output is refused.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: nodes to remove from the show's own
+            audioNodes list when targets is absent or empty. Valid only
+            together with an absent or empty targets - declaring both is
+            refused. Each id must name a node in the show's audioNodes
+            list, and excluding every one of them is refused.
+          type: array
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
     ConfigShowCueLTCOutput:
       type: object
       description: >-
@@ -17438,6 +17502,15 @@ components:
           description: >-
             Deprecated one-element compatibility form of targets (ADR-049).
             Declaring both target and targets on one output is refused.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: see ConfigShowCueAudioOutput's own
+            excludeNodes description; the same rules apply here.
+          type: array
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
     ConfigShowCueOutputs:
       type: object
       description: >-
@@ -17913,6 +17986,17 @@ components:
             node play every item, and an item's own target then only
             selects which registered copy of the file to use, not where
             it plays.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: nodes to remove from the show's own
+            audioNodes list when targets is absent or empty. Valid only
+            together with an absent or empty targets - declaring both is
+            refused. Each id must name a node in the show's audioNodes
+            list, and excluding every one of them is refused.
+          type: array
+          items:
+            type: string
+            minLength: 1
     ConfigNightSessionBackgroundAudioReference:
       type: object
       description: >-
@@ -17940,6 +18024,14 @@ components:
             node play every item, and an item's own target then only
             selects which registered copy of the file to use, not where
             it plays.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: see ConfigNightSessionBackgroundAudioInline's
+            own excludeNodes description; the same rules apply here.
+          type: array
+          items:
+            type: string
+            minLength: 1
     ConfigNightSessionResting:
       type: object
       description: >-

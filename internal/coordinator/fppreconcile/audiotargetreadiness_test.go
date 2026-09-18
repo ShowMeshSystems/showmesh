@@ -33,6 +33,15 @@ func putCueWithOutputs(t *testing.T, st *store.Store, cueID, showID string, outp
 	putConfig(t, st, config.ShowCueConfigKind, cueID, payload)
 }
 
+func putShowWithAudioNodes(t *testing.T, st *store.Store, id, name string, audioNodes []string) {
+	t.Helper()
+	payload, err := config.EncodeShowPayload(config.ShowPayload{Name: name, AudioNodes: audioNodes})
+	if err != nil {
+		t.Fatalf("encode show payload: %v", err)
+	}
+	putConfig(t, st, config.ShowConfigKind, id, payload)
+}
+
 func playlistWithCue(showID, cueID string) config.ShowPlaylistPayload {
 	return config.ShowPlaylistPayload{
 		Show: showID, Name: "Main", Runner: "showmesh",
@@ -314,7 +323,10 @@ func TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC(t *testing
 // empty-list default rule's OTHER branch (TestAudioTargetReadinessPassesTheReferenceInstallation
 // covers the program+ltc branch): with no node holding program+ltc at
 // all, an installation with exactly one declared audio.node still
-// resolves an untargeted output to it, and stays ready.
+// resolves an untargeted output to it, and stays ready. ADR-049 decision
+// 10: since the show has no audioNodes of its own, this now also warns
+// (audio-nodes-defaulted) rather than staying silent, since the output
+// only reaches pi because of the installation-wide fallback.
 func TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "show-1", "Show One")
@@ -330,8 +342,8 @@ func TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode(t *testing.T)
 	if cond != "" {
 		t.Fatalf("condition = %q (%s), want ready: pi is the sole audio.node, so the untargeted output resolves to it", cond, reason)
 	}
-	if warning != "" {
-		t.Errorf("warning = %q, want empty", warning)
+	if !strings.Contains(warning, "cue-1") {
+		t.Errorf("warning = %q, want it to name the cue (audio-nodes-defaulted)", warning)
 	}
 }
 
@@ -356,5 +368,54 @@ func TestAudioTargetReadinessChecksEveryListedTarget(t *testing.T) {
 	}
 	if !strings.Contains(reason, "pi") || !strings.Contains(reason, "cue-1") {
 		t.Errorf("reason = %q, want it to name the cue and the unbound target node", reason)
+	}
+}
+
+// --- ADR-049 decision 10: show.audioNodes / excludeNodes at the readiness layer. ---
+
+// TestAudioTargetReadinessUntargetedCueResolvesToShowAudioNodes proves
+// decision 10 step 2: with the show's own audioNodes list set, a cue with
+// no explicit targets plays on every listed node, not the installation
+// default, and does not warn audio-nodes-defaulted.
+func TestAudioTargetReadinessUntargetedCueResolvesToShowAudioNodes(t *testing.T) {
+	st := openTestStore(t)
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putShowWithAudioNodes(t, st, "show-1", "Show One", []string{"m4", "pi"})
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a"},
+	})
+
+	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready", cond, reason)
+	}
+	if strings.Contains(warning, "audio node list") {
+		t.Errorf("warning = %q, want no audio-nodes-defaulted warning: the show has its own audioNodes list", warning)
+	}
+}
+
+// TestAudioTargetReadinessExcludeNodesNarrowsShowAudioNodes proves
+// decision 10's per-output excludeNodes: a cue excluding one of the
+// show's two audio nodes plays only on the other, so an unbound-target
+// check against the excluded node's own name never fires.
+func TestAudioTargetReadinessExcludeNodesNarrowsShowAudioNodes(t *testing.T) {
+	st := openTestStore(t)
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putShowWithAudioNodes(t, st, "show-1", "Show One", []string{"m4", "pi"})
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", ExcludeNodes: []string{"pi"}},
+	})
+
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready: excludeNodes only narrows the show's own list", cond, reason)
 	}
 }

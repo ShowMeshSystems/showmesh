@@ -5330,8 +5330,10 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement or the night-mode resting bed may name more than one node, and those consumers use every listed node. Every other consumer dispatches to only the first listed node. Configuration validation is not a dispatch consumer: a binding check verifies that every named node is declared, regardless of which node a dispatch would reach. */
+            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement or the night-mode resting bed may name more than one node, and those consumers use every listed node. Every other consumer dispatches to only the first listed node. Configuration validation is not a dispatch consumer: a binding check verifies that every named node is declared, regardless of which node a dispatch would reach. ADR-049 decision 10: absent, or an explicitly empty array, is no longer refused; the target then resolves against the show's own audioNodes list minus excludeNodes (ResolveAudioNodes), falling back to the installation's default node when the show has none. */
             audioNodeId?: string | string[];
+            /** @description ADR-049 decision 10: nodes to remove from the show's own audioNodes list when audioNodeId is absent or empty. Valid only together with an absent or empty audioNodeId - declaring both is refused. Each id must name a node in the show's audioNodes list, and excluding every one of them is refused. */
+            excludeNodes?: string[];
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
             /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. `params` is otherwise opaque here and validated by the node, with one exception: `audio.gain.set` requires `params.gainDb` and `audio.gain.fade` requires `params.targetGainDb`, both in DECIBELS on the same scale as the gain endpoints (0 dB unity, -60 dB silence, +12 dB the most accepted). The pre-decibel `params.gain`/`params.targetGain` are refused here at authoring time, naming the replacement, rather than discovered when the Cue fires mid-show. */
@@ -5353,8 +5355,10 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            /** @description audio-only: the target audio node id(s) - a bare string or an array of distinct, non-empty node ids. See ConfigShowActionTarget's own audioNodeId description. */
+            /** @description audio-only: the target audio node id(s) - a bare string or an array of distinct, non-empty node ids, or absent/empty to resolve against the show's own audioNodes list. See ConfigShowActionTarget's own audioNodeId description. */
             audioNodeId?: string | string[];
+            /** @description ADR-049 decision 10: see ConfigShowActionTarget's own excludeNodes description; the same rules apply here. */
+            excludeNodes?: string[];
             audioSessionId?: string;
             audioAction?: string;
         };
@@ -5926,6 +5930,8 @@ export interface components {
             fppInstances?: string[];
             /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
             resolumeInstances?: string[];
+            /** @description ADR-049 decision 10's show-wide audio node list: every audio.node id this show plays on by default. An audio-bearing object with no explicit node list of its own (a Cue's outputs.audio/outputs.announcement, a night background bed, or a show.action audio target) resolves against this list minus its own excludeNodes. Absent or an empty array both mean unset, unlike fppInstances/resolumeInstances: there is no operator-visible distinction between "never configured" and "explicitly no audio nodes", since either way an audio-bearing object falls back to the installation's default node. */
+            audioNodes?: string[];
         };
         /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward, and neither is a participation selection: a write that omits fppInstances or resolumeInstances records that show as having no selection for that integration, which is not the same as choosing an empty one. Send an empty array to state "no instance of this integration takes part". A present `null` is rejected for both. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
         ConfigShowWrite: {
@@ -5935,6 +5941,8 @@ export interface components {
             fppInstances?: string[];
             /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
             resolumeInstances?: string[];
+            /** @description ADR-049 decision 10's show-wide audio node list. Absent or an empty array both mean unset; see ConfigShow's own audioNodes description for what that means for every audio-bearing object in this show. */
+            audioNodes?: string[];
         };
         /** @description The body of GET and PUT /config/show/{id}. */
         ShowConfigResponse: {
@@ -6021,6 +6029,8 @@ export interface components {
              * @description Deprecated one-element compatibility form of targets (ADR-049). Declaring both target and targets on one output is refused.
              */
             target?: string;
+            /** @description ADR-049 decision 10: nodes to remove from the show's own audioNodes list when targets is absent or empty. Valid only together with an absent or empty targets - declaring both is refused. Each id must name a node in the show's audioNodes list, and excluding every one of them is refused. */
+            excludeNodes?: string[];
         };
         /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. target (ADR-045) is the same optional target node as outputs.audio's deprecated target form; ADR-049 deliberately kept outputs.ltc on a single node and did not widen it to a targets list. */
         ConfigShowCueLTCOutput: {
@@ -6039,6 +6049,8 @@ export interface components {
              * @description Deprecated one-element compatibility form of targets (ADR-049). Declaring both target and targets on one output is refused.
              */
             target?: string;
+            /** @description ADR-049 decision 10: see ConfigShowCueAudioOutput's own excludeNodes description; the same rules apply here. */
+            excludeNodes?: string[];
         };
         /** @description show.cue.outputs (Track H seam H1). At least one member is required — enforced server-side, since an empty object cannot be distinguished from "absent" by a plain JSON schema. */
         ConfigShowCueOutputs: {
@@ -6218,12 +6230,16 @@ export interface components {
             fadeInMs?: number;
             /** @description An optional list of audio.node ids the bed plays on (ADR-049). Absent or empty is today's per-node behavior (each node plays the items registered for it); non-empty makes every listed node play every item, and an item's own target then only selects which registered copy of the file to use, not where it plays. */
             targets?: string[];
+            /** @description ADR-049 decision 10: nodes to remove from the show's own audioNodes list when targets is absent or empty. Valid only together with an absent or empty targets - declaring both is refused. Each id must name a node in the show's audioNodes list, and excluding every one of them is refused. */
+            excludeNodes?: string[];
         };
         /** @description The REFERENCE form of resting.backgroundAudio: mediaPlaylist, naming a media.playlist object id whose own items/repeat/resume/itemTransition/gain/fade fields govern the bed, plus the bed's own optional targets. No other property is permitted here - naming any inline-only property selects the inline form instead. */
         ConfigNightSessionBackgroundAudioReference: {
             mediaPlaylist: string;
             /** @description An optional list of audio.node ids the bed plays on (ADR-049). Absent or empty is today's per-node behavior (each node plays the items registered for it); non-empty makes every listed node play every item, and an item's own target then only selects which registered copy of the file to use, not where it plays. */
             targets?: string[];
+            /** @description ADR-049 decision 10: see ConfigNightSessionBackgroundAudioInline's own excludeNodes description; the same rules apply here. */
+            excludeNodes?: string[];
         };
         /** @description night.session.resting (Track F seam F1, RESTING-MODE.md §6-8). endOfNightPlaylist defaults to playlist when absent (server-side). */
         ConfigNightSessionResting: {

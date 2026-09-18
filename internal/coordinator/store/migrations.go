@@ -146,7 +146,12 @@ var migrations = []migration{
 	// A pure addition, like schemaV17/schemaV25/schemaV33: no existing
 	// table is touched.
 	{version: 36, sql: schemaV36},
-	// v37 is reserved for other in-flight work and unallocated here.
+	// v37 (rehearsal rig, 2026-09-17): re-keys node_asset_inventory
+	// (schemaV8) from `PRIMARY KEY (node_id, content_hash)` to
+	// `(node_id, content_hash, runtime_filename)`, so one node may report
+	// holding one content hash under more than one runtime filename
+	// (schemaV37's own doc comment, migrations.go).
+	{version: 37, sql: schemaV37},
 	// v38 (owner ruling 2026-09-18, PCM show audio): adds audio_renditions,
 	// one row per original audio asset content hash recording its 48kHz/
 	// 16-bit/stereo WAV rendition (audio_renditions.go's own doc comment).
@@ -1824,6 +1829,51 @@ CREATE TABLE IF NOT EXISTS credentials (
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (kind, object_id, field)
 );
+`
+
+// schemaV37 re-keys node_asset_inventory (schemaV8) from
+// `PRIMARY KEY (node_id, content_hash)` to a composite
+// `(node_id, content_hash, runtime_filename)` primary key, so one node may
+// report holding one content hash under more than one runtime filename.
+//
+// The rehearsal rig hit this on 2026-09-17: asset sync deliberately
+// dispatches a second copy of an already-held content hash under a second
+// runtime filename when a node is told to play another node's upload
+// (ADR-028 decision 2's "the runtime filename is preserved" applied per
+// target). The agent then reports both filenames for the one hash, and
+// node_assets.go's replaceNodeAssetInventory tried to insert both rows
+// under schemaV8's bare (node_id, content_hash) key, failing the whole
+// report on a UNIQUE constraint violation
+// ("node_asset_inventory.node_id, node_asset_inventory.content_hash").
+// Every report for that node was then discarded, its stored report went
+// stale, and cue activation refused every dispatch to it on
+// [assetsync.StalenessWindow] — an announcement never reached the node.
+//
+// Follows the same SQLite "12 steps to altering a table" pattern schemaV2/
+// schemaV4/schemaV27 already established (SQLite's ALTER TABLE cannot
+// change an existing PRIMARY KEY in place): create the new table shape,
+// copy every existing row across unchanged, drop the old table, and rename
+// the new one into its place. This is a pure widening, not a data fix,
+// matching schemaV28's identical reasoning: the new key is a strict
+// superset of the old one, so a row already unique under (node_id,
+// content_hash) is trivially still unique once runtime_filename is
+// appended to that same tuple, and no existing row can violate it.
+const schemaV37 = `
+CREATE TABLE node_asset_inventory_v37 (
+    node_id          TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    runtime_filename TEXT NOT NULL,
+    size_bytes       INTEGER NOT NULL,
+    verified_at      TEXT NOT NULL,
+    PRIMARY KEY (node_id, content_hash, runtime_filename)
+);
+
+INSERT INTO node_asset_inventory_v37 (node_id, content_hash, runtime_filename, size_bytes, verified_at)
+    SELECT node_id, content_hash, runtime_filename, size_bytes, verified_at FROM node_asset_inventory;
+
+DROP TABLE node_asset_inventory;
+
+ALTER TABLE node_asset_inventory_v37 RENAME TO node_asset_inventory;
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

@@ -545,6 +545,23 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 		collectedAt := s.CollectedAt
 		r.CollectedAt = &collectedAt
 	}
+	// ADR-051 decision 6: how this session most recently started, from
+	// cueActivationTriggerRegistry (package-level, audiostarttrigger.go,
+	// written by activateAudio for a coordinator-driven start and by the
+	// MultiSync cue-audio trigger for one it started itself). A session
+	// that has never started, or one this registry has no record for at
+	// all (an announcement, background, or staging session, none of
+	// which this ADR's start path ever touches), reports "" and every
+	// other field at its zero value.
+	if cueActivationTriggerRegistry != nil {
+		if rec, ok := cueActivationTriggerRegistry.get(s.ID); ok {
+			r.StartTrigger = rec.Trigger
+			r.TriggerSequenceFilename = rec.SequenceFilename
+			r.TriggerArrivalNs = rec.ArrivalNs
+			r.StartLeadMs = rec.LeadMs
+			r.PreparedLate = rec.PreparedLate
+		}
+	}
 	return r
 }
 

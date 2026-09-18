@@ -358,14 +358,22 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 				reason: fmt.Sprintf("media.playlist %q is missing or has been deleted", ba.MediaPlaylist),
 			}}
 		}
-		resolved = nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets)
+		resolved = nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets, ba.ExcludeNodes)
 	}
+	showAudioNodes := h.showAudioNodes(ctx)(show)
+	resolvedNodeIDs, resolvedFrom := resolved.ResolvedPlaybackNodeIDs(showAudioNodes)
 	checks := []nightReadinessCheck{h.nightCheckBackgroundAudioAssets(ctx, show, resolved)}
-	if resolved.HasDeclaredTargets() {
-		checks = append(checks, h.nightCheckBackgroundAudioBedTargetCoverage(ctx, now, show, resolved))
-		checks = append(checks, h.nightCheckBackgroundAudioBedProgramLTCCoverage(ctx, resolved))
+	if resolvedFrom != config.AudioNodeResolutionDefault {
+		checks = append(checks, h.nightCheckBackgroundAudioBedTargetCoverage(ctx, now, show, resolved, resolvedNodeIDs))
+		checks = append(checks, h.nightCheckBackgroundAudioBedProgramLTCCoverage(ctx, resolvedNodeIDs))
 	}
-	for _, nodeID := range resolved.PlaybackNodeIDs() {
+	if len(showAudioNodes) == 0 && resolvedFrom == config.AudioNodeResolutionDefault && len(resolvedNodeIDs) > 0 {
+		checks = append(checks, nightReadinessCheck{
+			name: "resting:background-audio-nodes-defaulted", health: nightHealthDegraded(),
+			reason: "the show has no audio node list to inherit; the background bed plays on the installation's default node instead. Set the show's audio nodes, then re-check.",
+		})
+	}
+	for _, nodeID := range resolvedNodeIDs {
 		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, resolved))
 		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, resolved))
 	}
@@ -401,9 +409,8 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 // (nightCheckBackgroundAudioReadiness's own guard): it keeps today's
 // per-node routing, where a node only ever needs the assets it is itself
 // the target of, already covered by nightCheckBackgroundAudioAssets.
-func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Context, now time.Time, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Context, now time.Time, show string, ba *config.NightSessionBackgroundAudio, targets []string) nightReadinessCheck {
 	name := "resting:background-audio-bed-target-coverage"
-	targets := ba.PlaybackNodeIDs()
 	if h.deps.AssetManifests == nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "no asset manifest store is configured on this coordinator"}
 	}
@@ -526,9 +533,8 @@ func nightInventoryFilenameForHash(inventory []store.NodeAssetInventoryRecord, c
 // nightCheckBackgroundAudioBedProgramLTCCoverage warns, mirroring
 // audioTargetReadiness's Cue-side rule, when a bed's declared Targets
 // name more than one node and exclude the program+ltc node.
-func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Context, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Context, targets []string) nightReadinessCheck {
 	name := "resting:background-audio-bed-program-ltc"
-	targets := ba.PlaybackNodeIDs()
 	if len(targets) <= 1 {
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "a single-target bed has nothing for decision 3's shared start to disagree about"}
 	}

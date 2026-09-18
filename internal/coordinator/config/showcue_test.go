@@ -48,7 +48,7 @@ func validLTCCueJSON() string {
 }
 
 func TestDecodeShowCuePayloadValid(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -69,7 +69,7 @@ func TestDecodeShowCuePayloadValid(t *testing.T) {
 }
 
 func TestDecodeShowCuePayloadValidLTC(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -94,14 +94,14 @@ func TestDecodeShowCuePayloadRefusesLTCWithAnnouncement(t *testing.T) {
 			"announcement": {"policy": "mix", "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.ltc" {
 		t.Fatalf("expected field-invalid on outputs.ltc for ltc+announcement, got %+v", verr)
 	}
 }
 
 func TestEncodeShowCuePayloadRoundTrips(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -119,7 +119,7 @@ func TestEncodeShowCuePayloadRoundTrips(t *testing.T) {
 }
 
 func TestDecodeShowCuePayloadShowUnknown(t *testing.T) {
-	_, verr := DecodeShowCuePayload(validCueJSON(), alwaysFalse, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(validCueJSON(), alwaysFalse, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "show" {
 		t.Fatalf("expected field-unknown-reference on show, got %+v", verr)
 	}
@@ -127,7 +127,7 @@ func TestDecodeShowCuePayloadShowUnknown(t *testing.T) {
 
 func TestDecodeShowCuePayloadUnknownTopLevelKey(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x", "outputs": {"render": {"sequence": "a"}}, "extra": true}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key, got %+v", verr)
 	}
@@ -135,7 +135,7 @@ func TestDecodeShowCuePayloadUnknownTopLevelKey(t *testing.T) {
 
 func TestDecodeShowCuePayloadUnknownNestedKey(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x", "outputs": {"render": {"sequence": "a", "extra": true}}}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key on nested object, got %+v", verr)
 	}
@@ -147,7 +147,7 @@ func TestDecodeShowCuePayloadNameTooLong(t *testing.T) {
 		name[i] = 'a'
 	}
 	j := `{"show": "halloween-2026", "name": "` + string(name) + `", "outputs": {"render": {"sequence": "a"}}}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "name" {
 		t.Fatalf("expected field-invalid on name, got %+v", verr)
 	}
@@ -157,7 +157,7 @@ func TestDecodeShowCuePayloadNameTooLong(t *testing.T) {
 
 func TestDecodeShowCuePayloadOutputsAbsent(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x"}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "outputs" {
 		t.Fatalf("expected field-required on outputs, got %+v", verr)
 	}
@@ -165,7 +165,7 @@ func TestDecodeShowCuePayloadOutputsAbsent(t *testing.T) {
 
 func TestDecodeShowCuePayloadOutputsNull(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x", "outputs": null}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "outputs" {
 		t.Fatalf("expected field-null on outputs, got %+v", verr)
 	}
@@ -173,7 +173,7 @@ func TestDecodeShowCuePayloadOutputsNull(t *testing.T) {
 
 func TestDecodeShowCuePayloadOutputsEmpty(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x", "outputs": {}}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs" {
 		t.Fatalf("expected field-invalid on outputs (empty), got %+v", verr)
 	}
@@ -186,7 +186,7 @@ func TestDecodeShowCuePayloadLTCWithoutAudio(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"render": {"sequence": "a"}, "ltc": {"startOffsetMillis": 0}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.ltc" {
 		t.Fatalf("expected field-invalid on outputs.ltc, got %+v", verr)
 	}
@@ -200,7 +200,7 @@ func TestDecodeShowCuePayloadLTCOffsetOutOfBounds(t *testing.T) {
 			"ltc": {"startOffsetMillis": 86400001}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.ltc.startOffsetMillis" {
 		t.Fatalf("expected field-invalid on outputs.ltc.startOffsetMillis, got %+v", verr)
 	}
@@ -214,7 +214,7 @@ func TestDecodeShowCuePayloadLTCOffsetNegative(t *testing.T) {
 			"ltc": {"startOffsetMillis": -1}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.ltc.startOffsetMillis" {
 		t.Fatalf("expected field-invalid on outputs.ltc.startOffsetMillis, got %+v", verr)
 	}
@@ -227,7 +227,7 @@ func TestDecodeShowCuePayloadAnnouncementWithoutAudio(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"render": {"sequence": "a"}, "announcement": {"policy": "mix", "fadeMillis": 0}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement" {
 		t.Fatalf("expected field-invalid on outputs.announcement, got %+v", verr)
 	}
@@ -243,7 +243,7 @@ func TestDecodeShowCuePayloadDuckRequiresDuckGainDb(t *testing.T) {
 			"announcement": {"policy": "duck", "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "outputs.announcement.duckGainDb" {
 		t.Fatalf("expected field-required on outputs.announcement.duckGainDb, got %+v", verr)
 	}
@@ -257,7 +257,7 @@ func TestDecodeShowCuePayloadMixRefusesDuckGainDb(t *testing.T) {
 			"announcement": {"policy": "mix", "duckGainDb": -10, "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement.duckGainDb" {
 		t.Fatalf("expected field-invalid on outputs.announcement.duckGainDb, got %+v", verr)
 	}
@@ -271,7 +271,7 @@ func TestDecodeShowCuePayloadInterruptRefusesDuckGainDb(t *testing.T) {
 			"announcement": {"policy": "interrupt", "duckGainDb": -10, "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement.duckGainDb" {
 		t.Fatalf("expected field-invalid on outputs.announcement.duckGainDb, got %+v", verr)
 	}
@@ -285,7 +285,7 @@ func TestDecodeShowCuePayloadDuckGainDbNotNegative(t *testing.T) {
 			"announcement": {"policy": "duck", "duckGainDb": 0, "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement.duckGainDb" {
 		t.Fatalf("expected field-invalid on outputs.announcement.duckGainDb (not negative), got %+v", verr)
 	}
@@ -299,7 +299,7 @@ func TestDecodeShowCuePayloadDuckGainDbBelowFloor(t *testing.T) {
 			"announcement": {"policy": "duck", "duckGainDb": -61, "fadeMillis": 0}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement.duckGainDb" {
 		t.Fatalf("expected field-invalid on outputs.announcement.duckGainDb (below floor), got %+v", verr)
 	}
@@ -313,7 +313,7 @@ func TestDecodeShowCuePayloadFadeMillisOutOfBounds(t *testing.T) {
 			"announcement": {"policy": "mix", "fadeMillis": 60001}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.announcement.fadeMillis" {
 		t.Fatalf("expected field-invalid on outputs.announcement.fadeMillis, got %+v", verr)
 	}
@@ -324,7 +324,7 @@ func TestDecodeShowCuePayloadAudioOffsetNegative(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": -1}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio.startOffsetMillis" {
 		t.Fatalf("expected field-invalid on outputs.audio.startOffsetMillis, got %+v", verr)
 	}
@@ -338,7 +338,7 @@ func TestDecodeShowCuePayloadAudioOffsetDefaultsZero(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a"}}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -355,7 +355,7 @@ func TestDecodeShowCuePayloadAudioOffsetOutOfBounds(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 86400001}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio.startOffsetMillis" {
 		t.Fatalf("expected field-invalid on outputs.audio.startOffsetMillis (over ceiling), got %+v", verr)
 	}
@@ -372,7 +372,7 @@ func TestDecodeShowCuePayloadAudioOffsetOutOfBounds(t *testing.T) {
 // among the claims — only announcement-session and the two render-surface
 // claims are.
 func TestDeriveShowCueClaimsAllOutputsAnnouncement(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -405,7 +405,7 @@ func TestDeriveShowCueClaimsAllOutputsAnnouncement(t *testing.T) {
 // claims the route directly), ltc-output, and the two render-surface
 // claims.
 func TestDeriveShowCueClaimsRenderAudioLTC(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -446,7 +446,7 @@ func TestDeriveShowCueClaimsAnnouncementOnlyClaimsSession(t *testing.T) {
 			"announcement": {"policy": "mix", "fadeMillis": 0}
 		}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -473,7 +473,7 @@ func TestDeriveShowCueClaimsAudioOnlyClaimsProgramAudioRoute(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0}}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -498,7 +498,7 @@ func TestDeriveShowCueClaimsAudioOnlyClaimsProgramAudioRoute(t *testing.T) {
 // makes the derivation itself wrong (not merely non-deterministic) is
 // caught.
 func TestDeriveShowCueClaimsRepeatedCallsAgree(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -537,7 +537,7 @@ func TestDeriveShowCueClaimsRenderSurfaceIDsDeduped(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"render": {"sequence": "a"}}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -567,7 +567,7 @@ func TestDeriveShowCueClaimsRenderSurfaceIDsDeduped(t *testing.T) {
 // component — two unrelated Cues would otherwise collide on the identical
 // claim.
 func TestDeriveShowCueClaimsRefusesUnpopulatedContext(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -589,7 +589,7 @@ func TestDeriveShowCueClaimsRefusesUnpopulatedContext(t *testing.T) {
 // claim set ADR-045 predates — proving a one-node installation is
 // unchanged, not merely that the JSON still parses.
 func TestDecodeShowCuePayloadNoTargetUnchangedForOneNodeFixtures(t *testing.T) {
-	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -600,7 +600,7 @@ func TestDecodeShowCuePayloadNoTargetUnchangedForOneNodeFixtures(t *testing.T) {
 		t.Fatalf("expected outputs.announcement.targets empty absent any \"target\"/\"targets\" key, got %q", p.Outputs.Announcement.Targets)
 	}
 
-	ltc, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	ltc, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -643,7 +643,7 @@ func TestDecodeShowCuePayloadAudioTargetValid(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "target": "audio-zone-1"}}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -661,7 +661,7 @@ func TestDecodeShowCuePayloadAudioTargetUnknownRefused(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "target": "no-such-node"}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.audio.target" {
 		t.Fatalf("expected field-unknown-reference on outputs.audio.target, got %+v", verr)
 	}
@@ -679,7 +679,7 @@ func TestDecodeShowCuePayloadLTCTargetUnknownRefused(t *testing.T) {
 			"ltc": {"startOffsetMillis": 0, "target": "no-such-node"}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.ltc.target" {
 		t.Fatalf("expected field-unknown-reference on outputs.ltc.target, got %+v", verr)
 	}
@@ -693,7 +693,7 @@ func TestDecodeShowCuePayloadAnnouncementTargetUnknownRefused(t *testing.T) {
 			"announcement": {"policy": "mix", "fadeMillis": 0, "target": "no-such-node"}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.announcement.target" {
 		t.Fatalf("expected field-unknown-reference on outputs.announcement.target, got %+v", verr)
 	}
@@ -707,7 +707,7 @@ func TestDecodeShowCuePayloadTargetEmptyStringRefused(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "target": ""}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "outputs.audio.target" {
 		t.Fatalf("expected field-empty on outputs.audio.target, got %+v", verr)
 	}
@@ -723,7 +723,7 @@ func TestDecodeShowCuePayloadTargetsMultipleDecodeInOrder(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-b", "node-a"]}}
 	}`
-	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -741,7 +741,7 @@ func TestDecodeShowCuePayloadTargetsEmptyAndAbsentBothResolveEmpty(t *testing.T)
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": []}}
 	}`
-	p, verr := DecodeShowCuePayload(empty, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	p, verr := DecodeShowCuePayload(empty, alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -753,7 +753,7 @@ func TestDecodeShowCuePayloadTargetsEmptyAndAbsentBothResolveEmpty(t *testing.T)
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0}}
 	}`
-	p, verr = DecodeShowCuePayload(absent, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	p, verr = DecodeShowCuePayload(absent, alwaysTrueShowExists, alwaysFalseAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -771,7 +771,7 @@ func TestDecodeShowCuePayloadTargetAndTargetsBothRefused(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "target": "node-a", "targets": ["node-a"]}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio" {
 		t.Fatalf("expected field-invalid on outputs.audio, got %+v", verr)
 	}
@@ -788,7 +788,7 @@ func TestDecodeShowCuePayloadTargetsDuplicateRefused(t *testing.T) {
 		"show": "halloween-2026", "name": "x",
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-a", "node-a"]}}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeShowCueTargetDuplicate || verr.Field != "outputs.audio.targets[1]" {
 		t.Fatalf("expected show-cue-target-duplicate on outputs.audio.targets[1], got %+v", verr)
 	}
@@ -804,7 +804,7 @@ func TestDecodeShowCuePayloadTargetsUnknownRefused(t *testing.T) {
 		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-a", "no-such-node"]}}
 	}`
 	audioNodeExists := func(id string) bool { return id == "node-a" }
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, audioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, audioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.audio.targets[1]" {
 		t.Fatalf("expected field-unknown-reference on outputs.audio.targets[1], got %+v", verr)
 	}
@@ -822,7 +822,7 @@ func TestDecodeShowCuePayloadLTCRefusesTargetsKey(t *testing.T) {
 			"ltc": {"startOffsetMillis": 0, "targets": ["node-a"]}
 		}
 	}`
-	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey || verr.Field != "outputs.ltc" {
 		t.Fatalf("expected field-unknown-key refusal on outputs.ltc, got %+v", verr)
 	}
@@ -848,7 +848,7 @@ func TestEncodeDecodeShowCuePayloadTargetsRoundTrip(t *testing.T) {
 	if !strings.Contains(raw, `"targets":["node-a","node-b"]`) {
 		t.Fatalf("encoded payload = %s, want a \"targets\" array, never \"target\"", raw)
 	}
-	got, verr := DecodeShowCuePayload(raw, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	got, verr := DecodeShowCuePayload(raw, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("decode: %+v", verr)
 	}
@@ -989,5 +989,108 @@ func TestShowCueAnnouncementOutputUnmarshalJSONTreatsEmptyTargetAsAbsent(t *test
 	}
 	if len(o.Targets) != 0 {
 		t.Fatalf("targets = %q, want empty", o.Targets)
+	}
+}
+
+// --- ADR-049 decision 10: outputs.audio/announcement excludeNodes ---
+
+func cueJSONWithAudioExcludeNodes(excludeNodes string) string {
+	return `{
+		"show": "halloween-2026",
+		"name": "Thriller",
+		"outputs": {
+			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0, "excludeNodes": ` + excludeNodes + `}
+		}
+	}`
+}
+
+func showAudioNodesFixture(nodes ...string) func(string) []string {
+	return func(string) []string { return nodes }
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesValid(t *testing.T) {
+	p, verr := DecodeShowCuePayload(cueJSONWithAudioExcludeNodes(`["pi"]`), alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Outputs.Audio.ExcludeNodes) != 1 || p.Outputs.Audio.ExcludeNodes[0] != "pi" {
+		t.Fatalf("unexpected excludeNodes: %v", p.Outputs.Audio.ExcludeNodes)
+	}
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesWithTargetsRejected(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"name": "Thriller",
+		"outputs": {
+			"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["m4"], "excludeNodes": ["pi"]}
+		}
+	}`
+	_, verr := DecodeShowCuePayload(raw, alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio.excludeNodes" {
+		t.Fatalf("expected field-invalid on outputs.audio.excludeNodes, got %+v", verr)
+	}
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesNotInShowListRejected(t *testing.T) {
+	_, verr := DecodeShowCuePayload(cueJSONWithAudioExcludeNodes(`["ghost"]`), alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.audio.excludeNodes[0]" {
+		t.Fatalf("expected field-unknown-reference on outputs.audio.excludeNodes[0], got %+v", verr)
+	}
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesDuplicateRejected(t *testing.T) {
+	_, verr := DecodeShowCuePayload(cueJSONWithAudioExcludeNodes(`["pi", "pi"]`), alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr == nil || verr.Code != ValidationCodeExcludeNodesDuplicate || verr.Field != "outputs.audio.excludeNodes[1]" {
+		t.Fatalf("expected exclude-nodes-duplicate on outputs.audio.excludeNodes[1], got %+v", verr)
+	}
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesAllRejected(t *testing.T) {
+	_, verr := DecodeShowCuePayload(cueJSONWithAudioExcludeNodes(`["m4", "pi"]`), alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio.excludeNodes" {
+		t.Fatalf("expected field-invalid on outputs.audio.excludeNodes for excluding every node, got %+v", verr)
+	}
+}
+
+func TestDecodeShowCuePayloadAudioExcludeNodesSkipsValidationWhenNotChecking(t *testing.T) {
+	// showAudioNodes=nil is the non-validating, stored-row-decode posture:
+	// an excludeNodes entry unresolvable against a live show list must not
+	// be refused when no live list is available.
+	p, verr := DecodeShowCuePayload(cueJSONWithAudioExcludeNodes(`["ghost"]`), alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Outputs.Audio.ExcludeNodes) != 1 || p.Outputs.Audio.ExcludeNodes[0] != "ghost" {
+		t.Fatalf("unexpected excludeNodes: %v", p.Outputs.Audio.ExcludeNodes)
+	}
+}
+
+func TestDecodeShowCuePayloadAnnouncementExcludeNodesValid(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"name": "Thriller",
+		"outputs": {
+			"audio": {"asset": "a", "startOffsetMillis": 0},
+			"announcement": {"policy": "mix", "fadeMillis": 0, "excludeNodes": ["pi"]}
+		}
+	}`
+	p, verr := DecodeShowCuePayload(raw, alwaysTrueShowExists, alwaysTrueAudioNodeExists, showAudioNodesFixture("m4", "pi"))
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Outputs.Announcement.ExcludeNodes) != 1 || p.Outputs.Announcement.ExcludeNodes[0] != "pi" {
+		t.Fatalf("unexpected excludeNodes: %v", p.Outputs.Announcement.ExcludeNodes)
+	}
+}
+
+func TestShowCueAudioOutputUnmarshalJSONReadsStoredExcludeNodes(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"excludeNodes":["pi"]}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err != nil {
+		t.Fatalf("unmarshal stored row: %v", err)
+	}
+	if len(o.ExcludeNodes) != 1 || o.ExcludeNodes[0] != "pi" {
+		t.Fatalf("unexpected excludeNodes: %v", o.ExcludeNodes)
 	}
 }

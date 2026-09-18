@@ -33,6 +33,48 @@ func syncPacket(action SyncAction, filename string, frame uint32, seconds float3
 	}
 }
 
+// TestStepTime_UnknownUntilSetStepTimeCalledWithAPositiveValue proves
+// StepTime's own "known" flag: a fresh Timeline reports its constructor
+// default as not known (nobody has learned a real FSEQ step time yet),
+// SetStepTime with a positive value makes it known, and SetStepTime with
+// a non-positive value resets to DefaultStepTime without claiming
+// knowledge. A MultiSync STOP's own blanking grace (internal/agent's
+// multisynccueaudio.go) depends on being able to tell "this is a real
+// file's cadence" from "the constructor's own guess."
+func TestStepTime_UnknownUntilSetStepTimeCalledWithAPositiveValue(t *testing.T) {
+	clock := newFakeClock()
+	tl := NewTimeline(clock.now, Config{})
+
+	step, known := tl.StepTime()
+	if known {
+		t.Fatalf("StepTime() known = true on a fresh Timeline, want false")
+	}
+	if step != DefaultStepTime {
+		t.Fatalf("StepTime() = %v, want the constructor default %v", step, DefaultStepTime)
+	}
+
+	tl.SetStepTime(20 * time.Millisecond)
+	step, known = tl.StepTime()
+	if !known {
+		t.Fatal("StepTime() known = false after SetStepTime(20ms), want true")
+	}
+	if step != 20*time.Millisecond {
+		t.Fatalf("StepTime() = %v, want 20ms", step)
+	}
+
+	// A later non-positive value resets the step time itself back to the
+	// default, but never un-learns that a real cadence was seen at some
+	// point in this Timeline's life.
+	tl.SetStepTime(0)
+	step, known = tl.StepTime()
+	if !known {
+		t.Fatal("StepTime() known = false after a later SetStepTime(0), want true: a real cadence was already learned once")
+	}
+	if step != DefaultStepTime {
+		t.Fatalf("StepTime() = %v, want the default %v after SetStepTime(0)", step, DefaultStepTime)
+	}
+}
+
 func TestNewTimeline_InitialSnapshot_IsUnknownWithNoSyncEvidence(t *testing.T) {
 	clock := newFakeClock()
 	tl := NewTimeline(clock.now, Config{})

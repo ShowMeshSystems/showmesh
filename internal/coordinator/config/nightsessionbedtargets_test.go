@@ -47,7 +47,7 @@ const twoTargetInlineBackgroundAudioJSON = `{
 func decodeTwoTargetInlineBackgroundAudio(t *testing.T) NightSessionPayload {
 	t.Helper()
 	p, verr := DecodeNightSessionPayload(twoTargetInlineBackgroundAudioJSON, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error decoding a valid two-target inline bed: %+v", verr)
 	}
@@ -77,7 +77,7 @@ func TestEncodeNightSessionPayloadRoundTripsBedTargetsInline(t *testing.T) {
 		t.Fatalf("expected targets on the wire, got: %s", raw)
 	}
 	back, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("re-decode of the API's own encoded output must not fail: %+v (encoded: %s)", verr, raw)
 	}
@@ -94,7 +94,7 @@ func nightSessionJSONWithMediaPlaylistRefAndTargets(id string) string {
 func TestEncodeNightSessionPayloadRoundTripsBedTargetsReference(t *testing.T) {
 	raw := nightSessionJSONWithMediaPlaylistRefAndTargets("planetary-bed")
 	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error decoding a valid two-target reference bed: %+v", verr)
 	}
@@ -110,7 +110,7 @@ func TestEncodeNightSessionPayloadRoundTripsBedTargetsReference(t *testing.T) {
 		t.Fatalf("expected targets on the wire alongside mediaPlaylist, got: %s", encoded)
 	}
 	back, verr := DecodeNightSessionPayload(encoded, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("re-decode of the API's own encoded output must not fail: %+v (encoded: %s)", verr, encoded)
 	}
@@ -148,7 +148,7 @@ func TestDecodeNightSessionPayloadBedTargetsAbsentMatchesLegacyAccessors(t *test
 func TestDecodeNightSessionPayloadBedTargetsEmptyArrayMatchesAbsent(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "targets": []`, 1)
 	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error on an explicit empty targets array: %+v", verr)
 	}
@@ -211,7 +211,7 @@ func TestDecodeNightSessionPayloadBedTargetsUnknownNodeRefused(t *testing.T) {
 	audioNodeExists := func(id string) bool { return id != "no-such-node" }
 	raw := strings.Replace(twoTargetInlineBackgroundAudioJSON, `"audio-node-1", "audio-node-3"`, `"audio-node-1", "no-such-node"`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, audioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, audioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "resting.backgroundAudio.targets[1]" {
 		t.Fatalf("expected field-unknown-reference on resting.backgroundAudio.targets[1], got %+v", verr)
 	}
@@ -223,7 +223,7 @@ func TestDecodeNightSessionPayloadBedTargetsUnknownNodeRefused(t *testing.T) {
 func TestDecodeNightSessionPayloadBedTargetsRepeatedIDRefused(t *testing.T) {
 	raw := strings.Replace(twoTargetInlineBackgroundAudioJSON, `"audio-node-1", "audio-node-3"`, `"audio-node-1", "audio-node-1"`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeNightBackgroundAudioTargetDuplicate || verr.Field != "resting.backgroundAudio.targets[1]" {
 		t.Fatalf("expected night-background-audio-target-duplicate on resting.backgroundAudio.targets[1], got %+v", verr)
 	}
@@ -232,7 +232,7 @@ func TestDecodeNightSessionPayloadBedTargetsRepeatedIDRefused(t *testing.T) {
 func TestDecodeNightSessionPayloadBedTargetsNullRefused(t *testing.T) {
 	raw := strings.Replace(twoTargetInlineBackgroundAudioJSON, `"targets": ["audio-node-1", "audio-node-3"]`, `"targets": null`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "resting.backgroundAudio.targets" {
 		t.Fatalf("expected field-null on resting.backgroundAudio.targets, got %+v", verr)
 	}
@@ -241,7 +241,7 @@ func TestDecodeNightSessionPayloadBedTargetsNullRefused(t *testing.T) {
 func TestDecodeNightSessionPayloadBedTargetsNonArrayRefused(t *testing.T) {
 	raw := strings.Replace(twoTargetInlineBackgroundAudioJSON, `"targets": ["audio-node-1", "audio-node-3"]`, `"targets": "audio-node-1"`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.targets" {
 		t.Fatalf("expected field-invalid on a non-array resting.backgroundAudio.targets, got %+v", verr)
 	}
@@ -250,7 +250,7 @@ func TestDecodeNightSessionPayloadBedTargetsNonArrayRefused(t *testing.T) {
 func TestDecodeNightSessionPayloadBedTargetsNonStringEntryRefused(t *testing.T) {
 	raw := strings.Replace(twoTargetInlineBackgroundAudioJSON, `"audio-node-1", "audio-node-3"`, `"audio-node-1", 3`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
-		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists)
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.targets" {
 		t.Fatalf("expected field-invalid on a non-string entry in resting.backgroundAudio.targets, got %+v", verr)
 	}
@@ -302,5 +302,82 @@ func TestNightSessionBackgroundAudioStoredDecodeWithoutTargetsUnchanged(t *testi
 	}
 	if !reflect.DeepEqual(ba.OutputNodeIDs(), []string{"audio-node-1"}) {
 		t.Fatalf("OutputNodeIDs() = %+v, want [audio-node-1]", ba.OutputNodeIDs())
+	}
+}
+
+// --- ADR-049 decision 10: resting.backgroundAudio.excludeNodes. ---
+
+func nightSessionJSONWithExcludeNodes(excludeNodes string) string {
+	return strings.Replace(validNightSessionJSON, `"maxGainDb": -10`,
+		`"maxGainDb": -10, "excludeNodes": `+excludeNodes, 1)
+}
+
+func TestDecodeNightSessionPayloadBedExcludeNodesValid(t *testing.T) {
+	p, verr := DecodeNightSessionPayload(nightSessionJSONWithExcludeNodes(`["audio-node-3"]`), nightSessionTestEndpoints,
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists,
+		showAudioNodesFixture("audio-node-1", "audio-node-2", "audio-node-3"))
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if !reflect.DeepEqual(p.Resting.BackgroundAudio.ExcludeNodes, []string{"audio-node-3"}) {
+		t.Fatalf("unexpected excludeNodes: %+v", p.Resting.BackgroundAudio.ExcludeNodes)
+	}
+	resolved, from := p.Resting.BackgroundAudio.ResolvedPlaybackNodeIDs([]string{"audio-node-1", "audio-node-2", "audio-node-3"})
+	if from != AudioNodeResolutionShow || !reflect.DeepEqual(resolved, []string{"audio-node-1", "audio-node-2"}) {
+		t.Fatalf("resolved = %+v from %q, want [audio-node-1 audio-node-2] from show", resolved, from)
+	}
+}
+
+func TestDecodeNightSessionPayloadBedExcludeNodesWithTargetsRejected(t *testing.T) {
+	raw := nightSessionJSONWithExcludeNodes(`["audio-node-3"]`)
+	raw = strings.Replace(raw, `"maxGainDb": -10, "excludeNodes": ["audio-node-3"]`,
+		`"maxGainDb": -10, "targets": ["audio-node-1"], "excludeNodes": ["audio-node-3"]`, 1)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints,
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists,
+		showAudioNodesFixture("audio-node-1", "audio-node-3"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.excludeNodes" {
+		t.Fatalf("expected field-invalid on resting.backgroundAudio.excludeNodes, got %+v", verr)
+	}
+}
+
+func TestDecodeNightSessionPayloadBedExcludeNodesNotInShowListRejected(t *testing.T) {
+	_, verr := DecodeNightSessionPayload(nightSessionJSONWithExcludeNodes(`["ghost"]`), nightSessionTestEndpoints,
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists,
+		showAudioNodesFixture("audio-node-1", "audio-node-2"))
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "resting.backgroundAudio.excludeNodes[0]" {
+		t.Fatalf("expected field-unknown-reference on resting.backgroundAudio.excludeNodes[0], got %+v", verr)
+	}
+}
+
+func TestDecodeNightSessionPayloadBedExcludeNodesAllRejected(t *testing.T) {
+	_, verr := DecodeNightSessionPayload(nightSessionJSONWithExcludeNodes(`["audio-node-1", "audio-node-2"]`), nightSessionTestEndpoints,
+		alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists,
+		showAudioNodesFixture("audio-node-1", "audio-node-2"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.excludeNodes" {
+		t.Fatalf("expected field-invalid on resting.backgroundAudio.excludeNodes for excluding every node, got %+v", verr)
+	}
+}
+
+// TestResolvedPlaybackNodeIDsFallsBackToOutputNodeIDsWithoutShowAudioNodes
+// proves decision 10 step 3 for a bed: with no show.audioNodes, a bed with
+// no Targets keeps today's per-item routing exactly as before.
+func TestResolvedPlaybackNodeIDsFallsBackToOutputNodeIDsWithoutShowAudioNodes(t *testing.T) {
+	p := decodeValidNightSession(t)
+	ba := p.Resting.BackgroundAudio
+	resolved, from := ba.ResolvedPlaybackNodeIDs(nil)
+	if from != AudioNodeResolutionDefault || !reflect.DeepEqual(resolved, ba.OutputNodeIDs()) {
+		t.Fatalf("resolved = %+v from %q, want OutputNodeIDs() from default", resolved, from)
+	}
+}
+
+// TestResolvedPlaybackNodeIDsPrefersDeclaredTargetsOverShowAudioNodes
+// proves decision 10 step 1: a bed's own Targets wins even when the show
+// has audioNodes.
+func TestResolvedPlaybackNodeIDsPrefersDeclaredTargetsOverShowAudioNodes(t *testing.T) {
+	p := decodeTwoTargetInlineBackgroundAudio(t)
+	ba := p.Resting.BackgroundAudio
+	resolved, from := ba.ResolvedPlaybackNodeIDs([]string{"audio-node-9"})
+	if from != AudioNodeResolutionExplicit || !reflect.DeepEqual(resolved, ba.Targets) {
+		t.Fatalf("resolved = %+v from %q, want Targets from explicit", resolved, from)
 	}
 }

@@ -366,6 +366,10 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 	if err != nil {
 		return nil, err
 	}
+	showAudioNodes, err := ShowAudioNodes(ctx, st, showID)
+	if err != nil {
+		return nil, err
+	}
 
 	cueObjs, err := st.ListConfigObjects(ctx, config.ShowCueConfigKind)
 	if err != nil {
@@ -384,7 +388,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 			}
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue, nil)
 		if verr != nil {
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
@@ -398,7 +402,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 		if payload.Outputs.Render != nil && nodeHasSurface {
 			seqs[payload.Outputs.Render.Sequence] = true
 		}
-		if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.OwnsAny(payload.Outputs.Audio.Targets) {
+		if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.OwnsResolved(payload.Outputs.Audio.Targets, showAudioNodes, payload.Outputs.Audio.ExcludeNodes) {
 			seqs[payload.Outputs.Audio.Asset] = true
 		}
 	}
@@ -625,6 +629,12 @@ func StalenessWindow(inventoryInterval time.Duration) time.Duration {
 // returns before either is computed). A report that is stale (case 3)
 // never populates Extra or Verdicts: what a stale report says a node
 // holds is exactly as unreliable as what it says a node lacks.
+//
+// A node's inventory may hold one content hash under more than one
+// filename (schemaV37): each inventory row is judged against Extra
+// independently, so the row matching an expected asset's own filename is
+// never Extra while a second, genuinely unrecognized filename for that
+// same hash still is — see the Extra-computation loop's own comment below.
 func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet, report *store.NodeAssetReportRecord, reportFresh bool, inventory []store.NodeAssetInventoryRecord) NodeManifest {
 	m := NodeManifest{NodeID: nodeID}
 
@@ -700,15 +710,43 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	}
 	m.Verdicts = verdicts
 
-	expectedHashes := make(map[string]bool, len(expected.Assets))
+	// expectedUnderFilename is the same hash-and-filename join as
+	// heldUnderFilename, but keyed from expected.Assets instead of
+	// inventory: heldUnderFilename is built FROM inventory itself, so
+	// every inventory row is trivially "held" by its own key and cannot
+	// tell an inventory row matching an expected asset apart from one that
+	// does not. expectedUnderFilename is what the Extra loop below needs
+	// instead — whether THIS row is the one an expected asset named.
+	expectedUnderFilename := make(map[string]bool, len(expected.Assets))
 	for _, a := range expected.Assets {
-		expectedHashes[a.ContentHash] = true
+		expectedUnderFilename[heldKey(a.ContentHash, a.Filename)] = true
+	}
+
+	// missingHashes names every expected content hash NOT held under its
+	// own expected filename — [TestComputeNodeManifestHeldUnderWrongFilenameRendersMissing]'s
+	// wrongly-named copy is exempted from Extra by this set, matching that
+	// test's "expected content, never an unrelated extra file" rule. A hash
+	// exempted here only by virtue of being missing stops being exempted
+	// the moment some OTHER inventory row holds it under the correct name
+	// (expectedUnderFilename below already excludes that row directly), so
+	// a node reporting the SAME hash under both its expected filename and a
+	// second, genuinely unrecognized one (schemaV37's own two-filenames
+	// scenario) still reports that second row as Extra.
+	missingHashes := make(map[string]bool, len(expected.Assets))
+	for _, a := range expected.Assets {
+		if !heldUnderFilename[heldKey(a.ContentHash, a.Filename)] {
+			missingHashes[a.ContentHash] = true
+		}
 	}
 	var extra []ExtraAsset
 	for _, item := range inventory {
-		if !expectedHashes[item.ContentHash] {
-			extra = append(extra, ExtraAsset{ContentHash: item.ContentHash, Filename: item.RuntimeFilename, SizeBytes: item.SizeBytes})
+		if expectedUnderFilename[heldKey(item.ContentHash, item.RuntimeFilename)] {
+			continue
 		}
+		if missingHashes[item.ContentHash] {
+			continue
+		}
+		extra = append(extra, ExtraAsset{ContentHash: item.ContentHash, Filename: item.RuntimeFilename, SizeBytes: item.SizeBytes})
 	}
 	m.Extra = extra
 

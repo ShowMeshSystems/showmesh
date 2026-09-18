@@ -484,6 +484,41 @@ func TestComputeNodeManifestHeldUnderWrongFilenameRendersMissing(t *testing.T) {
 	}
 }
 
+// TestComputeNodeManifestTwoFilenamesForOneHashOneHeldOneExtra pins
+// schemaV37's own scenario (migrations.go's schemaV37 doc comment): a node's
+// inventory reports one content hash under two different runtime
+// filenames, one of them the expected filename and the other one nothing
+// expects. The expected filename must render as held (an entry in
+// Verdicts with AssetVerdictHeld and nothing in Missing), and the other
+// filename - genuinely unexpected content under that name, sharing no
+// expected asset's filename - must render as Extra, exactly as an
+// unrelated file would.
+func TestComputeNodeManifestTwoFilenamesForOneHashOneHeldOneExtra(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{
+		{AssetID: "a1", ContentHash: "sha256:aaa", Filename: "Opening.fseq", SequenceID: "opening"},
+	}}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{
+		{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq", SizeBytes: 100},
+		{ContentHash: "sha256:aaa", RuntimeFilename: "SomeOtherName.fseq", SizeBytes: 100},
+	}
+
+	m := ComputeNodeManifest("pi-audio-01", active, expected, report, true, inventory)
+	if m.State != ManifestReady {
+		t.Fatalf("ComputeNodeManifest() State = %q, want %q: the expected filename is held", m.State, ManifestReady)
+	}
+	if len(m.Missing) != 0 {
+		t.Fatalf("ComputeNodeManifest().Missing = %+v, want empty", m.Missing)
+	}
+	if len(m.Verdicts) != 1 || m.Verdicts[0].State != AssetVerdictHeld {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want one entry for a1 with State=held", m.Verdicts)
+	}
+	if len(m.Extra) != 1 || m.Extra[0].Filename != "SomeOtherName.fseq" {
+		t.Fatalf("ComputeNodeManifest().Extra = %+v, want one entry naming SomeOtherName.fseq", m.Extra)
+	}
+}
+
 // TestComputeNodeManifestGapAloneMakesNotReady pins W2: manifest.go's
 // "len(missing) > 0 || len(expected.Gaps) > 0" was only ever exercised from
 // the api PACKAGE's own tests (TestNodeAssetManifestGapNamesUncoveredSequence),

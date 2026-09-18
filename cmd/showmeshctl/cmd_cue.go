@@ -570,15 +570,17 @@ func printCueDetail(w io.Writer, resp showCueConfigResponse) {
 // duplicate what the JSON object already expresses directly.
 type cueOutputTargets struct {
 	Audio *struct {
-		Target  string   `json:"target"`
-		Targets []string `json:"targets"`
+		Target       string   `json:"target"`
+		Targets      []string `json:"targets"`
+		ExcludeNodes []string `json:"excludeNodes"`
 	} `json:"audio"`
 	LTC *struct {
 		Target string `json:"target"`
 	} `json:"ltc"`
 	Announcement *struct {
-		Target  string   `json:"target"`
-		Targets []string `json:"targets"`
+		Target       string   `json:"target"`
+		Targets      []string `json:"targets"`
+		ExcludeNodes []string `json:"excludeNodes"`
 	} `json:"announcement"`
 }
 
@@ -618,18 +620,22 @@ func printCueOutputTargets(w io.Writer, outputs json.RawMessage) {
 		return
 	}
 	format := fmt.Sprintf("%%-%ds%%s\n", targetLineWidth)
-	describeList := func(label string, targets []string) {
+	describeList := func(label string, targets, excludeNodes []string) {
 		if len(targets) == 0 {
-			_, _ = fmt.Fprintf(w, format, label, "(resolves to the program+ltc node)")
+			if len(excludeNodes) > 0 {
+				_, _ = fmt.Fprintf(w, format, label, fmt.Sprintf("(inherits the show's audio nodes, excluding %s)", strings.Join(excludeNodes, ", ")))
+				return
+			}
+			_, _ = fmt.Fprintf(w, format, label, "(inherits the show's audio nodes, or the program+ltc node if none are set)")
 			return
 		}
 		_, _ = fmt.Fprintf(w, format, label, strings.Join(targets, ", "))
 	}
 	if t.Audio != nil {
-		describeList("Audio targets:", resolvedTargets(t.Audio.Target, t.Audio.Targets))
+		describeList("Audio targets:", resolvedTargets(t.Audio.Target, t.Audio.Targets), t.Audio.ExcludeNodes)
 	}
 	if t.Announcement != nil {
-		describeList("Announcement targets:", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
+		describeList("Announcement targets:", resolvedTargets(t.Announcement.Target, t.Announcement.Targets), t.Announcement.ExcludeNodes)
 	}
 	if t.LTC != nil {
 		if t.LTC.Target == "" {

@@ -207,10 +207,26 @@ func Run() int {
 		logger.Warn("failed to load persisted fppconnect state at startup; starting with none", "error", err)
 	}
 
+	// cueActivationTriggerRegistry (package-level, audiostarttrigger.go)
+	// is ADR-051 decision 6's shared start-trigger evidence: written by
+	// cueAudioTrigger below (a "multisync" start) and by activateAudio
+	// (internal/agent/cueactivationaudio.go, a "coordinator" start), read
+	// by the audio report loop (audioreport.go) and by activateAudio's
+	// own item 7 restart guard. Set here, before anything that could
+	// write to it.
+	cueActivationTriggerRegistry = newAudioStartTriggerRegistry()
+
+	// cueAudioTrigger is ADR-051's node-side start path: constructed here,
+	// before the MultiSync listener goroutine below starts, and wired to
+	// its real sources (catalogStore, audioMgr) further down once they
+	// exist. See this type's own doc comment for why that split is
+	// necessary and why HandleSequencePacket tolerates it.
+	cueAudioTrigger := newMultiSyncCueAudioTrigger(logger, time.Now)
+
 	multiSyncDone := make(chan struct{})
 	go func() {
 		defer close(multiSyncDone)
-		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, fppConnect, logger)
+		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, fppConnect, cueAudioTrigger, logger)
 	}()
 
 	// fppConnectStatus carries this listener's bind outcome into the
@@ -368,6 +384,12 @@ func Run() int {
 	audioEngineAvailable = audioEngine.Available
 
 	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
+	// Both of cueAudioTrigger's real sources now exist: catalogStore
+	// (constructed above, at line 304) and audioMgr (just above). See
+	// cueAudioTrigger's own construction, near the MultiSync listener
+	// goroutine, for why this is a two-step wiring rather than a single
+	// constructor call.
+	cueAudioTrigger.SetSources(catalogStore, audioMgr, cfg.AssetDir, timeline)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
 	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
 	// rebuilder so a post-bind capability detection can tell "the engine

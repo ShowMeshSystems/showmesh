@@ -43,6 +43,14 @@ type Timeline struct {
 	// cannot be learned from the wire.
 	stepTime time.Duration
 
+	// stepTimeKnown is true once SetStepTime has been called with a real
+	// (positive) value from an actual FSEQ file, distinguishing a
+	// genuinely-learned step time from the constructor's own
+	// DefaultStepTime guess. See StepTime's own doc comment for the one
+	// consumer (a MultiSync STOP's blanking grace) that needs the
+	// distinction.
+	stepTimeKnown bool
+
 	state State
 	// stateSince is when state was last observed to change value; it does
 	// not move while the same state is merely reconfirmed. Set only through
@@ -458,8 +466,25 @@ func (t *Timeline) SetStepTime(stepTime time.Duration) {
 
 	if stepTime <= 0 {
 		stepTime = DefaultStepTime
+	} else {
+		t.stepTimeKnown = true
 	}
 	t.stepTime = stepTime
+}
+
+// StepTime returns the step time this Timeline currently converts
+// FrameNumber with, and whether it was actually learned from a real FSEQ
+// file via SetStepTime (known) rather than left at the constructor's own
+// DefaultStepTime guess (not known). A caller that needs to distinguish
+// "this file's real cadence" from "nobody has told this Timeline yet"
+// (a MultiSync STOP's blanking grace, RES-002's "~5 frames before
+// blanking") reads known; every other caller in this package already
+// consumes stepTime as a plain conversion factor and does not need this
+// distinction.
+func (t *Timeline) StepTime() (stepTime time.Duration, known bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stepTime, t.stepTimeKnown
 }
 
 // Observe applies one incoming sync packet to the timeline. source is an

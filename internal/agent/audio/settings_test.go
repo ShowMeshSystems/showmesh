@@ -61,6 +61,38 @@ func TestSetSettingsRejectsMalformedLTCStartOffset(t *testing.T) {
 	}
 }
 
+// TestSetSettingsRejectsNegativeMultisyncStartLeadMs verifies ADR-051
+// decision 1's own lead field falls back to DefaultSettings' 100ms rather
+// than landing negative.
+func TestSetSettingsRejectsNegativeMultisyncStartLeadMs(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+
+	bad := DefaultSettings
+	bad.MultisyncStartLeadMs = -1
+	m.SetSettings(bad)
+
+	got := m.SettingsSnapshot()
+	if got.MultisyncStartLeadMs != DefaultSettings.MultisyncStartLeadMs {
+		t.Fatalf("MultisyncStartLeadMs = %d, want the default %d substituted for the rejected -1", got.MultisyncStartLeadMs, DefaultSettings.MultisyncStartLeadMs)
+	}
+	state, fields, _ := m.SettingsSubstitution()
+	if state != SettingsSubstituted {
+		t.Fatalf("state = %q, want %q", state, SettingsSubstituted)
+	}
+	if len(fields) != 1 || fields[0] != "MultisyncStartLeadMs" {
+		t.Fatalf("fields = %v, want exactly [MultisyncStartLeadMs]", fields)
+	}
+}
+
+// TestDefaultSettingsMultisyncStartLeadMsIsOneHundred pins RES-020's own
+// starting value for the lead a fresh, never-configured node uses.
+func TestDefaultSettingsMultisyncStartLeadMsIsOneHundred(t *testing.T) {
+	if DefaultSettings.MultisyncStartLeadMs != 100 {
+		t.Fatalf("DefaultSettings.MultisyncStartLeadMs = %d, want 100", DefaultSettings.MultisyncStartLeadMs)
+	}
+}
+
 // TestSetSettingsPreservesEveryOtherValidFieldWhenOneIsRejected verifies
 // that one bad field falls back on its own — it must never discard
 // every other value an operator actually set.
