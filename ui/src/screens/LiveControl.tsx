@@ -72,6 +72,7 @@ import {
   Table,
   TableWrap,
   Textarea,
+  Workbench,
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
@@ -458,9 +459,82 @@ export function LiveControl() {
     if (reportedPlaylistNow !== null) setStartPlaylistName((current) => (current === '' ? reportedPlaylistNow : current))
   }, [reportedPlaylistNow])
 
+  const outputsSection = (
+      <Section
+        id="lc-outputs"
+        title="What each output is doing"
+        aside={<span className="sm-small sm-muted">As each output last reported it</span>}
+      >
+        {runsAbsence !== null && (
+          <RuledStrip
+            absence={runsAbsence}
+            label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
+            fact={
+              runsAbsence === 'unavailable'
+                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
+                : 'Reading current-run state for program audio.'
+            }
+          />
+        )}
+        {rows.length === 0 ? (
+          <RuledStrip
+            absence="unobserved"
+            label="Unobserved"
+            fact="No output has reported what it is doing."
+            detail="No render or audio observation has reached this coordinator. That is not the same as nothing running."
+          />
+        ) : (
+          <>
+            <TableWrap label="Outputs, scrollable">
+              <Table minWidth={600}>
+                <thead>
+                  <tr>
+                    <th scope="col">Output</th>
+                    <th scope="col">Doing what</th>
+                    <th scope="col">Last confirmed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.key}>
+                      <td>
+                        <span className="sm-data">{row.name}</span>
+                        <br />
+                        <span className="sm-small sm-faint">{row.where}</span>
+                      </td>
+                      <td>
+                        {row.doing}
+                        {row.content !== null && (
+                          <>
+                            {' '}
+                            <span className="sm-data">{row.content}</span>
+                          </>
+                        )}
+                      </td>
+                      <td>
+                        <StatusPair tone={row.tone} label={row.evidence} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+            <p className="sm-section__footnote">
+              {confirmed} of {rows.length} outputs confirm what they are doing.
+              {confirmed < rows.length && ` ${rows.length - confirmed} cannot be verified right now.`}
+            </p>
+          </>
+        )}
+      </Section>
+  )
   return (
     <>
       <PageHeader />
+
+      <Workbench
+        sideLabel="What each output is doing"
+        side={outputsSection}
+        main={<>
 
       <Section
         id="lc-transport"
@@ -735,73 +809,6 @@ export function LiveControl() {
         </div>
       </Section>
 
-      <Section
-        id="lc-outputs"
-        title="What each output is doing"
-        aside={<span className="sm-small sm-muted">As each output last reported it</span>}
-      >
-        {runsAbsence !== null && (
-          <RuledStrip
-            absence={runsAbsence}
-            label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
-            fact={
-              runsAbsence === 'unavailable'
-                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
-                : 'Reading current-run state for program audio.'
-            }
-          />
-        )}
-        {rows.length === 0 ? (
-          <RuledStrip
-            absence="unobserved"
-            label="Unobserved"
-            fact="No output has reported what it is doing."
-            detail="No render or audio observation has reached this coordinator. That is not the same as nothing running."
-          />
-        ) : (
-          <>
-            <TableWrap label="Outputs, scrollable">
-              <Table minWidth={600}>
-                <thead>
-                  <tr>
-                    <th scope="col">Output</th>
-                    <th scope="col">Doing what</th>
-                    <th scope="col">Last confirmed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.key}>
-                      <td>
-                        <span className="sm-data">{row.name}</span>
-                        <br />
-                        <span className="sm-small sm-faint">{row.where}</span>
-                      </td>
-                      <td>
-                        {row.doing}
-                        {row.content !== null && (
-                          <>
-                            {' '}
-                            <span className="sm-data">{row.content}</span>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        <StatusPair tone={row.tone} label={row.evidence} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-            <p className="sm-section__footnote">
-              {confirmed} of {rows.length} outputs confirm what they are doing.
-              {confirmed < rows.length && ` ${rows.length - confirmed} cannot be verified right now.`}
-            </p>
-          </>
-        )}
-      </Section>
-
       <ResolumeQuickStrip gate={resolumeGate} />
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
@@ -857,6 +864,8 @@ export function LiveControl() {
         Brightness ceiling and site control are set on the Night Session and enforced automatically; there are no
         separate controls for them here. All lists above are scoped to the active show.
       </Callout>
+      </>}
+      />
     </>
   )
 }

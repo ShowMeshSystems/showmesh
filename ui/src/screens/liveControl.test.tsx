@@ -253,18 +253,18 @@ describe('Live Control', () => {
     return dialog
   }
 
-  it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
+  it('stacks the controls on the left and pins output evidence in the side column', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
       'Emergency stop',
-      'What each output is doing',
       'Resolume',
       'Night lifecycle',
       'Audio sessions',
       'Macros',
       'Announcements',
       'Actions',
+      'What each output is doing',
     ])
     expect(screen.getByRole('link', { name: /open resolume control/i })).toHaveAttribute('href', '/control/resolume')
   })
