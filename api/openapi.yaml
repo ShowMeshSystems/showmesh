@@ -18202,6 +18202,17 @@ components:
             node play every item, and an item's own target then only
             selects which registered copy of the file to use, not where
             it plays.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: nodes to remove from the show's own
+            audioNodes list when targets is absent or empty. Valid only
+            together with an absent or empty targets - declaring both is
+            refused. Each id must name a node in the show's audioNodes
+            list, and excluding every one of them is refused.
+          type: array
+          items:
+            type: string
+            minLength: 1
     ConfigNightSessionBackgroundAudioReferenceWrite:
       type: object
       description: >-
@@ -18229,6 +18240,17 @@ components:
             node play every item, and an item's own target then only
             selects which registered copy of the file to use, not where
             it plays.
+        excludeNodes:
+          description: >-
+            ADR-049 decision 10: nodes to remove from the show's own
+            audioNodes list when targets is absent or empty. Valid only
+            together with an absent or empty targets - declaring both is
+            refused. Each id must name a node in the show's audioNodes
+            list, and excluding every one of them is refused.
+          type: array
+          items:
+            type: string
+            minLength: 1
     ConfigNightSessionRestingWrite:
       type: object
       description: >-
