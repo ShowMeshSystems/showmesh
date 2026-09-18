@@ -761,9 +761,9 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		return
 	}
 	resolvedNodeIDs, _ := resolved.ResolvedPlaybackNodeIDs(showAudioNodes)
-	for _, nodeID := range resolvedNodeIDs {
+	h.nightDispatchBedNodesConcurrently(resolvedNodeIDs, func(nodeID string) {
 		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
-	}
+	})
 }
 
 // nightBackgroundAudioIsMultiNode reports whether ba resolves (ADR-049
@@ -1198,9 +1198,9 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 		h.logWarn("night loop: background audio: referenced media.playlist is missing or tombstoned; stopping from dispatch history instead", "sessionId", rec.ID, "mediaPlaylist", payload.Resting.BackgroundAudio.MediaPlaylist)
 		resolved, owner = &config.NightSessionBackgroundAudio{}, nightBackgroundAudioOwner{}
 	}
-	for _, nodeID := range nodeIDs {
+	h.nightDispatchBedNodesConcurrently(nodeIDs, func(nodeID string) {
 		h.nightStopBackgroundAudioIfRunningForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
-	}
+	})
 }
 
 // nightStopBackgroundAudioIfRunningForNode's ba is already resolved (never
@@ -1624,9 +1624,9 @@ const nightBedReadyStepBound = 5 * time.Second
 // the bed-level gate drives the shared schedule and dispatch.
 func (h *handlers) nightAdvanceMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
 	nodeIDs, _ := ba.ResolvedPlaybackNodeIDs(h.showAudioNodes(ctx)(show))
-	for _, nodeID := range nodeIDs {
+	h.nightDispatchBedNodesConcurrently(nodeIDs, func(nodeID string) {
 		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, show, nodeID, ba, owner, history)
-	}
+	})
 
 	history, err := h.nightBackgroundAudioHistory(ctx, rec)
 	if err != nil {
