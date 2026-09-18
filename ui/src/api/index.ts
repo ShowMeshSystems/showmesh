@@ -482,6 +482,21 @@ export { getStoredToken } from './token'
 // the store's own generation rather than inventing a second scheme.
 export { randomUUIDv4 } from './uuid'
 
+// ADR-049 decision 10: the show's declared audio nodes and the per-object
+// excludeNodes/resolvedFrom vocabulary, hand-written until the coordinator
+// half of this decision lands in the generated schema (see audioNodesTypes.ts).
+export type {
+  ResolvedFrom,
+  ConfigShowWithAudioNodes,
+  ConfigShowWriteWithAudioNodes,
+  ConfigShowCueAudioOutputWithExclude,
+  ConfigShowCueAnnouncementOutputWithExclude,
+  ConfigNightSessionBackgroundAudioInlineWriteWithExclude,
+  ConfigNightSessionBackgroundAudioReferenceWriteWithExclude,
+  ConfigShowActionTargetWithExclude,
+} from './audioNodesTypes'
+export { readShowAudioNodes, readCueOutputExcludeNodes, readBackgroundAudioExcludeNodes, readActionTargetExcludeNodes } from './audioNodesTypes'
+
 // Exported for seam C's error-boundary / advanced testing needs and for
 // this seam's own tests; the real application only ever needs the
 // singleton wired up in useModel.ts.

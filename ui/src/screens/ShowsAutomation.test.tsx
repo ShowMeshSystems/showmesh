@@ -812,8 +812,8 @@ describe('Shows · Automation tab', () => {
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('dialog')
-      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
-      const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
+      const boxA = await within(aside).findByRole('checkbox', { name: 'a Node A' })
+      const boxB = within(aside).getByRole('checkbox', { name: 'b Node B' })
       expect(boxA).toBeChecked()
       expect(boxB).toBeChecked()
 
@@ -833,8 +833,8 @@ describe('Shows · Automation tab', () => {
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('dialog')
-      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
-      const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
+      const boxA = await within(aside).findByRole('checkbox', { name: 'a Node A' })
+      const boxB = within(aside).getByRole('checkbox', { name: 'b Node B' })
       expect(boxA).toBeChecked()
       expect(boxB).not.toBeChecked()
 
@@ -854,7 +854,7 @@ describe('Shows · Automation tab', () => {
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('dialog')
-      const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
+      const boxB = await within(aside).findByRole('checkbox', { name: 'b Node B' })
       fireEvent.click(boxB)
 
       const save = await screen.findByRole('button', { name: 'Save action' })
@@ -873,7 +873,7 @@ describe('Shows · Automation tab', () => {
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('dialog')
-      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
+      const boxA = await within(aside).findByRole('checkbox', { name: 'a Node A' })
       expect(boxA).toBeChecked()
 
       const save = await screen.findByRole('button', { name: 'Save action' })
@@ -903,6 +903,60 @@ describe('Shows · Automation tab', () => {
       expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a'])
     })
 
+    it('an action with no explicit nodes shows the show’s nodes and writes excludeNodes on untick', async () => {
+      setupWithAudioAction({})
+      stubs.getShow = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          kind: 'show',
+          id: 'winter-ridge-2026',
+          revision: 47,
+          payload: { name: 'Winter Ridge 2026', notes: '', audioNodes: ['a', 'b'] },
+          updatedAt: '2026-08-30T18:22:00Z',
+          createdByPrincipalId: 'p1',
+          createdByPrincipalName: 'erbartos',
+          source: 'api',
+        })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      await within(aside).findByText('Plays on a · Node A, b · Node B (from the show).')
+      const excludeGroup = within(aside).getByRole('group', { name: 'Audio nodes exclude' })
+      fireEvent.click(within(excludeGroup).getByRole('checkbox', { name: 'b Node B' }))
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect(sent).not.toHaveProperty('audioNodeId')
+      expect((sent as unknown as { excludeNodes?: string[] }).excludeNodes).toEqual(['b'])
+    })
+
+    it('the clear action on an explicit action node list returns it to the show’s audio nodes', async () => {
+      setupWithAudioAction({ audioNodeId: ['a'] })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      await within(aside).findByRole('checkbox', { name: 'a Node A' })
+      fireEvent.click(within(aside).getByRole('button', { name: "Use the show's audio nodes" }))
+      expect(within(aside).queryByRole('checkbox', { name: 'a Node A' })).not.toBeInTheDocument()
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect(sent).not.toHaveProperty('audioNodeId')
+      expect(sent).not.toHaveProperty('excludeNodes')
+    })
+
     it('changing only the node list on an announcement keeps params.media and sourceRole unchanged', async () => {
       const storedParams = {
         sourceRole: 'announcement',
@@ -916,7 +970,7 @@ describe('Shows · Automation tab', () => {
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('dialog')
-      const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
+      const boxB = await within(aside).findByRole('checkbox', { name: 'b Node B' })
       fireEvent.click(boxB)
 
       const save = await screen.findByRole('button', { name: 'Save action' })

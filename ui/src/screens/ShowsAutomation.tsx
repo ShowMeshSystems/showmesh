@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   getMacroRun,
@@ -14,6 +14,7 @@ import {
   listResolumeActions,
   putShowAction,
   putShowMacro,
+  readActionTargetExcludeNodes,
   submitMacroRun,
   type ActionBinding,
   type ActionInvocationResult,
@@ -22,6 +23,7 @@ import {
   type ConfigShowAction,
   type ConfigShowActionMQTTExpect,
   type ConfigShowActionTarget,
+  type ConfigShowActionTargetWithExclude,
   type ConfigShowMacro,
   type ConfigShowMacroLocalFallback,
   type ConfigShowMacroStep,
@@ -40,6 +42,7 @@ import { formatClock } from '../domain/time'
 import { randomUUIDv4 } from '../api/uuid'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchActionBindings, fetchShowActions, fetchShowContents, fetchShowMacros } from './showsData'
+import { AudioNodesResolutionField, useShowAudioNodes, type ShowAudioNodesState } from './audioNodesField'
 import {
   actionIntegrationLabel,
   actionTargetSummary,
@@ -47,6 +50,8 @@ import {
   bindingLabel,
   bindingsByAction,
   bindingTone,
+  excludeNodesError,
+  explicitListExcludeConflictError,
   fppDerivedSafetyClass,
   lastRunForMacro,
   macroBindingSummary,
@@ -1071,6 +1076,7 @@ type MqttTargetValue = {
 type ResolumeTargetValue = { action: string; ref: Record<string, string> }
 type AudioTargetValue = {
   audioNodeIds: string[]
+  excludeNodes: string[]
   audioSessionId: string
   audioAction: string
   gainDb: string
@@ -1088,7 +1094,7 @@ function emptyResolumeValue(): ResolumeTargetValue {
   return { action: '', ref: {} }
 }
 function emptyAudioValue(): AudioTargetValue {
-  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '', audioNodeIdWasArray: false, params: {} }
+  return { audioNodeIds: [], excludeNodes: [], audioSessionId: '', audioAction: '', gainDb: '', audioNodeIdWasArray: false, params: {} }
 }
 
 function fppValueFromTarget(target: ConfigShowActionTarget): FppTargetValue {
@@ -1130,6 +1136,7 @@ function audioValueFromTarget(target: ConfigShowActionTarget): AudioTargetValue 
   const ids = target.audioNodeId
   return {
     audioNodeIds: Array.isArray(ids) ? ids : ids === undefined || ids === '' ? [] : [ids],
+    excludeNodes: readActionTargetExcludeNodes(target),
     audioSessionId: target.audioSessionId ?? '',
     audioAction,
     gainDb: gain === undefined ? '' : String(gain),
@@ -1247,9 +1254,10 @@ function buildResolumeTarget(value: ResolumeTargetValue, actionsState: ResolumeA
   return { target: { integration: 'resolume', action: value.action, ref }, blockReason }
 }
 
-function buildAudioTarget(value: AudioTargetValue): TargetBuild {
+function buildAudioTarget(value: AudioTargetValue, showAudioNodes: readonly string[]): TargetBuild {
   let blockReason: string | null = null
-  if (value.audioNodeIds.length === 0) blockReason ??= 'An audio node is required.'
+  blockReason ??= explicitListExcludeConflictError(value.audioNodeIds, value.excludeNodes)
+  if (blockReason === null && value.audioNodeIds.length === 0) blockReason = excludeNodesError(showAudioNodes, value.excludeNodes)
   if (value.audioSessionId.trim() === '') blockReason ??= 'A session id is required.'
   if (value.audioAction === '') blockReason ??= 'An audio operation is required.'
   const params: Record<string, unknown> = { ...value.params }
@@ -1265,9 +1273,13 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
       else params[key] = n
     }
   }
-  const target: ConfigShowActionTarget = {
+  const target: ConfigShowActionTargetWithExclude = {
     integration: 'audio',
-    audioNodeId: value.audioNodeIds.length === 1 && !value.audioNodeIdWasArray ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds,
+    ...(value.audioNodeIds.length > 0
+      ? { audioNodeId: value.audioNodeIds.length === 1 && !value.audioNodeIdWasArray ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds }
+      : value.excludeNodes.length > 0
+        ? { excludeNodes: value.excludeNodes }
+        : {}),
     audioSessionId: value.audioSessionId.trim(),
     audioAction: value.audioAction,
     ...(Object.keys(params).length > 0 ? { params } : {}),
@@ -1488,55 +1500,33 @@ function AudioTarget({
   onChange,
   nodesState,
   assetsState,
+  showAudioNodesState,
 }: {
   value: AudioTargetValue
   onChange: (value: AudioTargetValue) => void
   nodesState: AudioNodesState
   assetsState: AudioAssetsState
+  showAudioNodesState: ShowAudioNodesState
 }) {
-  const helpId = useId()
-  const declaredIds = nodesState.kind === 'loaded' ? new Set(nodesState.nodes.map((node) => node.id)) : new Set<string>()
-  const undeclaredIds = value.audioNodeIds.filter((id) => !declaredIds.has(id))
   const storedMedia = storedAudioMedia(value.params)
   const audioAssets = assetsState.kind === 'loaded' ? assetsState.assets.filter((asset) => asset.mediaType === 'audio' && asset.current) : []
   const storedMediaKnown = storedMedia !== null && audioAssets.some((asset) => asset.id === storedMedia.assetId)
+  const showAudioNodes = showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : []
   return (
     <div className="sm-inspector__group">
       <p className="sm-eyebrow sm-flat">audio target</p>
-      {nodesState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />}
-      {nodesState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />}
-      {nodesState.kind === 'loaded' &&
-        (nodesState.nodes.length === 0 ? (
-          <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
-        ) : (
-          <div className="sm-field">
-            <fieldset className="sm-choice-row" style={{ border: 0, padding: 0, margin: 0 }} aria-describedby={helpId}>
-              <legend className="sm-field__label">Audio nodes</legend>
-              {nodesState.nodes.map((node) => {
-                const checked = value.audioNodeIds.includes(node.id)
-                return (
-                  <label key={node.id} className="sm-choice">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => onChange({ ...value, audioNodeIds: checked ? value.audioNodeIds.filter((id) => id !== node.id) : [...value.audioNodeIds, node.id] })}
-                    />
-                    <span>{node.label}</span>
-                  </label>
-                )
-              })}
-              {undeclaredIds.map((id) => (
-                <label key={id} className="sm-choice">
-                  <input type="checkbox" checked onChange={() => onChange({ ...value, audioNodeIds: value.audioNodeIds.filter((x) => x !== id) })} />
-                  <span>{id} (not declared)</span>
-                </label>
-              ))}
-            </fieldset>
-            <span className="sm-field__help" id={helpId}>
-              Announcements and the resting bed play on every checked node; other actions use the first.
-            </span>
-          </div>
-        ))}
+      <AudioNodesResolutionField
+        label="Audio nodes"
+        ownLabel="this action"
+        explicitValue={value.audioNodeIds}
+        onExplicitChange={(audioNodeIds) => onChange({ ...value, audioNodeIds })}
+        excludeValue={value.excludeNodes}
+        onExcludeChange={(excludeNodes) => onChange({ ...value, excludeNodes })}
+        excludeError={value.audioNodeIds.length === 0 ? (excludeNodesError(showAudioNodes, value.excludeNodes) ?? undefined) : undefined}
+        showAudioNodesState={showAudioNodesState}
+        nodesState={nodesState}
+      />
+      <p className="sm-small sm-faint">Announcements and the resting bed play on every resolved node; other actions use the first.</p>
       <Field label="Session" help="Minted by the caller, not looked up: the pkg/audio session id this operation targets.">
         {(props) => <Input {...props} className="sm-data" value={value.audioSessionId} onChange={(e) => onChange({ ...value, audioSessionId: e.target.value })} />}
       </Field>
@@ -1712,6 +1702,7 @@ function ActionDraft({
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
   const [audioAssets, setAudioAssets] = useState<AudioAssetsState>({ kind: 'loading' })
+  const showAudioNodesState = useShowAudioNodes(showId)
   const [creating, setCreating] = useState(false)
   const [taken, setTaken] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -1792,7 +1783,7 @@ function ActionDraft({
     targetBlockReason = built.blockReason
     if (resolumeValue.action !== '') derivedClass = resolumeDerivedSafetyClass(resolumeValue.action)
   } else if (integration === 'audio') {
-    const built = buildAudioTarget(audioValue)
+    const built = buildAudioTarget(audioValue, showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : [])
     target = built.target
     targetBlockReason = built.blockReason
     if (audioValue.audioAction !== '') derivedClass = audioDerivedSafetyClass(audioValue.audioAction)
@@ -1870,7 +1861,7 @@ function ActionDraft({
       {integration === 'fpp' && <FppTarget value={fppValue} onChange={setFppValue} fppInstances={model.fpp} />}
       {integration === 'mqtt' && <MqttTarget value={mqttValue} onChange={setMqttValue} />}
       {integration === 'resolume' && <ResolumeTarget value={resolumeValue} onChange={setResolumeValue} actionsState={resolumeActions} />}
-      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} />}
+      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} showAudioNodesState={showAudioNodesState} />}
 
       {integration !== '' && (
         <SafetyClassBlock
@@ -1944,6 +1935,7 @@ function ActionEditor({
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
   const [audioAssets, setAudioAssets] = useState<AudioAssetsState>({ kind: 'loading' })
+  const showAudioNodesState = useShowAudioNodes(action.payload.show)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActionConfigResponse>, { kind: 'stale' }> | null>(null)
@@ -2015,7 +2007,7 @@ function ActionEditor({
     targetBlockReason = built.blockReason
     if (resolumeValue.action !== '') derivedClass = resolumeDerivedSafetyClass(resolumeValue.action)
   } else {
-    const built = buildAudioTarget(audioValue)
+    const built = buildAudioTarget(audioValue, showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : [])
     target = built.target
     targetBlockReason = built.blockReason
     if (audioValue.audioAction !== '') derivedClass = audioDerivedSafetyClass(audioValue.audioAction)
@@ -2086,7 +2078,7 @@ function ActionEditor({
       {integration === 'fpp' && <FppTarget value={fppValue} onChange={setFppValue} fppInstances={model.fpp} />}
       {integration === 'mqtt' && <MqttTarget value={mqttValue} onChange={setMqttValue} />}
       {integration === 'resolume' && <ResolumeTarget value={resolumeValue} onChange={setResolumeValue} actionsState={resolumeActions} />}
-      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} />}
+      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} showAudioNodesState={showAudioNodesState} />}
 
       <SafetyClassBlock
         integration={integration}

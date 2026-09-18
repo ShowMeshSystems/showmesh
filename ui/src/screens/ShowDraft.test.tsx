@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type Model, type SessionResponse } from '../api'
@@ -8,6 +8,9 @@ import { ModelContext } from '../app/ModelContext'
 const stubs = vi.hoisted(() => ({
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listConfigObjects: (() => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [] })) as (
+    ...args: never[]
+  ) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -16,6 +19,7 @@ vi.mock('../api', async () => {
     ...actual,
     getShow: (...args: never[]) => stubs.getShow(...args),
     putShow: (...args: never[]) => stubs.putShow(...args),
+    listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
   }
 })
 
@@ -108,6 +112,31 @@ describe('ShowDraft', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Winter Ridge 2027' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create show' }))
     await waitFor(() => expect(screen.getByText('show detail page')).toBeInTheDocument())
+  })
+
+  it('creates a show with the picked audio nodes', async () => {
+    stubs.getShow = () => Promise.reject(new ApiError('not found', 404, 'https://showmesh.dev/problems/resource-not-found'))
+    stubs.listConfigObjects = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'audio.node',
+        objects: [
+          { id: 'node-a', label: 'node-a', show: 'winter-ridge-2027', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+          { id: 'node-b', label: 'node-b', show: 'winter-ridge-2027', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+        ],
+      })
+    let sent: { audioNodes?: string[] } | null = null
+    stubs.putShow = (_id: string, payload: { audioNodes?: string[] }) => {
+      sent = payload
+      return Promise.resolve(showResponse())
+    }
+    renderDraft({ session: signedIn(['config:write']) })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Winter Ridge 2027' } })
+    const group = await screen.findByRole('group', { name: 'Audio nodes' })
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'node-a' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create show' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect((sent as { audioNodes?: string[] } | null)?.audioNodes).toEqual(['node-a'])
   })
 
   it('disables Create show with a stated reason when the principal lacks config:write', () => {

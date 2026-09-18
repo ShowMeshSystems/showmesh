@@ -6,21 +6,33 @@ import {
   getShowCueRevisions,
   listConfigObjects,
   putShowCue,
+  readCueOutputExcludeNodes,
   type Asset,
   type AudioNodeSummary,
   type ConfigShowCue,
-  type ConfigShowCueOutputs,
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, ChoiceGroup, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
+import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
-import { CUE_OUTPUT_CHIP, type CueActivationDraft, type CueOutputKind, type CueRow, cueActivationSummary, cueRows, formatBytes, slugify } from './showsModel'
+import {
+  CUE_OUTPUT_CHIP,
+  excludeNodesError,
+  explicitListExcludeConflictError,
+  type CueActivationDraft,
+  type CueOutputKind,
+  type CueRow,
+  cueActivationSummary,
+  cueRows,
+  formatBytes,
+  slugify,
+} from './showsModel'
 
 type ListState =
   | { kind: 'loading' }
@@ -362,11 +374,6 @@ function nodeIdentityText(node: { id: string; label: string }): string {
   return node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id
 }
 
-/** The label as ChoiceGroup's muted secondary context: omitted (not merely blank) when it adds nothing beyond the id already shown as the primary text. */
-function nodeSecondaryText(node: { id: string; label: string }): string | undefined {
-  return node.label !== '' && node.label !== node.id ? node.label : undefined
-}
-
 function TargetNodeField({
   label,
   value,
@@ -417,50 +424,6 @@ function TargetNodeField({
   )
 }
 
-/** ADR-049: audio and announcement outputs name a list of audio.node targets, plural where LTC's TargetNodeField stays singular. */
-function TargetNodesField({
-  label,
-  value,
-  onChange,
-  nodesState,
-}: {
-  label: string
-  value: string[]
-  onChange: (value: string[]) => void
-  nodesState: AudioNodesState
-}) {
-  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
-  if (nodesState.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
-  if (nodesState.nodes.length === 0) {
-    return (
-      <>
-        <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
-        {value.length > 0 && (
-          <p className="sm-small sm-faint">
-            Stored targets: <span className="sm-data">{value.join(', ')}</span>
-          </p>
-        )}
-      </>
-    )
-  }
-  const known = new Set(nodesState.nodes.map((node) => node.id))
-  const unknown = value.filter((id) => !known.has(id))
-  const help =
-    unknown.length > 0
-      ? `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not a configured audio.node; saving is refused until ${unknown.length === 1 ? 'it is' : 'they are'} deselected.`
-      : value.length === 0
-        ? 'No nodes selected: plays on the program+ltc node.'
-        : undefined
-  return (
-    <ChoiceGroup
-      label={label}
-      help={help}
-      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
-      value={value}
-      onChange={onChange}
-    />
-  )
-}
 
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
@@ -515,9 +478,12 @@ function CueEditor({
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
   const [audioTargets, setAudioTargets] = useState<string[]>(cue?.payload.outputs.audio?.targets ?? [])
+  const [audioExcludeNodes, setAudioExcludeNodes] = useState<string[]>(readCueOutputExcludeNodes(cue?.payload.outputs.audio))
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
   const [announcementTargets, setAnnouncementTargets] = useState<string[]>(cue?.payload.outputs.announcement?.targets ?? [])
+  const [announcementExcludeNodes, setAnnouncementExcludeNodes] = useState<string[]>(readCueOutputExcludeNodes(cue?.payload.outputs.announcement))
   const audioNodes = useAudioNodes()
+  const showAudioNodesState = useShowAudioNodes(showId)
   const ltcFrameRateState = useLtcFrameRate()
   const fps = ltcFrameRateState.kind === 'loaded' ? ltcFrameRateState.fps : null
   const [saving, setSaving] = useState(false)
@@ -569,6 +535,17 @@ function CueEditor({
     if (ltcOffsetMillis === null) blockReason = 'Start offset must be hh:mm:ss.ff or a whole number of milliseconds.'
     else if (ltcOffsetMillis > 86400000) blockReason = 'Start offset must be 24 hours or less.'
   }
+  const showAudioNodes = showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : []
+  if (blockReason === null && kinds.has('audio')) {
+    blockReason =
+      explicitListExcludeConflictError(audioTargets, audioExcludeNodes) ??
+      (audioTargets.length === 0 ? excludeNodesError(showAudioNodes, audioExcludeNodes) : null)
+  }
+  if (blockReason === null && kinds.has('announcement')) {
+    blockReason =
+      explicitListExcludeConflictError(announcementTargets, announcementExcludeNodes) ??
+      (announcementTargets.length === 0 ? excludeNodesError(showAudioNodes, announcementExcludeNodes) : null)
+  }
 
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
@@ -582,14 +559,18 @@ function CueEditor({
 
   const save = () => {
     if (blockReason !== null) return
-    const outputs: ConfigShowCueOutputs = {
+    const outputs = {
       ...(kinds.has('render') ? { render: { sequence: renderSequence.trim() } } : {}),
       ...(kinds.has('audio')
         ? {
             audio: {
               asset: audioAsset,
               startOffsetMillis: audioOffsetMillis ?? 0,
-              ...(audioTargets.length > 0 ? { targets: audioTargets } : {}),
+              ...(audioTargets.length > 0
+                ? { targets: audioTargets }
+                : audioExcludeNodes.length > 0
+                  ? { excludeNodes: audioExcludeNodes }
+                  : {}),
             },
           }
         : {}),
@@ -607,7 +588,11 @@ function CueEditor({
               policy: announcementPolicy,
               fadeMillis: Number(fadeMillis),
               ...(announcementPolicy === 'duck' ? { duckGainDb: Number(duckGainDb) } : {}),
-              ...(announcementTargets.length > 0 ? { targets: announcementTargets } : {}),
+              ...(announcementTargets.length > 0
+                ? { targets: announcementTargets }
+                : announcementExcludeNodes.length > 0
+                  ? { excludeNodes: announcementExcludeNodes }
+                  : {}),
             },
           }
         : {}),
@@ -749,7 +734,17 @@ function CueEditor({
               />
             )}
           </Field>
-          <TargetNodesField label="Audio target nodes" value={audioTargets} onChange={setAudioTargets} nodesState={audioNodes} />
+          <AudioNodesResolutionField
+            label="Audio target nodes"
+            ownLabel="this cue"
+            explicitValue={audioTargets}
+            onExplicitChange={setAudioTargets}
+            excludeValue={audioExcludeNodes}
+            onExcludeChange={setAudioExcludeNodes}
+            excludeError={audioTargets.length === 0 ? (excludeNodesError(showAudioNodes, audioExcludeNodes) ?? undefined) : undefined}
+            showAudioNodesState={showAudioNodesState}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 
@@ -792,7 +787,17 @@ function CueEditor({
             </Field>
             <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
           </div>
-          <TargetNodesField label="Announcement target nodes" value={announcementTargets} onChange={setAnnouncementTargets} nodesState={audioNodes} />
+          <AudioNodesResolutionField
+            label="Announcement target nodes"
+            ownLabel="this announcement"
+            explicitValue={announcementTargets}
+            onExplicitChange={setAnnouncementTargets}
+            excludeValue={announcementExcludeNodes}
+            onExcludeChange={setAnnouncementExcludeNodes}
+            excludeError={announcementTargets.length === 0 ? (excludeNodesError(showAudioNodes, announcementExcludeNodes) ?? undefined) : undefined}
+            showAudioNodesState={showAudioNodesState}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 

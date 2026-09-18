@@ -21,6 +21,18 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => Promise.resolve({ serverTime: '', assets: [] })) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => Promise.resolve({ serverTime: '', definitions: [] })) as (...args: never[]) => Promise<unknown>,
   getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShow: (() =>
+    Promise.resolve({
+      serverTime: '',
+      kind: 'show',
+      id: 'winter-ridge-2026',
+      revision: 1,
+      payload: { name: 'Winter Ridge 2026', notes: '' },
+      updatedAt: '',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    })) as (...args: never[]) => Promise<unknown>,
 }))
 
 function commandResponse(command: string, outcome: 'applied' | 'idempotent_no_op' = 'applied', attributionDegraded = false) {
@@ -57,6 +69,7 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getShowAction: (...args: never[]) => stubs.getShowAction(...args),
+    getShow: (...args: never[]) => stubs.getShow(...args),
   }
 })
 
@@ -123,6 +136,18 @@ describe('Show Night', () => {
     stubs.listConfigObjects = () => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })
     stubs.getNightSessionConfig = () => new Promise(() => {})
     stubs.putNightSessionConfig = () => Promise.resolve({})
+    stubs.getShow = () =>
+      Promise.resolve({
+        serverTime: '',
+        kind: 'show',
+        id: 'winter-ridge-2026',
+        revision: 1,
+        payload: { name: 'Winter Ridge 2026', notes: '' },
+        updatedAt: '',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+      })
   })
 
   it('says the session has not reported rather than showing a cycle it does not know', () => {
@@ -1402,6 +1427,62 @@ describe('Show Night', () => {
       expect(within(group).getByRole('checkbox', { name: 'audio-03' })).not.toBeChecked()
     })
 
+    it('a bed with no targets shows the show’s nodes and writes excludeNodes on untick', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }])
+      stubs.getShow = () =>
+        Promise.resolve({
+          serverTime: '',
+          kind: 'show',
+          id: 'winter-ridge-2026',
+          revision: 1,
+          payload: { name: 'Winter Ridge 2026', notes: '', audioNodes: ['audio-01', 'audio-02'] },
+          updatedAt: '',
+          createdByPrincipalId: 'p1',
+          createdByPrincipalName: 'erbartos',
+          source: 'api',
+        })
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      await screen.findByText('Plays on audio-01, audio-02 (from the show).')
+      const excludeGroup = screen.getByRole('group', { name: 'Play on these nodes exclude' })
+      const excludeTwo = within(excludeGroup).getByRole('checkbox', { name: 'audio-02' })
+      expect(excludeTwo).not.toBeChecked()
+      fireEvent.click(excludeTwo)
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+      expect(backgroundAudio).not.toHaveProperty('targets')
+      expect(backgroundAudio.excludeNodes).toEqual(['audio-02'])
+    })
+
+    it('the clear action on an explicit bed target list returns it to the show’s audio nodes', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(withTargets(fullDefinitionResponse('Winter Ridge'), ['audio-01']))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      expect(await screen.findByRole('group', { name: 'Play on these nodes' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: "Use the show's audio nodes" }))
+      expect(screen.queryByRole('group', { name: 'Play on these nodes' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+      expect(backgroundAudio).not.toHaveProperty('targets')
+      expect(backgroundAudio).not.toHaveProperty('excludeNodes')
+    })
+
     it('toggling checkboxes builds the payload with exactly the checked ids', async () => {
       const captured: { body: Record<string, unknown> | null } = { body: null }
       mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }])
@@ -1413,6 +1494,8 @@ describe('Show Night', () => {
       }
       renderDefinitions({ session: configWriteSession })
       await openWinterRidgeDefinition()
+      await screen.findByText('Plays on no node (installation default).')
+      fireEvent.click(screen.getByRole('button', { name: 'Set specific nodes for this bed' }))
       const group = await screen.findByRole('group', { name: 'Play on these nodes' })
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-01' }))
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))

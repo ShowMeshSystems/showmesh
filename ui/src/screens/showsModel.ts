@@ -1,6 +1,7 @@
 import type {
   ActionBinding,
   Asset,
+  AudioNodeSummary,
   ConfigObjectSummary,
   ConfigShowActionTarget,
   ConfigShowCue,
@@ -11,6 +12,7 @@ import type {
   MacroRunSummary,
   Model,
   Node,
+  ResolvedFrom,
   ShowCueConfigResponse,
 } from '../api'
 import type { Tone } from '../kit'
@@ -230,7 +232,7 @@ export type CueActivationDraft = {
   ltcFps: number | null
 }
 
-function joinFacts(parts: readonly string[]): string {
+export function joinFacts(parts: readonly string[]): string {
   if (parts.length === 0) return ''
   if (parts.length === 1) return parts[0] ?? ''
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`
@@ -564,4 +566,67 @@ export function formatBytes(bytes: number): string {
     unit += 1
   }
   return `${value.toFixed(1)} ${units[unit]}`
+}
+
+// ---------------------------------------------------------------------
+// ADR-049 decision 10: the show names its audio nodes once, and a cue
+// audio/announcement output, the night bed, and a show.action audio
+// target each inherit that list unless they carry their own explicit one
+// or exclude a node from it.
+// ---------------------------------------------------------------------
+
+/**
+ * ADR-045/ADR-049 decision 1's original default target: the installation's
+ * program+ltc node (the one node whose ltcChannel is reported), or its sole
+ * audio.node when none holds that role. Null when neither can be determined.
+ */
+export function installationDefaultAudioNode(nodes: readonly AudioNodeSummary[]): string | null {
+  const ltcNode = nodes.find((node) => node.ltcChannel !== undefined)
+  if (ltcNode !== undefined) return ltcNode.id
+  return nodes.length === 1 ? (nodes[0]?.id ?? null) : null
+}
+
+export type ResolvedAudioNodes = { nodes: string[]; from: ResolvedFrom }
+
+/** ADR-049 decision 10's resolution order: this object's own explicit list, else the show's audioNodes minus this object's own excludeNodes, else the installation default. */
+export function resolveAudioNodes(params: {
+  explicitList: readonly string[]
+  showAudioNodes: readonly string[]
+  excludeNodes: readonly string[]
+  defaultNodeId: string | null
+}): ResolvedAudioNodes {
+  if (params.explicitList.length > 0) return { nodes: [...params.explicitList], from: 'explicit' }
+  if (params.showAudioNodes.length > 0) {
+    const excluded = new Set(params.excludeNodes)
+    return { nodes: params.showAudioNodes.filter((id) => !excluded.has(id)), from: 'show' }
+  }
+  return { nodes: params.defaultNodeId === null ? [] : [params.defaultNodeId], from: 'default' }
+}
+
+/** The resolved-nodes line every audio-bearing shape shows: which nodes, and where the list came from. `ownLabel` names the object, e.g. "this cue". */
+export function resolvedNodesFact(resolved: ResolvedAudioNodes, ownLabel: string): string {
+  const source = resolved.from === 'explicit' ? `${ownLabel}'s own list` : resolved.from === 'show' ? 'from the show' : 'installation default'
+  return resolved.nodes.length === 0 ? `Plays on no node (${source}).` : `Plays on ${resolved.nodes.join(', ')} (${source}).`
+}
+
+/** Mirrors the coordinator's excludeNodes refusals (ADR-049 decision 10): an excluded id not in the show's own list, and excluding every node in it. */
+export function excludeNodesError(showAudioNodes: readonly string[], excludeNodes: readonly string[]): string | null {
+  if (excludeNodes.length === 0) return null
+  const showSet = new Set(showAudioNodes)
+  const unknown = excludeNodes.filter((id) => !showSet.has(id))
+  if (unknown.length > 0) {
+    return `${joinFacts(unknown)} ${unknown.length === 1 ? 'is not' : 'are not'} in the show's audio nodes.`
+  }
+  if (showAudioNodes.length > 0 && showAudioNodes.every((id) => excludeNodes.includes(id))) {
+    return 'Excluding every node in the show list leaves nothing to play on.'
+  }
+  return null
+}
+
+/** Mirrors the coordinator's refusal of excludeNodes alongside an explicit node list on the same object (ADR-049 decision 10). */
+export function explicitListExcludeConflictError(explicitList: readonly string[], excludeNodes: readonly string[]): string | null {
+  if (explicitList.length > 0 && excludeNodes.length > 0) {
+    return "This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude."
+  }
+  return null
 }
