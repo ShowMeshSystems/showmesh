@@ -9,10 +9,16 @@
 html,
 body {
   margin: 0;
-  background: var(--bg);
   color: var(--text);
   font: var(--t-body);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Paint the ground on body only. It propagates to the canvas, so a single
+   layer covers everything. Backgrounding both html and body composites two
+   identical near-black layers that seam at the body-box edge on a tall page. */
+body {
+  background: var(--bg);
 }
 
 a {
