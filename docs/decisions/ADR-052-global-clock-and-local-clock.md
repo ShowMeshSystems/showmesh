@@ -45,10 +45,11 @@ clock domain, and it is reported elsewhere under another name.
 6. **One sync status line per node**, in the manner of a broadcast audio
    node's sync page: whether the local clock is locked, what it follows,
    the offset and the rate adjustment. Example: `Sync: Locked. Follows PTP
-   000fd4fffe06553a:0, offset 0.2 µs, rate +0.00 ppm`. The word is
-   "follows". A node with no global clock reads `Sync: Free-running on the
-   local clock`. Values the node does not measure are omitted, never
-   invented.
+   000fd4fffe06553a:0, δ 0.2 µs, rate +0.00 ppm`. The word is "follows" and
+   the offset is written δ. A node with no global clock reads `Sync:
+   Free-running on the local clock`. The rate adjustment, in parts per
+   million, is measured and reported by the node as part of this decision;
+   until a build measures a value it is omitted, never invented.
 
 ## Consequences
 
