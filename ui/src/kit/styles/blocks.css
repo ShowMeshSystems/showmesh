@@ -817,6 +817,19 @@ a.sm-tile:hover {
   margin: 0;
 }
 
+/* Dense: one full-width row of equal buttons, no consequence lines. Wraps on
+   a narrow screen instead of overflowing. Used on Show Night only. */
+.sm-lifecycle-commands--dense {
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+}
+
+.sm-lifecycle-commands--dense > div {
+  flex: 1 1 150px;
+  grid-column: auto;
+}
+
 @media (max-width: 1100px) {
   .sm-lifecycle-commands {
     grid-template-columns: repeat(2, minmax(0, 1fr));

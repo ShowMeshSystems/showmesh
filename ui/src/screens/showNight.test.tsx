@@ -386,16 +386,19 @@ describe('Show Night', () => {
     expect(buttons.map((b) => b.textContent)).toEqual(names)
   })
 
-  it('groups the lifecycle commands into Prepare, Start, End the night', () => {
+  it('renders the lifecycle commands as one flat row in run order, with no group subheadings', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
+    expect(within(region).queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    const order = ['Prepare site', 'Run readiness', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
+    const buttons = within(region).getAllByRole('button').filter((b) => order.includes(b.textContent ?? ''))
+    expect(buttons.map((b) => b.textContent)).toEqual(order)
   })
 
-  it('shows each lifecycle command its consequence line', () => {
+  it('cuts the per-command consequence lines in the dense lifecycle row', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    expect(within(region).getByText(/Gets the site ready/)).toBeInTheDocument()
+    expect(within(region).queryByText(/Gets the site ready/)).not.toBeInTheDocument()
   })
 
   it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {
