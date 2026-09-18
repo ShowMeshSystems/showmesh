@@ -117,8 +117,9 @@ func checkIdentity(path string, ref pkgaudio.MediaRef) (ok bool, reason string, 
 // 3, on [decodedAudioCapsPattern]'s own doc comment. gst-discoverer-1.0,
 // when it ran, is the sole source of an authoritative Duration (ruling 1);
 // its absence falls back to a Ready verdict with no duration rather than a
-// fault (ruling 5).
-func classifyDecode(dr DecodeResult) MediaItemResult {
+// fault (ruling 5), unless path is a PCM WAV file, whose RIFF header
+// determines the duration directly; see [wavFileDuration].
+func classifyDecode(dr DecodeResult, path string) MediaItemResult {
 	if !dr.TypeIdentified {
 		return faulted(MediaFaultUndecodable, "GStreamer could not identify any stream type in this file's content")
 	}
@@ -138,6 +139,19 @@ func classifyDecode(dr DecodeResult) MediaItemResult {
 		return MediaItemResult{
 			State: MediaReady, DurationKnown: true, DurationSource: DurationSourceContainerMetadata,
 			Duration:  dr.Discoverer.Duration,
+			Container: dr.MIMEType, Codec: firstNonEmpty(dr.Discoverer.Codec, dr.Codec),
+			Channels:   firstPositive(dr.Discoverer.Channels, dr.Channels),
+			SampleRate: firstPositive(dr.Discoverer.SampleRate, dr.SampleRate),
+		}
+	}
+
+	// gst-discoverer-1.0 either never ran or gave no usable duration. Show
+	// audio is delivered as PCM WAV, whose length the RIFF header itself
+	// determines, so try that before falling back to an unknown duration.
+	if wavDuration, ok := wavFileDuration(path); ok {
+		return MediaItemResult{
+			State: MediaReady, DurationKnown: true, DurationSource: DurationSourceContainerMetadata,
+			Duration:  wavDuration,
 			Container: dr.MIMEType, Codec: firstNonEmpty(dr.Discoverer.Codec, dr.Codec),
 			Channels:   firstPositive(dr.Discoverer.Channels, dr.Channels),
 			SampleRate: firstPositive(dr.Discoverer.SampleRate, dr.SampleRate),
@@ -212,7 +226,7 @@ func ProbeAsset(ctx context.Context, dir string, ref pkgaudio.MediaRef, dec Deco
 	if !dr.Available {
 		return unknown(dr.Reason)
 	}
-	return classifyDecode(dr)
+	return classifyDecode(dr, path)
 }
 
 // MediaProbeItem is one playlist slot's identity plus its probe evidence.
