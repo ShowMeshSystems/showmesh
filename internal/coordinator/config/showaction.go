@@ -735,7 +735,13 @@ type ShowActionTarget struct {
 	// multi-node fan-out (background audio, announcement clear/apply/
 	// start) is the sole place every configured node is actually
 	// addressed - see nightannouncement.go and nightbackgroundaudio.go.
+	// AudioNodeIDs is now optional (ADR-049 decision 10): an absent or
+	// empty target.audioNodeId resolves through [ResolveAudioNodes]
+	// against the show's own audioNodes list instead of being refused.
+	// ExcludeNodes is that resolution's per-target exclude list, valid
+	// only when AudioNodeIDs is empty.
 	AudioNodeIDs   AudioNodeIDList `json:"audioNodeId,omitempty"`
+	ExcludeNodes   []string        `json:"excludeNodes,omitempty"`
 	AudioSessionID string          `json:"audioSessionId,omitempty"`
 	AudioAction    string          `json:"audioAction,omitempty"`
 }
@@ -852,7 +858,7 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 // the currently stored composition; showExists reports whether "show"
 // names an existing show config object. None of the five is fetched by
 // this package — see this file's own top doc comment.
-func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver, showExists func(string) bool) (ShowActionPayload, *ValidationError) {
+func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver, showExists func(string) bool, showAudioNodes func(string) []string) (ShowActionPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowActionPayload{}, verr
@@ -920,7 +926,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 	case ShowActionIntegrationResolume:
 		target, verr = decodeResolumeTarget(targetFields, safetyClass, resolver)
 	case ShowActionIntegrationAudio:
-		target, verr = decodeAudioTarget(targetFields, safetyClass)
+		var showAudioNodesList []string
+		validateExcludeNodes := showAudioNodes != nil
+		if validateExcludeNodes {
+			showAudioNodesList = showAudioNodes(show)
+		}
+		target, verr = decodeAudioTarget(targetFields, safetyClass, showAudioNodesList, validateExcludeNodes)
 	default:
 		verr = &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.integration",
@@ -1204,8 +1215,12 @@ var audioActionDeclaredSafetyClass = map[string]string{
 // and the coordinator's own dispatch path are where a missing node or
 // session surfaces, exactly as an unresolvable mqtt broker would if it
 // were removed after an action was bound to it.
-func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string) (ShowActionTarget, *ValidationError) {
+func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string, showAudioNodes []string, validateExcludeNodes bool) (ShowActionTarget, *ValidationError) {
 	nodeIDs, verr := decodeAudioNodeIDList(targetFields, "audioNodeId", "target.audioNodeId")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	excludeNodes, verr := decodeExcludeNodes(targetFields, "target", []string(nodeIDs), showAudioNodes, validateExcludeNodes)
 	if verr != nil {
 		return ShowActionTarget{}, verr
 	}
@@ -1256,20 +1271,27 @@ func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyCl
 	}
 
 	return ShowActionTarget{
-		Integration: ShowActionIntegrationAudio, AudioNodeIDs: nodeIDs, AudioSessionID: sessionID,
+		Integration: ShowActionIntegrationAudio, AudioNodeIDs: nodeIDs, ExcludeNodes: excludeNodes, AudioSessionID: sessionID,
 		AudioAction: action, Params: params,
 	}, nil
 }
 
 // decodeAudioNodeIDList reads key from top as target.audioNodeId, this
-// package's own widened field: a required, non-null JSON string (decoded
-// as a one-element list, the shape every payload stored before this
-// change already used) or a required, non-null, non-empty JSON array of
-// non-empty strings.
+// package's own widened field: an optional (ADR-049 decision 10) JSON
+// string (decoded as a one-element list, the shape every payload stored
+// before this change already used) or JSON array of non-empty strings.
+// Absent, an explicit empty string, or an explicit empty array all mean
+// unset — this target's node list then resolves against the show's own
+// audioNodes list minus ExcludeNodes ([ResolveAudioNodes]) rather than
+// being refused; no previously valid payload could carry an empty value
+// here, since it was refused outright before this decision, so widening
+// what absent/empty means breaks no existing configuration. An explicit
+// null is still refused, matching every other optional field's own
+// null-refusal convention in this package.
 func decodeAudioNodeIDList(top map[string]json.RawMessage, key, field string) (AudioNodeIDList, *ValidationError) {
 	raw, present := top[key]
 	if !present {
-		return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: field, Detail: fmt.Sprintf("%s is required", field)}
+		return nil, nil
 	}
 	if isJSONNull(raw) {
 		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
@@ -1277,7 +1299,7 @@ func decodeAudioNodeIDList(top map[string]json.RawMessage, key, field string) (A
 	var single string
 	if err := json.Unmarshal(raw, &single); err == nil {
 		if single == "" {
-			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must not be empty", field)}
+			return nil, nil
 		}
 		return AudioNodeIDList{single}, nil
 	}
@@ -1286,7 +1308,7 @@ func decodeAudioNodeIDList(top map[string]json.RawMessage, key, field string) (A
 		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON string or an array of strings", field)}
 	}
 	if len(list) == 0 {
-		return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must name at least one node", field)}
+		return nil, nil
 	}
 	seen := make(map[string]bool, len(list))
 	for i, id := range list {

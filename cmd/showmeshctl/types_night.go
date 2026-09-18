@@ -50,6 +50,7 @@ type nightSessionBackgroundAudio struct {
 	CrossfadeMs    *int
 	MaxGainDb      float64
 	Targets        []string
+	ExcludeNodes   []string
 }
 
 func (b nightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
@@ -57,7 +58,8 @@ func (b nightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 		return json.Marshal(struct {
 			MediaPlaylist string   `json:"mediaPlaylist"`
 			Targets       []string `json:"targets,omitempty"`
-		}{MediaPlaylist: b.MediaPlaylist, Targets: b.Targets})
+			ExcludeNodes  []string `json:"excludeNodes,omitempty"`
+		}{MediaPlaylist: b.MediaPlaylist, Targets: b.Targets, ExcludeNodes: b.ExcludeNodes})
 	}
 	return json.Marshal(struct {
 		Items          []nightSessionBackgroundAudioItem `json:"items"`
@@ -67,9 +69,10 @@ func (b nightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 		CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
 		MaxGainDb      float64                           `json:"maxGainDb"`
 		Targets        []string                          `json:"targets,omitempty"`
+		ExcludeNodes   []string                          `json:"excludeNodes,omitempty"`
 	}{
 		Items: b.Items, Repeat: b.Repeat, Resume: b.Resume, ItemTransition: b.ItemTransition,
-		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, Targets: b.Targets,
+		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, Targets: b.Targets, ExcludeNodes: b.ExcludeNodes,
 	})
 }
 
@@ -83,6 +86,7 @@ func (b *nightSessionBackgroundAudio) UnmarshalJSON(data []byte) error {
 		CrossfadeMs    *int                              `json:"crossfadeMs"`
 		MaxGainDb      float64                           `json:"maxGainDb"`
 		Targets        []string                          `json:"targets"`
+		ExcludeNodes   []string                          `json:"excludeNodes"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -103,6 +107,7 @@ func (b *nightSessionBackgroundAudio) UnmarshalJSON(data []byte) error {
 	b.CrossfadeMs = wire.CrossfadeMs
 	b.MaxGainDb = wire.MaxGainDb
 	b.Targets = wire.Targets
+	b.ExcludeNodes = wire.ExcludeNodes
 	return nil
 }
 

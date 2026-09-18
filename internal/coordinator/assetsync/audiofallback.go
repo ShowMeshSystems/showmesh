@@ -45,18 +45,16 @@ func preferNodeOverShowAudioAssets(nodeAssets, showAssets []store.AssetRecord) [
 
 // effectiveAudioTargets resolves an audio or announcement output's
 // declared Targets to the node ids it actually concerns, applying ADR-049
-// decision 1's own "empty resolves to the installation's default node"
-// rule ([audioTargets.OwnsAny]'s identical resolution, restated here
-// because that method only ever answers membership, never enumerates the
-// list membership is checked against).
-func effectiveAudioTargets(targets []string, defaultNode string) []string {
-	if len(targets) > 0 {
-		return targets
+// decision 10's full three-tier order via [config.ResolveAudioNodes]
+// (restated here because [audioTargets.OwnsResolved] only ever answers
+// membership, never enumerates the list membership is checked against).
+func effectiveAudioTargets(targets, excludeNodes, showAudioNodes []string, defaultNode string) []string {
+	var defaultNodes []string
+	if defaultNode != "" {
+		defaultNodes = []string{defaultNode}
 	}
-	if defaultNode == "" {
-		return nil
-	}
-	return []string{defaultNode}
+	resolved, _ := config.ResolveAudioNodes(targets, showAudioNodes, excludeNodes, defaultNodes)
+	return resolved
 }
 
 // audioFallbackAssets implements ADR-049 decision 5's third precedence
@@ -88,6 +86,10 @@ func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID st
 	if err != nil {
 		return nil, err
 	}
+	showAudioNodes, err := ShowAudioNodes(ctx, st, showID)
+	if err != nil {
+		return nil, err
+	}
 
 	cueObjs, err := st.ListConfigObjects(ctx, config.ShowCueConfigKind)
 	if err != nil {
@@ -110,7 +112,7 @@ func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID st
 			}
 			return nil, fmt.Errorf("assetsync: audio fallback assets for node %q: read show.cue %q revision %d: %w", nodeID, obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue, nil)
 		if verr != nil {
 			// Unlike ResolveCueCatalog's own main loop (which must fail
 			// hard so [exclusiveClaimReadiness]'s undecodableCueID match
@@ -135,13 +137,13 @@ func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID st
 			continue
 		}
 
-		orderedTargets := effectiveAudioTargets(payload.Outputs.Audio.Targets, nodeTargets.defaultNode)
+		orderedTargets := effectiveAudioTargets(payload.Outputs.Audio.Targets, payload.Outputs.Audio.ExcludeNodes, showAudioNodes, nodeTargets.defaultNode)
 		if payload.Outputs.Announcement != nil {
 			present := make(map[string]bool, len(orderedTargets))
 			for _, t := range orderedTargets {
 				present[t] = true
 			}
-			for _, t := range effectiveAudioTargets(payload.Outputs.Announcement.Targets, nodeTargets.defaultNode) {
+			for _, t := range effectiveAudioTargets(payload.Outputs.Announcement.Targets, payload.Outputs.Announcement.ExcludeNodes, showAudioNodes, nodeTargets.defaultNode) {
 				if !present[t] {
 					orderedTargets = append(orderedTargets, t)
 					present[t] = true

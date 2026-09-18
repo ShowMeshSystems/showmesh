@@ -55,8 +55,10 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 		// ADR-049 decision 7: absent/empty targets is today's per-node behavior, not "no bed".
 		if len(ba.Targets) > 0 {
 			_, _ = fmt.Fprintf(w, "    Targets: %s\n", strings.Join(ba.Targets, ", "))
+		} else if len(ba.ExcludeNodes) > 0 {
+			_, _ = fmt.Fprintf(w, "    Targets: the show's audio nodes, excluding %s\n", strings.Join(ba.ExcludeNodes, ", "))
 		} else {
-			_, _ = fmt.Fprintf(w, "    Targets: none: each node plays its registered items\n")
+			_, _ = fmt.Fprintf(w, "    Targets: none: each node plays its registered items, or the show's audio nodes if set\n")
 		}
 	}
 

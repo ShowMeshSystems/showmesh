@@ -7,7 +7,7 @@ import (
 )
 
 func TestDecodeShowPayloadValid(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": "the good one"}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": "the good one"}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -17,7 +17,7 @@ func TestDecodeShowPayloadValid(t *testing.T) {
 }
 
 func TestEncodeShowPayloadRoundTrips(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": ""}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": ""}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -35,21 +35,21 @@ func TestEncodeShowPayloadRoundTrips(t *testing.T) {
 }
 
 func TestDecodeShowPayloadNameAbsent(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"notes": "x"}`)
+	_, verr := DecodeShowPayload(`{"notes": "x"}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "name" {
 		t.Fatalf("expected field-required on name, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadNameNull(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": null, "notes": "x"}`)
+	_, verr := DecodeShowPayload(`{"name": null, "notes": "x"}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "name" {
 		t.Fatalf("expected field-null on name, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadNameEmpty(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "", "notes": "x"}`)
+	_, verr := DecodeShowPayload(`{"name": "", "notes": "x"}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "name" {
 		t.Fatalf("expected field-empty on name, got %+v", verr)
 	}
@@ -57,7 +57,7 @@ func TestDecodeShowPayloadNameEmpty(t *testing.T) {
 
 func TestDecodeShowPayloadNameTooLong(t *testing.T) {
 	long := strings.Repeat("a", maxShowNameRunes+1)
-	_, verr := DecodeShowPayload(`{"name": "` + long + `", "notes": ""}`)
+	_, verr := DecodeShowPayload(`{"name": "`+long+`", "notes": ""}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "name" {
 		t.Fatalf("expected field-invalid on name, got %+v", verr)
 	}
@@ -69,7 +69,7 @@ func TestDecodeShowPayloadNameTooLong(t *testing.T) {
 // treated as "leave whatever was there before" — Step 7 shipped exactly
 // that defect for a different field and wiped every FPP endpoint.
 func TestDecodeShowPayloadNotesAbsentMeansEmpty(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026"}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026"}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -79,7 +79,7 @@ func TestDecodeShowPayloadNotesAbsentMeansEmpty(t *testing.T) {
 }
 
 func TestDecodeShowPayloadNotesExplicitlyEmpty(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": ""}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": ""}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -89,7 +89,7 @@ func TestDecodeShowPayloadNotesExplicitlyEmpty(t *testing.T) {
 }
 
 func TestDecodeShowPayloadNotesNull(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": null}`)
+	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": null}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "notes" {
 		t.Fatalf("expected field-null on notes, got %+v", verr)
 	}
@@ -97,21 +97,21 @@ func TestDecodeShowPayloadNotesNull(t *testing.T) {
 
 func TestDecodeShowPayloadNotesTooLong(t *testing.T) {
 	long := strings.Repeat("a", maxShowNotesRunes+1)
-	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": "` + long + `"}`)
+	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "notes": "`+long+`"}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "notes" {
 		t.Fatalf("expected field-invalid on notes, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadUnknownTopLevelKey(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "surfaces": []}`)
+	_, verr := DecodeShowPayload(`{"name": "Halloween 2026", "surfaces": []}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadBodyNotObject(t *testing.T) {
-	_, verr := DecodeShowPayload(`[1,2,3]`)
+	_, verr := DecodeShowPayload(`[1,2,3]`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeBodyInvalid {
 		t.Fatalf("expected body-invalid, got %+v", verr)
 	}
@@ -144,7 +144,7 @@ func TestValidateShowObjectIDMatchesTheReferenceRule(t *testing.T) {
 // a consumer that reads "absent" as "no instance takes part" would report
 // a show with nothing in it as correctly configured.
 func TestDecodeShowPayloadParticipationAbsentIsNotEmpty(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026"}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026"}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -167,7 +167,7 @@ func TestDecodeShowPayloadParticipationAbsentIsNotEmpty(t *testing.T) {
 // and no Resolume, so "no Resolume takes part" has to be expressible and
 // has to be a different decoded value from never having chosen.
 func TestDecodeShowPayloadParticipationExplicitlyEmptyIsRecorded(t *testing.T) {
-	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "fppInstances": ["fpp-a", "fpp-b"], "resolumeInstances": []}`)
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "fppInstances": ["fpp-a", "fpp-b"], "resolumeInstances": []}`, alwaysTrueAudioNodeExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -204,7 +204,7 @@ func TestEncodeShowPayloadParticipationRoundTripsAllThreeStates(t *testing.T) {
 		{"populated", `{"name": "s", "resolumeInstances": ["arena-01"]}`, false, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, verr := DecodeShowPayload(tc.raw)
+			p, verr := DecodeShowPayload(tc.raw, alwaysTrueAudioNodeExists)
 			if verr != nil {
 				t.Fatalf("decode: %+v", verr)
 			}
@@ -219,7 +219,7 @@ func TestEncodeShowPayloadParticipationRoundTripsAllThreeStates(t *testing.T) {
 			if _, present := top["resolumeInstances"]; present == tc.wantKeyAbsent {
 				t.Fatalf("resolumeInstances key present=%v in %s, want absent=%v", present, encoded, tc.wantKeyAbsent)
 			}
-			back, verr := DecodeShowPayload(encoded)
+			back, verr := DecodeShowPayload(encoded, alwaysTrueAudioNodeExists)
 			if verr != nil {
 				t.Fatalf("decode of encoded payload: %+v", verr)
 			}
@@ -232,28 +232,28 @@ func TestEncodeShowPayloadParticipationRoundTripsAllThreeStates(t *testing.T) {
 }
 
 func TestDecodeShowPayloadParticipationNullRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": null}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": null}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "fppInstances" {
 		t.Fatalf("expected field-null on fppInstances, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadParticipationNotAnArrayRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": "fpp-a"}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": "fpp-a"}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "fppInstances" {
 		t.Fatalf("expected field-invalid on fppInstances, got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadParticipationEmptyEntryRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", ""]}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", ""]}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "fppInstances[1]" {
 		t.Fatalf("expected field-empty on fppInstances[1], got %+v", verr)
 	}
 }
 
 func TestDecodeShowPayloadParticipationBadInstanceIDRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "resolumeInstances": ["Arena 01"]}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "resolumeInstances": ["Arena 01"]}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resolumeInstances[0]" {
 		t.Fatalf("expected field-invalid on resolumeInstances[0], got %+v", verr)
 	}
@@ -263,7 +263,7 @@ func TestDecodeShowPayloadParticipationBadInstanceIDRejected(t *testing.T) {
 // refused rather than silently deduplicated, so the operator sees the typo
 // instead of the coordinator storing a list nobody typed.
 func TestDecodeShowPayloadParticipationDuplicateRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", "fpp-b", "fpp-a"]}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", "fpp-b", "fpp-a"]}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeInstanceIDDuplicate || verr.Field != "fppInstances[2]" {
 		t.Fatalf("expected instance-id-duplicate on fppInstances[2], got %+v", verr)
 	}
@@ -274,8 +274,57 @@ func TestDecodeShowPayloadParticipationDuplicateRejected(t *testing.T) {
 // unconfigured, which is exactly the failure this field pair exists to
 // make visible.
 func TestDecodeShowPayloadParticipationUnknownKeyRejected(t *testing.T) {
-	_, verr := DecodeShowPayload(`{"name": "s", "fppInstance": ["fpp-a"]}`)
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstance": ["fpp-a"]}`, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key, got %+v", verr)
+	}
+}
+
+// TestDecodeShowPayloadAudioNodesAbsentIsNil is ADR-049 decision 10's
+// load-bearing test for this field: absent must decode to nil so a show
+// with no audioNodes reads the same whether it predates the field or an
+// operator explicitly cleared it.
+func TestDecodeShowPayloadAudioNodesAbsentIsNil(t *testing.T) {
+	p, verr := DecodeShowPayload(`{"name": "s"}`, alwaysTrueAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.AudioNodes != nil {
+		t.Fatalf("expected nil audioNodes, got %v", p.AudioNodes)
+	}
+}
+
+func TestDecodeShowPayloadAudioNodesExplicitlyEmptyIsNil(t *testing.T) {
+	p, verr := DecodeShowPayload(`{"name": "s", "audioNodes": []}`, alwaysTrueAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.AudioNodes != nil {
+		t.Fatalf("expected an explicitly empty audioNodes to decode to nil, got %v", p.AudioNodes)
+	}
+}
+
+func TestDecodeShowPayloadAudioNodesPopulated(t *testing.T) {
+	p, verr := DecodeShowPayload(`{"name": "s", "audioNodes": ["m4", "pi"]}`, alwaysTrueAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.AudioNodes) != 2 || p.AudioNodes[0] != "m4" || p.AudioNodes[1] != "pi" {
+		t.Fatalf("unexpected audioNodes: %v", p.AudioNodes)
+	}
+}
+
+func TestDecodeShowPayloadAudioNodesUnknownReferenceRejected(t *testing.T) {
+	notExists := func(string) bool { return false }
+	_, verr := DecodeShowPayload(`{"name": "s", "audioNodes": ["m4"]}`, notExists)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "audioNodes[0]" {
+		t.Fatalf("expected field-unknown-reference on audioNodes[0], got %+v", verr)
+	}
+}
+
+func TestDecodeShowPayloadAudioNodesDuplicateRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "audioNodes": ["m4", "pi", "m4"]}`, alwaysTrueAudioNodeExists)
+	if verr == nil || verr.Code != ValidationCodeInstanceIDDuplicate || verr.Field != "audioNodes[2]" {
+		t.Fatalf("expected instance-id-duplicate on audioNodes[2], got %+v", verr)
 	}
 }

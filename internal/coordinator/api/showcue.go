@@ -167,7 +167,7 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()), h.audioNodeExists(r.Context()))
+	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()), h.audioNodeExists(r.Context()), h.showAudioNodes(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return

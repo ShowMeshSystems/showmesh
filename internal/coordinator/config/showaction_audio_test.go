@@ -25,7 +25,7 @@ func validAudioActionJSON() string {
 }
 
 func TestDecodeShowActionPayloadAudioValid(t *testing.T) {
-	p, verr := DecodeShowActionPayload(validAudioActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(validAudioActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -52,7 +52,7 @@ func TestDecodeShowActionPayloadAudioAcceptsNodeIDArray(t *testing.T) {
 			"audioAction": "audio.session.apply"
 		}
 	}`
-	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -61,9 +61,13 @@ func TestDecodeShowActionPayloadAudioAcceptsNodeIDArray(t *testing.T) {
 	}
 }
 
-// TestDecodeShowActionPayloadAudioRejectsEmptyNodeIDArray defends the
-// "at least one node" floor for the widened array form.
-func TestDecodeShowActionPayloadAudioRejectsEmptyNodeIDArray(t *testing.T) {
+// TestDecodeShowActionPayloadAudioEmptyNodeIDArrayMeansUnset is ADR-049
+// decision 10's own widening of the pre-existing "at least one node" rule:
+// an explicitly empty audioNodeId array is no longer refused; it means the
+// same as an absent one, resolving against the show's own audioNodes list
+// instead ([ResolveAudioNodes]). No previously stored payload could carry
+// an empty array here, since it was refused outright before this decision.
+func TestDecodeShowActionPayloadAudioEmptyNodeIDArrayMeansUnset(t *testing.T) {
 	raw := `{
 		"show": "halloween-2026",
 		"label": "Empty node list",
@@ -75,12 +79,34 @@ func TestDecodeShowActionPayloadAudioRejectsEmptyNodeIDArray(t *testing.T) {
 			"audioAction": "audio.session.apply"
 		}
 	}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
-	if verr == nil {
-		t.Fatal("expected a validation error for an empty audioNodeId array")
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
 	}
-	if verr.Field != "target.audioNodeId" {
-		t.Fatalf("Field = %q, want target.audioNodeId", verr.Field)
+	if len(p.Target.AudioNodeIDs) != 0 {
+		t.Fatalf("AudioNodeIDs = %+v, want empty", p.Target.AudioNodeIDs)
+	}
+}
+
+// TestDecodeShowActionPayloadAudioAbsentNodeIDMeansUnset is the absent-key
+// sibling of the empty-array case above.
+func TestDecodeShowActionPayloadAudioAbsentNodeIDMeansUnset(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"label": "No node list",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioSessionId": "announce-1",
+			"audioAction": "audio.session.apply"
+		}
+	}`
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Target.AudioNodeIDs) != 0 {
+		t.Fatalf("AudioNodeIDs = %+v, want empty", p.Target.AudioNodeIDs)
 	}
 }
 
@@ -101,7 +127,7 @@ func TestDecodeShowActionPayloadAudioRejectsUnsupportedAction(t *testing.T) {
 			"audioAction": "audio.session.teleport"
 		}
 	}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil {
 		t.Fatal("expected a validation error for an unsupported audioAction, got none")
 	}
@@ -126,7 +152,7 @@ func TestDecodeShowActionPayloadAudioSafetyClassMismatch(t *testing.T) {
 			"audioAction": "audio.session.stop"
 		}
 	}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeSafetyClassMismatch {
 		t.Fatalf("verr = %+v, want ValidationCodeSafetyClassMismatch", verr)
 	}
@@ -148,7 +174,7 @@ func TestDecodeShowActionPayloadAudioParamsRoundTrip(t *testing.T) {
 			"params": {"sourceRole": "background"}
 		}
 	}`
-	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -188,7 +214,7 @@ func audioGainActionJSON(action, params string) string {
 func decodeAudioGainAction(t *testing.T, action, params string) (ShowActionPayload, *ValidationError) {
 	t.Helper()
 	return DecodeShowActionPayload(audioGainActionJSON(action, params), testEndpoints(), testBrokers(),
-		newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 }
 
 func TestDecodeShowActionPayloadAudioGainAcceptsDecibels(t *testing.T) {
@@ -257,11 +283,86 @@ func TestDecodeShowActionPayloadAudioNonGainParamsStayOpaque(t *testing.T) {
 		}
 	}`
 	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(),
-		newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
 	if p.Target.Params["positionMs"] != float64(1500) || p.Target.Params["gain"] != 0.5 {
 		t.Fatalf("params = %+v, want them carried through untouched", p.Target.Params)
 	}
+}
+
+// --- ADR-049 decision 10: target.excludeNodes ---
+
+func audioTargetJSONWithExcludeNodes(excludeNodes string) string {
+	return `{
+		"show": "halloween-2026",
+		"label": "Hush resting background audio",
+		"safetyClass": "stop",
+		"target": {
+			"integration": "audio",
+			"excludeNodes": ` + excludeNodes + `,
+			"audioSessionId": "resting-bg",
+			"audioAction": "audio.session.stop"
+		}
+	}`
+}
+
+func TestDecodeShowActionPayloadAudioExcludeNodesValid(t *testing.T) {
+	p, verr := DecodeShowActionPayload(audioTargetJSONWithExcludeNodes(`["node-b"]`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists,
+		showAudioNodesFixture("node-a", "node-b"))
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if !strEqual(p.Target.ExcludeNodes, []string{"node-b"}) {
+		t.Fatalf("unexpected excludeNodes: %v", p.Target.ExcludeNodes)
+	}
+}
+
+func TestDecodeShowActionPayloadAudioExcludeNodesWithNodeIDRejected(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"label": "Hush resting background audio",
+		"safetyClass": "stop",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["node-a"],
+			"excludeNodes": ["node-b"],
+			"audioSessionId": "resting-bg",
+			"audioAction": "audio.session.stop"
+		}
+	}`
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists,
+		showAudioNodesFixture("node-a", "node-b"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.excludeNodes" {
+		t.Fatalf("expected field-invalid on target.excludeNodes, got %+v", verr)
+	}
+}
+
+func TestDecodeShowActionPayloadAudioExcludeNodesNotInShowListRejected(t *testing.T) {
+	_, verr := DecodeShowActionPayload(audioTargetJSONWithExcludeNodes(`["ghost"]`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists,
+		showAudioNodesFixture("node-a", "node-b"))
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "target.excludeNodes[0]" {
+		t.Fatalf("expected field-unknown-reference on target.excludeNodes[0], got %+v", verr)
+	}
+}
+
+func TestDecodeShowActionPayloadAudioExcludeNodesAllRejected(t *testing.T) {
+	_, verr := DecodeShowActionPayload(audioTargetJSONWithExcludeNodes(`["node-a", "node-b"]`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists,
+		showAudioNodesFixture("node-a", "node-b"))
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.excludeNodes" {
+		t.Fatalf("expected field-invalid on target.excludeNodes for excluding every node, got %+v", verr)
+	}
+}
+
+func strEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
