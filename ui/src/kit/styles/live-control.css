@@ -28,17 +28,18 @@
   font: var(--t-small);
 }
 
-/* The select gets a real width; Repeat sits beside it; Start playlist never wraps. */
+/* The select gets a real width; Repeat sits beside it; Start playlist never wraps.
+   Centered so the picker sits under the middle of the transport panel. */
 .sm-lc-transport__playlist-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-3);
   flex-wrap: wrap;
 }
 
 .sm-lc-transport__playlist-row > .sm-field {
-  flex: 1 1 320px;
-  max-width: 480px;
+  flex: 0 1 480px;
 }
 
 .sm-lc-transport__playlist-row > .sm-choice {
@@ -50,24 +51,12 @@
   white-space: nowrap;
 }
 
-/* A volume field only needs to hold three digits. Apply's margin-top matches
-   the field's label row (21px) plus its gap (6px) so it aligns with the
-   input, not with the field's own bottom once its help line is counted. */
-.sm-lc-transport__volume-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s-3);
-}
-
-.sm-lc-transport__volume-row > .sm-field {
+/* The volume input rides in the transport control row at the gloved button
+   height, holding three digits. */
+.sm-lc-volume-input {
+  width: 5.5rem;
+  height: var(--ctrl-h-gloved);
   flex: 0 0 auto;
-  width: 96px;
-}
-
-.sm-lc-transport__volume-row > .sm-btn {
-  flex: 0 0 auto;
-  margin-top: 27px;
-  white-space: nowrap;
 }
 
 .sm-lc-transport__body {

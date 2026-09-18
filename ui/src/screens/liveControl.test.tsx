@@ -257,7 +257,6 @@ describe('Live Control', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
-      'Resolume',
       'Night lifecycle',
       'Audio sessions',
       'Macros',
@@ -266,7 +265,6 @@ describe('Live Control', () => {
       'Emergency stop',
       'What each output is doing',
     ])
-    expect(screen.getByRole('link', { name: /open resolume control/i })).toHaveAttribute('href', '/control/resolume')
   })
 
   it('dispatches blackout and reports its evidence outcome', async () => {
@@ -282,10 +280,6 @@ describe('Live Control', () => {
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
-  it('explains Stop now as a helper line under the transport, not a callout', () => {
-    renderScreen({})
-    expect(screen.getByText(/halts this player only/)).toBeInTheDocument()
-  })
 
   it('gates every emergency-stop control on show:emergencystop:invoke, disabled with the real reason, never hidden', () => {
     renderScreen({

@@ -341,6 +341,14 @@ export function LiveControl() {
   const [hardStopArmBusy, setHardStopArmBusy] = useState(false)
   const [hardStopArmError, setHardStopArmError] = useState<string | null>(null)
   const [armTick, setArmTick] = useState(0)
+  const [resolumeBlackoutOutcome, setResolumeBlackoutOutcome] = useState<ResolumeActionResult | null>(null)
+  const [resolumeBlackoutError, setResolumeBlackoutError] = useState<string | null>(null)
+  const runResolumeBlackout = useCallback(() => {
+    setResolumeBlackoutError(null)
+    blackoutResolume()
+      .then(setResolumeBlackoutOutcome)
+      .catch((err: unknown) => setResolumeBlackoutError(describeApiError(err)))
+  }, [])
 
   const macros = useConfigList('show.macro', show)
   const actions = useConfigList('show.action', show)
@@ -560,12 +568,15 @@ export function LiveControl() {
             >
               Stop and power down
             </Button>
-          </ButtonRow>
-
-          <ResolumeBlackout gate={resolumeGate} />
-
-          <div className="sm-lc-emergency__hardstop">
-            <ButtonRow>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!resolumeGate.allowed}
+              title={resolumeGate.allowed ? 'Blacks out Resolume immediately, without stopping FPP.' : resolumeGate.reason}
+              onClick={runResolumeBlackout}
+            >
+              Resolume blackout
+            </Button>
               <Button
                 size="gloved"
                 disabled={!emergencyGate.allowed || hardStopArmBusy}
@@ -591,20 +602,21 @@ export function LiveControl() {
               >
                 Fire hard stop
               </Button>
-            </ButtonRow>
-            {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
-            {hardStopArm !== null && armRemainingMs !== null && (
-              <Notice
-                tone="warn"
-                live="status"
-                headline={
-                  armExpired
-                    ? 'The arm token expired. Arm again, then fire promptly.'
-                    : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
-                }
-              />
-            )}
-          </div>
+          </ButtonRow>
+          {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
+          {hardStopArm !== null && armRemainingMs !== null && (
+            <Notice
+              tone="warn"
+              live="status"
+              headline={
+                armExpired
+                  ? 'The arm token expired. Arm again, then fire promptly.'
+                  : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
+              }
+            />
+          )}
+          {resolumeBlackoutOutcome !== null && <ResolumeOutcome result={resolumeBlackoutOutcome} />}
+          {resolumeBlackoutError !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={resolumeBlackoutError} />}
 
           <EmergencyStopOutcome outcome={emergencyOutcome} />
         </div>
@@ -674,7 +686,7 @@ export function LiveControl() {
             <div className="sm-lc-transport__body">
               <div className="sm-lc-transport__playlist-row">
                 {selectablePlaylistNames.length > 0 ? (
-                  <Field label="Playlist" help="Imported FPP playlist definitions.">
+                  <Field label="Playlist">
                     {(field) => (
                       <Select {...field} value={startPlaylistName} onChange={(event) => setStartPlaylistName(event.target.value)}>
                         <option value="">Choose a playlist</option>
@@ -763,41 +775,34 @@ export function LiveControl() {
                   <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
                     <span aria-hidden="true">■ </span>Stop now
                   </Button>
+                  <ButtonRule />
+                  <Input
+                    aria-label="Volume, 0 to 100"
+                    className="sm-lc-volume-input"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={volume}
+                    placeholder={state.volume === null ? 'Vol' : String(state.volume)}
+                    title={state.volume === null ? 'This instance does not report its volume.' : 'Volume, 0 to 100'}
+                    onChange={(event) => setVolume(event.target.value)}
+                  />
+                  <Button
+                    size="gloved"
+                    disabled={!commandGate.allowed || volume.trim() === ''}
+                    title={commandGate.allowed ? undefined : commandGate.reason}
+                    onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
+                  >
+                    Set volume
+                  </Button>
                 </ButtonRow>
-              </div>
-              <div className="sm-lc-transport__volume-row">
-                <Field label="Volume" help={state.volume === null ? 'This instance does not report its volume.' : '0-100.'}>
-                  {(field) => (
-                    <Input
-                      {...field}
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={volume}
-                      placeholder={state.volume === null ? '' : String(state.volume)}
-                      onChange={(event) => setVolume(event.target.value)}
-                    />
-                  )}
-                </Field>
-                <Button
-                  disabled={!commandGate.allowed || volume.trim() === ''}
-                  title={commandGate.allowed ? undefined : commandGate.reason}
-                  onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
-                >
-                  Apply
-                </Button>
               </div>
               <Outcome outcome={outcome} />
             </div>
           </div>
         )}
-        <p className="sm-small sm-muted">
-          <strong>Stop now</strong> halts this player only; projection and audio hold their last state until their own
-          cues run.
-        </p>
       </Section>
 
-      <ResolumeQuickStrip />
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <p className="sm-small sm-muted">
@@ -1769,35 +1774,6 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
           <Outcome outcome={outcome} />
         </Section>
       </Drawer>
-    </Section>
-  )
-}
-
-/** Just the Resolume blackout: an immediate-recovery control that sits with the emergency stops. */
-function ResolumeBlackout({ gate }: { gate: Gate }) {
-  const [outcome, setOutcome] = useState<ResolumeActionResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const blackout = () => {
-    setError(null)
-    blackoutResolume().then(setOutcome).catch((err: unknown) => setError(describeApiError(err)))
-  }
-
-  return (
-    <div className="sm-lc-emergency__resolume">
-      <ButtonRow>
-        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? 'Blacks out Resolume immediately, without stopping FPP.' : gate.reason} onClick={blackout}>Resolume blackout</Button>
-      </ButtonRow>
-      {outcome !== null && <ResolumeOutcome result={outcome} />}
-      {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
-    </div>
-  )
-}
-
-function ResolumeQuickStrip() {
-  return (
-    <Section id="lc-resolume" title="Resolume" aside={<Link to="/control/resolume">Open Resolume control →</Link>}>
-      <p className="sm-small sm-muted">The clip grid and layer controls have their own wide workspace. Blackout is with the emergency stops.</p>
     </Section>
   )
 }
