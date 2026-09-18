@@ -160,8 +160,9 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
-      'Run of Show',
       'Status',
+      'Run of Show',
+      'Background Audio Record',
       'Night session activation',
     ])
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
@@ -385,19 +386,19 @@ describe('Show Night', () => {
     expect(buttons.map((b) => b.textContent)).toEqual(names)
   })
 
-  it('groups the lifecycle commands into Prepare, Start, End the night: the same one element Live Control renders', () => {
+  it('renders the lifecycle commands as one flat row in contract order, with no group subheadings', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
+    expect(within(region).queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    const order = ['Prepare site', 'Run readiness', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
+    const buttons = within(region).getAllByRole('button').filter((b) => order.includes(b.textContent ?? ''))
+    expect(buttons.map((b) => b.textContent)).toEqual(order)
   })
 
-  it('renders Prepare as Prepare site, Run readiness and Start as Start preshow, Start night: the group spec order, not blocks.css’s unscoped per-command order', () => {
+  it('cuts the per-command consequence lines in the dense lifecycle row', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    const prepareSection = within(region).getByRole('heading', { name: 'Prepare', level: 3 }).closest('section') as HTMLElement
-    expect(within(prepareSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prepare site', 'Run readiness'])
-    const startSection = within(region).getByRole('heading', { name: 'Start', level: 3 }).closest('section') as HTMLElement
-    expect(within(startSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Start preshow', 'Start night'])
+    expect(within(region).queryByText(/Gets the site ready/)).not.toBeInTheDocument()
   })
 
   it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {
