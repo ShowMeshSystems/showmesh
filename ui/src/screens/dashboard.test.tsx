@@ -284,7 +284,7 @@ describe('Dashboard', () => {
   it('gates the next start when readiness ran in an earlier epoch', () => {
     const verdict = nextStartVerdict(session({ sameEpoch: false }), '2026-08-29T01:34:00Z')
     expect(verdict?.state).toBe('Next start gated')
-    expect(verdict?.fact).toContain('earlier epoch')
+    expect(verdict?.fact).toContain('last prepared')
     expect(verdict?.gated).toBe(true)
   })
 
@@ -315,7 +315,7 @@ describe('Dashboard', () => {
     const verdict = nextStartVerdict(session({ outcome: 'ready_with_warnings', sameEpoch: false }), '2026-08-29T01:34:00Z')
     expect(verdict?.state).toBe('Next start gated')
     expect(verdict?.gated).toBe(true)
-    expect(verdict?.fact).toContain('earlier epoch')
+    expect(verdict?.fact).toContain('last prepared')
     expect(verdict?.fact).not.toContain('ready_with_warnings')
   })
 

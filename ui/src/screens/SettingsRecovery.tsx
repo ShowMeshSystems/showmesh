@@ -136,7 +136,7 @@ export function SettingsRecovery() {
             absence="stale"
             label="Read this first"
             fact="Idle output is what the audience sees when a pipeline has failed."
-            detail="Black is honest; a held last frame can look like a working show for an hour. Restart bounds exist so a broken pipeline stops retrying forever rather than flickering at the audience."
+            detail="On failure, output goes black rather than holding the last frame. Restarts are bounded, so a broken pipeline stops retrying instead of flickering at the audience."
           />
           {state.response.revision === 0 && state.response.source === 'default' && (
             <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for render recovery yet. These are the coordinator's own defaults." />

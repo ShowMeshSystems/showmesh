@@ -152,8 +152,8 @@ function ManifestEmptyRow({ manifest, fact }: { manifest: NodeAssetManifest; fac
       <RuledStrip
         absence="unobserved"
         label="No verdict"
-        fact="This node has no asset evidence to judge."
-        detail={manifest.reason ?? 'Nothing has been observed, so an empty list here would not mean an empty result.'}
+        fact="This node has not reported its assets yet."
+        detail={manifest.reason ?? "An empty list here doesn't mean nothing is missing; nothing has been checked yet."}
       />
     )
   }
@@ -859,8 +859,7 @@ export function NodeDetail() {
 
       <Section id="nd-assets" title="Assets held locally">
         <p className="sm-small sm-muted">
-          This reports what is missing, uncovered or unexpected, not what this node correctly holds, since the manifest reports absence, never
-          presence.
+          This lists assets that are missing, uncovered, or unexpected. It does not confirm what the node correctly holds.
         </p>
 
         {manifestState.kind === 'loading' && (
@@ -873,7 +872,7 @@ export function NodeDetail() {
             fact={manifestState.reason}
             detail={
               <>
-                No manifest read has ever succeeded on this device.{' '}
+This device has never returned an asset list.{' '}
                 <button type="button" className="sm-linkbutton" onClick={reloadManifest}>
                   Try again
                 </button>
@@ -888,7 +887,7 @@ export function NodeDetail() {
                 absence="stale"
                 label="Stale"
                 fact={manifestState.reason}
-                detail={`Showing the manifest last read at ${
+                detail={`Showing the asset list last read at ${
                   manifestState.receivedAt === null ? 'an unrecorded time' : (formatClock(new Date(manifestState.receivedAt).toISOString()) ?? 'an unrecorded time')
                 }.`}
               />

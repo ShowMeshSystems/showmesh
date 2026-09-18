@@ -436,7 +436,7 @@ function SurfaceEditor({
 
       <div className="sm-inspector__group">
         <h3 className="sm-subsection__title">Output</h3>
-        <p className="sm-small sm-muted">Exactly one transport. NDI support is never evidence HDMI works on the same node.</p>
+        <p className="sm-small sm-muted">Exactly one transport. NDI working does not mean HDMI also works on the same node.</p>
         <Segmented
           label="Transport"
           value={transport}

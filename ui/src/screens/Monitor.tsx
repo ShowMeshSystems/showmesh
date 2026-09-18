@@ -333,7 +333,7 @@ export function Monitor() {
               <RuledStrip
                 absence="empty"
                 label="Nothing selected"
-                fact="Select a resource for its full evidence."
+                fact="Select a resource to see its full status."
                 detail="FPP transport stays in Live Control. Resolume configuration has its own screen."
               />
             </div>

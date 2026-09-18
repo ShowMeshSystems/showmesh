@@ -278,7 +278,7 @@ export function SettingsConnections() {
       <NotWiredBanner
         what="Test"
         missing="test endpoint for a configured connection"
-        detail="Health below comes from the coordinator's own polling, which is what the fleet already reports. A test would be a live check from the coordinator, not saved, and it would not prove the address still answers at showtime."
+        detail="Health comes from the coordinator's polling. There is no live test button."
       />
 
       <Section id="st-fpp" title="FPP players">

@@ -241,7 +241,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       rows: observationRows(node.audio, 'audio', node.audio.length),
       absent:
         node.audio.length === 0
-          ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
+          ? 'This node has never claimed an audio capability, so there is nothing to observe. That is not the same as an audio path that is failing.'
           : null,
     },
     {

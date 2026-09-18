@@ -238,7 +238,7 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
       tone: 'unknown',
       state: 'Readiness unknown',
       fact: 'No readiness result has been recorded for this session.',
-      detail: readiness.reason !== '' ? readiness.reason : 'Unknown is never a pass. start-night is withheld.',
+      detail: readiness.reason !== '' ? readiness.reason : 'Unknown is never a pass. Start night is withheld.',
       action: true,
     }
   }
@@ -261,15 +261,15 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
       tone: warned ? 'warn' : 'good',
       state: warned ? 'Next start warned' : 'Next start clear',
       fact: warned
-        ? `Readiness passed with a warning ${when}${ago}, from this epoch. ${passed} of ${readiness.checks.length} checks. The night will start; review readiness before it does.`
-        : `Readiness passed ${when}${ago}, from this epoch. ${passed} of ${readiness.checks.length} checks.`,
+        ? `Readiness passed with a warning ${when}${ago}, ${passed} of ${readiness.checks.length} checks. The night will start; review readiness before it does.`
+        : `Readiness passed ${when}${ago}, ${passed} of ${readiness.checks.length} checks.`,
       detail: null,
       action: warned,
     }
   }
   const why: string[] = []
   if (!willStart) why.push(`the last run reported ${readiness.outcome}`)
-  if (!readiness.sameEpoch) why.push('it ran in an earlier epoch')
+  if (!readiness.sameEpoch) why.push('it ran before the site was last prepared')
   if (!readiness.fresh) why.push('it is no longer fresh')
   return {
     tone: 'warn',

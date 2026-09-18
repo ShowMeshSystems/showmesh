@@ -183,8 +183,8 @@ function EmptyList({ manifest, fact }: { manifest: NodeAssetManifest; fact: stri
       <RuledStrip
         absence="unobserved"
         label="No verdict"
-        fact="This node has no asset evidence to judge."
-        detail={manifest.reason ?? 'Nothing has been observed, so an empty list here would not mean an empty result.'}
+        fact="This node has not reported its assets yet."
+        detail={manifest.reason ?? "An empty list here doesn't mean nothing is missing; nothing has been checked yet."}
       />
     )
   }
