@@ -365,6 +365,57 @@ func TestInvokeActionAudioConfirmed(t *testing.T) {
 	}
 }
 
+// TestInvokeActionAudioApplyResolvesReadyRenditionMedia proves an ad hoc
+// show.action's own audio.session.apply dispatch resolves a
+// params["media"] reference to a ready rendition's hash and .wav filename.
+func TestInvokeActionAudioApplyResolvesReadyRenditionMedia(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:welcome", store.AudioRenditionReady{
+		ContentHash: "sha256:welcome-rendition", SizeBytes: 2048, DurationMillis: 3000, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	deps.AssetManifests = st
+	pub := &fakeAudioPublisher{result: mqttproto.ResultPayload{
+		Outcome:  mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "position", "reason": "applied"}},
+	}}
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "apply-announcement", `{
+		"show": "halloween-2026",
+		"label": "Apply the announcement",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": "node-a",
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.apply",
+			"params": {"media": {"assetId": "welcome", "contentHash": "sha256:welcome", "filename": "welcome.mp3", "sizeBytes": 1024}}
+		}
+	}`)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("apply-announcement", "audio-key-apply", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	media, ok := pub.lastParams["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatched params[media] = %v, want a JSON object", pub.lastParams["media"])
+	}
+	if media["filename"] != "welcome.wav" {
+		t.Errorf("media.filename = %v, want welcome.wav (the ready rendition's own runtime filename)", media["filename"])
+	}
+	if media["contentHash"] != "sha256:welcome-rendition" {
+		t.Errorf("media.contentHash = %v, want the rendition's own hash sha256:welcome-rendition", media["contentHash"])
+	}
+}
+
 // TestInvokeActionAudioDispatchesOnlyTheFirstOfMultipleTargetNodes pins the
 // ad hoc action-invocation path's own documented contract: every consumer
 // of an audio-integration show.action OTHER than a night-session

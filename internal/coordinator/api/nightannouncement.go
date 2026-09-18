@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -57,7 +58,7 @@ func (h *handlers) nightAnnouncementDeclaredTarget(ctx context.Context, rec stor
 			target.AudioNodeIDs = config.AudioNodeIDList(h.resolveAudioActionTargetNodes(ctx, payload.Show, target))
 		}
 	}
-	target = nightAnnouncementDeclareParams(cue, target)
+	target = h.nightAnnouncementDeclareTargetParams(ctx, cue, target)
 	if len(target.AudioNodeIDs) > 1 {
 		target.AudioNodeIDs = target.AudioNodeIDs[:1]
 	}
@@ -67,8 +68,26 @@ func (h *handlers) nightAnnouncementDeclaredTarget(ctx context.Context, rec stor
 // nightAnnouncementDeclaredTargetFullNodeList is
 // [nightAnnouncementDeclaredTarget]'s own param-declaration logic without
 // its first-node clamp, for every additional node's own single-node target.
-func nightAnnouncementDeclaredTargetFullNodeList(cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
-	return nightAnnouncementDeclareParams(cue, target)
+func (h *handlers) nightAnnouncementDeclaredTargetFullNodeList(ctx context.Context, cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+	return h.nightAnnouncementDeclareTargetParams(ctx, cue, target)
+}
+
+// nightAnnouncementDeclareTargetParams is the shared param step for both
+// callers above: sourceRole/mixPolicy declaration, then media resolution
+// via [handlers.resolveAudioApplyMediaParams], so no two nodes ever
+// dispatch a media reference that disagrees.
+func (h *handlers) nightAnnouncementDeclareTargetParams(ctx context.Context, cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+	target = nightAnnouncementDeclareParams(cue, target)
+	if !nightAnnouncementTargetDeclarable(target) {
+		return target
+	}
+	params := make(map[string]any, len(target.Params))
+	for k, v := range target.Params {
+		params[k] = v
+	}
+	h.resolveAudioApplyMediaParams(ctx, params)
+	target.Params = params
+	return target
 }
 
 // nightAnnouncementDeclareParams is nightAnnouncementDeclaredTarget's own
@@ -282,7 +301,7 @@ func (h *handlers) nightAdvanceAnnouncementApplyExtra(ctx context.Context, now t
 	if !ok || len(target.AudioNodeIDs) <= 1 {
 		return
 	}
-	declared := nightAnnouncementDeclaredTargetFullNodeList(cue, target)
+	declared := h.nightAnnouncementDeclaredTargetFullNodeList(ctx, cue, target)
 	for _, nodeID := range target.AudioNodeIDs[1:] {
 		applyTarget := declared
 		applyTarget.AudioNodeIDs = config.AudioNodeIDList{nodeID}
@@ -696,6 +715,26 @@ func nightAnnouncementMediaRef(params map[string]any) nightAnnouncementMedia {
 		sizeBytes = v
 	}
 	return nightAnnouncementMedia{AssetID: assetID, ContentHash: contentHash, Filename: filename, SizeBytes: sizeBytes}
+}
+
+// resolveAudioApplyMediaParams rewrites params["media"] (ADR-049 decision
+// 9) to name what the asset-sync manifest currently delivers for that
+// asset. Left unchanged when there is no complete reference, no
+// asset-manifest store wired, or the lookup fails.
+func (h *handlers) resolveAudioApplyMediaParams(ctx context.Context, params map[string]any) {
+	media := nightAnnouncementMediaRef(params)
+	if !media.Complete() || h.deps.AssetManifests == nil {
+		return
+	}
+	resolved, err := assetsync.ResolveAudioMedia(ctx, h.deps.AssetManifests, media.AssetID, media.ContentHash, media.Filename, media.SizeBytes)
+	if err != nil {
+		h.logWarn("night loop: announcement: failed to resolve audio media rendition; dispatching the stored reference", "assetId", media.AssetID, "error", err)
+		return
+	}
+	params["media"] = map[string]any{
+		"assetId": media.AssetID, "contentHash": resolved.ContentHash,
+		"filename": resolved.Filename, "sizeBytes": resolved.SizeBytes,
+	}
 }
 
 // nightAnnouncementSessionTarget resolves cue's bound show.action and

@@ -565,6 +565,10 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		// nightDispatchCueAudio's (nightcue.go) identical conversion at its
 		// own dispatch point.
 		ConvertAuthoredAudioGainParams(target.AudioAction, params)
+		// Resolves a params["media"] reference (ADR-049 decision 9) to
+		// what the asset-sync manifest currently delivers; a no-op when
+		// params carries no complete media reference.
+		h.resolveAudioApplyMediaParams(ctx, params)
 		audioIdemKey := actionInvokeAudioChildIdempotencyKeyPrefix + cmdID
 		params["sessionId"] = target.AudioSessionID
 		params["invocationId"] = audioIdemKey

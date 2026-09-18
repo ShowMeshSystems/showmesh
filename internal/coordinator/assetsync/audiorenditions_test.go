@@ -111,6 +111,70 @@ func TestExpectedAssetsForNodeKeepsOriginalWithoutAReadyRendition(t *testing.T) 
 	}
 }
 
+// TestResolveAudioMedia covers a ready rendition (resolved hash/filename/
+// size), a pending (rendering or failed) rendition, and no rendition row
+// at all: only "ready" ever changes the original values.
+func TestResolveAudioMedia(t *testing.T) {
+	const assetID = "opening-theme"
+	const originalHash = "sha256:original"
+	const originalFilename = "opening-theme.mp3"
+	const originalSize = int64(12345)
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, st *store.Store)
+		want  ResolvedAudioMedia
+	}{
+		{
+			name:  "no rendition ever queued",
+			setup: func(t *testing.T, st *store.Store) {},
+			want:  ResolvedAudioMedia{ContentHash: originalHash, Filename: originalFilename, SizeBytes: originalSize},
+		},
+		{
+			name: "rendition still rendering",
+			setup: func(t *testing.T, st *store.Store) {
+				if err := st.SetAudioRenditionRendering(context.Background(), originalHash); err != nil {
+					t.Fatalf("SetAudioRenditionRendering: %v", err)
+				}
+			},
+			want: ResolvedAudioMedia{ContentHash: originalHash, Filename: originalFilename, SizeBytes: originalSize},
+		},
+		{
+			name: "rendition failed",
+			setup: func(t *testing.T, st *store.Store) {
+				if err := st.SetAudioRenditionFailed(context.Background(), originalHash, "decode error"); err != nil {
+					t.Fatalf("SetAudioRenditionFailed: %v", err)
+				}
+			},
+			want: ResolvedAudioMedia{ContentHash: originalHash, Filename: originalFilename, SizeBytes: originalSize},
+		},
+		{
+			name: "rendition ready",
+			setup: func(t *testing.T, st *store.Store) {
+				if err := st.SetAudioRenditionReady(context.Background(), originalHash, store.AudioRenditionReady{
+					ContentHash: "sha256:rendition", SizeBytes: 999, DurationMillis: 12345, Format: "wav48k16s",
+				}); err != nil {
+					t.Fatalf("SetAudioRenditionReady: %v", err)
+				}
+			},
+			want: ResolvedAudioMedia{ContentHash: "sha256:rendition", Filename: "opening-theme.wav", SizeBytes: 999},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openTestStore(t)
+			tc.setup(t, st)
+
+			got, err := ResolveAudioMedia(context.Background(), st, assetID, originalHash, originalFilename, originalSize)
+			if err != nil {
+				t.Fatalf("ResolveAudioMedia() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ResolveAudioMedia() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestExpectedAssetsForNodeNeverSubstitutesSequenceAssets proves an fseq
 // entry is never rewritten, even if a row with its own content hash
 // somehow existed in audio_renditions.

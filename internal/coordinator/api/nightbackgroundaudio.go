@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -542,6 +543,10 @@ func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.Ni
 // WHOLE build rather than silently dropping one item, matching AUDIO-
 // ENGINE section 3's "fails visibly instead of guessing" rule for a
 // missing item.
+//
+// Each item's own media names what the asset-sync manifest currently
+// delivers ([assetsync.ResolveAudioMedia]), not the pinned asset record's
+// original filename/hash, so this bed and the manifest never disagree.
 func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show string, items []config.NightSessionBackgroundAudioItem) ([]pkgaudio.PlaylistItem, error) {
 	out := make([]pkgaudio.PlaylistItem, 0, len(items))
 	for i, item := range items {
@@ -555,9 +560,16 @@ func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show s
 		if rec.MediaType != "audio" {
 			return nil, fmt.Errorf("backgroundAudio item %q: pinned asset's media type is %q, not \"audio\"", item.ItemID, rec.MediaType)
 		}
+		media := assetsync.ResolvedAudioMedia{ContentHash: rec.ContentHash, Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes}
+		if h.deps.AssetManifests != nil {
+			media, err = assetsync.ResolveAudioMedia(ctx, h.deps.AssetManifests, rec.ID, rec.ContentHash, rec.RuntimeFilename, rec.SizeBytes)
+			if err != nil {
+				return nil, fmt.Errorf("backgroundAudio item %q: resolve audio media: %w", item.ItemID, err)
+			}
+		}
 		out = append(out, pkgaudio.PlaylistItem{
 			ItemID: item.ItemID, Index: i,
-			Media: pkgaudio.MediaRef{AssetID: rec.ID, ContentHash: rec.ContentHash, SizeBytes: rec.SizeBytes, RuntimeFilename: rec.RuntimeFilename},
+			Media: pkgaudio.MediaRef{AssetID: rec.ID, ContentHash: media.ContentHash, SizeBytes: media.SizeBytes, RuntimeFilename: media.Filename},
 		})
 	}
 	return out, nil
