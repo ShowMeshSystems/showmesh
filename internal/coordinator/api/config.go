@@ -85,13 +85,9 @@ func (h *handlers) handleGetFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		// never reported as absence.
 		if h.deps.FPPEndpointsMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"no fpp.endpoints configuration is stored, but this coordinator IS collecting from the endpoints named by "+
-					"SHOWMESH_FPP_ENDPOINTS: the startup migration of that variable into this store could not be "+
-					"persisted on this boot, and was deferred rather than refusing to start. GET /api/v1/fpp lists the "+
-					"endpoints actually in effect. Nothing was written, so nothing here is stale or half-applied. Check this "+
-					"coordinator's startup log for the failure, fix the data volume (usually full, read-only, or a damaged "+
-					"database), and restart: the migration is retried on every start. Do NOT remove SHOWMESH_FPP_ENDPOINTS "+
-					"until it has succeeded — while the migration is deferred that variable is the only copy of this list."))
+				"No fpp.endpoints configuration is stored: the coordinator's data volume is unwritable, so nothing "+
+					"was saved. GET /api/v1/fpp shows the endpoints actually in effect. Fix the volume and restart; "+
+					"do not clear SHOWMESH_FPP_ENDPOINTS."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(

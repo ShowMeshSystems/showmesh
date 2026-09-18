@@ -96,10 +96,7 @@ const (
 // (Track F seam F6) even though the session's own Degraded flag never
 // does; end-session is untouched by any interlock and is always the
 // unconditional way to reach stopped.
-const nightDegradedGuidance = "night session is degraded (%s). " +
-	"request-final-show, fade-out-night and power-down-presentation are still accepted and are how you end the night through this session, " +
-	"unless a configured interlock separately withholds one of them; " +
-	"end-session abandons it instead, is never withheld by an interlock, and prepare-site then starts a fresh one. Every other lifecycle command is refused until then."
+const nightDegradedGuidance = "Night session degraded: %s. Run End Session, then Prepare Site to recover."
 
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
 // "roll back, no error occurred - a *v1.Problem describes the refusal",
@@ -270,7 +267,7 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
-		p := invalidParameterProblem(fmt.Sprintf("%q declares no interlock phase and consults no gate; interlockOverrides must be omitted, not silently ignored", cmd))
+		p := invalidParameterProblem(fmt.Sprintf("%q has no gate for interlockOverrides to affect, so omit that field instead of sending it ignored", cmd))
 		return "", nil, false, &p
 	}
 	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, nil
@@ -948,7 +945,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 // inside nightRunGated's own transaction.
 func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
-		p := nightStateRejectedProblem("start-preshow has no unconsumed preparation epoch; run prepare-site first")
+		p := nightStateRejectedProblem("start-preshow has nothing new to consume from prepare-site; run prepare-site first")
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
@@ -968,7 +965,7 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 	case nightStatePreshow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting, nightStateRestingIntershow, nightStateEndOfNightResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	default: // fading-out, stopped
-		p := nightStateRejectedProblem("start-preshow has no unconsumed preparation epoch; run prepare-site first")
+		p := nightStateRejectedProblem("start-preshow has nothing new to consume from prepare-site; run prepare-site first")
 		return nightCommandOutcome{}, &p, nil
 	}
 }
@@ -994,13 +991,13 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		readiness, err := tx.GetLatestNightReadiness(ctx, current.ID)
 		if err != nil {
 			if err == store.ErrNightReadinessNotFound {
-				p := nightNotReadyProblem("start-night: no readiness result recorded for this preparation epoch; run run-readiness first")
+				p := nightNotReadyProblem("start-night: no readiness result recorded yet; run run-readiness first")
 				return nightCommandOutcome{}, &p, nil
 			}
 			return nightCommandOutcome{}, nil, err
 		}
 		if readiness.EpochID != current.ID {
-			p := nightNotReadyProblem("start-night: the most recent readiness result belongs to a prior preparation epoch and is never adopted (invariant 2)")
+			p := nightNotReadyProblem("Readiness is stale. Run Run Readiness again, then Start Night.")
 			return nightCommandOutcome{}, &p, nil
 		}
 		// Wall-clock, not monotonic: an NTP step backwards can trip the
@@ -1052,7 +1049,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		// "resynchronized after a clock discontinuity" on a healthy
 		// clock.
 		lastTick := now
-		reason := fmt.Sprintf("content boundary E is this transition's own start plus its enterShow lead; no resting playback preceded it to lead from otherwise; show launch expected at %s", boundaryE.Format(time.RFC3339))
+		reason := fmt.Sprintf("Show launch expected at %s.", boundaryE.Format(time.RFC3339))
 		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: reason})
 		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
 		if len(gate.Overridden) > 0 {
@@ -1065,7 +1062,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		p := nightStateRejectedProblem("start-night: finalization is monotonic; end-of-night resting never starts another show")
 		return nightCommandOutcome{}, &p, nil
 	case nightStateFadingOut, nightStateStopped:
-		p := nightStateRejectedProblem("start-night: this session has closed; a new prepare-site epoch, readiness, and start-preshow are required")
+		p := nightStateRejectedProblem("start-night: this session has closed; run prepare-site, run-readiness, and start-preshow again")
 		return nightCommandOutcome{}, &p, nil
 	default: // preparing
 		p := nightNotReadyProblem("start-night: not ready; operator recovery completes readiness and invokes start-preshow first")
@@ -1217,7 +1214,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 		rec.ContentAnchorJSON = ""
 		rec.BoundaryJSON = encodeNightBoundary(nightBoundary{
 			State:  nightBoundaryStateInvalid,
-			Reason: "the armed boundary was cancelled by a shutdown request",
+			Reason: "the expected timing was cancelled by a shutdown request",
 		})
 		changed = true
 	}
@@ -1546,7 +1543,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 			return nightCommandOutcome{}, problem, nil
 		}
 		if curTx.ID != current.ID {
-			p := nightNotReadyProblem("run-readiness: the preparation epoch changed while readiness was being computed; run run-readiness again")
+			p := nightNotReadyProblem("run-readiness: prepare-site ran again while readiness was being computed; run run-readiness again")
 			return nightCommandOutcome{}, &p, nil
 		}
 		rec := store.NightReadinessRecord{
@@ -1567,7 +1564,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 // 2), shared by the pre-read and the tx-bound re-check.
 func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1.Problem {
 	if !ok || current == nil {
-		p := nightNotReadyProblem("run-readiness: no preparation epoch is open; run prepare-site first")
+		p := nightNotReadyProblem("run-readiness: no preparation is open; run prepare-site first")
 		return &p
 	}
 	if current.Degraded && current.State != nightStateStopped {
@@ -1576,7 +1573,7 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 	}
 	switch current.State {
 	case nightStateInactive, nightStateStopped, nightStateFadingOut:
-		p := nightNotReadyProblem("run-readiness: no preparation epoch is open; run prepare-site first")
+		p := nightNotReadyProblem("run-readiness: no preparation is open; run prepare-site first")
 		return &p
 	}
 	return nil
@@ -2183,7 +2180,7 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 	readiness, err := deps.NightSessions.GetLatestNightReadiness(ctx, rec.ID)
 	if errors.Is(err, store.ErrNightReadinessNotFound) {
 		empty.State = v1.NightEvidenceUnknown
-		empty.Reason = "no readiness result recorded for this preparation epoch"
+		empty.Reason = "no readiness result recorded for this preparation"
 		return empty
 	}
 	if err != nil {
@@ -2286,9 +2283,7 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingRepeat,
 			"the repeating end-of-night resting playlist")
 	case nightStateTransitionToShow, nightStateTransitionToResting:
-		return fmt.Sprintf(
-			"coordinator restarted while the session was in %q, mid-transition, where this build cannot confirm what is safe to resume; run end-session, then prepare-site, to recover",
-			rec.State)
+		return "the coordinator restarted mid-transition and can't confirm what is safe to resume"
 	}
 	return ""
 }
@@ -2300,9 +2295,7 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, subject string) string {
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
 	if !has || anchor.Purpose != purpose {
-		return fmt.Sprintf(
-			"coordinator restarted in %q with no usable content anchor for %s; run end-session, then prepare-site, to recover",
-			rec.State, subject)
+		return fmt.Sprintf("the coordinator restarted with no record of %s", subject)
 	}
 	if anchor.ObservedAt.IsZero() {
 		// Dispatched but never confirmed before the restart: the loop's own
@@ -2313,14 +2306,12 @@ func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.T
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 	if !obs.Current {
 		return fmt.Sprintf(
-			"coordinator restarted in %q and no current fpp.status evidence for instance %q is available to confirm %s; run end-session, then prepare-site, to recover",
-			rec.State, anchor.FPPInstanceID, subject)
+			"the coordinator restarted with no current status from instance %q to confirm %s",
+			anchor.FPPInstanceID, subject)
 	}
 
 	if bad, reason := nightBoundaryContradicted(anchor, obs, now); bad {
-		return fmt.Sprintf(
-			"coordinator restarted in %q and fresh evidence contradicts %s (%s); run end-session, then prepare-site, to recover",
-			rec.State, subject, reason)
+		return fmt.Sprintf("after a restart, %s", reason)
 	}
 	return ""
 }

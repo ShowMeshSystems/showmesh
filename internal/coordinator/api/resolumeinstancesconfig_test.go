@@ -219,10 +219,10 @@ func TestPutResolumeInstancesConfigDeferredMigrationGivesANonDestructiveRemedy(t
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
-	if !strings.Contains(detail, "Do NOT remove SHOWMESH_RESOLUME_URL") {
-		t.Errorf("detail = %q, want an explicit warning against removing the variable while the migration is deferred", detail)
+	if !strings.Contains(detail, "do not clear SHOWMESH_RESOLUME_URL") {
+		t.Errorf("detail = %q, want an explicit warning against clearing the variable while the migration is deferred", detail)
 	}
-	if strings.Contains(detail, "Remove SHOWMESH_RESOLUME_URL and SHOWMESH_RESOLUME_ID and restart this coordinator once, then retry.") {
+	if strings.Contains(detail, "Remove SHOWMESH_RESOLUME_URL and SHOWMESH_RESOLUME_ID, restart this coordinator, then retry.") {
 		t.Errorf("detail = %q, must NOT give the standard remedy while the migration is deferred", detail)
 	}
 }
@@ -250,7 +250,7 @@ func TestGetResolumeInstancesConfigDeferredMigrationStatesItRatherThanReportingN
 	if strings.Contains(detail, "has been created yet") {
 		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: one IS in effect", detail)
 	}
-	for _, want := range []string{"SHOWMESH_RESOLUME_URL", "could not be", "GET /api/v1/resolume/instances"} {
+	for _, want := range []string{"SHOWMESH_RESOLUME_URL", "unwritable", "GET /api/v1/resolume/instances"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", detail, want)
 		}

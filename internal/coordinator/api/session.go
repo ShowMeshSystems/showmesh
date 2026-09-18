@@ -225,7 +225,7 @@ func (h *handlers) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if targetID == "" {
 		if ac.result.Form != identity.FormSession {
 			writeProblem(w, h.logger, now, invalidParameterProblem(
-				"DELETE /api/v1/session with no body revokes the session that authenticated this request; this request authenticated with a bearer token, which has no associated session — pass {\"sessionId\":...} to revoke a specific session instead"))
+				"this request authenticated with a bearer token, which has no session to revoke; pass {\"sessionId\":...} to revoke a specific session instead"))
 			return
 		}
 		targetID = ac.result.CredentialID

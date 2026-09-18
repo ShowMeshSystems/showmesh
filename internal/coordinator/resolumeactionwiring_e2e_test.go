@@ -696,10 +696,10 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	// The two substrings mirror api.degradedAttributionReasonAuditNeverBlocks
 	// and api.degradedAttributionReasonSafetyClassExemption, unexported and
 	// unreachable from this package, so duplicated rather than referenced.
-	if !strings.Contains(stderrOutput, "audit-unavailability-never-blocks rule") {
+	if !strings.Contains(stderrOutput, "still proceeds without a durable pre-dispatch audit entry") {
 		t.Errorf("launchClip (not exempt) degraded-attribution log did not name the audit-never-blocks reason; got: %s", stderrOutput)
 	}
-	if strings.Contains(stderrOutput, "safety class exemption") {
+	if strings.Contains(stderrOutput, "which always proceeds even if the pre-dispatch audit write fails") {
 		t.Errorf("launchClip (not exempt) degraded-attribution log named the safety-class exemption reason; it is not a member of that class: %s", stderrOutput)
 	}
 	var launchClipResp struct {

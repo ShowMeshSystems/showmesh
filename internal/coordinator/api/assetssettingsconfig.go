@@ -53,14 +53,9 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.AssetSettingsMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"no assets.settings configuration is stored, but this coordinator IS using one or more of the "+
-					"SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/SHOWMESH_ASSET_SYNC_INTERVAL/"+
-					"SHOWMESH_ASSET_INVENTORY_INTERVAL settings: the startup migration of those variables into this "+
-					"store could not be persisted on this boot, and was deferred rather than refusing to start. "+
-					"Nothing was written, so nothing here is stale or half-applied. Check this coordinator's startup "+
-					"log for the failure, fix the data volume (usually full, read-only, or a damaged database), and "+
-					"restart: the migration is retried on every start. Do NOT remove any of those variables until it "+
-					"has succeeded — while the migration is deferred they are the only copy of this configuration."))
+				"No assets.settings configuration is stored: the coordinator's data volume is unwritable, so "+
+					"nothing was saved. Fix the volume and restart; do not clear the SHOWMESH_ASSET_* settings "+
+					"variables."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
