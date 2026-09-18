@@ -28,22 +28,47 @@ func substituteAudioRenditions(ctx context.Context, st *store.Store, assets []Ex
 		if a.MediaType != audioMediaType {
 			continue
 		}
-		rend, err := st.GetAudioRendition(ctx, a.ContentHash)
-		if errors.Is(err, store.ErrAudioRenditionNotFound) {
-			continue
-		}
+		original := ResolvedAudioMedia{ContentHash: a.ContentHash, Filename: a.Filename, SizeBytes: a.SizeBytes}
+		resolved, err := ResolveAudioMedia(ctx, st, a.AssetID, a.ContentHash, a.Filename, a.SizeBytes)
 		if err != nil {
 			return nil, fmt.Errorf("assetsync: substitute audio rendition for asset %q: %w", a.AssetID, err)
 		}
-		if rend.Status != store.AudioRenditionStatusReady {
+		if resolved == original {
 			continue
 		}
-		assets[i].ContentHash = rend.ContentHash
-		assets[i].SizeBytes = rend.SizeBytes
-		assets[i].Filename = RenditionFilename(a.Filename)
+		assets[i].ContentHash = resolved.ContentHash
+		assets[i].SizeBytes = resolved.SizeBytes
+		assets[i].Filename = resolved.Filename
 		assets[i].Rendition = true
 	}
 	return assets, nil
+}
+
+// ResolvedAudioMedia is the {contentHash, filename, sizeBytes} shape a
+// dispatch carries onto the wire for one audio asset.
+type ResolvedAudioMedia struct {
+	ContentHash string
+	Filename    string
+	SizeBytes   int64
+}
+
+// ResolveAudioMedia is [substituteAudioRenditions]'s own per-asset
+// decision, exported for every other dispatch path naming an audio asset:
+// a bed item, an announcement, an ad hoc show.action. Same lookup key
+// (originalContentHash), so no caller can ever disagree with the manifest.
+func ResolveAudioMedia(ctx context.Context, st *store.Store, assetID, originalContentHash, originalFilename string, originalSizeBytes int64) (ResolvedAudioMedia, error) {
+	original := ResolvedAudioMedia{ContentHash: originalContentHash, Filename: originalFilename, SizeBytes: originalSizeBytes}
+	rend, err := st.GetAudioRendition(ctx, originalContentHash)
+	if errors.Is(err, store.ErrAudioRenditionNotFound) {
+		return original, nil
+	}
+	if err != nil {
+		return ResolvedAudioMedia{}, fmt.Errorf("assetsync: resolve audio media for asset %q: %w", assetID, err)
+	}
+	if rend.Status != store.AudioRenditionStatusReady {
+		return original, nil
+	}
+	return ResolvedAudioMedia{ContentHash: rend.ContentHash, Filename: RenditionFilename(originalFilename), SizeBytes: rend.SizeBytes}, nil
 }
 
 // RenditionFilename replaces original's own extension with ".wav",

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -593,6 +594,10 @@ func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.Ni
 // WHOLE build rather than silently dropping one item, matching AUDIO-
 // ENGINE section 3's "fails visibly instead of guessing" rule for a
 // missing item.
+//
+// Each item's own media names what the asset-sync manifest currently
+// delivers ([assetsync.ResolveAudioMedia]), not the pinned asset record's
+// original filename/hash, so this bed and the manifest never disagree.
 func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show string, items []config.NightSessionBackgroundAudioItem) ([]pkgaudio.PlaylistItem, error) {
 	out := make([]pkgaudio.PlaylistItem, 0, len(items))
 	for i, item := range items {
@@ -606,9 +611,16 @@ func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show s
 		if rec.MediaType != "audio" {
 			return nil, fmt.Errorf("backgroundAudio item %q: pinned asset's media type is %q, not \"audio\"", item.ItemID, rec.MediaType)
 		}
+		media := assetsync.ResolvedAudioMedia{ContentHash: rec.ContentHash, Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes}
+		if h.deps.AssetManifests != nil {
+			media, err = assetsync.ResolveAudioMedia(ctx, h.deps.AssetManifests, rec.ID, rec.ContentHash, rec.RuntimeFilename, rec.SizeBytes)
+			if err != nil {
+				return nil, fmt.Errorf("backgroundAudio item %q: resolve audio media: %w", item.ItemID, err)
+			}
+		}
 		out = append(out, pkgaudio.PlaylistItem{
 			ItemID: item.ItemID, Index: i,
-			Media: pkgaudio.MediaRef{AssetID: rec.ID, ContentHash: rec.ContentHash, SizeBytes: rec.SizeBytes, RuntimeFilename: rec.RuntimeFilename},
+			Media: pkgaudio.MediaRef{AssetID: rec.ID, ContentHash: media.ContentHash, SizeBytes: media.SizeBytes, RuntimeFilename: media.Filename},
 		})
 	}
 	return out, nil
@@ -663,6 +675,37 @@ const audioSessionFadeStateSignalID observation.SignalID = "audio_session.fade.s
 
 const audioSessionFadeStateInProgress string = "in_progress"
 
+// audioSessionStateSignalID mirrors nodeaudio.SignalSessionState's own
+// wire value, for the same reason [audioSessionFadeStateSignalID] mirrors
+// SignalSessionFadeState one constant up: this package must never import
+// the collector package that produces it.
+const audioSessionStateSignalID observation.SignalID = "audio_session.state"
+
+// nightBackgroundAudioReportedSessionState reads nodeID's own most recent
+// CURRENT report of sessionID's [pkgaudio.State] (the node's own claim,
+// never this coordinator's own idea of what it should be). ok is false
+// for no observation at all, a stale one, or one that predates notBefore -
+// the same three "cannot yet trust this evidence" cases
+// [nightBackgroundAudioFadeSettled] already guards for its own signal.
+// Pass the zero time.Time for notBefore when there is no specific dispatch
+// instant to fence the read against.
+func nightBackgroundAudioReportedSessionState(audio NodeAudioLister, now, notBefore time.Time, nodeID, sessionID string) (state string, ok bool) {
+	for _, o := range audio.NodeAudioObservations(nodeID) {
+		if o.Signal != audioSessionStateSignalID || o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
+			continue
+		}
+		if o.StateAt(now) != observation.StateCurrent {
+			return "", false
+		}
+		if o.CollectedAt.Before(notBefore) {
+			return "", false
+		}
+		state, _ = o.Value.(string)
+		return state, state != ""
+	}
+	return "", false
+}
+
 // nightBackgroundAudioFadeSettled reports whether sessionID's own fade on
 // nodeID has genuinely finished ramping, per the node's own reported
 // audio_session.fade.state - never inferred from a fade command's own
@@ -674,6 +717,16 @@ const audioSessionFadeStateInProgress string = "in_progress"
 // from the session risks racing a ramp it cannot yet see, and racing it
 // is exactly the defect this function exists to prevent.
 //
+// The node's own reported session state is checked first and is
+// authoritative over the fade-state signal: once the node reports
+// anything but Playing, the session has already left the state a fade
+// ramps within, whatever the fade-state signal itself still claims -
+// a session a node-side cut (or an operator stop/pause) paused mid-ramp
+// can leave that signal latched at "in_progress" forever, since nothing
+// ever drives the ramp to its own natural completion from there. A
+// paused, stopped, or otherwise no-longer-playing session is settled by
+// definition: there is no live ramp left to wait for.
+//
 // notBefore fences the evidence itself, matching resolveConfirmationEvidence's
 // own ADR-003 fence (fppcommand_evidence.go): the node audio collector
 // (internal/coordinator/collector/nodeaudio) holds only a node's single
@@ -682,6 +735,9 @@ const audioSessionFadeStateInProgress string = "in_progress"
 // matter what value it carries. Pass the zero time.Time to disable the
 // fence for a caller with no dispatch instant to fence against.
 func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now, notBefore time.Time, nodeID, sessionID string) bool {
+	if state, ok := nightBackgroundAudioReportedSessionState(audio, now, notBefore, nodeID, sessionID); ok && state != string(pkgaudio.StatePlaying) {
+		return true
+	}
 	for _, o := range audio.NodeAudioObservations(nodeID) {
 		if o.Signal != audioSessionFadeStateSignalID || o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
 			continue
@@ -884,6 +940,26 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	}
 
 	confirmed := latest.Row.Outcome == nightCueOutcomeConfirmed
+
+	// The node's own reported session state is authoritative over this
+	// node's own step history: a bed a node-side cut paused outside the
+	// coordinator's own ledger (audio.Manager.CutBackgroundBed) can leave
+	// this node's latest step stalled on something other than a confirmed
+	// pause - a fadedown whose ramp the cut interrupted before it could
+	// ever settle, in particular - with no later step this switch
+	// recognizes ever getting committed. Reported Paused is resumed
+	// unconditionally here, whatever step the ledger stalled on, so a
+	// node the coordinator never finished suspending is never left
+	// silently paused for the rest of the night. Left to the bed-level
+	// gate for a multi-node bed ([nightAdvanceMultiNodeBackgroundAudio]):
+	// it alone holds the shared resume instant more than one resuming
+	// node must share.
+	if !multiNode && latest.Step.Kind != nightBGStepPause && latest.Step.Kind != nightBGStepResume {
+		if state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, time.Time{}, nodeID, sessionID); ok && state == string(pkgaudio.StatePaused) {
+			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history)
+			return
+		}
+	}
 
 	switch latest.Step.Kind {
 	case nightBGStepApply:
@@ -1685,10 +1761,11 @@ func (h *handlers) nightAdvanceMultiNodeBackgroundAudio(ctx context.Context, now
 		return
 	}
 
+	sessionID := nightBackgroundAudioSessionID(rec)
 	switch {
 	case nightBedStartPending(history, nodeIDs):
 		h.nightStartMultiNodeBackgroundAudio(ctx, now, rec, show, ba, history, nodeIDs)
-	case nightBedResumePending(history, nodeIDs):
+	case h.nightBedResumePending(now, history, nodeIDs, sessionID):
 		h.nightResumeMultiNodeBackgroundAudio(ctx, now, rec, show, ba, history, nodeIDs)
 	}
 }
@@ -1777,10 +1854,31 @@ func nightBedStartPending(history []nightBackgroundAudioHistoryRow, nodeIDs []st
 	return nightBedGatePending(history, nodeIDs, nightBedClassifyStartGate)
 }
 
+// nightBedResumeGateClassifier is [nightBedClassifyResumeGate] plus the
+// node's own reported session state as a fallback: a node the ledger
+// itself never recorded a confirmed pause for (a node-side cut raced the
+// coordinator's own suspend before it could commit one) is still Ready
+// once it reports [pkgaudio.StatePaused] - the same authority
+// [nightBackgroundAudioFadeSettled] gives that report over its own
+// fade-state signal. now and sessionID are bound once per call so every
+// node checked in one bed-level pass reads the same evidence snapshot.
+func (h *handlers) nightBedResumeGateClassifier(now time.Time, sessionID string) nightBedGateClassifier {
+	return func(history []nightBackgroundAudioHistoryRow, nodeID string) (nightBedGateState, nightBackgroundAudioHistoryRow) {
+		if state, latest := nightBedClassifyResumeGate(history, nodeID); state != nightBedGateNotReady {
+			return state, latest
+		}
+		latest, _ := nightBackgroundAudioLatestStepForNode(history, nodeID)
+		if reported, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, time.Time{}, nodeID, sessionID); ok && reported == string(pkgaudio.StatePaused) {
+			return nightBedGateReady, latest
+		}
+		return nightBedGateNotReady, latest
+	}
+}
+
 // nightBedResumePending is [nightBedGatePending] for the shared resume
 // gate.
-func nightBedResumePending(history []nightBackgroundAudioHistoryRow, nodeIDs []string) bool {
-	return nightBedGatePending(history, nodeIDs, nightBedClassifyResumeGate)
+func (h *handlers) nightBedResumePending(now time.Time, history []nightBackgroundAudioHistoryRow, nodeIDs []string, sessionID string) bool {
+	return nightBedGatePending(history, nodeIDs, h.nightBedResumeGateClassifier(now, sessionID))
 }
 
 // nightBedEvaluateGate classifies every listed node: which are ready to
@@ -2182,17 +2280,18 @@ func (h *handlers) nightBedProgramLTCNode(ctx context.Context, nodeIDs []string)
 // with no ready program+ltc node or unknown bookmark, it falls back per-node.
 func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
 	sessionID := nightBackgroundAudioSessionID(rec)
+	classify := h.nightBedResumeGateClassifier(now, sessionID)
 
 	if _, already := nightBedScheduleForCycle(history, rec.Cycle); already {
 		for _, nodeID := range nodeIDs {
-			if state, _ := nightBedClassifyResumeGate(history, nodeID); state == nightBedGateReady {
+			if state, _ := classify(history, nodeID); state == nightBedGateReady {
 				h.nightBackgroundAudioResumeScheduled(ctx, now, rec, nodeID, sessionID, nightBedScheduleResult{UnalignedReason: nightBedLateUnalignedReason("resume")}, nightBedBookmark{}, history)
 			}
 		}
 		return
 	}
 
-	ready, notReady, firstReadyAt := nightBedEvaluateGate(history, nodeIDs, nightBedClassifyResumeGate)
+	ready, notReady, firstReadyAt := nightBedEvaluateGate(history, nodeIDs, classify)
 	if len(ready) == 0 {
 		return
 	}

@@ -251,6 +251,107 @@ func TestNightAnnouncement_OperatorDeclaredParamsAreNeverOverwritten(t *testing.
 	}
 }
 
+// announcementMediaParams builds an ADR-049 decision 9 media reference
+// naming a not-yet-rendered original: the shape an operator-authored
+// show.action's own target.params["media"] always carries.
+func announcementMediaParams(assetID, contentHash, filename string, sizeBytes int64) map[string]any {
+	return map[string]any{"media": map[string]any{
+		"assetId": assetID, "contentHash": contentHash, "filename": filename, "sizeBytes": float64(sizeBytes),
+	}}
+}
+
+// TestNightAnnouncement_AppliesReadyRenditionMedia proves the cue's bound
+// action's own first node names a ready rendition's own content hash and
+// a .wav filename, never the stored show.action's original media
+// reference.
+func TestNightAnnouncement_AppliesReadyRenditionMedia(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:welcome", store.AudioRenditionReady{
+		ContentHash: "sha256:welcome-rendition", SizeBytes: 2048, DurationMillis: 3000, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+			Params: announcementMediaParams("welcome", "sha256:welcome", "welcome.mp3", 1024),
+		},
+	})
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	params := announcementApplyParams(t, pub)
+	media, ok := params["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("params.media = %v, want a JSON object", params["media"])
+	}
+	if media["filename"] != "welcome.wav" {
+		t.Errorf("media.filename = %v, want welcome.wav (the ready rendition's own runtime filename)", media["filename"])
+	}
+	if media["contentHash"] != "sha256:welcome-rendition" {
+		t.Errorf("media.contentHash = %v, want the rendition's own hash sha256:welcome-rendition", media["contentHash"])
+	}
+	if media["sizeBytes"] != float64(2048) {
+		t.Errorf("media.sizeBytes = %v, want the rendition's own size 2048", media["sizeBytes"])
+	}
+	if media["assetId"] != "welcome" {
+		t.Errorf("media.assetId = %v, want welcome unchanged", media["assetId"])
+	}
+}
+
+// TestNightAnnouncement_ExtraNodeAppliesReadyRenditionMedia proves an
+// extra node's own announcement apply is substituted exactly like the
+// primary node's: the same ready rendition's hash and .wav filename.
+func TestNightAnnouncement_ExtraNodeAppliesReadyRenditionMedia(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:welcome", store.AudioRenditionReady{
+		ContentHash: "sha256:welcome-rendition", SizeBytes: 2048, DurationMillis: 3000, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
+			AudioAction: "audio.session.apply",
+			Params:      announcementMediaParams("welcome", "sha256:welcome", "welcome.mp3", 1024),
+		},
+	})
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	var nodeBApplyParams map[string]any
+	for _, d := range pub.dispatched {
+		if d.Action == "audio.session.apply" && d.NodeID == "node-b" {
+			nodeBApplyParams = d.Params
+		}
+	}
+	if nodeBApplyParams == nil {
+		t.Fatal("no audio.session.apply was dispatched to node-b")
+	}
+	media, ok := nodeBApplyParams["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("node-b params.media = %v, want a JSON object", nodeBApplyParams["media"])
+	}
+	if media["filename"] != "welcome.wav" {
+		t.Errorf("node-b media.filename = %v, want welcome.wav", media["filename"])
+	}
+	if media["contentHash"] != "sha256:welcome-rendition" {
+		t.Errorf("node-b media.contentHash = %v, want sha256:welcome-rendition", media["contentHash"])
+	}
+}
+
 // mutation target: nightAnnouncementTargetDeclarable's integration/action
 // check. Remove it and this controller starts injecting audio params into
 // an FPP dispatch, which fails here.
