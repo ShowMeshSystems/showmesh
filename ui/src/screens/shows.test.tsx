@@ -419,4 +419,55 @@ describe('Shows · Identity', () => {
     expect(screen.queryByText('Active · 47')).not.toBeInTheDocument()
     expect(screen.queryByText(/renamed/)).not.toBeInTheDocument()
   })
+
+  it('the show’s audio nodes multi-select round-trips through a save', async () => {
+    stubs.getShow = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show',
+        id: 'winter-ridge-2026',
+        revision: 47,
+        payload: { name: 'Winter Ridge 2026', notes: 'Barn roof rebuilt.', audioNodes: ['node-a'] },
+        updatedAt: '2026-08-30T18:22:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+      })
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'audio.node'
+        ? Promise.resolve({
+            serverTime: '2026-08-30T21:00:00Z',
+            kind,
+            objects: [
+              { id: 'node-a', label: 'node-a', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+              { id: 'node-b', label: 'node-b', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+            ],
+          })
+        : contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    const putSpy = vi.fn((id: string, payload: { audioNodes?: string[] }) =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show' as const,
+        id,
+        revision: 48,
+        payload,
+        updatedAt: '2026-08-30T18:22:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api' as const,
+      }),
+    )
+    stubs.putShow = putSpy
+    renderDetail('winter-ridge-2026', { session: signedIn(['config:write']) })
+    await waitFor(() => expect(screen.getByDisplayValue('Winter Ridge 2026')).toBeInTheDocument())
+    const group = await screen.findByRole('group', { name: 'Audio nodes' })
+    expect(within(group).getByRole('checkbox', { name: 'node-a' })).toBeChecked()
+    expect(within(group).getByRole('checkbox', { name: 'node-b' })).not.toBeChecked()
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'node-b' }))
+    fireEvent.click(screen.getByRole('button', { name: /Save show/ }))
+    await waitFor(() => expect(putSpy).toHaveBeenCalled())
+    const [, sent] = putSpy.mock.calls[0] as [string, { audioNodes?: string[] }]
+    expect(sent.audioNodes).toEqual(['node-a', 'node-b'])
+  })
 })

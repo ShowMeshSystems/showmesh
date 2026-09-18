@@ -1,11 +1,37 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getShow, putShow } from '../api'
-import { Button, ButtonRow, Field, Input, RuledStrip, Section, Textarea } from '../kit'
+import { getShow, listConfigObjects, putShow, type AudioNodeSummary, type ConfigShowWrite } from '../api'
+import { Button, ButtonRow, ChoiceGroup, Field, Input, RuledStrip, Section, Textarea } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate } from '../domain/save'
 import { slugify } from './showsModel'
+
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
+
+/** Same `listConfigObjects('audio.node')` source every other audio-node picker in Shows reads. */
+function useAudioNodes(): AudioNodesState {
+  const [state, setState] = useState<AudioNodesState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('audio.node')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', nodes: response.objects })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
+  return node.label !== '' && node.label !== node.id ? node.label : undefined
+}
 
 export function ShowDraft() {
   const model = useModelContext()
@@ -15,9 +41,11 @@ export function ShowDraft() {
   const [id, setId] = useState('')
   const [idTouched, setIdTouched] = useState(false)
   const [notes, setNotes] = useState('')
+  const [audioNodes, setAudioNodes] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
   const [taken, setTaken] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const audioNodesState = useAudioNodes()
 
   const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
@@ -36,9 +64,10 @@ export function ShowDraft() {
     setCreating(true)
     setTaken(false)
     setCreateError(null)
+    const payload: ConfigShowWrite = { name, notes, audioNodes }
     guardedCreate({
       read: () => getShow(id),
-      write: () => putShow(id, { name, notes }),
+      write: () => putShow(id, payload),
     })
       .then((outcome) => {
         if (outcome.kind === 'taken') {
@@ -83,6 +112,23 @@ export function ShowDraft() {
             {(props) => <Textarea {...props} value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />}
           </Field>
         </div>
+      </Section>
+
+      <Section id="sd-audio" title="Audio nodes">
+        {audioNodesState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />}
+        {audioNodesState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={audioNodesState.reason} />}
+        {audioNodesState.kind === 'loaded' &&
+          (audioNodesState.nodes.length === 0 ? (
+            <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
+          ) : (
+            <ChoiceGroup
+              label="Audio nodes"
+              help="Every cue, announcement, and night bed plays on these nodes unless it excludes one."
+              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
+              value={audioNodes}
+              onChange={setAudioNodes}
+            />
+          ))}
       </Section>
 
       {taken && (

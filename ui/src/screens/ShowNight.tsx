@@ -17,8 +17,11 @@ import {
   putNightSessionActiveConfig,
   putNightSessionConfig,
   randomUUIDv4,
+  readBackgroundAudioExcludeNodes,
   type ConfigObjectSummary,
   type ConfigNightSessionBackgroundAudioInlineWrite,
+  type ConfigNightSessionBackgroundAudioInlineWriteWithExclude,
+  type ConfigNightSessionBackgroundAudioReferenceWriteWithExclude,
   type ConfigNightSessionCue,
   type ConfigNightSessionWrite,
   type ShowActionConfigResponse,
@@ -36,7 +39,6 @@ import {
   Button,
   ButtonRow,
   Choice,
-  ChoiceGroup,
   DefinitionStrip,
   Field,
   FieldGrid,
@@ -58,7 +60,8 @@ import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, nightLifecycleGroups, type CommandOutcome } from './liveControlModel'
 import { AudioAssetPicker } from './audioAssetPicker'
-import { audioAssetOptions, type AudioAssetOption } from './showsModel'
+import { audioAssetOptions, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
+import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
@@ -779,6 +782,7 @@ type BackgroundAudioDraft = {
   fadeOutMs: string
   fadeInMs: string
   targets: string[]
+  excludeNodes: string[]
 }
 
 type PrerequisiteDraft = { kind: 'action' | 'delay' | 'evidence'; action: string; requireConfirmation: boolean; delayMs: string }
@@ -860,7 +864,10 @@ const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
 
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
 const blankBackgroundAudioItem = (show = ''): BackgroundAudioItemDraft => ({ itemId: '', show, sequence: '', target: '' })
-const blankBackgroundAudio = (): BackgroundAudioDraft => ({ enabled: false, mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '', targets: [] })
+const blankBackgroundAudio = (): BackgroundAudioDraft => ({
+  enabled: false, mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential',
+  crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '', targets: [], excludeNodes: [],
+})
 
 /** The reference picker's options: the show's reported media.playlist objects, plus the retained id if a loaded session names one this fetch did not report (never dropped silently). */
 function mediaPlaylistOptions(reported: readonly ConfigObjectSummary[], retained: string): { id: string; label: string }[] {
@@ -901,7 +908,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     bg === undefined
       ? blankBackgroundAudio()
       : 'mediaPlaylist' in bg
-        ? { ...blankBackgroundAudio(), mediaPlaylist: bg.mediaPlaylist, targets: bg.targets ?? [] }
+        ? { ...blankBackgroundAudio(), mediaPlaylist: bg.mediaPlaylist, targets: bg.targets ?? [], excludeNodes: readBackgroundAudioExcludeNodes(bg) }
         : {
             enabled: true,
             mediaPlaylist: '',
@@ -912,6 +919,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
             fadeOutMs: bg.fadeOutMs === undefined ? '' : String(bg.fadeOutMs),
             fadeInMs: bg.fadeInMs === undefined ? '' : String(bg.fadeInMs),
             targets: bg.targets ?? [],
+            excludeNodes: readBackgroundAudioExcludeNodes(bg),
           }
   const powerOn = payload.siteControl?.presentationPowerOn
   const powerOff = payload.siteControl?.presentationPowerOff
@@ -948,16 +956,25 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
   }
 }
 
-type BackgroundAudioWrite = NonNullable<ConfigNightSessionWrite['resting']['backgroundAudio']>
+type BackgroundAudioWrite = ConfigNightSessionBackgroundAudioInlineWriteWithExclude | ConfigNightSessionBackgroundAudioReferenceWriteWithExclude
 type SiteControlWrite = NonNullable<ConfigNightSessionWrite['siteControl']>
 type InterlockWrite = NonNullable<ConfigNightSessionWrite['interlocks']>[number]
 
-function buildBackgroundAudio(audio: BackgroundAudioDraft, audioAssets: readonly AudioAssetOption[]): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
+function buildBackgroundAudio(
+  audio: BackgroundAudioDraft,
+  audioAssets: readonly AudioAssetOption[],
+  showAudioNodes: readonly string[],
+): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
+  if (!audio.enabled && audio.mediaPlaylist === '') return { ok: true, value: undefined }
+  const conflict = explicitListExcludeConflictError(audio.targets, audio.excludeNodes)
+  if (conflict !== null) return { ok: false, error: conflict }
+  if (audio.targets.length === 0) {
+    const excludeError = excludeNodesError(showAudioNodes, audio.excludeNodes)
+    if (excludeError !== null) return { ok: false, error: excludeError }
+  }
+  const targetsField = audio.targets.length > 0 ? { targets: audio.targets } : audio.excludeNodes.length > 0 ? { excludeNodes: audio.excludeNodes } : {}
   if (!audio.enabled) {
-    return {
-      ok: true,
-      value: audio.mediaPlaylist === '' ? undefined : { mediaPlaylist: audio.mediaPlaylist, ...(audio.targets.length > 0 ? { targets: audio.targets } : {}) },
-    }
+    return { ok: true, value: { mediaPlaylist: audio.mediaPlaylist, ...targetsField } }
   }
   if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or disable it.' }
   const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
@@ -991,7 +1008,7 @@ function buildBackgroundAudio(audio: BackgroundAudioDraft, audioAssets: readonly
       items, repeat: audio.repeat, resume: audio.resume, itemTransition: audio.itemTransition, maxGainDb,
       ...(audio.itemTransition === 'crossfade' ? { crossfadeMs: Number(audio.crossfadeMs) } : {}),
       ...(fadeOutText === '' ? {} : { fadeOutMs: Number(fadeOutText), fadeInMs: Number(fadeInText) }),
-      ...(audio.targets.length > 0 ? { targets: audio.targets } : {}),
+      ...targetsField,
     },
   }
 }
@@ -1061,7 +1078,11 @@ function buildInterlocks(items: InterlockDraft[]): { ok: true; value: InterlockW
   return { ok: true, value: built }
 }
 
-function definitionPayload(draft: DefinitionDraft, audioAssets: readonly AudioAssetOption[]): ConfigNightSessionWrite | { error: string } {
+function definitionPayload(
+  draft: DefinitionDraft,
+  audioAssets: readonly AudioAssetOption[],
+  showAudioNodes: readonly string[],
+): ConfigNightSessionWrite | { error: string } {
   const required: readonly [string, string][] = [
     ['Definition id', draft.id], ['Show', draft.show], ['Label', draft.label], ['Show playlist FPP instance', draft.showFpp], ['Show playlist', draft.showPlaylist],
     ['Resting FPP instance', draft.restingFpp], ['Resting playlist', draft.restingPlaylist], ['Resting timeline show', draft.timelineShow], ['Resting timeline sequence', draft.timelineSequence], ['Resting timeline target', draft.timelineTarget],
@@ -1091,7 +1112,7 @@ function definitionPayload(draft: DefinitionDraft, audioAssets: readonly AudioAs
   if (!enteringShow.ok) return { error: enteringShow.error }
   const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
   if (!enteringResting.ok) return { error: enteringResting.error }
-  const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio, audioAssets)
+  const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio, audioAssets, showAudioNodes)
   if (!backgroundAudio.ok) return { error: backgroundAudio.error }
   const siteControl = buildSiteControl(draft.siteControl)
   if (!siteControl.ok) return { error: siteControl.error }
@@ -1150,74 +1171,6 @@ function useAudioNodes(): AudioNodesState {
   return state
 }
 
-/** The label as ChoiceGroup's muted secondary context: omitted when it adds nothing beyond the id already shown as the primary text. */
-function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
-  return node.label !== '' && node.label !== node.id ? node.label : undefined
-}
-
-/**
- * ADR-049 decision 7's bed node checklist. The checked set is exactly the
- * saved `targets`, never derived from asset registration or an item's own
- * target; an id no longer configured stays checked and visibly marked.
- */
-function BackgroundAudioTargetsField({
-  value,
-  onChange,
-  nodesState,
-  error,
-}: {
-  value: string[]
-  onChange: (value: string[]) => void
-  nodesState: AudioNodesState
-  error?: string | undefined
-}) {
-  const errorNotice = error !== undefined && (
-    <span className="sm-field__error">
-      <span aria-hidden="true">✕</span>
-      {error}
-    </span>
-  )
-  if (nodesState.kind === 'loading') {
-    return (
-      <>
-        <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
-        {errorNotice}
-      </>
-    )
-  }
-  if (nodesState.kind === 'failed') {
-    return (
-      <>
-        <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
-        {errorNotice}
-      </>
-    )
-  }
-  if (nodesState.nodes.length === 0) {
-    return (
-      <>
-        <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
-        {value.length > 0 && (
-          <p className="sm-small sm-faint">
-            Stored targets: <span className="sm-data">{value.join(', ')}</span>
-          </p>
-        )}
-        {errorNotice}
-      </>
-    )
-  }
-  return (
-    <ChoiceGroup
-      label="Play on these nodes"
-      help="Empty: each node plays the items registered for it. Checked: every checked node plays every item."
-      error={error}
-      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
-      value={value}
-      onChange={onChange}
-    />
-  )
-}
-
 export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -1236,6 +1189,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const [revision, setRevision] = useState<NightSessionConfigResponse | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const audioNodesState = useAudioNodes()
+  const showAudioNodesState = useShowAudioNodes(draft.show)
 
   useEffect(() => {
     let cancelled = false
@@ -1271,17 +1225,19 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }
   const updateCues = (which: 'enterShow' | 'enterResting', index: number, patch: Partial<CueDraft>) => setDraft((current) => ({ ...current, [which]: current[which].map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
   const save = () => {
-    const payload = definitionPayload(draft, audioAssets)
+    const showAudioNodes = showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : []
+    const payload = definitionPayload(draft, audioAssets, showAudioNodes)
     if ('error' in payload) { setError(payload.error); return }
     setSaving(true); setError(null); setBackgroundAudioTargetsError(null)
     putNightSessionConfig(draft.id.trim(), payload)
       .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)); setSelected(response.id); setReloadKey((n) => n + 1) })
       .catch((err: unknown) => {
         const message = describeApiError(err)
-        // resting.backgroundAudio.targets[i] (a coordinator write-validation field path,
-        // api/openapi.yaml's Problem.detail) surfaces next to the checklist it names,
-        // not in the inspector's generic failure strip.
-        if (message.includes('resting.backgroundAudio.targets')) setBackgroundAudioTargetsError(message)
+        // resting.backgroundAudio.targets[i]/excludeNodes[i] (a coordinator
+        // write-validation field path, api/openapi.yaml's Problem.detail)
+        // surfaces next to the checklist it names, not in the inspector's
+        // generic failure strip.
+        if (message.includes('resting.backgroundAudio.targets') || message.includes('resting.backgroundAudio.excludeNodes')) setBackgroundAudioTargetsError(message)
         else setError(message)
       })
       .finally(() => setSaving(false))
@@ -1430,11 +1386,16 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               </>
             )}
             {(draft.backgroundAudio.enabled || draft.backgroundAudio.mediaPlaylist !== '') && (
-              <BackgroundAudioTargetsField
-                value={draft.backgroundAudio.targets}
-                onChange={(targets) => updateBackgroundAudio({ targets })}
+              <AudioNodesResolutionField
+                label="Play on these nodes"
+                ownLabel="this bed"
+                explicitValue={draft.backgroundAudio.targets}
+                onExplicitChange={(targets) => updateBackgroundAudio({ targets })}
+                excludeValue={draft.backgroundAudio.excludeNodes}
+                onExcludeChange={(excludeNodes) => updateBackgroundAudio({ excludeNodes })}
+                excludeError={backgroundAudioTargetsError ?? undefined}
+                showAudioNodesState={showAudioNodesState}
                 nodesState={audioNodesState}
-                error={backgroundAudioTargetsError ?? undefined}
               />
             )}
           </div>

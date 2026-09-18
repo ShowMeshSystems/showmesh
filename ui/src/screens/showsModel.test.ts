@@ -4,11 +4,16 @@ import {
   cueActivationSummary,
   cueAssetMissing,
   cueRows,
+  excludeNodesError,
+  explicitListExcludeConflictError,
   formatBytes,
   fppDerivedSafetyClass,
   hashLabel,
+  installationDefaultAudioNode,
   macroUsagesForAction,
   resolumeDerivedSafetyClass,
+  resolveAudioNodes,
+  resolvedNodesFact,
   type CueActivationDraft,
 } from './showsModel'
 
@@ -210,5 +215,77 @@ describe('cueActivationSummary', () => {
       ltcFps: null,
     }
     expect(cueActivationSummary(draft)).toBe('On activation this cue will render an unnamed sequence and play an unselected asset.')
+  })
+})
+
+describe('ADR-049 decision 10: the show names its audio nodes once', () => {
+  it('resolves the installation default to the one node reporting an ltcChannel, among several nodes', () => {
+    const nodes = [
+      { id: 'node-a', label: 'a', programChannels: [1], currentRevision: 1, updatedAt: '' },
+      { id: 'node-b', label: 'b', programChannels: [1], ltcChannel: 2, currentRevision: 1, updatedAt: '' },
+    ]
+    expect(installationDefaultAudioNode(nodes)).toBe('node-b')
+  })
+
+  it('resolves the installation default to the sole node when none holds the program+ltc role', () => {
+    const nodes = [{ id: 'node-a', label: 'a', programChannels: [1], currentRevision: 1, updatedAt: '' }]
+    expect(installationDefaultAudioNode(nodes)).toBe('node-a')
+  })
+
+  it('resolves no default when more than one node exists and none reports an ltcChannel', () => {
+    const nodes = [
+      { id: 'node-a', label: 'a', programChannels: [1], currentRevision: 1, updatedAt: '' },
+      { id: 'node-b', label: 'b', programChannels: [1], currentRevision: 1, updatedAt: '' },
+    ]
+    expect(installationDefaultAudioNode(nodes)).toBeNull()
+  })
+
+  it('resolves to the explicit list first, when present and non-empty', () => {
+    expect(resolveAudioNodes({ explicitList: ['x'], showAudioNodes: ['a', 'b'], excludeNodes: ['a'], defaultNodeId: 'a' })).toEqual({
+      nodes: ['x'],
+      from: 'explicit',
+    })
+  })
+
+  it('resolves to the show list minus excludeNodes, when the explicit list is empty', () => {
+    expect(resolveAudioNodes({ explicitList: [], showAudioNodes: ['a', 'b'], excludeNodes: ['b'], defaultNodeId: null })).toEqual({
+      nodes: ['a'],
+      from: 'show',
+    })
+  })
+
+  it('resolves to the installation default when the show has no audio nodes', () => {
+    expect(resolveAudioNodes({ explicitList: [], showAudioNodes: [], excludeNodes: [], defaultNodeId: 'a' })).toEqual({
+      nodes: ['a'],
+      from: 'default',
+    })
+    expect(resolveAudioNodes({ explicitList: [], showAudioNodes: [], excludeNodes: [], defaultNodeId: null })).toEqual({
+      nodes: [],
+      from: 'default',
+    })
+  })
+
+  it('states the resolved nodes and where they came from', () => {
+    expect(resolvedNodesFact({ nodes: ['node-01', 'pi-audio-01'], from: 'show' }, 'this cue')).toBe('Plays on node-01, pi-audio-01 (from the show).')
+    expect(resolvedNodesFact({ nodes: ['node-01'], from: 'explicit' }, 'this cue')).toBe("Plays on node-01 (this cue's own list).")
+    expect(resolvedNodesFact({ nodes: [], from: 'default' }, 'this bed')).toBe('Plays on no node (installation default).')
+  })
+
+  it('refuses an excluded id not in the show’s own list', () => {
+    expect(excludeNodesError(['a', 'b'], ['x'])).toBe("x is not in the show's audio nodes.")
+  })
+
+  it('refuses excluding every node in the show’s own list', () => {
+    expect(excludeNodesError(['a', 'b'], ['a', 'b'])).toBe('Excluding every node in the show list leaves nothing to play on.')
+  })
+
+  it('allows a partial exclude of the show’s own list', () => {
+    expect(excludeNodesError(['a', 'b'], ['a'])).toBeNull()
+  })
+
+  it('refuses excludeNodes alongside an explicit list on the same object', () => {
+    expect(explicitListExcludeConflictError(['a'], ['b'])).toBe("This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude.")
+    expect(explicitListExcludeConflictError(['a'], [])).toBeNull()
+    expect(explicitListExcludeConflictError([], ['b'])).toBeNull()
   })
 })

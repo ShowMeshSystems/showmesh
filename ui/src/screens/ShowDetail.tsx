@@ -1,13 +1,48 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { getShow, getShowRevisions, putShow, type ShowConfigResponse } from '../api'
-import { Button, ButtonRow, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
+import {
+  getShow,
+  getShowRevisions,
+  listConfigObjects,
+  putShow,
+  readShowAudioNodes,
+  type AudioNodeSummary,
+  type ConfigShowWrite,
+  type ShowConfigResponse,
+} from '../api'
+import { Button, ButtonRow, ChoiceGroup, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents } from './showsData'
 import { activeShowId, contentsCounts, type ShowContentsCounts } from './showsModel'
+
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
+
+/** Same `listConfigObjects('audio.node')` source every other audio-node picker in Shows reads (ShowsCues.tsx, ShowNight.tsx, ShowsAutomation.tsx). */
+function useAudioNodes(): AudioNodesState {
+  const [state, setState] = useState<AudioNodesState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('audio.node')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', nodes: response.objects })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
+  return node.label !== '' && node.label !== node.id ? node.label : undefined
+}
 
 type DetailState =
   | { kind: 'loading' }
@@ -70,15 +105,18 @@ export function ShowDetail() {
 
   const [name, setName] = useState('')
   const [notes, setNotes] = useState('')
+  const [audioNodes, setAudioNodes] = useState<string[]>([])
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowConfigResponse>, { kind: 'stale' }> | null>(null)
+  const audioNodesState = useAudioNodes()
 
   useEffect(() => {
     if (state.kind === 'loaded') {
       setName(state.response.payload.name)
       setNotes(state.response.payload.notes)
+      setAudioNodes(readShowAudioNodes(state.response.payload))
       setDirty(false)
     }
   }, [state])
@@ -89,6 +127,7 @@ export function ShowDetail() {
     if (state.kind !== 'loaded') return
     setName(state.response.payload.name)
     setNotes(state.response.payload.notes)
+    setAudioNodes(readShowAudioNodes(state.response.payload))
     setDirty(false)
     setSaveError(null)
   }
@@ -99,10 +138,11 @@ export function ShowDetail() {
     setSaving(true)
     setSaveError(null)
     setStale(null)
+    const payload: ConfigShowWrite = { name, notes, audioNodes }
     guardedSave({
       loaded,
       read: () => getShow(id),
-      write: () => putShow(id, { name, notes }),
+      write: () => putShow(id, payload),
     })
       .then((outcome) => {
         if (outcome.kind === 'saved') {
@@ -219,6 +259,26 @@ export function ShowDetail() {
             )}
           </Field>
         </div>
+      </Section>
+
+      <Section id="sh-audio" title="Audio nodes">
+        {audioNodesState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />}
+        {audioNodesState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={audioNodesState.reason} />}
+        {audioNodesState.kind === 'loaded' &&
+          (audioNodesState.nodes.length === 0 ? (
+            <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
+          ) : (
+            <ChoiceGroup
+              label="Audio nodes"
+              help="Every cue, announcement, and night bed plays on these nodes unless it excludes one."
+              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
+              value={audioNodes}
+              onChange={(value) => {
+                setAudioNodes(value)
+                setDirty(true)
+              }}
+            />
+          ))}
       </Section>
 
       <Section id="sh-contents" title="What this show contains">
