@@ -266,10 +266,7 @@ func (d *ActionDispatcher) Actions() []ActionDescriptor {
 func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params ActionParams) (ActionOutcome, error) {
 	if params.ResolvedAtRevision != 0 {
 		if current := d.collector.compositionStore.LoadedRevision(); current != params.ResolvedAtRevision {
-			return refusedOutcome(name, fmt.Sprintf(
-				"the composition was replaced (revision %d, now %d) while this command was being prepared; the "+
-					"resolved reference may no longer name the intended object — re-issue the command",
-				params.ResolvedAtRevision, current)), nil
+			return refusedOutcome(name, "the composition changed while this command was being prepared. Re-issue the command."), nil
 		}
 	}
 
@@ -516,7 +513,7 @@ func (d *ActionDispatcher) baselineFailureOutcome(ctx context.Context, w dispatc
 		return *bad
 	}
 	return unconfirmableOutcome(name, dispatchedAt, fmt.Sprintf(
-		"the pre-dispatch baseline could not be read (%s), so post-dispatch evidence cannot distinguish this action's effect from the state it found", why))
+		"could not read this action's state before sending it (%s), so its result could not be confirmed", why))
 }
 
 // --- The write phase --------------------------------------------------------
@@ -587,7 +584,7 @@ func identityGateRefusal(snap SurveySnapshot, now time.Time) (reason string, ref
 	}
 	if age := now.Sub(snap.IdentityObservedAt); age > MaxIdentityEvidenceAge {
 		return fmt.Sprintf(
-			"the composition identity evidence is %s old (last checked %s), past the %s an action may rest on; a fresh check has been requested",
+			"the composition identity reading is %s old (checked at %s), past the %s limit for an action to rely on it. A fresh check has been requested.",
 			age.Round(time.Second), snap.IdentityObservedAt.Format(time.RFC3339), MaxIdentityEvidenceAge), true, true
 	}
 	if snap.Identity == IdentityTrue {
@@ -682,7 +679,7 @@ func (d *ActionDispatcher) pollUntilConfirmedOrDeadline(
 	}
 	expired := func() bool { return d.expired(deadlineAt) }
 
-	lastReason := "no confirming evidence has arrived yet"
+	lastReason := "nothing has confirmed this yet"
 	interval := d.pollInterval
 
 	for {
@@ -702,7 +699,7 @@ func (d *ActionDispatcher) pollUntilConfirmedOrDeadline(
 		}
 		if ctx.Err() != nil && !expired() {
 			return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt,
-				Reason: fmt.Sprintf("the request was canceled before confirming evidence arrived: %s", lastReason)}
+				Reason: fmt.Sprintf("the request was canceled before this was confirmed: %s", lastReason)}
 		}
 		if expired() {
 			return d.unconfirmedOutcome(name, dispatchedAt, deadline, windowBound, lastReason)
@@ -726,9 +723,9 @@ func (d *ActionDispatcher) pollUntilConfirmedOrDeadline(
 // unconfirmedOutcome names which budget ran out — the action's own derived
 // confirmation deadline, or the total dispatch window that cut it short.
 func (d *ActionDispatcher) unconfirmedOutcome(name ActionName, dispatchedAt time.Time, deadline time.Duration, windowBound bool, lastReason string) ActionOutcome {
-	reason := fmt.Sprintf("no confirming evidence arrived within %s of dispatch: %s", deadline, lastReason)
+	reason := fmt.Sprintf("nothing confirmed this within %s of sending the command: %s", deadline, lastReason)
 	if windowBound {
-		reason = fmt.Sprintf("the confirmation phase ran out of the %s total dispatch budget before evidence arrived: %s", MaxDispatchDuration, lastReason)
+		reason = fmt.Sprintf("checking this ran out of the %s total dispatch budget before anything confirmed it: %s", MaxDispatchDuration, lastReason)
 	}
 	return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt, Reason: reason}
 }

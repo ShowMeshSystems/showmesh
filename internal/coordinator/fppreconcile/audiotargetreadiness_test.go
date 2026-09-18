@@ -302,10 +302,10 @@ func TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC(t *testing
 	if cond != "" {
 		t.Fatalf("condition = %q, want ready: an unaligned start is a warning, never a failure", cond)
 	}
-	if !strings.Contains(warning, "cue-1") || !strings.Contains(warning, "no audio.node holds the installation's program+ltc role") {
+	if !strings.Contains(warning, "cue-1") || !strings.Contains(warning, "no node has the program+LTC role") {
 		t.Errorf("warning = %q, want it to name the cue and say no node holds the program+ltc role", warning)
 	}
-	if strings.Contains(warning, "exclude the installation's program+ltc node") {
+	if strings.Contains(warning, "do not include the node with the program+LTC role") {
 		t.Errorf("warning = %q, want it distinct from the excludes-the-program+ltc-node wording: there is no such node to exclude", warning)
 	}
 }

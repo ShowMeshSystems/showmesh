@@ -943,7 +943,7 @@ func (r *Recovery) restoreLayer(ctx context.Context, target RecoveryLayerRecord,
 		// prefixed here so a restore report never reads as launchClip's
 		// own generic wording alone.
 		row.Result = RestoreResultSkipped
-		row.Reason = "this layer's own recorded clip could not be launched during the restore (the restore never selects a deck — §6): " + outcome.Reason
+		row.Reason = "this layer's recorded clip could not be launched during the restore (the restore never selects a deck): " + outcome.Reason
 	default:
 		row.Result = RestoreResultFailed
 		row.Reason = outcome.Reason

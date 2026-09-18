@@ -619,7 +619,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	if !reportFresh {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseStaleReport
-		m.Reason = fmt.Sprintf("the last inventory report from this node was received at %s, which is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		m.Reason = fmt.Sprintf("this inventory report is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 			report.ReportedAt.Format(time.RFC3339))
 		return m
 	}

@@ -108,7 +108,7 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 	if p.OffsetKnown {
 		obs = append(obs, buildValue(nodeID, SignalOffsetNs, p.OffsetNs, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalOffsetNs, source, "no fresh offset evidence (not currently locked)", rep.receivedAt))
+		obs = append(obs, notCollected(res, SignalOffsetNs, source, "no fresh offset is available; the clock is not currently locked", rep.receivedAt))
 	}
 
 	if p.ClockClassKnown {

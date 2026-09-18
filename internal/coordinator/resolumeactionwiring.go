@@ -345,9 +345,8 @@ func sanitizeResolumeActionReason(action resolume.ActionName, reason string) str
 		return reason
 	}
 	return fmt.Sprintf(
-		"%s: the underlying Resolume request failed with a transport error this coordinator has no named "+
-			"classification for; the original error named a request URL, which never reaches an operator-facing "+
-			"surface (ADR-029)",
+		"%s: the request to Resolume failed with an error this coordinator does not recognize. "+
+			"Its details are withheld because they could contain a file path.",
 		action)
 }
 

@@ -616,8 +616,8 @@ func decodeRequiredIntList(top map[string]json.RawMessage, key, field string) ([
 // node has advertised no audio capability at all — not "this route is
 // wrong", but "this coordinator holds no probe evidence for this node's
 // audio output at all", which is a different, more basic refusal.
-var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has advertised no audio output capability; " +
-	"placement is refused against the node's own probe evidence, never against the operator's claim alone")
+var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has not advertised any audio output. " +
+	"Placement is refused based on what the node itself reports, not the operator's claim alone")
 
 // ValidateAudioNodePlacement refuses placement of p against advertised
 // probe evidence (audio.output.local / audio.output.ltc capability
@@ -653,8 +653,8 @@ func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []s
 		return nil
 	}
 	if !containsString(ltcRoutes, p.LTCRoute) {
-		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised discrete LTC-capable routes %v "+
-			"(a route needs at least a third channel beyond the program pair to carry LTC per ADR-018)",
+		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised LTC-capable routes %v. "+
+			"An LTC route needs at least a third channel beyond the program pair",
 			p.LTCRoute, ltcRoutes)
 	}
 	return nil
@@ -679,7 +679,7 @@ func ValidateAudioNodeRoleUniqueness(id string, p AudioNodePayload, existingRole
 		}
 		if otherRole == AudioNodeRoleProgramLTC {
 			return fmt.Errorf(
-				"audio.node: %q and %q would both carry role %q; exactly one audio.node may be the installation's program+ltc node (ADR-018's one clock domain, ADR-045)",
+				"audio.node: %q and %q would both carry role %q. Only one audio.node may be the installation's program+ltc node",
 				id, otherID, AudioNodeRoleProgramLTC)
 		}
 	}

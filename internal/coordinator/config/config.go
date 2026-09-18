@@ -706,11 +706,10 @@ func checkAPITokenRetired(lookup func(string) (string, bool)) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%s is set, but ADR-024 retired it: this coordinator no longer accepts a shared bearer-token secret for the read API. "+
+		"%s is set, but this coordinator no longer accepts a shared bearer-token secret for the read API. "+
 			"Remove %s from your environment. If you want the read API to require a credential the way a non-empty %s used to, "+
 			"set %s=true instead, then create your first administrator via the one-time bootstrap code "+
-			"(POST /api/v1/bootstrap, or run `showmesh-coordinator bootstrap` against this coordinator's data volume) — "+
-			"see ADR-024 decision 2 for the full migration",
+			"(POST /api/v1/bootstrap, or run `showmesh-coordinator bootstrap` against this coordinator's data volume)",
 		envAPIToken, envAPIToken, envAPIToken, envAPICloseReads)
 }
 

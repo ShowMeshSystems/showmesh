@@ -399,7 +399,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	if outputs.LTC != nil && outputs.Announcement != nil {
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs.ltc",
-			Detail: "outputs.ltc must not be combined with outputs.announcement: a node has one LTC generator tied to the program-audio clock domain (ADR-018), and the announcement session is not that domain",
+			Detail: "outputs.ltc must not be combined with outputs.announcement. A node has one LTC generator, and it belongs to the program audio, not the announcement session.",
 		}
 	}
 

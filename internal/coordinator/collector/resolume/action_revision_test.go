@@ -68,8 +68,8 @@ func TestDispatchRefusesWhenCompositionRevisionMovedSinceResolve(t *testing.T) {
 	if outcome.State != ActionRefused {
 		t.Fatalf("outcome.State = %q, want %q; reason: %s", outcome.State, ActionRefused, outcome.Reason)
 	}
-	if !strings.Contains(outcome.Reason, "replaced") {
-		t.Errorf("reason = %q, want it to say the composition was replaced", outcome.Reason)
+	if !strings.Contains(outcome.Reason, "changed") {
+		t.Errorf("reason = %q, want it to say the composition changed", outcome.Reason)
 	}
 	if len(requests) != 0 {
 		t.Errorf("arena received %d request(s), want 0 — the revision guard must refuse before any dispatch: %v", len(requests), requests)

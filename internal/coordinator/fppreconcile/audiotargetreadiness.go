@@ -51,7 +51,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 	}
 	if len(ltcEmitters) > 1 {
 		return ReadinessAudioLTCEmitterAmbiguous, fmt.Sprintf(
-			"audio.node %q and %q both hold role %q; exactly one node may be the installation's LTC emitter (ADR-018's one clock domain, ADR-045)",
+			"audio.node %q and %q both hold role %q. Only one node may be the installation's LTC emitter.",
 			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), "", nil
 	}
 	programLTC, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
@@ -114,12 +114,12 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				// decision 3's one-instant selection to disagree about.
 			case programLTC == "":
 				warning = fmt.Sprintf(
-					"cue %q's audio and announcement outputs together reach %v, and no audio.node holds the installation's program+ltc role; a scheduled multi-node start has no node's clock to select an instant from (ADR-049), so this Cue can never start aligned",
-					entry.Cue, union)
+					"Cue %q plays on several nodes but no node has the program+LTC role. Assign one node that role, then re-check.",
+					entry.Cue)
 			case !containsID(union, programLTC):
 				warning = fmt.Sprintf(
-					"cue %q's audio and announcement outputs together reach %v, which exclude the installation's program+ltc node; a Cue reaching more than one node starts at one instant read from that node's clock (ADR-049), so this Cue can never start aligned",
-					entry.Cue, union)
+					"Cue %q plays on several nodes but its outputs do not include the node with the program+LTC role. Add that node to the cue's outputs, then re-check.",
+					entry.Cue)
 			}
 		}
 	}
@@ -410,13 +410,13 @@ func nodeClockWarning(clock ClockObservationsLister, liveness map[string]nodeLiv
 		}
 	}
 	if stateObs == nil {
-		return "no node.clock.ptp.state evidence has ever been reported for it"
+		return "its clock state has never been reported"
 	}
 	switch state := stateObs.StateAt(now); state {
 	case observation.StateStale:
-		detail := "clock evidence"
+		detail := "a clock reading"
 		if stateObs.ObservedAt != nil {
-			detail = fmt.Sprintf("clock evidence last observed at %s", stateObs.ObservedAt.Format(time.RFC3339))
+			detail = fmt.Sprintf("a clock reading from %s", stateObs.ObservedAt.Format(time.RFC3339))
 		}
 		return fmt.Sprintf("its most recent %s is stale, so its clock cannot be confirmed locked right now", detail)
 	case observation.StateCurrent:
@@ -424,9 +424,9 @@ func nodeClockWarning(clock ClockObservationsLister, liveness map[string]nodeLiv
 		if value == clockLockedValue {
 			return ""
 		}
-		return fmt.Sprintf("its clock provider reports %q, not locked, so a scheduled multi-node start would ignore the shared instant on this node (ADR-046)", value)
+		return fmt.Sprintf("its clock provider reports %q, not locked, so a scheduled multi-node start would ignore the shared instant on this node", value)
 	default:
-		return fmt.Sprintf("its node.clock.ptp.state evidence is %s rather than current or stale, so its clock cannot be confirmed locked", state)
+		return fmt.Sprintf("its node.clock.ptp.state reading is %s rather than current or stale, so its clock cannot be confirmed locked", state)
 	}
 }
 

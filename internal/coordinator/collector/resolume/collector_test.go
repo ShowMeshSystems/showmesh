@@ -1524,7 +1524,7 @@ func TestIdentityObservationEmitsForDeckMismatch(t *testing.T) {
 	c := newTestCollector(t, "http://127.0.0.1:1", Options{})
 	identity := IdentityResult{
 		Outcome:         IdentityDeckMismatch,
-		Reason:          "the selected deck changed while this identity check was running, so the missing clips are not evidence of a stale composition",
+		Reason:          "the selected deck changed while this check was running, so the missing clips do not mean the composition is stale",
 		ExpectedDeck:    IdentitySampleClip{ID: 2000000000001},
 		ActualDeckKnown: true,
 		ActualDeck:      2000000000002,
