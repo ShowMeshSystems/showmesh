@@ -57,6 +57,48 @@ Two nodes rate-locked to the shared PTP clock hold within 0.5 ms
 (RES-019, 2026-09-11). A start that lands on the same instant on both stays
 together.
 
+### 2.5 First rig runs of the new path (L2, rehearsal rig, 2026-09-18)
+
+Bench FPP 10 on the coordinator host, `MultiSyncExtraRemotes` naming node-01
+only, so node-01 exercises the packet path and the Pi exercises the fallback.
+Playlist `halloween-quick-check` (wake-up, then kpop-audio), both nodes on the
+same build, WAV renditions in place, prepare-ahead staging the second Cue.
+Times are the node's media clock from its persisted session decisions and the
+coordinator's command store; no audible-sample measurement was taken (run 1
+of section 3 is still open).
+
+| Build | Cue | node-01 START arrival to start | node-01 path | Pi start after FPP evidence | Pi activation time |
+| -- | -- | -- | -- | -- | -- |
+| d8e5c30 | wake-up (cold) | 850 ms | refused in past, late start | 5.4 s | 3.0 s |
+| d8e5c30 | kpop-audio (staged) | 337 ms | refused in past, late start | 4.1 s | 2.4 s |
+| 6fea752 | wake-up (cold) | 537 ms | refused in past, late start | 4.4 s (cold cache), 3.3 s (warm) | 3.0 s, 1.7 s |
+| 6fea752 | kpop-audio (staged) | 100 ms lead honored | scheduled start | 4.1 s (cold cache), 1.8 s (warm) | 2.5 s, 0.16 s |
+
+What the two builds changed:
+
+- On d8e5c30 every scheduled start ran a synchronous clock poll (four `pmc`
+  subprocesses, about 415 ms on node-01) before comparing the instant, so the
+  100 ms lead was always in the past by the time it was checked. 6fea752 uses
+  the tracker's last polled status when it is younger than 30 s. With that, a
+  staged Cue starts at its packet's arrival plus the configured lead.
+- Every `cue.activate` hashed the whole media file before starting (66 MB WAV,
+  about 2.3 s on the Pi 3B+). 6fea752 caches the verified hash by size and
+  modification time, so the Pi's staged activation fell to 160 ms. The cache
+  is in-process: the first activation of each file after an agent restart
+  still pays the hash.
+- The cold first Cue is bounded by the OPEN prepare: about 520 ms on node-01
+  for the 35 MB WAV, because FPP 10 sends OPEN and START back to back and
+  nothing stages the first Cue of a playlist. The late-start fallback now
+  fires within 2 ms of the refusal instead of after the poll.
+
+Open from these runs: staging the first Cue of the next scheduled playlist
+(would remove the cold prepare); the coordinator's 1.5 s wait reads the
+periodic session report, whose `start.trigger` field persists from the
+previous Cue, so the wait can return early on stale evidence and the node's
+own `cue.activate` result fields are what the persisted record now relies on;
+node-01's `audio.node` binding has `outputLatency.method: unmeasured`, so no
+latency compensation was applied in these runs.
+
 ## 3. What the rig run must measure
 
 Every run uses the bound show playlist with both audio nodes, the coordinator,
