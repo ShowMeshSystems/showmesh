@@ -131,7 +131,7 @@ func listNightCycleOutcomes(ctx context.Context, q querier, sessionID string) ([
 	if err != nil {
 		return nil, fmt.Errorf("store: list night cycle outcomes %q: %w", sessionID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []NightCycleOutcomeRecord
 	for rows.Next() {
 		rec, err := scanNightCycleOutcome(rows)
@@ -166,7 +166,7 @@ func listOpenNightCycleOutcomes(ctx context.Context, q querier) ([]NightCycleOut
 	if err != nil {
 		return nil, fmt.Errorf("store: list open night cycle outcomes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []NightCycleOutcomeRecord
 	for rows.Next() {
 		rec, err := scanNightCycleOutcome(rows)
