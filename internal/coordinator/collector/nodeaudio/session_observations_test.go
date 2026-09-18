@@ -384,6 +384,62 @@ func TestSessionItemGapReportedWhenKnown(t *testing.T) {
 	}
 }
 
+// TestSessionItemGapStaysCurrentUntilTheNextTrackChange proves the owner
+// ruling "static does not mean stale": a measurement taken once at an
+// event (a track change) does not age by [DefaultValidFor] the way a
+// polled reading does. ValidFor stays zero so StateAt reports StateCurrent
+// no matter how long ago the gap was measured, until the node reports a
+// new one.
+func TestSessionItemGapStaysCurrentUntilTheNextTrackChange(t *testing.T) {
+	gapAt := time.Now().Add(-1 * time.Hour)
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		GapKnown: true, ItemGapMs: 137, ItemGapReason: "", ItemGapObservedAt: &gapAt,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	ms := findSessionObs(t, obs, SignalSessionItemGapMs)
+	if ms.ValidFor != 0 {
+		t.Errorf("item_gap_ms ValidFor = %s, want 0 (never expires)", ms.ValidFor)
+	}
+	if got := ms.StateAt(time.Now()); got != observation.StateCurrent {
+		t.Errorf("item_gap_ms StateAt(now) = %q, want %q even though it was measured %s ago", got, observation.StateCurrent, time.Since(gapAt))
+	}
+
+	reason := findSessionObs(t, obs, SignalSessionItemGapReason)
+	if got := reason.StateAt(time.Now()); got != observation.StateCurrent {
+		t.Errorf("item_gap.reason StateAt(now) = %q, want %q even though it was measured %s ago", got, observation.StateCurrent, time.Since(gapAt))
+	}
+}
+
+// TestSessionItemGapObservationsEndWithTheSession proves the other half of
+// the same ruling: a measurement's currency ends when the session itself
+// ends, not on a timer. Once a session no longer appears in the node's
+// report, Poll emits no item_gap observation for it at all.
+func TestSessionItemGapObservationsEndWithTheSession(t *testing.T) {
+	gapAt := time.Now().Add(-1 * time.Hour)
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		GapKnown: true, ItemGapMs: 137, ItemGapReason: "", ItemGapObservedAt: &gapAt,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+	if len(obs) == 0 {
+		t.Fatalf("expected observations while the session is reported")
+	}
+
+	st.Put("audio-01", samplePayload(), time.Now()) // no Sessions: the session has stopped.
+	obs, _ = c.Poll(context.Background())
+	for _, o := range obs {
+		if o.Resource.Kind == observation.ResourceAudioSession && o.Resource.ID == "sess-1" {
+			t.Errorf("found observation %+v for a session that no longer appears in the node's report", o)
+		}
+	}
+}
+
 // TestSessionItemGapNotCollectedWhenUnknown proves the not-collected case:
 // both signal ids report [observation.StateNotCollected] with the node's
 // stated reason, never zero and never omitted.
