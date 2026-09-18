@@ -7,6 +7,52 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
+// CutBackgroundBed immediately suspends id when it is a Playing session
+// with source role background, capturing a resume bookmark exactly as a
+// commanded [Manager.Pause] would: an Engine.Pause, never a fade. Unlike
+// [Manager.interruptOneLocked] it never joins interruptedByAll, so a
+// later coordinator-issued pause or resume against id still runs through
+// its own ledger unobstructed instead of tripping [Manager.Resume]'s
+// interruptedByAll refusal. It also bypasses [Session.dispatch]'s
+// revState ledger entirely, the same trade [Manager.SilenceAll] already
+// makes, so a coordinator command dispatched afterward is still accepted
+// on its own revision.
+//
+// Reports false, with nothing changed, when there is nothing to cut: no
+// such session, its source role is not background, its handle is not
+// loaded, or it is not Playing.
+func (m *Manager) CutBackgroundBed(ctx context.Context, id pkgaudio.SessionID) bool {
+	s, ok := m.get(id)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StatePlaying || !s.handleLoaded {
+		return false
+	}
+	if s.desired.SourceRole == nil || *s.desired.SourceRole != pkgaudio.SourceRoleBackground {
+		return false
+	}
+	pauseCtx, cancel := boundedEngineCallContext(ctx)
+	obs, err := m.engine.Pause(pauseCtx, s.handle)
+	cancel()
+	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		return false
+	}
+	s.state = pkgaudio.StatePaused
+	s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Identity: s.loadedIdentity, Index: s.currentIndex, Position: obs.Position}
+	if s.desired.Playlist != nil {
+		s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
+	}
+	s.timingKnown = true
+	s.lastObservedAt = obs.ObservedAt
+	m.stopLTCLocked(ctx, s)
+	s.persistBestEffortLocked("state change")
+	return true
+}
+
 // interruptLowerPriority runs after a session with role interrupterRole and
 // mix policy Interrupt reaches Playing: it suspends every OTHER currently
 // Playing session whose role priority is strictly lower, using the same

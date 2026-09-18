@@ -671,6 +671,15 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: blockedReason})
 		return
 	}
+	// The bound show playlist's own first audio-bearing cue is staged on
+	// every audio node it resolves to before the player is ever told to
+	// start (owner ruling 2026-09-18): idempotent across repeat ticks, so
+	// this costs nothing once already dispatched, and never delays the
+	// player past its own bounded wait.
+	if unstaged := h.nightStageFirstShowCueAudio(ctx, now, rec, payload); len(unstaged) > 0 {
+		h.logWarn("night loop: starting the show without confirmed first-cue staging on every node", "sessionId", rec.ID, "nodeIds", unstaged)
+	}
+
 	// ifBusy is decided ONCE here, from a snapshot read; the dispatch is a
 	// separate moment and is not re-checked a second time before it - see
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
