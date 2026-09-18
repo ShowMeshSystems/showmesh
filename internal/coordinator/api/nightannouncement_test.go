@@ -1838,6 +1838,83 @@ func TestNightAnnouncement_ExtraNodeApplyPrepareStartRevisionsIncreaseAcrossTwoE
 	}
 }
 
+// TestNightAnnouncement_OrderOfMagnitudeRevisionGapBothNodesStartOnBothEntries
+// is the rehearsal-rig regression proof: node-a's own persisted revision
+// is already in the thousands (a long night's worth of prior entries),
+// node-b's own floor is still in the tens (a node only recently added to
+// the show) - an order of magnitude apart, exactly the shape that exposed
+// the coordinator-side acceptance ledger conflating both nodes' own
+// revisions under their shared session id. Both nodes must still receive
+// an apply, a prepare and a start, confirmed, on BOTH entries.
+func TestNightAnnouncement_OrderOfMagnitudeRevisionGapBothNodesStartOnBothEntries(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
+	putAudioNodeNoLTCForTest(t, st, "node-b") // the extra node
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+
+	if err := st.PutAudioSession(ctx, store.AudioSessionRecord{
+		ID: "announcement-1", NodeID: "node-a", DesiredJSON: "{}", Revision: 1000,
+	}); err != nil {
+		t.Fatalf("seed node-a's own high persisted revision: %v", err)
+	}
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+
+	for entry := 1; entry <= 2; entry++ {
+		if entry > 1 {
+			rec.Cycle++
+			rec.ShowCommitted = false
+			if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+				t.Fatalf("entry %d: advance cycle: %v", entry, err)
+			}
+		}
+
+		before := len(pub.dispatched)
+		h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+
+		nodeAApply, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
+		if err != nil {
+			t.Fatalf("entry %d: node-a apply row: %v", entry, err)
+		}
+		if nodeAApply.State != nightCueStateResolved || nodeAApply.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("entry %d: node-a apply = %+v, want resolved/confirmed", entry, nodeAApply)
+		}
+		nodeBApply, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementApplyExtra+":"+nightPhaseEnterShow+":node-b", "thank-you")
+		if err != nil {
+			t.Fatalf("entry %d: node-b apply row: %v", entry, err)
+		}
+		if nodeBApply.State != nightCueStateResolved || nodeBApply.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("entry %d: node-b apply = %+v, want resolved/confirmed - not refused as stale_revision by node-a's own higher revision", entry, nodeBApply)
+		}
+
+		for _, nodeID := range []string{"node-a", "node-b"} {
+			startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow+":"+nodeID, "thank-you")
+			if err != nil {
+				t.Fatalf("entry %d: %s start row: %v", entry, nodeID, err)
+			}
+			if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+				t.Fatalf("entry %d: %s start = %+v, want resolved/confirmed - not refused as stale_revision by the OTHER node's own history", entry, nodeID, startRow)
+			}
+			// Confirms the step actually reached the node, on every entry -
+			// not merely that a row exists (a pre-commit ledger refusal, the
+			// defect this test guards, never dispatches anything at all).
+			dispatchedRevisionForNode(t, pub, "audio.session.apply", nodeID, before)
+			dispatchedRevisionForNode(t, pub, "audio.session.prepare", nodeID, before)
+			dispatchedRevisionForNode(t, pub, "audio.session.start", nodeID, before)
+		}
+	}
+}
+
 // TestNightAnnouncement_ExtraNodeApplyRefusalIsReportedAndTheAnnouncementStillStarts
 // is the reporting acceptance proof: when the extra node's own apply is
 // refused, that refusal lands durably on ITS OWN applyExtra outbox row -
