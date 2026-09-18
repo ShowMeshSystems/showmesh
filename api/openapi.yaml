@@ -19010,6 +19010,42 @@ components:
         current:
           type: boolean
           description: True exactly when supersededAt is null.
+        rendition:
+          oneOf:
+            - $ref: "#/components/schemas/AssetRendition"
+            - type: "null"
+          description: >-
+            This asset's 48kHz/16-bit/stereo WAV rendition state (owner
+            ruling 2026-09-18, PCM show audio). Present only when
+            mediaType is "audio". Null when mediaType is "audio" but no
+            rendition has ever been queued for this asset's content - the
+            coordinator's own reconcile pass has not reached it yet, and
+            the original file is what every node still fetches and plays.
+    AssetRendition:
+      type: object
+      description: >-
+        One audio asset's rendition state, as read back on Asset.rendition.
+        The rendition is a second, separately content-addressed WAV blob;
+        the operator's own uploaded file (Asset.contentHash) is never
+        rewritten.
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [rendering, ready, failed]
+        format:
+          type: string
+          description: The rendition's fixed format string. Set only when status is "ready".
+        durationMillis:
+          type: integer
+          description: The rendition's playable duration in milliseconds. Set only when status is "ready".
+        failureReason:
+          type: string
+          description: >-
+            Why the last transcode attempt failed. Set only when status
+            is "failed". The original file is still served to every node
+            regardless.
     AssetResponse:
       type: object
       description: >-

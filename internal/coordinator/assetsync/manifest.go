@@ -233,6 +233,15 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, err
 	}
 
+	// Substituted last, after supersededHashes is computed from the raw
+	// asset rows: that computation is about the operator's own upload
+	// history and stays keyed on the original content hash regardless of
+	// whether a rendition now exists.
+	assets, err = substituteAudioRenditions(ctx, st, assets)
+	if err != nil {
+		return ExpectedSet{}, err
+	}
+
 	surfaceIDs, err := surfaceIDsForNode(ctx, st, showID, nodeID)
 	if err != nil {
 		return ExpectedSet{}, err

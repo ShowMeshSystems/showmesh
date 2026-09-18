@@ -20,7 +20,7 @@ import { Button, ButtonRow, Callout, Field, Input, Notice, Panes, RuledStrip, Se
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
-import { assetHistory, assetIdentityKey, formatBytes, hashLabel, targetLabel } from './showsModel'
+import { assetHistory, assetIdentityKey, formatBytes, hashLabel, renditionSummary, targetLabel } from './showsModel'
 
 /**
  * A rehashed identity, used to decide when re-uploading a file would
@@ -620,6 +620,12 @@ function AssetDetail({
             {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown principal'}
           </p>
         </div>
+        {asset.mediaType === 'audio' && (
+          <div className="sm-inspector__row">
+            <span className="sm-inspector__label">Node copy</span>
+            <p className="sm-inspector__value sm-data">{renditionSummary(asset.rendition)}</p>
+          </div>
+        )}
       </section>
 
       <section className="sm-inspector__group">

@@ -534,6 +534,25 @@ export function hashLabel(contentHash: string): string {
   return `${hex.slice(0, 4)}…${hex.slice(-2)}`
 }
 
+/**
+ * An audio asset's rendition state (Asset.rendition), in the one line
+ * every screen shows it: the fixed format and playable duration once
+ * ready, or a fact stating why not yet - never a raw status string.
+ */
+export function renditionSummary(rendition: Asset['rendition']): string {
+  if (!rendition) return 'Not built yet. Nodes still play the original file.'
+  switch (rendition.status) {
+    case 'ready':
+      return `${rendition.format ?? 'wav48k16s'}, ${formatDuration(rendition.durationMillis ?? 0)}`
+    case 'rendering':
+      return 'Building now. Nodes still play the original file.'
+    case 'failed':
+      return `Could not be built: ${rendition.failureReason ?? 'unknown reason'}. Nodes still play the original file.`
+    default:
+      return rendition.status
+  }
+}
+
 /** A reported byte count, shown the one way every screen shows it. Derived, never rounded away: the exact figure stays in the title. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`

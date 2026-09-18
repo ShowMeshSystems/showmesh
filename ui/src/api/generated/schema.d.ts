@@ -6620,6 +6620,19 @@ export interface components {
             supersededAt: string | null;
             /** @description True exactly when supersededAt is null. */
             current: boolean;
+            /** @description This asset's 48kHz/16-bit/stereo WAV rendition state (owner ruling 2026-09-18, PCM show audio). Present only when mediaType is "audio". Null when mediaType is "audio" but no rendition has ever been queued for this asset's content - the coordinator's own reconcile pass has not reached it yet, and the original file is what every node still fetches and plays. */
+            rendition?: components["schemas"]["AssetRendition"] | null;
+        };
+        /** @description One audio asset's rendition state, as read back on Asset.rendition. The rendition is a second, separately content-addressed WAV blob; the operator's own uploaded file (Asset.contentHash) is never rewritten. */
+        AssetRendition: {
+            /** @enum {string} */
+            status: "rendering" | "ready" | "failed";
+            /** @description The rendition's fixed format string. Set only when status is "ready". */
+            format?: string;
+            /** @description The rendition's playable duration in milliseconds. Set only when status is "ready". */
+            durationMillis?: number;
+            /** @description Why the last transcode attempt failed. Set only when status is "failed". The original file is still served to every node regardless. */
+            failureReason?: string;
         };
         /** @description The body of POST /assets and GET /assets/{id}. `rolledBack` is true only when a POST matched a SUPERSEDED identity and performed ADR-028 decision 10's rollback (un-superseding `asset` and superseding whatever was current); it is always false on GET. */
         AssetResponse: {
