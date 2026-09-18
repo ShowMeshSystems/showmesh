@@ -643,7 +643,7 @@ export function LiveControl() {
       <Section
         id="lc-emergency"
         title="Emergency stop"
-        detail="Every configured FPP instance, independent of which one is selected above. Resolume blackout, below, fires the identical blackout the emergency stop already dispatches, not a separate path."
+        detail="Stops every configured FPP instance, independent of which one is selected above, plus any stop actions your site configured for this level, such as stopping audio or blacking out Resolume. The Resolume blackout button below fires that same blackout, not a separate one."
       >
         <div className="sm-lc-emergency">
           <ButtonRow>
@@ -653,7 +653,7 @@ export function LiveControl() {
               disabled={!emergencyGate.allowed || emergencyBusy !== false}
               title={emergencyGate.allowed ? undefined : emergencyGate.reason}
               onClick={() => {
-                if (!window.confirm('Stop every configured FPP instance now? This does not affect projection or audio.')) return
+                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
                 runEmergencyStop('stop', emergencyStop)
               }}
             >
@@ -667,7 +667,7 @@ export function LiveControl() {
               onClick={() => {
                 if (
                   !window.confirm(
-                    'Stop every configured FPP instance and force an active night session straight into its own graceful power-down, now?',
+                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
                   )
                 )
                   return
@@ -678,7 +678,8 @@ export function LiveControl() {
             </Button>
           </ButtonRow>
           <p className="sm-small sm-muted">
-            <strong>Stop</strong> halts every configured FPP instance. <strong>Stop and power down</strong> does the
+            <strong>Stop</strong> halts every configured FPP instance, plus any stop actions your site configured for
+            this level, such as stopping audio or blacking out Resolume. <strong>Stop and power down</strong> does the
             same, plus forces an active night session into the standard power-down sequence immediately rather than
             waiting for it.
           </p>
@@ -765,7 +766,7 @@ export function LiveControl() {
                   <tr>
                     <th scope="col">Output</th>
                     <th scope="col">Doing what</th>
-                    <th scope="col">Evidence</th>
+                    <th scope="col">Last confirmed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -853,9 +854,8 @@ export function LiveControl() {
       />
 
       <Callout>
-        Brightness ceiling is not advertised by this coordinator, so it has no controls here. Site control and
-        interlocks are authored on the Night Session definition and enforced automatically; Live Control has no
-        separate controls for them. All lists above are scoped to the active show.
+        Brightness ceiling and site control are set on the Night Session and enforced automatically; there are no
+        separate controls for them here. All lists above are scoped to the active show.
       </Callout>
     </>
   )
@@ -1483,7 +1483,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
             ) : (
               <Field
                 label="Revision override"
-                help="For a wedged ledger. Overrides the value above. A full int64, so typed as digits, not a number spinner."
+                help="Use only if the automatic value above is stuck. Type the number as digits; it can be larger than a spinner allows."
                 error={overrideError ?? undefined}
               >
                 {(props) => (
@@ -1584,7 +1584,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                 </div>
                 <Field
                   label="Start at"
-                  help="Nanoseconds on this node's own media clock, as digits. Empty starts on arrival. A node whose clock has already passed the instant refuses the start rather than starting late."
+                  help="Start time in nanoseconds; leave empty to start on arrival. If that time has already passed, the node refuses the start instead of starting late."
                   error={scheduledAtNsError ?? undefined}
                 >
                   {(props) => (

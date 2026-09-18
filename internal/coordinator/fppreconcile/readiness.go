@@ -331,8 +331,8 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Ready = false
 		report.FailingCondition = ReadinessDefinitionSuperseded
 		report.Reason = fmt.Sprintf(
-			"a newer playlist definition (hash %s, captured %s) is stored for instance %q playlist %q than the bound hash %s (captured %s); the FPP playlist was edited since import",
-			newest.PlaylistHash, newest.CapturedAt.Format(time.RFC3339), p.FPP.InstanceUUID, p.FPP.PlaylistName, p.FPP.PlaylistHash, defRec.CapturedAt.Format(time.RFC3339))
+			"the FPP playlist was edited since import. Instance %q playlist %q is now hash %s (captured %s); the import used hash %s (captured %s). Re-import the playlist.",
+			p.FPP.InstanceUUID, p.FPP.PlaylistName, newest.PlaylistHash, newest.CapturedAt.Format(time.RFC3339), p.FPP.PlaylistHash, defRec.CapturedAt.Format(time.RFC3339))
 		return report, nil
 	}
 
@@ -413,7 +413,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-		report.Warning = "no observation has been received yet for this instance; this is the normal afternoon state, not a fault"
+		report.Warning = "no observation has been received yet for this instance. This is normal before the first report arrives, not a fault."
 	case err != nil:
 		return Report{}, fmt.Errorf("fppreconcile: get latest observation: %w", err)
 	case obs.Unavailable != "":
@@ -424,7 +424,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	case obs.PlaylistHash != p.FPP.PlaylistHash:
 		report.Ready = false
 		report.FailingCondition = ReadinessObservationHashMismatch
-		report.Reason = fmt.Sprintf("the latest observation's playlistHash (%s) differs from the bound playlistHash (%s); the FPP playlist was edited since import", obs.PlaylistHash, p.FPP.PlaylistHash)
+		report.Reason = fmt.Sprintf("the FPP playlist was edited since import. The latest observation's playlistHash is %s, not the bound playlistHash %s.", obs.PlaylistHash, p.FPP.PlaylistHash)
 		return report, nil
 	}
 
@@ -681,7 +681,7 @@ func livenessOrUnknown(liveness map[string]nodeLivenessInfo, nodeID string) node
 	if info, ok := liveness[nodeID]; ok {
 		return info
 	}
-	return nodeLivenessInfo{liveness: inventory.LivenessUnknown, reason: "no inventory evidence has ever been observed for this node"}
+	return nodeLivenessInfo{liveness: inventory.LivenessUnknown, reason: "this node has never been observed"}
 }
 
 // nodeHoldsRenderAssignment reports whether nodeID currently has a
@@ -746,7 +746,7 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 				detail = fmt.Sprintf("%s, last observed at %s", detail, found.ObservedAt.Format(time.RFC3339))
 			}
 			return false, fmt.Sprintf(
-				"node %q's render assignment evidence for surface %q is %s rather than current; not treated as a confirmed assignment",
+				"node %q's render assignment reading for surface %q is %s, not current, so it is not treated as confirmed",
 				nodeID, surfaceID, detail), nil
 		}
 		return true, "", nil
@@ -846,7 +846,7 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 				if logger != nil {
 					logger.Warn("fppreconcile: exclusive-claim-conflict could not be fully evaluated; a stored show.cue could not be decoded", "cueId", cueID, "error", err)
 				}
-				return "", "", fmt.Sprintf("exclusive-claim-conflict could not be verified: cue %q has a stored revision that could not be decoded", cueID), nil
+				return "", "", fmt.Sprintf("cue %q's stored configuration could not be read, so a possible conflict with another cue could not be checked", cueID), nil
 			}
 			return "", "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
@@ -959,7 +959,7 @@ func nodeCatalogReadiness(ctx context.Context, st *store.Store, p config.ShowPla
 		}
 		if status != v1.CueCatalogStatusCurrent {
 			return ReadinessNodeCatalogStale, fmt.Sprintf(
-				"node %q has not acknowledged the active show's required catalog revision %q (status: %s, acknowledged revision: %q)",
+				"node %q has not confirmed it has the active show's current cue catalog %q (status: %s, node reports %q)",
 				n.NodeID, catalog.Revision, status, ackRevision), nil
 		}
 	}
@@ -1004,7 +1004,7 @@ func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, 
 	}
 	rev, err := st.GetConfigRevision(ctx, config.ShowCueConfigKind, cueID, obj.CurrentRevision)
 	if errors.Is(err, store.ErrConfigRevisionNotFound) {
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q's current revision could not be read", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf("cue %q's current configuration could not be read", cueID), nil
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("fppreconcile: get cue %q revision %d: %w", cueID, obj.CurrentRevision, err)
@@ -1014,7 +1014,7 @@ func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, 
 		if logger != nil {
 			logger.Warn("fppreconcile: stored cue revision could not be decoded; reporting cue-not-ready", "cueId", cueID, "error", err)
 		}
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q's stored revision could not be decoded", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf("cue %q's stored configuration could not be read", cueID), nil
 	}
 	if cuePayload.Show != playlistShow {
 		return ReadinessCueNotReady, fmt.Sprintf("cue %q belongs to show %q, not this playlist's own show %q", cueID, cuePayload.Show, playlistShow), nil

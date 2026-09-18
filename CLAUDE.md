@@ -175,6 +175,13 @@ handoff, not an investigation log.
   that post-dates the action.
 - Preserve manual and reduced local fallback paths. Degradation must not turn a
   control-plane failure into a stopped show or remove operator visibility.
+- Any string an operator can see, through the API, the CLI, or the UI, states
+  the fact first and then the action, in one or two sentences, with no nested
+  parentheticals, no internals vocabulary (`interlock`, `revision`, `epoch`,
+  `evidence`, `boundary`, `armed`, and the like), no ADR or spec citations, and
+  no invariant numbers. Backend messages are rendered verbatim by the UI and
+  `showmeshctl`, so fix the wording at the Go source. See section 5.1 of
+  `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md`.
 - Do not put private tracker identifiers, URLs, owner-only priorities, private
   notes, credentials, or deployment secrets in committed code, tests, API
   descriptions, documentation, commits, issues, or pull requests.

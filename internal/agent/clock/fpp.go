@@ -96,7 +96,7 @@ func (p *FPPProvider) Close() error       { return nil }
 // [ReadPHC], keyed off whatever this provider's own Poll reports as the
 // interface, not through this provider.
 func (p *FPPProvider) Now(context.Context) MediaTime {
-	return MediaTime{Valid: false, Reason: "the FPP-observed provider exposes PTP state, never PTP time"}
+	return MediaTime{Valid: false, Reason: "FPP reports clock status only, not clock time."}
 }
 
 // Poll fetches FPP's own AES67 status and translates its "ptp" object
@@ -115,7 +115,7 @@ func (p *FPPProvider) Poll(ctx context.Context) RawStatus {
 
 	if !status.PTP.Enabled {
 		return RawStatus{Reachable: true, Locked: false,
-			Reason: "FPP reports PTP not enabled (no AES67 instance enabled, or an AES67 Apply is in progress)", Owner: "fpp"}
+			Reason: "FPP has PTP turned off. Enable AES67 in FPP, or wait for it to finish applying.", Owner: "fpp"}
 	}
 
 	raw := RawStatus{
@@ -127,7 +127,7 @@ func (p *FPPProvider) Poll(ctx context.Context) RawStatus {
 		OffsetNs: status.PTP.OffsetNs, OffsetKnown: status.PTP.Synced,
 	}
 	if !raw.Locked {
-		raw.Reason = fmt.Sprintf("FPP reports PTP enabled but not synced (portState %s)", status.PTP.PortState)
+		raw.Reason = fmt.Sprintf("FPP's clock is not yet synced (port state %s).", status.PTP.PortState)
 	}
 	if status.PTP.GrandmasterID != "" {
 		raw.GrandmasterIdentity, raw.GMKnown = status.PTP.GrandmasterID, true

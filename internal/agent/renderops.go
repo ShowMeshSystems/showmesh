@@ -620,7 +620,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 	}
 	if gotHash != a.fseqContentHash {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf(
-			"%s: fseq asset %q content hash %q does not match assignment's %q (ADR-028: identity is content, not filename)",
+			"%s: fseq asset %q content hash %q does not match assignment's %q",
 			action, a.fseqFilename, gotHash, a.fseqContentHash)
 	}
 
@@ -655,7 +655,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 // minus the persistence write (already on disk) and the post-dispatch
 // confirmation poll (nothing is waiting on a boot-time resume's result).
 func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
-	const action = "render.surface.apply (resumed at boot)"
+	const action = "render.surface.apply"
 
 	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
 	if err != nil {

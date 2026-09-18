@@ -1241,7 +1241,7 @@ func TestStaleInventoryReportReadsUnknown(t *testing.T) {
 	if m.State != "unknown" {
 		t.Fatalf("State = %q, want unknown (never not_ready, never ready, for a report that has gone stale)", m.State)
 	}
-	if m.Reason == nil || !strings.Contains(*m.Reason, "staleness window") {
-		t.Errorf("Reason = %v, want it to name the staleness window", m.Reason)
+	if m.Reason == nil || !strings.Contains(*m.Reason, "out of date") {
+		t.Errorf("Reason = %v, want it to say the report may be out of date", m.Reason)
 	}
 }

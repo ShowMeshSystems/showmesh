@@ -136,7 +136,7 @@ describe('Show Night', () => {
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
       'Run of Show',
-      'Evidence',
+      'Status',
       'Night session activation',
     ])
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
@@ -246,7 +246,7 @@ describe('Show Night', () => {
       fpp: [knownPositionInstance],
     })
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText(/^Boundary armed for /)).toBeInTheDocument()
+    expect(within(boundary).getByText(/^Next transition armed for /)).toBeInTheDocument()
     expect(within(boundary).getByText('derived from millisecond-precision position')).toBeInTheDocument()
     expect(screen.queryByText('No Transition Step is armed')).not.toBeInTheDocument()
   })
@@ -261,8 +261,8 @@ describe('Show Night', () => {
       fpp: [knownPositionInstance],
     })
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText('No boundary for this purpose')).toBeInTheDocument()
-    expect(within(boundary).queryByText(/^Boundary armed/)).not.toBeInTheDocument()
+    expect(within(boundary).getByText('No transition for this purpose')).toBeInTheDocument()
+    expect(within(boundary).queryByText(/^Next transition armed/)).not.toBeInTheDocument()
   })
 
   it('shows the per-cue armed count as its own line when cues exist', () => {
@@ -291,7 +291,7 @@ describe('Show Night', () => {
     })
     expect(screen.getByText('Unknown')).toBeInTheDocument()
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText(/^Boundary armed for \d{2}:\d{2}$/)).toBeInTheDocument()
+    expect(within(boundary).getByText(/^Next transition armed for \d{2}:\d{2}$/)).toBeInTheDocument()
   })
 
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
@@ -777,7 +777,7 @@ describe('Show Night', () => {
       }),
     })
     expect(screen.getByText(/Pinned ceiling for this running session: -18 dB/)).toBeInTheDocument()
-    expect(screen.getByText(/not whatever night\.session's config currently holds/)).toBeInTheDocument()
+    expect(screen.getByText(/later config changes do not affect it/)).toBeInTheDocument()
   })
 
   it('says so honestly when the pinned ceiling is null because nothing is configured', () => {

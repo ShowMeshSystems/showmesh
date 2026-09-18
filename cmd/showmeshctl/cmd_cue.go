@@ -75,9 +75,9 @@ func cmdCue(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 func printCueUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl cue <subcommand> [flags]
 
-Read or write the coordinator's "show.cue" configuration objects (Track H,
-ADR-043: a Cue is the show-scoped, runner-agnostic intent for one
-synchronized playback item). Reads require show:macro:run OR config:write;
+Read or write the coordinator's "show.cue" configuration objects: a Cue
+is the show-scoped, runner-agnostic intent for one synchronized playback
+item. Reads require show:macro:run OR config:write;
 writes require config:write.
 
 Subcommands:
@@ -206,7 +206,7 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		_, _ = fmt.Fprintln(stderr, "definition first. --outputs-json is the whole outputs object, e.g.:")
 		_, _ = fmt.Fprintln(stderr, `  '{"render":{"sequence":"thriller"},"audio":{"asset":"thriller-audience","startOffsetMillis":0}}'`)
 		_, _ = fmt.Fprintln(stderr, "\noutputs.audio and outputs.announcement each accept \"targets\", a list of")
-		_, _ = fmt.Fprintln(stderr, "audio.node ids the cue's audio plays on at one aligned instant (ADR-049);")
+		_, _ = fmt.Fprintln(stderr, "audio.node ids the cue's audio plays on at one aligned instant;")
 		_, _ = fmt.Fprintln(stderr, "omitted or empty, it resolves to the installation's program+ltc")
 		_, _ = fmt.Fprintln(stderr, "audio.node. The deprecated singular \"target\" is still accepted as a")
 		_, _ = fmt.Fprintln(stderr, "one-element list; a cue naming both on the same output is refused.")

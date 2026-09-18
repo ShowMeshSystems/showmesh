@@ -453,6 +453,37 @@ func TestComputeNodeManifestNotReadyNamesMissing(t *testing.T) {
 	}
 }
 
+// TestComputeNodeManifestHeldUnderWrongFilenameRendersMissing pins the
+// rehearsal-rig failure this test guards against: a node's inventory holds
+// the EXPECTED content hash, but under a different runtime filename than
+// the one it was registered under (a node that fetched a since-retired
+// show-scoped row sharing this hash, for instance). internal/agent/audio/
+// mediaprobe.go opens the expected filename verbatim, so a node in this
+// state cannot actually play what gets dispatched and must render as
+// missing, never as held and never as extra.
+func TestComputeNodeManifestHeldUnderWrongFilenameRendersMissing(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{
+		{AssetID: "a1", ContentHash: "sha256:aaa", Filename: "(Don't Fear) The Reaper.mp3", SequenceID: "background-reaper"},
+	}}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:aaa", RuntimeFilename: "content.mp3"}}
+
+	m := ComputeNodeManifest("pi-audio-01", active, expected, report, true, inventory)
+	if m.State != ManifestNotReady {
+		t.Fatalf("ComputeNodeManifest() State = %q, want %q: right hash under the wrong filename is not held", m.State, ManifestNotReady)
+	}
+	if len(m.Missing) != 1 || m.Missing[0].AssetID != "a1" || m.Missing[0].Filename != "(Don't Fear) The Reaper.mp3" {
+		t.Fatalf("ComputeNodeManifest().Missing = %+v, want one entry naming asset a1 and its expected filename", m.Missing)
+	}
+	if len(m.Extra) != 0 {
+		t.Fatalf("ComputeNodeManifest().Extra = %+v, want empty: the wrongly-named copy is expected content, never an unrelated extra file", m.Extra)
+	}
+	if len(m.Verdicts) != 1 || m.Verdicts[0].State != AssetVerdictAbsent {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want one entry for a1 with State=absent (this hash was never superseded, so it is not \"superseded\" either)", m.Verdicts)
+	}
+}
+
 // TestComputeNodeManifestGapAloneMakesNotReady pins W2: manifest.go's
 // "len(missing) > 0 || len(expected.Gaps) > 0" was only ever exercised from
 // the api PACKAGE's own tests (TestNodeAssetManifestGapNamesUncoveredSequence),

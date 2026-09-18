@@ -386,7 +386,7 @@ export function ShowsAutomation() {
           <h3 className="sm-subsection__title sm-stack-4">
             Not in a macro <span className="sm-small sm-muted">· {notInMacro.length}</span>
           </h3>
-          <p className="sm-small sm-muted">Reachable only by direct invoke, or by a cue that names it and pins a revision. No macro will ever fire it.</p>
+          <p className="sm-small sm-muted">Reachable only by a direct invoke, or by a cue that names it and locks in the version. No macro will ever fire it.</p>
           <ActionTable actions={notInMacro} macros={macros} bindings={bindingMap} canInvoke={canInvoke} usedByColumn={false} onOpenAction={(id) => setAside({ kind: 'action-edit', actionId: id })} />
         </Section>
       </div>
@@ -925,7 +925,7 @@ function StepEditor({
             { value: 'continue', label: 'Continue' },
           ]}
         />
-        <p className="sm-small sm-faint">Unconfirmed means no evidence arrived, not that the wrong thing happened.</p>
+        <p className="sm-small sm-faint">Unconfirmed means nothing was reported back, not that the wrong thing happened.</p>
       </div>
 
       <div className="sm-inspector__group">

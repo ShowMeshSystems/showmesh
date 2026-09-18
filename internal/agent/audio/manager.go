@@ -350,7 +350,7 @@ func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation p
 		// "unsupported" only ever appears in an adapter's own capability
 		// report (AUDIO-ENGINE section 9): a session may never desire it.
 		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyUnsupported {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "unsupported" cannot be requested; it only appears in adapter capability reports`}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "unsupported" cannot be requested directly.`}
 		}
 		s.desired = merged
 		if s.currentIndex < 0 {
@@ -489,7 +489,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				// s.state, so dispatch's own persist re-writes the same
 				// state that was already there, not a new one.
 				if errors.Is(err, ErrNoEngineBinding) {
-					return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no audio engine bound yet; refused, not failed — retry once an audio.node binding has arrived"}
+					return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "No audio engine is connected yet. Retry once one connects."}
 				}
 				s.state = pkgaudio.StateFailed
 				m.stopLTCLocked(ctx, s)
@@ -674,7 +674,7 @@ func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 				m.logf("audio session %s: engine release of an orphaned promoted handle failed: %v", toID, err)
 			}
 			relCancel()
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "toID's desired content changed while promoting; the staged session was already released — retry with an ordinary Prepare and Start"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The content changed while promoting, so the staged session was released. Prepare and start it again."}
 		}
 		to.handle = handle
 		to.handleLoaded = true
@@ -844,7 +844,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 			s.releaseEngineLocked(ctx)
 			if _, err := s.prepareLocked(ctx, item); err != nil {
 				if errors.Is(err, ErrNoEngineBinding) {
-					return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no audio engine bound yet; refused, not failed — retry once an audio.node binding has arrived"}
+					return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "No audio engine is connected yet. Retry once one connects."}
 				}
 				s.state = pkgaudio.StateFailed
 				m.stopLTCLocked(ctx, s)
@@ -941,7 +941,7 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 		s.releaseEngineLocked(ctx)
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			if errors.Is(err, ErrNoEngineBinding) {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no audio engine bound yet; refused, not failed (retry once an audio.node binding has arrived)"}
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "No audio engine is connected yet. Retry once one connects."}
 			}
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)

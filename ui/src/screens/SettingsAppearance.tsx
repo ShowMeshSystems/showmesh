@@ -28,7 +28,7 @@ export function SettingsAppearance() {
         absence="unavailable"
         label="Local only"
         fact="Everything on this page is stored in this browser."
-        detail="It creates no coordinator revision, is not attributed to you, and no one else sees it, which is why it has no Save button."
+        detail="No one else sees it, and there is no Save button."
       />
 
       <section aria-labelledby="st-theme" className="sm-section">

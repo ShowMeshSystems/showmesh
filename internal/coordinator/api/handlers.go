@@ -109,6 +109,20 @@ type handlers struct {
 	// routes.
 	fppDefinitionUnknownMembers unknownMemberLog
 
+	// nightBGConfirmFailures dedupes nightAdvanceBackgroundAudioForNode's
+	// "did not confirm; not auto-retrying" warning for a background-audio
+	// start or resume step, the same way fppUnknownMembers dedupes its own
+	// flood above: the night loop ticks roughly once a second for as long
+	// as a night session is running (RESTING-MODE.md), and this class of
+	// failure is a deliberate, permanent no-retry stop for one attempt
+	// (nightbackgroundaudio.go), not a transient condition that clears on
+	// its own - repeating the identical line every tick logs the same
+	// already-known fact forever for zero new information (559 lines in
+	// 90 minutes was observed on the rehearsal rig). In-memory and
+	// per-*handlers, like fppUnknownMembers; losing it across a restart
+	// just means the next tick logs once more.
+	nightBGConfirmFailures unknownMemberLog
+
 	// nightCueHooks is Track F seam F4's own crash-injection seam for
 	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero

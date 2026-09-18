@@ -81,7 +81,7 @@ Subcommands:
 "macro put" accepts a full show.macro JSON payload (show, label,
 description, steps). Validated before activation: an invalid payload, an
 unknown action reference, or a fallback-class mismatch is rejected and
-appends no revision (ADR-009).
+appends no revision.
 
 Run "showmeshctl macro <subcommand> --help" for flags specific to one
 subcommand.
@@ -209,7 +209,7 @@ func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "The payload is a full show.macro object: show, label, description, and")
 		_, _ = fmt.Fprintln(stderr, "steps. Validated before activation: an invalid payload, an unknown action")
 		_, _ = fmt.Fprintln(stderr, "reference, or a fallback-class mismatch is rejected and appends no")
-		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "revision.")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"macro show --output json\" prints.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is \"macro show --output json\"'s own shape, otherwise a fresh read), refusing")

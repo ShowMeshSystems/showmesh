@@ -297,7 +297,7 @@ export function ShowNight() {
                     ),
                   },
                   {
-                    term: 'Evidence',
+                    term: 'Confirmed by',
                     value: (
                       <span className={run?.freshness.state === 'current' ? 'sm-nownext__evidence--good' : 'sm-muted'}>
                         {run === undefined
@@ -318,9 +318,9 @@ export function ShowNight() {
           {next.known ? (
             <>
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
-              <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
+              <p className="sm-small sm-muted">until the sequence ends and the next transition begins.</p>
               <p className="sm-small sm-faint sm-nownext__derivation">
-                Derived from observed playback, not a clock. If the position goes stale the boundary becomes unknown rather than assumed.
+                Derived from observed playback, not a clock. If the position goes stale, the transition time becomes unknown.
               </p>
             </>
           ) : (
@@ -329,7 +329,7 @@ export function ShowNight() {
           <div className="sm-nownext__boundary">
             <p>{boundaryHeadline(session.boundary)}</p>
             <p className="sm-small sm-muted">
-              {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this boundary.'}
+              {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this transition.'}
             </p>
             {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
           </div>
@@ -453,14 +453,14 @@ export function ShowNight() {
               </Table>
             </TableWrap>
             <p className="sm-section__footnote">
-              {steps.length} steps this cycle · {armed} armed for the boundary. A step marked unconfirmable expects no
+              {steps.length} steps this cycle · {armed} armed for the next transition. A step marked unconfirmable expects no
               response and reports that on every run.
             </p>
           </>
         )}
       </Section>
 
-      <Section id="sn-evidence" title="Evidence" aside={<span className="sm-small sm-muted">Anything not observed says so</span>}>
+      <Section id="sn-evidence" title="Status" aside={<span className="sm-small sm-muted">Anything not observed says so</span>}>
         {evidenceReadouts(session, nowIso).map((readout) => (
           <div key={readout.key} className="sm-readout">
             <StatusPair tone={readout.tone} label={readout.label} />

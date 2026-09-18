@@ -210,23 +210,23 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, w dispatchWin
 
 	if alreadySatisfied {
 		return unconfirmableOutcome(name, dispatchedAt,
-			"this clip was already playing before this command was dispatched, so evidence collected afterward cannot be attributed to it")
+			"The command was sent but its result could not be confirmed.")
 	}
 
 	outcome := d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		clip, clipAt, err := d.readClip(s.ctx, clipID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the clip's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the clip failed: %s", ClassifyError(err))
 		}
 		if s.expired() {
 			return false, time.Time{}, "the confirming reads did not finish before the deadline"
 		}
 		layer, layerAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the layer failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(clipAt, dispatchedAt) || !evidenceIsPostDispatch(layerAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		if !clipIsConnected(clip) {
 			return false, time.Time{}, fmt.Sprintf("the clip is not yet connected (state %s)", clipConnectedValue(clip))
@@ -302,16 +302,16 @@ func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, w dispatchWin
 
 	if alreadySatisfied {
 		return unconfirmableOutcome(name, dispatchedAt,
-			"this layer already reported no active clip before this command was dispatched, so evidence collected afterward cannot be attributed to it")
+			"The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, deadline, func(s confirmScope) (bool, time.Time, string) {
 		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the layer failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		if !layerActiveClipAbsent(layer) {
 			return false, time.Time{}, "the layer still reports an active clip (or its absence is not yet confirmed)"
@@ -383,7 +383,7 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindo
 
 	if alreadySatisfied {
 		return unconfirmableOutcome(name, dispatchedAt,
-			"every tracked layer already reported no active clip before this command was dispatched, so evidence collected afterward cannot be attributed to it")
+			"The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, deadline, func(s confirmScope) (bool, time.Time, string) {
@@ -394,10 +394,10 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindo
 			}
 			layer, readAt, err := d.readLayer(s.ctx, l.ID)
 			if err != nil {
-				return false, time.Time{}, fmt.Sprintf("reading layer %s's confirming evidence failed: %s", l.ID, ClassifyError(err))
+				return false, time.Time{}, fmt.Sprintf("checking layer %s failed: %s", l.ID, ClassifyError(err))
 			}
 			if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-				return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+				return false, time.Time{}, "this has not been checked again since the command was sent"
 			}
 			if !layerActiveClipAbsent(layer) {
 				return false, time.Time{}, fmt.Sprintf("layer %s still reports an active clip (or its absence is not yet confirmed)", l.ID)
@@ -446,16 +446,16 @@ func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, w dispatchW
 
 	if alreadySatisfied {
 		return unconfirmableOutcome(name, dispatchedAt,
-			"this column was already connected before this command was dispatched, so evidence collected afterward cannot be attributed to it")
+			"The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		column, readAt, err := d.readColumn(s.ctx, columnID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the column's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the column failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		if !columnIsConnected(column) {
 			return false, time.Time{}, fmt.Sprintf("the column is not yet connected (state %s)", columnConnectedValue(column))
@@ -500,16 +500,16 @@ func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, w dispatchWin
 
 	if alreadySatisfied {
 		return unconfirmableOutcome(name, dispatchedAt,
-			"this deck was already selected before this command was dispatched, so evidence collected afterward cannot be attributed to it")
+			"The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		deck, readAt, err := d.readDeck(s.ctx, deckID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the deck's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the deck failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		if !deckIsSelected(deck) {
 			return false, time.Time{}, "the deck is not yet reported as selected"
@@ -572,17 +572,16 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, w dispatc
 	}
 
 	if alreadySatisfied {
-		return unconfirmableOutcome(name, dispatchedAt, fmt.Sprintf(
-			"this layer's bypass already equalled the requested value (%t) before this command was dispatched, so evidence collected afterward cannot be attributed to it", want))
+		return unconfirmableOutcome(name, dispatchedAt, "The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the layer failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		// A value-less envelope (ok=false) must never read as false==want and
 		// report confirmed — see the baseline check above.
@@ -658,17 +657,16 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, w dispatc
 	}
 
 	if alreadySatisfied {
-		return unconfirmableOutcome(name, dispatchedAt, fmt.Sprintf(
-			"this layer's master already equalled the requested value (%.6f) before this command was dispatched, so evidence collected afterward cannot be attributed to it", want))
+		return unconfirmableOutcome(name, dispatchedAt, "The command was sent but its result could not be confirmed.")
 	}
 
 	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
-			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
+			return false, time.Time{}, fmt.Sprintf("checking the layer failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
-			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
+			return false, time.Time{}, "this has not been checked again since the command was sent"
 		}
 		master, ok := layer.Master.Float()
 		if !ok {

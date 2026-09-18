@@ -130,8 +130,8 @@ func (e *Executor) resolveStrandedFPPStep(ctx context.Context, runID string, ste
 		outcome := outcomeUnconfirmed
 		outcomeState := "not_collected"
 		reason := fmt.Sprintf(
-			"this step dispatched command %s before the coordinator restarted, and that command had not yet resolved "+
-				"when this run was reconciled: no confirming evidence is available", cmd.ID)
+			"this step's command %s was dispatched before the coordinator restarted and had not resolved yet, "+
+				"so this run could not confirm what happened", cmd.ID)
 		return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
 			State: &state, DispatchedAt: cmd.DispatchedAt, ResolvedAt: &now,
 			Outcome: &outcome, OutcomeState: &outcomeState, OutcomeReason: &reason, CommandID: cmdID,

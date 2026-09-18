@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -53,6 +54,15 @@ type fakeAssetFetchFailureSource struct {
 		reason   string
 		failedAt time.Time
 	}
+	attempts       map[[2]string]assetsync.LastFetchAttemptRecord
+	lastSyncPassAt time.Time
+}
+
+func (f *fakeAssetFetchFailureSource) setAttempt(nodeID, contentHash string, rec assetsync.LastFetchAttemptRecord) {
+	if f.attempts == nil {
+		f.attempts = make(map[[2]string]assetsync.LastFetchAttemptRecord)
+	}
+	f.attempts[[2]string{nodeID, contentHash}] = rec
 }
 
 func (f *fakeAssetFetchFailureSource) set(nodeID, contentHash, reason string, failedAt time.Time) {
@@ -74,6 +84,18 @@ func (f *fakeAssetFetchFailureSource) LastFetchFailure(nodeID, contentHash strin
 		return "", time.Time{}, false
 	}
 	return rec.reason, rec.failedAt, true
+}
+
+func (f *fakeAssetFetchFailureSource) LastFetchAttempt(nodeID, contentHash string) (assetsync.LastFetchAttemptRecord, bool) {
+	rec, ok := f.attempts[[2]string{nodeID, contentHash}]
+	return rec, ok
+}
+
+func (f *fakeAssetFetchFailureSource) LastSyncPassAt(string) (time.Time, bool) {
+	if f.lastSyncPassAt.IsZero() {
+		return time.Time{}, false
+	}
+	return f.lastSyncPassAt, true
 }
 
 // assetsTestDeps mirrors showObjectsTestDeps, additionally wiring a real

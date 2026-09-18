@@ -116,8 +116,8 @@ func TestDroppedChannelRangeReachesRealAPIWithoutReadingLogs(t *testing.T) {
 	if !strings.Contains(body, `"node.fppconnect.channel_range.reason"`) {
 		t.Fatalf("GET /nodes/render-01 body does not carry node.fppconnect.channel_range.reason: %s", body)
 	}
-	if !strings.Contains(body, "120-byte") {
-		t.Fatalf("GET /nodes/render-01 body does not name the actual refusal (120-byte ping field): %s", body)
+	if !strings.Contains(body, "120 bytes") {
+		t.Fatalf("GET /nodes/render-01 body does not name the actual refusal (over 120 bytes): %s", body)
 	}
 
 	// --- a node that never had a push resolved renders fppConnect: [],

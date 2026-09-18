@@ -1500,7 +1500,7 @@ func decodeResolumeRef(action string, fields map[string]json.RawMessage) (map[st
 
 func formatExpectedKeys(expected []string) string {
 	if len(expected) == 0 {
-		return "(none — this action takes no ref keys)"
+		return "(none: this action takes no ref keys)"
 	}
 	return strings.Join(expected, ", ")
 }

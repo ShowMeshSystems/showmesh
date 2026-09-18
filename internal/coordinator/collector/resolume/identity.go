@@ -193,9 +193,9 @@ func CheckIdentity(ck IdentityCheck) IdentityResult {
 		result.ActualDeckKnown = true
 		result.ActualDeck = ck.DeckRecheck.CurrentSelectedID
 		result.ActualDeckName = ck.DeckRecheck.CurrentSelectedName
-		result.Reason = "the selected deck changed while this identity check was running, so the missing clips are not evidence of a stale composition"
+		result.Reason = "the selected deck changed while this check was running, so the missing clips do not mean the composition is stale"
 	} else {
-		result.Reason = "the selected deck changed while this identity check was running and could not be re-identified, so the missing clips are not evidence of a stale composition"
+		result.Reason = "the selected deck changed while this check was running and could not be identified again, so the missing clips do not mean the composition is stale"
 	}
 	return result
 }

@@ -202,6 +202,15 @@ type Service struct {
 	// they can simply press the button again for.
 	resyncIntentMu sync.Mutex
 	resyncIntents  map[string]time.Time
+
+	// lastPass records, per node, the last time [Service.syncNode] ran a
+	// check against it: a full tick's own fleet pass or a single
+	// requested one. Guarded by mu, like inFlight; in-memory only, reset
+	// on restart, consulted through [Service.LastSyncPassAt] so the
+	// manifest API can show "since the coordinator last checked" without
+	// confusing it with the node's own report time (NodeManifest.
+	// ObservedAt).
+	lastPass map[string]time.Time
 }
 
 // NewService constructs a Service holding initial. See [Settings]' own
@@ -216,6 +225,7 @@ func NewService(st *store.Store, pub Publisher, logger *slog.Logger, initial Set
 		settings: initial,
 		nudge:    make(chan struct{}, 1), request: make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
 		byCmdID: make(map[string]dispatchKey), failures: make(map[dispatchKey]FetchFailureRecord),
+		lastPass: make(map[string]time.Time),
 	}
 }
 
@@ -529,6 +539,8 @@ func (s *Service) syncRequestedNodes(ctx context.Context) {
 // is the ONLY function in this codebase permitted to decide whether a node
 // is ready" — says is actually missing.
 func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
+	s.recordSyncPass(nodeID)
+
 	report, err := s.st.GetNodeAssetReport(ctx, nodeID)
 	var reportPtr *store.NodeAssetReportRecord
 	switch {
@@ -554,7 +566,7 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 
 	held := make(map[string]bool, len(inventory))
 	for _, item := range inventory {
-		held[item.ContentHash] = true
+		held[heldKey(item.ContentHash, item.RuntimeFilename)] = true
 	}
 
 	// reconcileInFlight's post-dispatch fence ([FetchConfirmed]) is
@@ -591,10 +603,25 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 	}
 }
 
+// heldKey joins a content hash and a runtime filename into this package's
+// shared inventory-membership key ([Service.syncNode]'s dispatch decision
+// and [ComputeNodeManifest]'s own held/missing join both use it): a node
+// holds an expected asset only once its inventory reports the hash under
+// that SAME filename, not merely the hash alone (the same bytes can
+// already sit on a node under a different, unrelated name — ADR-028
+// decision 1 — and that is not the copy either one means). The NUL
+// separator cannot appear in either a hex content hash or a
+// filesystem-valid runtime filename, so this never collides two distinct
+// (hash, filename) pairs onto the same key.
+func heldKey(contentHash, filename string) string {
+	return contentHash + "\x00" + filename
+}
+
 // FetchConfirmed reports whether a dispatched asset.fetch for contentHash
 // on nodeID is confirmed complete: report must be non-nil, held must be
-// true (the node's current inventory includes contentHash), AND report's
-// own ReportedAt must be AT OR AFTER dispatchedAt.
+// true (the node's current inventory includes contentHash UNDER THE
+// DISPATCHED FILENAME — see [heldKey]), AND report's own ReportedAt must be
+// AT OR AFTER dispatchedAt.
 //
 // That third condition is the load-bearing one. Held-and-non-nil alone is
 // NOT evidence this particular dispatch succeeded: a report from BEFORE
@@ -616,7 +643,12 @@ func FetchConfirmed(dispatchedAt time.Time, report *store.NodeAssetReportRecord,
 
 // reconcileInFlight clears every in-flight record for nodeID that
 // [FetchConfirmed] now says is done, using report and held (nodeID's
-// current inventory, already reduced to a hash set by the caller).
+// current inventory, already reduced to a [heldKey] set by the caller).
+// Every in-flight record carries the filename it was dispatched for
+// (dispatchRecord.filename), so this joins on hash AND filename per
+// [heldKey] rather than the hash alone: a node that already held these
+// bytes under some other name before this dispatch was ever sent must not
+// read as confirming it.
 func (s *Service) reconcileInFlight(nodeID string, report *store.NodeAssetReportRecord, held map[string]bool) {
 	if report == nil {
 		return
@@ -627,7 +659,7 @@ func (s *Service) reconcileInFlight(nodeID string, report *store.NodeAssetReport
 		if key.nodeID != nodeID {
 			continue
 		}
-		if FetchConfirmed(rec.dispatchedAt, report, held[key.contentHash]) {
+		if FetchConfirmed(rec.dispatchedAt, report, held[heldKey(key.contentHash, rec.filename)]) {
 			delete(s.inFlight, key)
 			// byCmdID must not outlive its inFlight record: HandleMessage
 			// reads inFlight[key] only while byCmdID still tracks the
@@ -962,4 +994,80 @@ func (s *Service) LastFetchFailure(nodeID, contentHash string) (reason string, f
 		return "", time.Time{}, false
 	}
 	return rec.Reason, rec.FailedAt, true
+}
+
+// LastFetchState is [LastFetchAttempt]'s two-valued outcome. There is no
+// "confirmed"/"succeeded" value here: this Service's only durable evidence
+// of a successful transfer is the node's own inventory report proving it
+// holds the bytes ([FetchConfirmed], surfaced as [AssetVerdictHeld]), never
+// a record of the dispatch itself succeeding.
+type LastFetchState string
+
+const (
+	// LastFetchInFlight: dispatched, no result delivered yet.
+	LastFetchInFlight LastFetchState = "in_flight"
+	// LastFetchFailed: the node's own asset.fetch result reported a
+	// non-success outcome (failed, refused, or unconfirmed).
+	LastFetchFailed LastFetchState = "failed"
+)
+
+// LastFetchAttempt is [Service.LastFetchAttempt]'s result for one
+// (node, contentHash): what THIS PROCESS currently remembers about its
+// own most recent asset.fetch dispatch. Never a persisted record: see
+// [Service.failures]' own doc comment for why asset.fetch dispatch is
+// deliberately NOT written to the commands table (unlike the
+// operator-issued "asset.inventory.request" resync, which is): this
+// resets on every coordinator restart, and DispatchedAt is the zero time
+// when this process no longer remembers a dispatch time (its in-flight
+// record already expired) but still remembers the failure itself.
+type LastFetchAttemptRecord struct {
+	DispatchedAt  time.Time
+	State         LastFetchState
+	FailureReason string // set only when State == LastFetchFailed
+	FailedAt      time.Time
+}
+
+// LastFetchAttempt reports what this process currently remembers about
+// its most recent asset.fetch dispatch to nodeID for contentHash, if
+// anything. A recorded failure takes precedence over a still-tracked
+// in-flight record for the same key: the two are not mutually exclusive
+// (a failure does not itself clear the in-flight record; only a later
+// confirming report or expiry does), and the failure is the more specific
+// evidence.
+func (s *Service) LastFetchAttempt(nodeID, contentHash string) (LastFetchAttemptRecord, bool) {
+	key := dispatchKey{nodeID: nodeID, contentHash: contentHash}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fail, hasFail := s.failures[key]
+	rec, hasRec := s.inFlight[key]
+	if !hasFail && !hasRec {
+		return LastFetchAttemptRecord{}, false
+	}
+	if hasFail {
+		out := LastFetchAttemptRecord{State: LastFetchFailed, FailureReason: fail.Reason, FailedAt: fail.FailedAt}
+		if hasRec {
+			out.DispatchedAt = rec.dispatchedAt
+		}
+		return out, true
+	}
+	return LastFetchAttemptRecord{State: LastFetchInFlight, DispatchedAt: rec.dispatchedAt}, true
+}
+
+// recordSyncPass notes that [Service.syncNode] just ran a check against
+// nodeID, at this process's own clock: see [Service.lastPass]'s own doc
+// comment.
+func (s *Service) recordSyncPass(nodeID string) {
+	s.mu.Lock()
+	s.lastPass[nodeID] = s.now()
+	s.mu.Unlock()
+}
+
+// LastSyncPassAt reports the last time this process ran [Service.syncNode]
+// against nodeID, if ever. In-memory only, like [Service.lastPass] itself;
+// reset on restart.
+func (s *Service) LastSyncPassAt(nodeID string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.lastPass[nodeID]
+	return t, ok
 }

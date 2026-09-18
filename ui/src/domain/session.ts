@@ -103,7 +103,7 @@ export function evaluateScope(
   if (sessionFetchFailed) {
     return {
       allowed: false,
-      reason: 'This device’s permissions could not be confirmed just now; treating this control as not permitted until they can be.',
+      reason: "Can't confirm this device's permissions right now. Control disabled until it reconnects.",
     }
   }
   if (!session.authenticated) {
@@ -112,7 +112,7 @@ export function evaluateScope(
   if (session.scopesState !== 'current') {
     return {
       allowed: false,
-      reason: 'This device’s permissions are unknown right now; treating this control as not permitted until they can be confirmed.',
+      reason: "Can't confirm this device's permissions right now. Control disabled until it reconnects.",
     }
   }
   if (!session.scopes.includes(requiredScope)) {
@@ -151,7 +151,7 @@ export function evaluateAnyScope(
   if (sessionFetchFailed) {
     return {
       allowed: false,
-      reason: 'This device’s permissions could not be confirmed just now; treating this control as not permitted until they can be.',
+      reason: "Can't confirm this device's permissions right now. Control disabled until it reconnects.",
     }
   }
   if (!session.authenticated) {
@@ -160,7 +160,7 @@ export function evaluateAnyScope(
   if (session.scopesState !== 'current') {
     return {
       allowed: false,
-      reason: 'This device’s permissions are unknown right now; treating this control as not permitted until they can be confirmed.',
+      reason: "Can't confirm this device's permissions right now. Control disabled until it reconnects.",
     }
   }
   if (requiredScopes.some((scope) => session.scopes.includes(scope))) {

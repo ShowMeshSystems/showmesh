@@ -65,7 +65,7 @@ type cueActivationOperation struct {
 func (o *cueActivationOperation) heldStateAndEntry(cueID string) (held cueauth.HeldState, entry cuecatalog.Entry, entryFound bool, err error) {
 	rec, ok, loadErr := o.catalogStore.Load()
 	if loadErr != nil {
-		return cueauth.HeldState{}, cuecatalog.Entry{}, false, fmt.Errorf("cue.activate: loading held catalog: %w", loadErr)
+		return cueauth.HeldState{}, cuecatalog.Entry{}, false, fmt.Errorf("could not load the held cue catalog: %w", loadErr)
 	}
 	if !ok {
 		return cueauth.HeldState{}, cuecatalog.Entry{}, false, nil
@@ -174,14 +174,12 @@ func refusalOutcomeValue(act cueactivation.Activation, outcome cueauth.Outcome) 
 //     held catalog entry (render, audio, and — transitively, through the
 //     audio session's own Start/Seek path — LTC).
 func (o *cueActivationOperation) activate(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
-	const action = "cue.activate"
-
 	act, err := cueactivation.DecodeParams(params)
 	if err != nil {
-		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
+		return OperationResult{}, fmt.Errorf("this activation could not be read: %w", err)
 	}
 	if err := act.Validate(); err != nil {
-		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
+		return OperationResult{}, fmt.Errorf("this activation is invalid: %w", err)
 	}
 
 	executedAt := now()
@@ -212,7 +210,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 	var unalignedReason string
 	if entry.Outputs.Render != nil {
 		if o.render == nil {
-			applyErrs = append(applyErrs, "cue declares a render output but this node has no render surfaces configured")
+			applyErrs = append(applyErrs, "This Cue needs a render surface, but none are configured on this node.")
 		} else if err := o.render.activateRender(act, *entry.Outputs.Render, now); err != nil {
 			applyErrs = append(applyErrs, err.Error())
 		}
@@ -223,7 +221,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 			concurrentAnnouncementReason = o.concurrentAnnouncementRefusalReason(ctx, act)
 		}
 		if o.audioMgr == nil {
-			applyErrs = append(applyErrs, "cue declares an audio output but this node has no audio engine configured")
+			applyErrs = append(applyErrs, "This Cue needs an audio engine, but none is configured on this node.")
 		} else if concurrentAnnouncementReason != "" {
 			// TRACK-H-cues-and-playlists.md section H5 build item 3's own
 			// ruling: a second announcement arriving while one is Playing
@@ -244,7 +242,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		// the show audio session's own Start/Seek path (activateAudio) —
 		// there is no session to attach an LTC offset to without an audio
 		// output declared on the same Cue. Stated, never silently skipped.
-		applyErrs = append(applyErrs, "cue declares an ltc output with no audio output on the same Cue; LTC has no program-audio clock domain to run from")
+		applyErrs = append(applyErrs, "This Cue has a timecode output but no audio output. Timecode needs an audio output on the same Cue.")
 	}
 
 	observedAt := now()
@@ -328,15 +326,9 @@ func (o *cueActivationOperation) concurrentAnnouncementRefusalReason(ctx context
 		// so honestly rather than fabricating an id.
 		priorCueID = "unknown (this node did not record it)"
 	}
-	// announcement-session:<node> matches config.ShowCueClaim{Kind:
-	// ShowCueClaimKindAnnouncementSession, Node: nodeID}.String()'s own
-	// format (internal/coordinator/config/showcue.go) — reproduced by
-	// value rather than imported, since internal/agent must not import
-	// internal/coordinator/config.
-	claim := fmt.Sprintf("announcement-session:%s", o.nodeID)
 	return fmt.Sprintf(
-		"cue.activate: announcement Cue %q refused: Cue %q is already playing in the announcement session (claim %q); a second announcement is refused, never superseded (H0.5)",
-		act.CueID, priorCueID, claim)
+		"Cue %q was refused because Cue %q is already playing as the announcement. Wait for it to finish.",
+		act.CueID, priorCueID)
 }
 
 // recordAnnouncementActivation records act as the last accepted

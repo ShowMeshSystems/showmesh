@@ -74,8 +74,8 @@ func printNodeClockUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl node-clock <subcommand> [flags]
 
 Read or write the coordinator's node.clock configuration objects, one per
-node (Track I seam I1, RES-019, ADR-039): which PTP provider this node
-runs, its interface, declared domain, role policy, and holdover limit.
+node: which PTP provider this node runs, its interface, declared domain,
+role policy, and holdover limit.
 Reads and writes both require config:write, admin only. A node with no
 node.clock object reports "unsynchronized" and behaves exactly as it did
 before this seam existed.

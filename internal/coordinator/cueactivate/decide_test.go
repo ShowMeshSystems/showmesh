@@ -1055,7 +1055,7 @@ func TestCueAssetsPresentStaleWhileConnectedStillRefused(t *testing.T) {
 	if present {
 		t.Fatal("present = true, want false: the report is genuinely stale and the coordinator was connected throughout")
 	}
-	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+	want := fmt.Sprintf("cue %q: node %q's asset inventory is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
 	if reason != want {
 		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
@@ -1100,7 +1100,7 @@ func TestCueAssetsPresentNeverConnectedNoOpenEndedAllowance(t *testing.T) {
 	if present {
 		t.Fatal("present = true, want false: a coordinator that has never connected must not get an open-ended staleness allowance")
 	}
-	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+	want := fmt.Sprintf("cue %q: node %q's asset inventory is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
 	if reason != want {
 		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
@@ -1139,7 +1139,7 @@ func TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires(t *testi
 	if present {
 		t.Fatal("present = true, want false: the reconnect allowance grants one inventoryInterval, not permanent immunity")
 	}
-	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+	want := fmt.Sprintf("cue %q: node %q's asset inventory is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
 	if reason != want {
 		t.Fatalf("reason = %q, want %q", reason, want)

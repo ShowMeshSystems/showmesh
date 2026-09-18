@@ -102,7 +102,7 @@ func controlPlaneColumn(cp controlPlane) string {
 	case "offline":
 		reason := "control-plane: offline (node may still be running the show)"
 		if cp.Reason != nil && *cp.Reason != "" {
-			reason = fmt.Sprintf("control-plane: offline — %s (node may still be running the show)", *cp.Reason)
+			reason = fmt.Sprintf("control-plane: offline, %s (node may still be running the show)", *cp.Reason)
 		}
 		return reason
 	case "unknown":

@@ -63,6 +63,40 @@ func ResolveActiveShow(ctx context.Context, st *store.Store) (ActiveShow, error)
 	return ActiveShow{Configured: true, ShowID: payload.Show, Generation: obj.CurrentRevision}, nil
 }
 
+// AssetSourceKind names which of ADR-049's precedence tiers put a node on
+// the hook for one expected asset.
+type AssetSourceKind string
+
+const (
+	// AssetSourceNode: the node's own node-targeted row.
+	AssetSourceNode AssetSourceKind = "node"
+	// AssetSourceShow: a show-wide row, no node-targeted row shadowing it.
+	AssetSourceShow AssetSourceKind = "show"
+	// AssetSourceCueCopy: a show.cue's (or a night.session announcement
+	// cue's) audio/announcement Targets borrowed this node onto another
+	// listed target's own node-scoped row (ADR-049 decisions 5 and 9).
+	AssetSourceCueCopy AssetSourceKind = "cue_copy"
+	// AssetSourceBedCopy: a night.session bed's declared Targets borrowed
+	// this node onto another listed target's own node-scoped row
+	// (ADR-049 decision 7).
+	AssetSourceBedCopy AssetSourceKind = "bed_copy"
+)
+
+// AssetSource names WHY [ExpectedAssetsForNode] expects a node to hold one
+// asset, for an operator staring at a node that holds nothing and asking
+// why it was ever expected to. RegisteredTarget is the node the asset row
+// was actually uploaded for: the node itself for [AssetSourceNode],
+// empty for [AssetSourceShow], and the OTHER node the copy was borrowed
+// from for [AssetSourceCueCopy]/[AssetSourceBedCopy]. ReferencedBy names
+// the Cue or night.session id(s) whose declared target list put this node
+// on the hook for a borrowed copy; always empty for [AssetSourceNode] and
+// [AssetSourceShow], which need no such reference.
+type AssetSource struct {
+	Kind             AssetSourceKind
+	RegisteredTarget string
+	ReferencedBy     []string
+}
+
 // ExpectedAsset is one asset a node is expected to hold, per §4.1 point 2:
 // a current asset whose show is the active show and whose target is
 // either this node or the whole show.
@@ -73,6 +107,18 @@ type ExpectedAsset struct {
 	ContentHash string
 	Filename    string
 	SizeBytes   int64
+	Source      AssetSource
+}
+
+// borrowedAsset is a store.AssetRecord borrowed from another target's own
+// current row, tagged with the id of the Cue or night.session whose
+// declared target list put the borrowing node on the hook: the fallback
+// files' own evidence for [AssetSource.ReferencedBy], carried alongside
+// the record rather than re-derived by a caller that no longer has the
+// config object in hand.
+type borrowedAsset struct {
+	store.AssetRecord
+	ReferencedBy string
 }
 
 // SurfaceGap names a sequence the active show has SOME current asset for,
@@ -154,15 +200,32 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
 
-	combined := append(append(append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...), bedFallbackAssets...), announcementAssets...)
-	assets := make([]ExpectedAsset, 0, len(combined))
-	coveredSequences := make(map[string]bool, len(combined))
-	for _, rec := range combined {
+	totalLen := len(nodeAssets) + len(showAssets) + len(fallbackAssets) + len(bedFallbackAssets) + len(announcementAssets)
+	assets := make([]ExpectedAsset, 0, totalLen)
+	combined := make([]store.AssetRecord, 0, totalLen)
+	coveredSequences := make(map[string]bool, totalLen)
+	addExpected := func(rec store.AssetRecord, source AssetSource) {
 		assets = append(assets, ExpectedAsset{
 			AssetID: rec.ID, SequenceID: rec.SequenceID, MediaType: rec.MediaType, ContentHash: rec.ContentHash,
-			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes,
+			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes, Source: source,
 		})
+		combined = append(combined, rec)
 		coveredSequences[rec.SequenceID] = true
+	}
+	for _, rec := range nodeAssets {
+		addExpected(rec, AssetSource{Kind: AssetSourceNode, RegisteredTarget: nodeID})
+	}
+	for _, rec := range showAssets {
+		addExpected(rec, AssetSource{Kind: AssetSourceShow})
+	}
+	for _, b := range fallbackAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceCueCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
+	}
+	for _, b := range bedFallbackAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceBedCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
+	}
+	for _, b := range announcementAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceCueCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
 	}
 
 	supersededHashes, err := supersededHashesByAssetID(ctx, st, showID, combined)
@@ -405,19 +468,24 @@ type ExtraAsset struct {
 // item 2): what the node's own fresh inventory report says about the
 // bytes it holds for that asset's identity, derived from facts
 // [ComputeNodeManifest] already computes for Missing/Extra and nothing
-// else — never a filename join (ADR-028 decision 1) and never a
-// timestamp.
+// else — never a timestamp. AssetVerdictHeld does join on filename (a
+// node's own [store.NodeAssetInventoryRecord] already records its
+// runtime filename per ADR-028 decision 2, and the same bytes under a
+// name the node was never told to play are not a held copy); the other
+// two states stay content-hash-only, matching what a superseded row's
+// own identity check has always compared.
 type AssetVerdictState string
 
 const (
 	// AssetVerdictHeld: the node's inventory holds the expected asset's
-	// own content hash.
+	// own content hash UNDER THE EXPECTED RUNTIME FILENAME.
 	AssetVerdictHeld AssetVerdictState = "held"
 	// AssetVerdictSuperseded: the node does not hold the expected content
-	// hash, but its inventory holds the content hash of a row that USED TO
-	// be current for this exact (show, sequence, targetKind, target)
-	// identity before being superseded — the node has not caught up to the
-	// latest upload, but it has not lost the asset either.
+	// hash under the expected filename, but its inventory holds the
+	// content hash (under any filename) of a row that USED TO be current
+	// for this exact (show, sequence, targetKind, target) identity before
+	// being superseded — the node has not caught up to the latest upload,
+	// but it has not lost the asset either.
 	AssetVerdictSuperseded AssetVerdictState = "superseded"
 	// AssetVerdictAbsent: the node's inventory holds nothing recognizable
 	// for this identity at all — neither the expected hash nor any hash
@@ -436,6 +504,10 @@ type AssetVerdict struct {
 	ContentHash string
 	SizeBytes   int64
 	State       AssetVerdictState
+	// Source is the expected asset's own [AssetSource], carried through
+	// unchanged: this function classifies nothing about why a node was
+	// expected to hold something, only what its inventory says about it.
+	Source AssetSource
 }
 
 // NodeManifest is [ComputeNodeManifest]'s result for one node.
@@ -513,11 +585,16 @@ func StalenessWindow(inventoryInterval time.Duration) time.Duration {
 //     Ready/NotReady branches at all.
 //  4. !report.Complete -> Unknown/ReportIncomplete, carrying report.Reason.
 //  5. Otherwise: Ready if every expected asset is held and there is no
-//     gap, NotReady (naming every miss) otherwise. Every expected asset
-//     also gets an [AssetVerdict] here: [AssetVerdictHeld] if its own
-//     content hash is held, else [AssetVerdictSuperseded] if the node
-//     holds any hash expected.SupersededHashes names as once-current for
-//     that same asset's identity, else [AssetVerdictAbsent].
+//     gap, NotReady (naming every miss) otherwise. "Held" requires the
+//     node's inventory to report the expected content hash UNDER THE
+//     EXPECTED RUNTIME FILENAME — the same bytes registered under a
+//     different name is a node that cannot actually play what gets
+//     dispatched, so it counts as missing, never as held. Every expected
+//     asset also gets an [AssetVerdict] here: [AssetVerdictHeld] on that
+//     same hash-and-filename match, else [AssetVerdictSuperseded] if the
+//     node holds any hash (any filename) expected.SupersededHashes names
+//     as once-current for that same asset's identity, else
+//     [AssetVerdictAbsent].
 //
 // Extra, and Verdicts alongside it, are populated only once report.Complete
 // is known true for a fresh report (i.e. only in case 5's body — case 4
@@ -542,7 +619,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	if !reportFresh {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseStaleReport
-		m.Reason = fmt.Sprintf("the last inventory report from this node was received at %s, which is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		m.Reason = fmt.Sprintf("this inventory report is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 			report.ReportedAt.Format(time.RFC3339))
 		return m
 	}
@@ -553,18 +630,31 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		return m
 	}
 
-	held := make(map[string]bool, len(inventory))
+	// heldUnderFilename requires BOTH the content hash and the runtime
+	// filename to match a node's own reported inventory row, via the same
+	// [heldKey] join the sync service applies before confirming a fetch:
+	// the same bytes registered under a different name (a node that
+	// fetched a since-retired show-scoped row sharing this hash, for
+	// instance) is a node that cannot actually play what was dispatched
+	// (internal/agent/audio/mediaprobe.go opens the expected filename
+	// verbatim), so it must render as missing here, never as held.
+	// heldHashes stays hash-only, matching a superseded row's identity
+	// check below, which is about "has this node caught up to a past
+	// upload" and unaffected by whatever name that past upload carried.
+	heldUnderFilename := make(map[string]bool, len(inventory))
+	heldHashes := make(map[string]bool, len(inventory))
 	for _, item := range inventory {
-		held[item.ContentHash] = true
+		heldUnderFilename[heldKey(item.ContentHash, item.RuntimeFilename)] = true
+		heldHashes[item.ContentHash] = true
 	}
 
 	var missing []MissingAsset
 	var verdicts []AssetVerdict
 	for _, a := range expected.Assets {
-		if held[a.ContentHash] {
+		if heldUnderFilename[heldKey(a.ContentHash, a.Filename)] {
 			verdicts = append(verdicts, AssetVerdict{
 				AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld,
+				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld, Source: a.Source,
 			})
 			continue
 		}
@@ -574,14 +664,14 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		})
 		state := AssetVerdictAbsent
 		for oldHash := range expected.SupersededHashes[a.AssetID] {
-			if held[oldHash] {
+			if heldHashes[oldHash] {
 				state = AssetVerdictSuperseded
 				break
 			}
 		}
 		verdicts = append(verdicts, AssetVerdict{
 			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: state,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: state, Source: a.Source,
 		})
 	}
 	m.Verdicts = verdicts

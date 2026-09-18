@@ -59,7 +59,7 @@ func cmdFPPConnect(args []string, stdout, stderr io.Writer, clock func() time.Ti
 func printFPPConnectUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl fppconnect <subcommand> [flags]
 
-The node's xLights FPP Connect ingestion listener (ADR-044). "settings" is
+The node's xLights FPP Connect ingestion listener. "settings" is
 the fppconnect.settings singleton: whether the listener is enabled, the
 per-file byte cap, and the total asset-directory byte cap it enforces.
 "status" shows one node's most recently pushed channel-range outcome:
@@ -183,8 +183,8 @@ func cmdFPPConnectSettings(args []string, stdout, stderr io.Writer, clock func()
 func printFPPConnectSettingsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl fppconnect settings <subcommand> [flags]
 
-Read or write the coordinator's fppconnect.settings configuration
-(ADR-044 decision 5): enabled (gates the node's xLights ingestion
+Read or write the coordinator's fppconnect.settings configuration:
+enabled (gates the node's xLights ingestion
 listener), maxFileBytes (the per-file byte cap on one ingested upload),
 and maxAssetDirBytes (the total byte cap on the node's asset directory;
 must be at least maxFileBytes). Defaults: enabled true, maxFileBytes
@@ -272,7 +272,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 		_, _ = fmt.Fprintln(stderr, "an absent field is refused by name, never silently defaulted or carried")
 		_, _ = fmt.Fprintln(stderr, "forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
-		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "revision.")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"fppconnect settings get --output json\" prints.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")

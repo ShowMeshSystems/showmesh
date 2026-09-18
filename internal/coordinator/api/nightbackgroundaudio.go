@@ -851,7 +851,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepStart:
 		if !confirmed {
-			h.logWarn("night loop: background audio: start did not confirm; not auto-retrying", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
+			h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepStart, latest.Row)
 			return
 		}
 		if ba.FadeInMs != nil {
@@ -898,7 +898,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 			if multiNode {
 				// Like start: a resume that did not confirm keeps its row and
 				// reason and is not re-sent every tick.
-				h.logWarn("night loop: background audio: resume did not confirm; not auto-retrying", "sessionId", rec.ID, "nodeId", nodeID, "outcome", latest.Row.Outcome, "reason", latest.Row.OutcomeReason)
+				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepResume, latest.Row)
 				return
 			}
 			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history) // retry under a fresh revision: never wedge here.
@@ -918,6 +918,25 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		}
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, owner, items, history)
 	}
+}
+
+// logBackgroundAudioDidNotConfirmOnce logs a background-audio start or
+// resume step's "did not confirm; not auto-retrying" warning, once per
+// (session, node, step kind, outbox row): row.ID names the specific
+// attempt that failed to confirm, so a genuinely NEW attempt (a fresh
+// outbox row) logs again, while a later tick that still finds the SAME
+// unconfirmed row - which is every tick, since this controller
+// deliberately does not retry a start or resume - does not. The retry
+// policy is unchanged; only the log line stops repeating. The row itself,
+// with its own reason, stays durably recorded in the night_cue_outbox
+// history the Night screen already reads (mapNightBackgroundAudio).
+func (h *handlers) logBackgroundAudioDidNotConfirmOnce(rec store.NightSessionRecord, nodeID, kind string, row store.NightCueOutboxRecord) {
+	key := rec.ID + "|" + nodeID + "|" + kind
+	if !h.nightBGConfirmFailures.shouldLog(key, []string{row.ID}) {
+		return
+	}
+	h.logWarn("night loop: background audio: "+kind+" did not confirm; not auto-retrying",
+		"sessionId", rec.ID, "nodeId", nodeID, "outcome", row.Outcome, "reason", row.OutcomeReason)
 }
 
 func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) {

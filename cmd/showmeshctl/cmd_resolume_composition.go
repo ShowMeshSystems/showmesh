@@ -274,8 +274,8 @@ func printResolumeUsage(w io.Writer) {
 
 Subcommands:
   instance      connect this coordinator to a Resolume Arena instance:
-                read, write, or remove the resolume.instances configuration
-                (Track G seam G-2, ADR-039) — the step that has to happen
+                read, write, or remove the resolume.instances configuration,
+                the step that has to happen
                 before any of the subcommands below can do anything
   composition   upload or show the stored Resolume Arena composition: the
                 id map of decks, layers, columns and clips every ShowMesh
@@ -757,14 +757,14 @@ func printResolumeCompositionDetail(w io.Writer, resp resolumeCompositionRespons
 		if name := deckName[id]; name != "" {
 			label = fmt.Sprintf("%s (%s)", name, id)
 		}
-		_, _ = fmt.Fprintf(w, "  deck %s — %d clip(s):\n", label, len(clips))
+		_, _ = fmt.Fprintf(w, "  deck %s: %d clip(s):\n", label, len(clips))
 		printResolumeClipsTable(w, clips)
 	}
 	if len(deckOrder) == 0 {
 		_, _ = fmt.Fprintln(w, "  (no decks)")
 	}
 
-	_, _ = fmt.Fprintf(w, "\npersistent clips (%d, no deck — live outside any deck):\n", len(resp.PersistentClips))
+	_, _ = fmt.Fprintf(w, "\npersistent clips (%d, no deck, live outside any deck):\n", len(resp.PersistentClips))
 	printResolumeClipsTable(w, resp.PersistentClips)
 }
 

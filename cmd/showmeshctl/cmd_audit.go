@@ -49,7 +49,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 	fs.StringVar(&limit, "limit", "", "maximum number of entries to return (default 100, coordinator clamps above 500)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audit [flags]")
-		_, _ = fmt.Fprintln(stderr, "\nShow the audit log (GET /api/v1/audit, ADR-024 decision 11).")
+		_, _ = fmt.Fprintln(stderr, "\nShow the audit log (GET /api/v1/audit).")
 		_, _ = fmt.Fprintln(stderr, "Requires the audit:read scope (the admin role) regardless of whether")
 		_, _ = fmt.Fprintln(stderr, "reads are otherwise open: this is not one of the four resources the")
 		_, _ = fmt.Fprintln(stderr, "open-reads posture covers.")

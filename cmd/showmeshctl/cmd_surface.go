@@ -103,9 +103,9 @@ func cmdSurface(args []string, stdout, stderr io.Writer, clock func() time.Time)
 func printSurfaceUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl surface <subcommand> [flags]
 
-Read or write the coordinator's "show.surface" configuration objects
-(Track E, ADR-026: a surface owns its canvas, its virtual-matrix channel
-extraction, and its output). Reads require show:macro:run OR
+Read or write the coordinator's "show.surface" configuration objects: a
+surface owns its canvas, its virtual-matrix channel extraction, and its
+output. Reads require show:macro:run OR
 config:write; writes require config:write.
 
 Subcommands:

@@ -79,7 +79,7 @@ func effectiveAudioTargets(targets []string, defaultNode string) []string {
 // hardware (a 4-channel M4 lending its mix to a 2-channel Scarlett-fed Pi)
 // and this function's only job is delivering the same bytes, never
 // judging them.
-func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]store.AssetRecord, error) {
+func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]borrowedAsset, error) {
 	referencedCues, err := referencedCueIDs(ctx, st, showID)
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID st
 
 	seenSequences := make(map[string]bool)
 	rowsByTarget := make(map[string][]store.AssetRecord)
-	var out []store.AssetRecord
+	var out []borrowedAsset
 
 	for _, obj := range cueObjs {
 		if obj.CurrentRevision == 0 {
@@ -176,7 +176,7 @@ func audioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID st
 			found := false
 			for _, rec := range rows {
 				if rec.SequenceID == seq && rec.MediaType == audioMediaType {
-					out = append(out, rec)
+					out = append(out, borrowedAsset{AssetRecord: rec, ReferencedBy: obj.ID})
 					found = true
 					break
 				}

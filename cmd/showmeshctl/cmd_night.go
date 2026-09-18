@@ -79,11 +79,11 @@ func printNightUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl night <subcommand> [flags]
 
 Read or write the coordinator's "night.session" configuration objects
-(RESTING-MODE.md, ADR-038, ADR-039) and the night.session.active singleton
-pointer. Reads require show:macro:run OR config:write, matching
-"show"/"macro"/"action"; writes require config:write.
+and the night.session.active singleton pointer. Reads require
+show:macro:run OR config:write, matching "show"/"macro"/"action"; writes
+require config:write.
 
-FPP alone authorizes and schedules a night session (ADR-038): no
+FPP alone authorizes and schedules a night session: no
 night.session field may carry a wall-clock time, date, weekday, timezone,
 or cron expression, and a write carrying one is rejected.
 
@@ -94,23 +94,20 @@ Subcommands:
                      replacement; reads a payload from --file, or from
                      stdin if --file is not given)
   revisions <id>    list revision history, newest first (metadata only)
-  revision <id> <n> show one past revision's full payload (immutable,
-                     ADR-009)
+  revision <id> <n> show one past revision's full payload (immutable)
   active            print the currently active night session (404 if none
                      has ever been activated)
   activate <id>     make <id> the active night session (write, full
                      replacement of the night.session.active singleton)
-  deactivate        clear the active night session back to unset (write;
-                     the zero-to-one-and-back-to-zero transition ADR-039
-                     rule 4 requires)
+  deactivate        clear the active night session back to unset (write)
   delete --confirm <id>
                      tombstone this session (write); revision history
                      stays readable via "revisions"/"revision". Refused
                      with a conflict while this id is the active night
                      session ("night active"); deactivate it first
 
-Lifecycle (RESTING-MODE.md, ADR-038 — the closed state machine and its
-seven commands; reads open, writes require night:command):
+Lifecycle (the closed state machine and its seven commands; reads open,
+writes require night:command):
   status            print the current night session's lifecycle state
   prepare-site      open a new preparation epoch
   readiness         run readiness for the current preparation epoch
@@ -228,7 +225,7 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "hand-entered rest duration, a siteControl/interlocks block, a dangling or")
 		_, _ = fmt.Fprintln(stderr, "cross-show asset/action reference, or a negative duration field")
 		_, _ = fmt.Fprintln(stderr, "(blackoutHoldMs, blackoutAfterShowMs, fadeDurationMs, crossfadeMs) is")
-		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). A cue's own offsetMs is NOT")
+		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision. A cue's own offsetMs is NOT")
 		_, _ = fmt.Fprintln(stderr, "bounded here: checking it against the resting FSEQ's actual length needs")
 		_, _ = fmt.Fprintln(stderr, "a live FPP read and is readiness work, not this write-time check.")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"night get --output json\" prints.")
@@ -405,7 +402,7 @@ func cmdNightRevision(args []string, stdout, stderr io.Writer, clock func() time
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night revision [flags] <session-id> <revision>")
 		_, _ = fmt.Fprintln(stderr, "\nShow one past revision's full payload (GET")
 		_, _ = fmt.Fprintln(stderr, "/api/v1/config/night.session/{id}/revisions/{revision}). Revisions are")
-		_, _ = fmt.Fprintln(stderr, "immutable (ADR-009); this may not be the currently active one.")
+		_, _ = fmt.Fprintln(stderr, "immutable; this may not be the currently active one.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -563,8 +560,8 @@ func cmdNightDeactivate(args []string, stdout, stderr io.Writer, clock func() ti
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night deactivate [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nClear the active night session back to unset (PUT")
 		_, _ = fmt.Fprintln(stderr, "/api/v1/config/night.session.active with an empty session). Requires")
-		_, _ = fmt.Fprintln(stderr, "config:write, admin only. This is the \"back to zero\" half of ADR-039")
-		_, _ = fmt.Fprintln(stderr, "rule 4's zero-to-one-and-back-to-zero transition.")
+		_, _ = fmt.Fprintln(stderr, "config:write, admin only. This is the \"back to zero\" half of the")
+		_, _ = fmt.Fprintln(stderr, "zero-to-one-and-back-to-zero transition.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "active session pointer changed since it was read.")
 		fs.PrintDefaults()

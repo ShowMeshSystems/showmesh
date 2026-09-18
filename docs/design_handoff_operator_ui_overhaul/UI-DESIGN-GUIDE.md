@@ -275,6 +275,35 @@ data* look like *a card containing data*.
 - Never claim success the server did not report. Night commands answer **202** with no downstream
   confirmation loop: the UI says *accepted*, never *done*.
 
+### 5.1 The standard covers every operator-visible string, at its source
+
+Section 5 governs screen copy, but most of what an operator reads is a string the backend
+generates and the UI and `showmeshctl` render unchanged: a `Problem` `Detail`, a readiness or
+degraded `Reason`, a disabled-command reason, a validation error. These are operator copy and
+obey the same rules. Fix the wording once in the Go source; the UI and CLI inherit it. UI copy
+that TypeScript composes locally, with no API string behind it, is edited in place to the same
+standard.
+
+A rule for an operator during a show, whichever layer emits it:
+
+- **Fact first, then the action.** State what is wrong in one sentence, then what to do in one
+  more: "Night session degraded: a different show is playing after a restart. Run End Session,
+  then Prepare Site to recover." Never bury the action mid-paragraph, and never state it twice.
+- **One or two sentences. No nested parentheticals.** If a message needs a third sentence or a
+  parenthetical inside a parenthetical, it is teaching architecture, not reporting a fact. Move
+  the detail to the log or an ADR.
+- **Say what happened and what to do, never why the system is built that way.** "This Arena
+  build does not report this value" is a fact. "does not expose this value without reading the
+  full composition, which this system never does" is a design note the operator cannot act on.
+- **No internals vocabulary raw in operator copy.** Not `interlock`, `attestation`, `provenance`,
+  `epoch`, `revision`, `boundary`, `armed`, `desired`/`observed`, or `evidence` unless the word
+  is the operator's own and defined on screen. Name the thing the operator sees instead.
+- **No ADR numbers, spec-file citations, or invariant numbers in operator copy.** `(ADR-027: a
+  Show is a namespace)`, `(RESTING-MODE.md §6.1)`, and `(invariant 2)` are for the code and the
+  docs, never for the person reading a refusal. Drop the citation; keep the plain fact.
+- **A recurring message is one string.** When the same condition is reported from several call
+  sites, give it one shared phrasing and one recovery line, so the operator learns it once.
+
 ---
 
 ## 6. Component rules

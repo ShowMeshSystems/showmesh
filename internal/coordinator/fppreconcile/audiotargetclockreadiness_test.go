@@ -146,8 +146,8 @@ func TestAudioTargetClockReadinessNoEvidenceWarnsDistinctly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
-	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "no node.clock.ptp.state evidence") {
-		t.Errorf("warning = %q, want it to name pi and say no evidence has ever been reported", warning)
+	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "clock state has never been reported") {
+		t.Errorf("warning = %q, want it to name pi and say its clock state has never been reported", warning)
 	}
 	if strings.Contains(warning, "stale") {
 		t.Errorf("warning = %q, want it distinct from the stale-evidence case", warning)
@@ -183,7 +183,7 @@ func TestAudioTargetClockReadinessStaleEvidenceWarnsDistinctly(t *testing.T) {
 	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "stale") {
 		t.Errorf("warning = %q, want it to name pi and say its clock evidence is stale", warning)
 	}
-	if strings.Contains(warning, "no node.clock.ptp.state evidence") {
+	if strings.Contains(warning, "clock state has never been reported") {
 		t.Errorf("warning = %q, want it distinct from the no-evidence case", warning)
 	}
 }
@@ -217,7 +217,7 @@ func TestAudioTargetClockReadinessOfflineNodeWarnsDistinctly(t *testing.T) {
 	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "not currently reporting") {
 		t.Errorf("warning = %q, want it to name pi and say it is not currently reporting", warning)
 	}
-	if strings.Contains(warning, "stale") || strings.Contains(warning, "no node.clock.ptp.state evidence") {
+	if strings.Contains(warning, "stale") || strings.Contains(warning, "clock state has never been reported") {
 		t.Errorf("warning = %q, want it distinct from the stale/no-evidence cases", warning)
 	}
 }

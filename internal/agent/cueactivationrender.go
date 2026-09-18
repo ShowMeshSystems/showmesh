@@ -47,10 +47,10 @@ import (
 func (o *renderOperations) activateRender(act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
 	assignments, err := o.store.Load()
 	if err != nil {
-		return fmt.Errorf("cue.activate: loading persisted render assignments: %w", err)
+		return fmt.Errorf("could not load this node's surface assignments: %w", err)
 	}
 	if len(assignments) == 0 {
-		return fmt.Errorf("cue.activate: no surface is currently assigned on this node; nothing to activate Cue %q's render output onto", act.CueID)
+		return fmt.Errorf("no surface is assigned on this node, so Cue %q's projection could not be activated", act.CueID)
 	}
 
 	var errs []string
@@ -60,7 +60,7 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("cue.activate: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -84,8 +84,8 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 
 	if out.Filename == "" {
 		return fmt.Errorf(
-			"%s: surface %q: activated Cue %q (revision %d) resolves render sequence %q to no runtime filename (no matching asset uploaded); refusing to open anything by sequence id (ADR-043 decision 6)",
-			action, a.SurfaceID, act.CueID, act.CueRevision, out.Sequence)
+			"surface %q's Cue %q (revision %d) uses render sequence %q, which has not been uploaded to this node, upload it and redeploy",
+			a.SurfaceID, act.CueID, act.CueRevision, out.Sequence)
 	}
 
 	// Ruling 1: MultiSync's own Filename is corroboration/mismatch
@@ -100,8 +100,8 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// if healthy.
 	if snap := o.timeline.Snapshot(); snap.Filename != "" && snap.Filename != out.Filename {
 		return fmt.Errorf(
-			"%s: surface %q: MultiSync reports filename %q but activated Cue %q (revision %d) resolves to %q; refusing to switch content on a filename disagreement (ADR-043 decision 6)",
-			action, a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
+			"surface %q is currently playing %q, which does not match Cue %q (revision %d)'s expected file %q, content was not switched",
+			a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
 	}
 
 	// Already exactly this Cue's resolved FSEQ, running under act's Show
@@ -138,7 +138,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
-		return fmt.Errorf("%s: surface %q: decoding persisted assignment params: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
 	}
 	params["fseqFilename"] = out.Filename
 	params["fseqContentHash"] = firstAssetHash(out.AssetHashes)
@@ -156,14 +156,14 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	rawParams, err := json.Marshal(params)
 	if err != nil {
 		_ = f.Close()
-		return fmt.Errorf("%s: surface %q: encoding updated assignment params: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("%s: surface %q: persisting updated assignment: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 
 	// Only now, with the new file already open and validated and the new
@@ -177,7 +177,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	o.stopFrameWriter(a.SurfaceID)
 	if err := o.startFrameWriter(a.SurfaceID, f, parsedA); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("%s: surface %q: starting frame writer for the newly activated FSEQ: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
 	}
 	// The SHARED timeline step time moves only after the new writer is
 	// actually running — never before, or a startFrameWriter failure above
@@ -204,11 +204,9 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 // and a reader inspecting RawParams directly should never see a
 // catalogRevision that disagrees with the Auth persisted alongside it.
 func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cueactivation.Activation, now func() time.Time) error {
-	const action = "cue.activate (render, catalog revision refresh)"
-
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
-		return fmt.Errorf("%s: surface %q: decoding persisted assignment params: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
 	}
 	params["show"] = act.Show
 	params["generation"] = float64(act.Generation)
@@ -216,13 +214,13 @@ func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cuea
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
-		return fmt.Errorf("%s: surface %q: encoding updated assignment params: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
-		return fmt.Errorf("%s: surface %q: persisting refreshed authorization: %w", action, a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its refreshed assignment: %w", a.SurfaceID, err)
 	}
 	return nil
 }

@@ -298,13 +298,13 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 	if info.Show != sessionShow {
 		return NightInterlockRule{}, &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: field + ".signal",
-			Detail: fmt.Sprintf("signal %q belongs to show %q, not this session's own show %q (ADR-027: a Show is a namespace)", signal, info.Show, sessionShow),
+			Detail: fmt.Sprintf("signal %q belongs to show %q, not this session's show %q. Use a signal from this session's own show.", signal, info.Show, sessionShow),
 		}
 	}
 	if info.Integration != ShowActionIntegrationMQTT || info.MQTTExpectKind == "" || info.MQTTExpectKind == MQTTExpectKindNone {
 		return NightInterlockRule{}, &ValidationError{
 			Code: ValidationCodeInterlockSignalNotConfirmable, Field: field + ".signal",
-			Detail: fmt.Sprintf("signal %q must be an mqtt action with an expected response other than \"none\"; an interlock's evidence is that action's own request/response", signal),
+			Detail: fmt.Sprintf("signal %q must be an mqtt action that expects a response other than \"none\". Set an expected response on that action so this rule can read its result.", signal),
 		}
 	}
 	// A "block" rule that can never observe a negative answer can only
@@ -322,7 +322,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 	if posture == NightInterlockPostureBlock && !nightInterlockSignalCanExpressFalse(info) {
 		return NightInterlockRule{}, &ValidationError{
 			Code: ValidationCodeInterlockSignalNoFalseAnswer, Field: field + ".signal",
-			Detail: fmt.Sprintf("signal %q uses an expect kind that can never report a negative answer (kind %q with no comparison value); a \"block\" rule needs a signal capable of reporting condition-false, not only confirmed/unavailable", signal, info.MQTTExpectKind),
+			Detail: fmt.Sprintf("signal %q can never report a no with kind %q and no comparison value. A block rule needs a signal that can say no; pick a different signal or set a comparison value.", signal, info.MQTTExpectKind),
 		}
 	}
 
@@ -380,7 +380,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 		if overridePolicy == NightInterlockOverridePolicyNone && nightInterlockPhaseRequiresOverride[phase] {
 			return NightInterlockRule{}, &ValidationError{
 				Code: ValidationCodeInterlockShutdownPhaseRequiresOverride, Field: field + ".overridePolicy",
-				Detail: fmt.Sprintf("a \"block\" rule on phase %q must declare overridePolicy \"authorized-operator\", never \"none\": this phase ends the night, and a guard on it must always have a human exit", phase),
+				Detail: fmt.Sprintf("phase %q ends the night. Set overridePolicy to \"authorized-operator\" here, not \"none\", so there is always a way to end the night by hand.", phase),
 			}
 		}
 		rule.OnUnavailable = onUnavailable
@@ -602,7 +602,7 @@ func validateNightSiteActionRef(action, field, sessionShow string, actionResolve
 	if show != sessionShow {
 		return &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: field,
-			Detail: fmt.Sprintf("action %q belongs to show %q, not this session's own show %q (ADR-027: a Show is a namespace)", action, show, sessionShow),
+			Detail: fmt.Sprintf("action %q belongs to show %q, not this session's show %q. Use an action from this session's own show.", action, show, sessionShow),
 		}
 	}
 	return nil
@@ -633,7 +633,7 @@ func decodeNightPowerBinding(fields map[string]json.RawMessage, path, sessionSho
 		// rather than trusted, per this seam's own build brief.
 		return NightPowerBinding{}, &ValidationError{
 			Code: ValidationCodeDomainProvenanceRefused, Field: path + ".domainProvenance",
-			Detail: "domainProvenance \"provider\" is refused: no control provider in this build can authoritatively identify a power binding's physical targets, so every binding is operator-declared",
+			Detail: "domainProvenance \"provider\" is not accepted. Set domainProvenance to \"operator-declared\".",
 		}
 	}
 	return NightPowerBinding{Action: action, PowerDomain: domain, DomainProvenance: provenance}, nil
@@ -650,7 +650,7 @@ func decodeNightPresentationPowerOff(fields map[string]json.RawMessage, sessionS
 	if binding.PowerDomain != NightPowerDomainPresentation {
 		return NightPresentationPowerOff{}, &ValidationError{
 			Code: ValidationCodePowerDomainRefused, Field: "siteControl.presentationPowerOff.powerDomain",
-			Detail: fmt.Sprintf("power-down-presentation only accepts powerDomain %q bindings, not %q (RESTING-MODE.md §10.2)", NightPowerDomainPresentation, binding.PowerDomain),
+			Detail: fmt.Sprintf("power-down-presentation only accepts powerDomain %q, not %q.", NightPowerDomainPresentation, binding.PowerDomain),
 		}
 	}
 

@@ -216,7 +216,7 @@ export function Access() {
       <Section
         id="ac-princ"
         title="Principals"
-        detail="Scopes are granted as bundles defined on the coordinator; there is no per-principal scope bundle to read, so the inspector shows your own scopes when you select your row. Every other principal shows its role instead."
+        detail="Shows your own scopes; other principals show their role."
         aside={
           <Button
             variant="primary"

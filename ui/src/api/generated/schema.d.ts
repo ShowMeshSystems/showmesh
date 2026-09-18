@@ -6661,6 +6661,11 @@ export interface components {
             /** @description One entry per asset this node was expected to hold, naming what its own reported inventory says about that asset's bytes. Absent, or an empty array, whenever no fresh inventory report exists for this node - the identical condition extra is populated under, for the identical reason: a stale report is not evidence of what a node currently holds. When present, this array has exactly one entry per asset the node was expected to hold, keyed by assetId - never by runtimeFilename, which Asset's own description already says is not identity. state is "held" (the node's inventory holds this asset's own content hash), "superseded" (the node does not hold that hash, but holds the content hash of a row that used to be current for this exact asset's (show, sequence, targetKind, target) identity before being superseded), or "absent" (the node holds nothing recognizable for this identity at all). */
             verdicts?: components["schemas"]["AssetSyncVerdict"][];
             resyncRequest?: components["schemas"]["ResyncRequestStatus"];
+            /**
+             * Format: date-time
+             * @description The asset-sync service's own process-lifetime record of when it last ran a check against this node - additive, in-memory only, reset on restart, and distinct from observedAt (the NODE's own report time). Absent when this coordinator process has never run a pass against this node.
+             */
+            lastSyncPassAt?: string;
         };
         /** @description One asset.inventory.request commands row, rendered for an operator reading `GET /nodes/{nodeId}/assets` rather than the commands table directly. state is "dispatched" while still waiting on the node, "resolved" once a fresh report confirmed it, or "failed" on a publish failure or a 30-second reconciliation timeout. outcomeReason is null while state is "dispatched" and set for both "resolved" and "failed". resolvedAt is null until state leaves "dispatched". */
         ResyncRequestStatus: {
@@ -6692,7 +6697,26 @@ export interface components {
             filename: string;
             sizeBytes: number;
         };
-        /** @description One expected asset's per-node sync verdict (D-016 item 2): exists only for an asset this node was expected to hold, keyed by assetId, and derived only from facts the manifest already computes for missing/extra - never a filename join and never a timestamp. */
+        /** @description Why ExpectedAssetsForNode expects this node to hold this asset: which of ADR-049's precedence tiers matched ("node" - the node's own node-targeted row; "show" - a show-wide row; "cue_copy" - a show.cue's or announcement cue's declared audio/announcement targets borrowed this node onto another listed target's row; "bed_copy" - a night.session bed's declared targets did the same), the node the row was actually uploaded for, and (for a borrowed copy) which Cue or night.session id(s) declared this node as a target. */
+        AssetVerdictSource: {
+            /** @enum {string} */
+            kind: "node" | "show" | "cue_copy" | "bed_copy";
+            /** @description The node this asset row was itself uploaded for; empty for a show-wide row. */
+            registeredTarget: string;
+            /** @description The Cue or night.session id(s) whose declared target list put this node on the hook for a borrowed copy; always empty for "node" or "show". */
+            referencedBy: string[];
+        };
+        /** @description The asset-sync service's own process-lifetime record of its most recent asset.fetch dispatch to this node for this asset's content hash: in-memory only, reset on every coordinator restart, and never a persisted commands-table row (unlike ResyncRequestStatus's asset.inventory.request rows, which ARE persisted - dispatching an asset.fetch is deliberately not). Absent when this coordinator process has never dispatched or observed a failure for this exact (node, asset). state is "in_flight" (dispatched, no result yet) or "failed" (the node's own result reported a non-success outcome); failureReason and failedAt are set only when state is "failed". dispatchedAt is null when this process no longer remembers a dispatch time (an old in-flight record already expired) but still remembers the failure itself. */
+        AssetLastFetch: {
+            /** @enum {string} */
+            state: "in_flight" | "failed";
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            failureReason: string | null;
+            /** Format: date-time */
+            failedAt: string | null;
+        };
+        /** @description One expected asset's per-node sync verdict (D-016 item 2): exists only for an asset this node was expected to hold, keyed by assetId, and derived only from facts the manifest already computes for missing/extra - never a filename join and never a timestamp. source and lastFetch are each additive (ADR-020): a client that predates either keeps reading every other field unchanged. */
         AssetSyncVerdict: {
             assetId: string;
             sequence: string;
@@ -6701,6 +6725,8 @@ export interface components {
             sizeBytes: number;
             /** @enum {string} */
             state: "held" | "superseded" | "absent";
+            source: components["schemas"]["AssetVerdictSource"];
+            lastFetch?: components["schemas"]["AssetLastFetch"];
         };
         /** @description The body of GET /nodes/{nodeId}/assets. */
         NodeAssetManifestResponse: {

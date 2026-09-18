@@ -202,23 +202,23 @@ func deriveLiveness(rec store.NodeRecord, now time.Time) (Liveness, string) {
 		if reason, disagrees := offlineDisagreesWithHealth(rec, now); disagrees {
 			return LivenessUnknown, reason
 		}
-		return LivenessOffline, "last-will evidence reports offline"
+		return LivenessOffline, "the node's last report said it went offline"
 	}
 	if rec.LWT == nil {
-		return LivenessUnknown, "no last-will evidence of an online state"
+		return LivenessUnknown, "this node has never reported itself online"
 	}
 	// rec.LWT != nil && rec.LWT.Online == true from here on.
 
 	if rec.Health == nil {
-		return LivenessUnknown, "last-will reports online but no health heartbeat has been observed yet"
+		return LivenessUnknown, "the node reports online but no health report has been observed yet"
 	}
 	if rec.Health.ObservedAt == nil {
-		return LivenessUnknown, "last-will reports online but the only health evidence is a retained delivery of unknown age"
+		return LivenessUnknown, "the node reports online, but the only health report is a retained message of unknown age"
 	}
 
 	age := now.Sub(*rec.Health.ObservedAt)
 	if age > StalenessWindow {
-		return LivenessUnknown, fmt.Sprintf("health evidence is %s old, past the %s staleness window", age.Round(time.Second), StalenessWindow)
+		return LivenessUnknown, fmt.Sprintf("this node's health status is %s old, past the %s limit, and may be out of date. Wait for the node to report again.", age.Round(time.Second), StalenessWindow)
 	}
 
 	return LivenessOnline, ""
@@ -252,7 +252,7 @@ func offlineDisagreesWithHealth(rec store.NodeRecord, now time.Time) (reason str
 		// the "node came back and has not republished its online will"
 		// case.
 		return fmt.Sprintf(
-			"last-will reports offline (retained delivery, age unknown) but a live health heartbeat %s old disagrees; treating as unknown rather than trusting either topic alone",
+			"the node's last report said offline, but a live health check %s ago says otherwise. Its online state cannot be confirmed.",
 			age.Round(time.Second)), true
 	}
 
@@ -266,6 +266,6 @@ func offlineDisagreesWithHealth(rec store.NodeRecord, now time.Time) (reason str
 	}
 
 	return fmt.Sprintf(
-		"last-will reports offline but a live health heartbeat %s old, observed after the last will, disagrees; treating as unknown rather than trusting either topic alone",
+		"the node's last report said offline, but a newer health check %s ago disagrees. Its online state cannot be confirmed.",
 		age.Round(time.Second)), true
 }

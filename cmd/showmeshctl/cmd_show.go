@@ -117,8 +117,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 func printShowUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl show <subcommand> [flags]
 
-Read or write the coordinator's "show" configuration objects (Track E,
-ADR-027: a Show is a namespace, not a container) and the show.active
+Read or write the coordinator's "show" configuration objects (a Show is
+a namespace, not a container) and the show.active
 singleton pointer. Reads require show:macro:run OR config:write, matching
 "action"/"macro"; writes require config:write.
 
@@ -137,7 +137,7 @@ Subcommands:
   activate <id>    make <id> the active show (write, full replacement of
                    the show.active singleton; audited like any other
                    configuration write)
-  mode             print the installation-wide operating mode (ADR-033);
+  mode             print the installation-wide operating mode;
                    "mode set <program|show>" writes it and "mode
                    revisions" lists its history. The mode is a different
                    thing from the active show: it says whether the

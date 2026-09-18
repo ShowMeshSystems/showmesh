@@ -94,7 +94,7 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "\nList configured FPP instances (GET /api/v1/fpp), or show one instance")
 		_, _ = fmt.Fprintln(stderr, "in detail if instance-id is given (GET /api/v1/fpp/{instanceId}).")
 		_, _ = fmt.Fprintln(stderr, "\n<verb> dispatches one of docs/bench/fpp-command-vocabulary.md section 4's")
-		_, _ = fmt.Fprintln(stderr, "eight primitive FPP commands and confirms it by evidence (ADR-003):")
+		_, _ = fmt.Fprintln(stderr, "eight primitive FPP commands and confirms it by evidence:")
 		_, _ = fmt.Fprintln(stderr, "  stop-playlist              <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "  start-playlist             <instance-id> <playlist-name> [--repeat] [--if-busy refuse|replace]")
 		_, _ = fmt.Fprintln(stderr, "  stop-playlist-gracefully   <instance-id> [--after-loop]")

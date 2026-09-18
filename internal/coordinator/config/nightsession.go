@@ -617,11 +617,11 @@ func scanNightSessionForbiddenKeys(raw string) *ValidationError {
 		return nil // malformed JSON is reported by decodeTopLevelObject
 	}
 	if verr := scanForbiddenKeysRec(generic, "", nightSessionCalendarKeys, ValidationCodeCalendarFieldRejected,
-		"%s is a calendar field; FPP alone authorizes and schedules a night session (ADR-038 decision 1)"); verr != nil {
+		"%s is a calendar field. FPP schedules and starts night sessions; remove this field."); verr != nil {
 		return verr
 	}
 	return scanForbiddenKeysRec(generic, "", nightSessionDurationKeys, ValidationCodeDuplicateRestDuration,
-		"%s restates the resting FSEQ's own duration; the FSEQ is the only duration authority (RESTING-MODE.md §6.1)")
+		"%s repeats a duration the resting FSEQ file already sets. Remove this field and let the FSEQ set the duration.")
 }
 
 // scanForbiddenKeysRec is scanNightSessionForbiddenKeys' recursive walker.
@@ -697,7 +697,7 @@ func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, session
 	if show != sessionShow {
 		return NightSessionAssetRef{}, &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: path + ".show",
-			Detail: fmt.Sprintf("%s names show %q, not this session's own show %q (ADR-027: a Show is a namespace)", path, show, sessionShow),
+			Detail: fmt.Sprintf("%s names show %q, not this session's show %q. Use this session's own show.", path, show, sessionShow),
 		}
 	}
 	sequence, verr := decodeRequiredString(fields, "sequence", path+".sequence")
@@ -1078,13 +1078,13 @@ func decodeNightSessionCue(raw json.RawMessage, field, sessionShow string, actio
 	if !ok {
 		return NightSessionCue{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: field + ".action",
-			Detail: fmt.Sprintf("action %q does not resolve to an existing show.action object", action),
+			Detail: fmt.Sprintf("action %q does not exist. Use an action already configured for this show.", action),
 		}
 	}
 	if actionShow != sessionShow {
 		return NightSessionCue{}, &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: field + ".action",
-			Detail: fmt.Sprintf("action %q belongs to show %q, not this session's own show %q (ADR-027: a Show is a namespace)", action, actionShow, sessionShow),
+			Detail: fmt.Sprintf("action %q belongs to show %q, not this session's show %q. Use an action from this session's own show.", action, actionShow, sessionShow),
 		}
 	}
 
@@ -1211,7 +1211,7 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 	if fadeOutPresent != fadeInPresent {
 		return nil, nil, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: fadeOutField,
-			Detail: fmt.Sprintf("%s and fadeInMs must be configured together, or both omitted for no fade", fadeOutField),
+			Detail: fmt.Sprintf("%s and fadeInMs must be set together, or both left out.", fadeOutField),
 		}
 	}
 	if !fadeOutPresent {
@@ -1225,7 +1225,7 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 	if v == 0 {
 		return nil, nil, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: fadeOutField,
-			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeOutField),
+			Detail: fmt.Sprintf("%s must be greater than 0. Leave out fadeOutMs and fadeInMs together for no fade.", fadeOutField),
 		}
 	}
 	v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", fadeInField)
@@ -1235,7 +1235,7 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 	if v2 == 0 {
 		return nil, nil, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: fadeInField,
-			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeInField),
+			Detail: fmt.Sprintf("%s must be greater than 0. Leave out fadeOutMs and fadeInMs together for no fade.", fadeInField),
 		}
 	}
 	return &v, &v2, nil

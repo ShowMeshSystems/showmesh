@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
@@ -906,13 +907,21 @@ func (noInventoryRequester) RequestNodeInventory(context.Context, string, mqttpr
 }
 
 // noAssetFetchFailureSource is [Dependencies.AssetFetchFailures]'s
-// nil-safe default: LastFetchFailure always reports ok=false, matching
+// nil-safe default: every method always reports ok=false, matching
 // [noAssetSyncNudger]'s identical "unwired reads as absent, never
 // fabricated" shape one field over.
 type noAssetFetchFailureSource struct{}
 
 func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.Time, bool) {
 	return "", time.Time{}, false
+}
+
+func (noAssetFetchFailureSource) LastFetchAttempt(string, string) (assetsync.LastFetchAttemptRecord, bool) {
+	return assetsync.LastFetchAttemptRecord{}, false
+}
+
+func (noAssetFetchFailureSource) LastSyncPassAt(string) (time.Time, bool) {
+	return time.Time{}, false
 }
 
 // noCueActivationNudger is [Dependencies.CueActivationNudger]'s nil-safe

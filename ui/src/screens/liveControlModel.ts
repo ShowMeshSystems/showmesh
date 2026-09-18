@@ -31,8 +31,8 @@ export const NIGHT_LIFECYCLE_GROUPS: readonly { id: string; title: string; comma
     id: 'lc-prep',
     title: 'Prepare',
     commands: [
-      ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
-      ['run-readiness', 'Run readiness', 'Re-runs every readiness check against this epoch.'],
+      ['prepare-site', 'Prepare site', 'Gets the site ready so readiness checks and start-preshow can run.'],
+      ['run-readiness', 'Run readiness', 'Re-runs every readiness check.'],
     ],
   },
   {
@@ -40,7 +40,7 @@ export const NIGHT_LIFECYCLE_GROUPS: readonly { id: string; title: string; comma
     title: 'Start',
     commands: [
       ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
-      ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
+      ['start-night', 'Start night', 'Starts the show and its first cycle.'],
     ],
   },
   {
@@ -49,8 +49,8 @@ export const NIGHT_LIFECYCLE_GROUPS: readonly { id: string; title: string; comma
     commands: [
       ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
       ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
-      ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
-      ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock; prepare-site then starts a fresh one.'],
+      ['power-down-presentation', 'Power down presentation', 'Powers down the presentation. A configured check can block it.'],
+      ['end-session', 'End session', 'Abandons the session immediately. Nothing blocks this; run Prepare site again to start fresh.'],
     ],
   },
 ]

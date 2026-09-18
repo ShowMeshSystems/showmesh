@@ -350,7 +350,7 @@ func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 	setBreakGlassUsage(fs, "Break-glass path: issues a token with no network credential, for a coordinator with no reachable\nadministrator. For ordinary use, run \"showmeshctl token issue\" instead.")
 	principalRef := fs.String("principal", "", "principal id or exact display name to mint a token for (required)")
 	label := fs.String("label", "", "label to help tell this token apart from others in list-tokens")
-	expires := fs.String("expires", "", "optional expiry: an RFC3339 timestamp or a Go duration from now (e.g. 4380h); default: never (ADR-024 decision 1)")
+	expires := fs.String("expires", "", "optional expiry: an RFC3339 timestamp or a Go duration from now (e.g. 4380h); default: never")
 	_ = fs.Parse(args)
 
 	trimmedRef := strings.TrimSpace(*principalRef)
@@ -398,11 +398,11 @@ func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 			return 1
 		}
 	} else {
-		if err := writeCLIOutput(deps, "Expires: never (ADR-024 decision 1's default — pass -expires to set one; revoke-token is the control)\n"); err != nil {
+		if err := writeCLIOutput(deps, "Expires: never. Pass -expires to set one, or use revoke-token to invalidate it early.\n"); err != nil {
 			return 1
 		}
 	}
-	if err := writeCLIOutput(deps, "\nThis token is displayed exactly once and cannot be retrieved again — store it now:\n%s\n", tok.Value); err != nil {
+	if err := writeCLIOutput(deps, "\nThis token is displayed exactly once and cannot be retrieved again. Store it now:\n%s\n", tok.Value); err != nil {
 		return 1
 	}
 	return 0

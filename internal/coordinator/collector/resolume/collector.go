@@ -979,7 +979,7 @@ func (c *Collector) surveyUnsupported(sig observation.SignalID, reason string, n
 // compositionLevelUnavailableReason is the fixed, operator-facing text for
 // every one of the three signals above — named once so all three state the
 // identical fact rather than three slightly different sentences.
-const compositionLevelUnavailableReason = "this Arena build does not expose this value without reading the full composition, which this system never does"
+const compositionLevelUnavailableReason = "This Arena build does not report this value."
 
 // compositionLevelReadinessTerm builds the fixed, permanently-unknown
 // [ReadinessTermInput] for composition.bypassed or composition.master —
@@ -1543,7 +1543,7 @@ func (c *Collector) clipObservations(order []ObjectID, results map[ObjectID]clip
 		if r.err != nil {
 			reason := ClassifyError(r.err)
 			if IsNotFound(r.err) {
-				reason = "no longer resolves (404) — see the layer/composition identity signals for whether this is a stale reference or a deck mismatch"
+				reason = "no longer resolves (404). Check the layer and composition identity signals for whether this is a stale reference or a deck mismatch."
 			}
 			obs = append(obs, c.surveyFailed(ClipConnectedSignal(id), reason, now))
 			obs = append(obs, c.surveyFailed(ClipTransportTypeSignal(id), reason, now))

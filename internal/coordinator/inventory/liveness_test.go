@@ -280,8 +280,8 @@ func TestDeriveLivenessDisagreementReasonNamesBothTopics(t *testing.T) {
 	if liveness != LivenessUnknown {
 		t.Fatalf("Liveness = %q, want unknown", liveness)
 	}
-	if !strings.Contains(reason, "last-will") || !strings.Contains(reason, "disagree") {
-		t.Errorf("reason = %q, want it to name the last-will/heartbeat disagreement plainly, not read as ordinary staleness", reason)
+	if !strings.Contains(reason, "last report") || !strings.Contains(reason, "disagree") {
+		t.Errorf("reason = %q, want it to name the last-report/health-check disagreement plainly, not read as ordinary staleness", reason)
 	}
 }
 

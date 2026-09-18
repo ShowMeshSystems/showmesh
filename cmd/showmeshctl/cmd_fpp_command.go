@@ -224,7 +224,7 @@ func reportFPPCommandResult(stdout, stderr io.Writer, cmdLabel string, result fp
 	}
 	if result.AttributionDegraded {
 		_, _ = fmt.Fprintf(stderr, "showmeshctl %s: WARNING: the coordinator's audit write "+
-			"failed for this command; it proceeded anyway (ADR-024 decision 11's safety class) with degraded "+
+			"failed for this command; it proceeded anyway, with degraded "+
 			"attribution recorded only to its own stderr\n", cmdLabel)
 	}
 

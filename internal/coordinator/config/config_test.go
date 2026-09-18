@@ -626,13 +626,13 @@ func TestLoadConfigRefusesToStartWithAPITokenSet(t *testing.T) {
 			env := map[string]string{"SHOWMESH_API_TOKEN": tt.value}
 			_, err := LoadConfigFrom(lookupFrom(env))
 			if err == nil {
-				t.Fatalf("LoadConfigFrom() error = nil, want a refusal naming the ADR-024 migration")
+				t.Fatalf("LoadConfigFrom() error = nil, want a refusal explaining the bootstrap migration")
 			}
 			if !strings.Contains(err.Error(), "SHOWMESH_API_TOKEN") {
 				t.Errorf("error = %q, want it to name SHOWMESH_API_TOKEN", err.Error())
 			}
-			if !strings.Contains(err.Error(), "ADR-024") {
-				t.Errorf("error = %q, want it to name the ADR-024 migration", err.Error())
+			if !strings.Contains(err.Error(), "bootstrap") {
+				t.Errorf("error = %q, want it to name the bootstrap migration", err.Error())
 			}
 		})
 	}
