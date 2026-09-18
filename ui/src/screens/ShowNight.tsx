@@ -39,6 +39,7 @@ import {
   Button,
   ButtonRow,
   Choice,
+  ConfirmDialog,
   DefinitionStrip,
   Field,
   FieldGrid,
@@ -140,6 +141,7 @@ export function ShowNight() {
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
 
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
@@ -283,9 +285,13 @@ export function ShowNight() {
         ))}
       </Section>
   )
+  const bgAudioAll = backgroundAudioSteps(session.backgroundAudio)
+  const bgAudioMax = 25
+  const bgAudioShown = bgAudioAll.slice(-bgAudioMax)
   const bgAudioSection = (
       <Section id="sn-bg-audio" title="Background Audio Record" aside={<span className="sm-small sm-muted">This cycle</span>}>
-        {session.backgroundAudio.steps.length > 0 ? (
+        {bgAudioAll.length > 0 ? (
+          <>
           <TableWrap label="Background audio steps this cycle, scrollable">
             <Table minWidth={700}>
               <thead>
@@ -299,7 +305,7 @@ export function ShowNight() {
                 </tr>
               </thead>
               <tbody>
-                {backgroundAudioSteps(session.backgroundAudio).map((step) => (
+                {bgAudioShown.map((step) => (
                   <tr key={step.key}>
                     <td className="sm-data">{step.when}</td>
                     <td>{step.sequence}</td>
@@ -324,6 +330,10 @@ export function ShowNight() {
               </tbody>
             </Table>
           </TableWrap>
+          {bgAudioAll.length > bgAudioMax && (
+            <p className="sm-section__footnote">Showing the most recent {bgAudioMax} of {bgAudioAll.length} events this cycle.</p>
+          )}
+          </>
         ) : (
           <RuledStrip absence="empty" label="None recorded" fact="No background audio steps are recorded for this cycle." />
         )}
@@ -439,21 +449,32 @@ export function ShowNight() {
           groups={[
             {
               id: 'sn-lifecycle',
-              commands: nightLifecycleGroups(
-                gate,
-                send,
-                <label className="sm-choice sm-choice--gloved">
-                  <input
-                    type="checkbox"
-                    checked={skipEnterShowLead}
-                    disabled={!gate.allowed}
-                    onChange={(e) => setSkipEnterShowLead(e.target.checked)}
-                  />
-                  <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
-                </label>,
+              commands: nightLifecycleGroups(gate, (command) =>
+                command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
               ).flatMap((group) => group.commands),
             },
           ]}
+        />
+        <ConfirmDialog
+          open={startNightConfirmOpen}
+          title="Start the night and its first cycle?"
+          detail={
+            <>
+              <p className="sm-body">This commits the armed definition and starts the show. It is accepted here, then the session reports what it does.</p>
+              <Choice
+                type="checkbox"
+                checked={skipEnterShowLead}
+                onChange={(event) => setSkipEnterShowLead(event.target.checked)}
+                label="Skip the enter-show lead. An enter-show announcement cue still dispatches."
+              />
+            </>
+          }
+          confirmLabel="Start night"
+          onConfirm={() => {
+            setStartNightConfirmOpen(false)
+            send('start-night')
+          }}
+          onCancel={() => setStartNightConfirmOpen(false)}
         />
         {outcome !== null && (
           <div className="sm-outcome">

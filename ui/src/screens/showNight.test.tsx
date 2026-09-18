@@ -430,8 +430,10 @@ describe('Show Night', () => {
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByLabelText(/Skip the enter-show lead/))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(true)
   })
 
@@ -443,17 +445,17 @@ describe('Show Night', () => {
     }
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(false)
   })
 
-  it('never sends skipEnterShowLead for a command other than start-night, even with the box checked', () => {
+  it('never sends a skipEnterShowLead field for a command other than start-night', () => {
     const calls: unknown[][] = []
     stubs.dispatchNightCommand = (...args: unknown[]) => {
       calls.push(args)
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(calls[0]?.[3]).toBeUndefined()
   })
@@ -489,6 +491,7 @@ describe('Show Night', () => {
       Promise.reject(new ApiError('start-night is not valid while live.', 409, PROBLEM_TYPE.nightStateRejected))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
     expect(await screen.findByText('Refused')).toBeInTheDocument()
     expect(screen.getByText(/is not valid from the session's current state/)).toBeInTheDocument()
     expect(screen.queryByText('Withheld')).not.toBeInTheDocument()
