@@ -146,20 +146,31 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 		return OperationResult{}, fmt.Errorf("asset.fetch: params.url scheme %q must be http or https", parsed.Scheme)
 	}
 
-	stagingPath, downloadedHash, downloadedSize, downloadErr := downloadToStaging(ctx, o.dir, o.token, rawURL, contentHash)
-	if downloadErr != nil {
-		// The store being unreachable (or any other transfer failure) means
-		// this node keeps whatever it already has and the next sync tick
-		// tries again — no local file is ever removed on this path, and
-		// nothing below executes.
-		return OperationResult{
-			Confirmed: false,
-			Signal:    "node.asset.fetch_failed",
-			Value:     assetID,
-		}, fmt.Errorf("asset.fetch: download failed: %w", downloadErr)
-	}
-
 	appliedAt := now()
+
+	// Before downloading, check whether this node already holds these bytes
+	// under a different runtime filename (asset sync deliberately delivers a
+	// second copy when a node plays another node's upload). A miss of any
+	// kind falls through to the ordinary download path unchanged.
+	source := "downloaded"
+	stagingPath, downloadedHash, downloadedSize, reused := reuseLocalAsset(o.dir, contentHash, filename, sizeBytes, now)
+	if reused {
+		source = "reused"
+	} else {
+		var downloadErr error
+		stagingPath, downloadedHash, downloadedSize, downloadErr = downloadToStaging(ctx, o.dir, o.token, rawURL, contentHash)
+		if downloadErr != nil {
+			// The store being unreachable (or any other transfer failure)
+			// means this node keeps whatever it already has and the next
+			// sync tick tries again — no local file is ever removed on this
+			// path, and nothing below executes.
+			return OperationResult{
+				Confirmed: false,
+				Signal:    "node.asset.fetch_failed",
+				Value:     assetID,
+			}, fmt.Errorf("asset.fetch: download failed: %w", downloadErr)
+		}
+	}
 
 	// Both mismatches below are a DEFINITE negative: the node demonstrably
 	// does not hold this asset. They return an error so the outcome is
@@ -199,7 +210,7 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 	return OperationResult{
 		Confirmed:  confirmed,
 		Signal:     "node.asset.held",
-		Value:      map[string]any{"assetId": assetID, "filename": filename, "contentHash": contentHash, "sizeBytes": readBackSize},
+		Value:      map[string]any{"assetId": assetID, "filename": filename, "contentHash": contentHash, "sizeBytes": readBackSize, "source": source},
 		ExecutedAt: appliedAt,
 		ObservedAt: now(),
 	}, nil
@@ -342,6 +353,91 @@ func readBackAsset(path, wantHash string) (confirmed bool, size int64) {
 	}
 	got := "sha256:" + hex.EncodeToString(h.Sum(nil))
 	return got == wantHash, n
+}
+
+// reuseLocalAsset looks for a file already under dir whose content hash
+// equals contentHash but whose runtime filename is not filename, using the
+// same inventory walk enumerateAssets already runs elsewhere in this
+// package. A candidate the walk reports is never trusted on that report
+// alone: it is re-hashed directly from disk (and its size re-checked)
+// before it is used as a source, since a stale inventory entry must never
+// stand in for a genuine verification. A confirmed candidate is hard linked
+// (or, when linking is not possible, copied) into the staging directory
+// under contentHash's derived name, where the newly written file's own
+// hash and size are computed fresh, for run() to verify exactly as it
+// verifies a download. ok is false whenever no usable candidate exists or
+// any step fails, in which case the caller falls through to the ordinary
+// download path unchanged.
+func reuseLocalAsset(dir, contentHash, filename string, sizeBytes int64, now func() time.Time) (stagingPath, hash string, size int64, ok bool) {
+	held, complete, _ := enumerateAssets(dir, map[string]hashCacheEntry{}, now)
+	if !complete {
+		return "", "", 0, false
+	}
+
+	for _, candidate := range held {
+		if candidate.Filename == filename || candidate.ContentHash != contentHash || candidate.SizeBytes != sizeBytes {
+			continue
+		}
+		candidatePath := filepath.Join(dir, candidate.Filename)
+
+		// Never trust the inventory cache alone: re-hash this specific
+		// candidate directly from disk before using it as a source.
+		rehashed, err := hashFile(candidatePath)
+		if err != nil || rehashed != contentHash {
+			continue
+		}
+
+		stagingDir := filepath.Join(dir, ".staging")
+		if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+			return "", "", 0, false
+		}
+		dst := filepath.Join(stagingDir, stagingFileName(contentHash))
+		_ = os.Remove(dst)
+
+		if err := linkOrCopyFile(candidatePath, dst); err != nil {
+			continue
+		}
+
+		gotHash, err := hashFile(dst)
+		if err != nil {
+			_ = os.Remove(dst)
+			continue
+		}
+		info, err := os.Stat(dst)
+		if err != nil {
+			_ = os.Remove(dst)
+			continue
+		}
+		return dst, gotHash, info.Size(), true
+	}
+
+	return "", "", 0, false
+}
+
+// linkOrCopyFile makes dst hold src's bytes: a hard link when the
+// filesystem allows it, the common and cheap case, or a full copy when
+// linking fails, for instance across a filesystem boundary. Either way,
+// removing one of the two names afterward never affects the other.
+func linkOrCopyFile(src, dst string) error {
+	if err := os.Link(src, dst); err == nil {
+		return nil
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // downloadToStaging downloads rawURL into <dir>/.staging/<name>, hashing
