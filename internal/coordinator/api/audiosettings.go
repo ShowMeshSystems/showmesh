@@ -305,6 +305,7 @@ func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettin
 		ScheduledStartDeliveryBoundMs: p.ScheduledStartDeliveryBoundMs,
 		ScheduledStartMarginMs:        p.ScheduledStartMarginMs,
 		MultisyncFallbackWindowMs:     p.MultisyncFallbackWindowMs,
+		MultisyncStartLeadMs:          p.MultisyncStartLeadMs,
 	}
 }
 

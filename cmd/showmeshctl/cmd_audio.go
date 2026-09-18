@@ -46,6 +46,11 @@ type configAudioSettingsPayload struct {
 	// (ADR-051 decision 4): how long it waits for a node's own MultiSync
 	// start evidence before dispatching with no scheduled instant instead.
 	MultisyncFallbackWindowMs int `json:"multisyncFallbackWindowMs"`
+
+	// MultisyncStartLeadMs is read by the NODE, not the coordinator
+	// (ADR-051 decision 1): the fixed lead a MultiSync-triggered Cue
+	// audio start waits past the START packet's own arrival.
+	MultisyncStartLeadMs int `json:"multisyncStartLeadMs"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -253,6 +258,10 @@ multisyncFallbackWindowMs (how long, after dispatching an activation, it
 waits for a node's own evidence that a MultiSync START packet already
 started that cue's audio before it dispatches with no scheduled instant
 instead). All three are guesses, not measurements.
+multisyncStartLeadMs is read by the NODE, not the coordinator: the fixed
+lead a MultiSync-triggered Cue audio start waits past the START packet's
+own arrival before presenting the first sample, pushed to every node on
+write and on hello.
 Every subcommand requires the config:write scope (admin only) — there is
 no config:read scope.
 
@@ -995,6 +1004,7 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  scheduledStartDeliveryBoundMs: %d\n", resp.Payload.ScheduledStartDeliveryBoundMs)
 	_, _ = fmt.Fprintf(w, "  scheduledStartMarginMs:        %d\n", resp.Payload.ScheduledStartMarginMs)
 	_, _ = fmt.Fprintf(w, "  multisyncFallbackWindowMs:     %d\n", resp.Payload.MultisyncFallbackWindowMs)
+	_, _ = fmt.Fprintf(w, "  multisyncStartLeadMs:          %d\n", resp.Payload.MultisyncStartLeadMs)
 }
 
 // printAudioNodesTable renders an audio.node list with its channel

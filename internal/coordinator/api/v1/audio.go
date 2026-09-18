@@ -39,6 +39,12 @@ type ConfigAudioSettingsPayload struct {
 	// that a MultiSync START packet already started that cue's audio
 	// before it dispatches with no scheduled instant instead.
 	MultisyncFallbackWindowMs int `json:"multisyncFallbackWindowMs"`
+
+	// MultisyncStartLeadMs is read by the NODE, not the coordinator
+	// (ADR-051 decision 1): the fixed lead a MultiSync-triggered Cue
+	// audio start waits past the START packet's own arrival before
+	// presenting the first sample.
+	MultisyncStartLeadMs int `json:"multisyncStartLeadMs"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

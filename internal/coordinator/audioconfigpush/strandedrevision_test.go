@@ -98,6 +98,12 @@ func TestStoredRevisionMissingNewlyRequiredFieldDoesNotStrandNode(t *testing.T) 
 			payload: `{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,` +
 				`"defaultMaxBackgroundGainDb":-4.44,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`,
 		},
+		{
+			name: "missing multisyncFallbackWindowMs and multisyncStartLeadMs (pre-ADR-051 revision)",
+			payload: `{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,` +
+				`"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04,"duckFadeDurationMs":200,"duckRestoreFadeDurationMs":800,` +
+				`"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := writeDatabaseAtCurrentSchemaMissingField(t, tc.payload)

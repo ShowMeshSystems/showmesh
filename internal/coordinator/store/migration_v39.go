@@ -7,29 +7,35 @@ import (
 	"fmt"
 )
 
-// v39AudioSettingsMultisyncFallbackWindowDefault is the value backfilled
-// into a stored audio.settings revision for multisyncFallbackWindowMs
-// (ADR-051 decision 4), when that key is absent from the stored JSON.
+// v39AudioSettingsDefaults is the value backfilled into a stored
+// audio.settings revision for each of these two ADR-051 keys, when that
+// key is absent from the stored JSON: multisyncFallbackWindowMs (decision
+// 4, the coordinator's own fallback wait) and multisyncStartLeadMs
+// (decision 1, the node's own fixed lead past a MultiSync START packet's
+// arrival).
 //
-// Repeated here as a literal rather than read from
+// Repeated here as literals rather than read from
 // [config.AudioSettingsDefaultPayload], for the reason
 // v20AudioSettingsRequiredFieldDefaults records: a migration must keep
-// applying the value it shipped with, even after the package default
+// applying the values it shipped with, even after the package default
 // moves.
-var v39AudioSettingsMultisyncFallbackWindowDefault = json.RawMessage(`1500`)
+var v39AudioSettingsDefaults = map[string]json.RawMessage{
+	"multisyncFallbackWindowMs": json.RawMessage(`1500`),
+	"multisyncStartLeadMs":      json.RawMessage(`100`),
+}
 
-// migrateV39AudioSettingsBackfillMultisyncFallbackWindow is
+// migrateV39AudioSettingsBackfillMultisyncFields is
 // migrateV34AudioSettingsBackfillScheduledStartFields's successor for the
-// one key added after it: without it, a coordinator upgraded across this
-// change decodes its own stored audio.settings revision, fails on a
+// two keys added after it: without it, a coordinator upgraded across
+// this change decodes its own stored audio.settings revision, fails on a
 // required key that did not exist when the revision was written, and
 // silently stops pushing audio configuration to every node. That is the
-// exact defect v20's own doc comment describes, and it is a new migration
-// rather than another entry in v34's own map because a shipped migration
-// keeps applying the values it shipped with.
+// exact defect v20's own doc comment describes, and it is a new
+// migration rather than another entry in v34's own map because a shipped
+// migration keeps applying the values it shipped with.
 //
-// A revision that already carries the key is left byte-for-byte alone.
-func migrateV39AudioSettingsBackfillMultisyncFallbackWindow(ctx context.Context, tx *sql.Tx) error {
+// A revision that already carries both keys is left byte-for-byte alone.
+func migrateV39AudioSettingsBackfillMultisyncFields(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT object_id, revision, payload_json FROM config_revisions WHERE kind = ?`, audioSettingsKind)
 	if err != nil {
@@ -48,7 +54,7 @@ func migrateV39AudioSettingsBackfillMultisyncFallbackWindow(ctx context.Context,
 			_ = rows.Close()
 			return fmt.Errorf("scan audio.settings revision: %w", err)
 		}
-		rewritten, changed, err := v39BackfillAudioSettingsMultisyncFallbackWindow(r.payload)
+		rewritten, changed, err := v39BackfillAudioSettingsMultisyncFields(r.payload)
 		if err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("backfill audio.settings revision %d: %w", r.revision, err)
@@ -77,12 +83,12 @@ func migrateV39AudioSettingsBackfillMultisyncFallbackWindow(ctx context.Context,
 	return nil
 }
 
-// v39BackfillAudioSettingsMultisyncFallbackWindow adds
-// multisyncFallbackWindowMs to raw's top-level object when it is absent,
+// v39BackfillAudioSettingsMultisyncFields adds any of
+// [v39AudioSettingsDefaults]'s keys missing from raw's top-level object,
 // changing nothing else. It reports changed=false, with no error, for a
-// payload that already carries the key and for the JSON literal null,
+// payload that already carries both keys and for the JSON literal null,
 // matching v34BackfillAudioSettingsScheduledStart exactly.
-func v39BackfillAudioSettingsMultisyncFallbackWindow(raw string) (string, bool, error) {
+func v39BackfillAudioSettingsMultisyncFields(raw string) (string, bool, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
 		return "", false, fmt.Errorf("stored payload is not a JSON object: %w", err)
@@ -90,10 +96,18 @@ func v39BackfillAudioSettingsMultisyncFallbackWindow(raw string) (string, bool, 
 	if top == nil {
 		return "", false, nil
 	}
-	if _, present := top["multisyncFallbackWindowMs"]; present {
+
+	changed := false
+	for key, def := range v39AudioSettingsDefaults {
+		if _, present := top[key]; present {
+			continue
+		}
+		top[key] = def
+		changed = true
+	}
+	if !changed {
 		return "", false, nil
 	}
-	top["multisyncFallbackWindowMs"] = v39AudioSettingsMultisyncFallbackWindowDefault
 
 	out, err := json.Marshal(top)
 	if err != nil {

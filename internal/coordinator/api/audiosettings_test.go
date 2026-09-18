@@ -33,7 +33,7 @@ func TestGetAudioSettingsDefaultsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000,"multisyncFallbackWindowMs":1500}`
+const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000,"multisyncFallbackWindowMs":1500,"multisyncStartLeadMs":100}`
 
 // TestPutAudioSettingsThenGetReflectsWrittenValue proves the zero-to-one
 // transition: an unconfigured kind, one write, and a subsequent GET that
@@ -192,7 +192,7 @@ func TestPutAudioSettingsConfigRevisionPreconditionWiring(t *testing.T) {
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := func(driftMs int) string {
-		return fmt.Sprintf(`{"driftIgnoreThresholdMs":%d,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000,"multisyncFallbackWindowMs":1500}`, driftMs)
+		return fmt.Sprintf(`{"driftIgnoreThresholdMs":%d,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000,"multisyncFallbackWindowMs":1500,"multisyncStartLeadMs":100}`, driftMs)
 	}
 	put := func(payload string, headers map[string]string) (*http.Response, []byte) {
 		h := map[string]string{"Authorization": "Bearer " + adminToken}

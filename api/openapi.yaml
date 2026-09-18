@@ -14558,12 +14558,17 @@ components:
         that a MultiSync START packet already started that cue's audio
         before it dispatches the activation with no scheduled instant
         instead (start on arrival).
+        `multisyncStartLeadMs` is read by the NODE, not the coordinator
+        (ADR-051 decision 1): the fixed lead a MultiSync-triggered Cue
+        audio start waits past the START packet's own arrival before
+        presenting the first sample. Pushed to every node on write and
+        on hello.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
          defaultMaxBackgroundGainDb, duckTargetGainDb, duckFadeDurationMs,
          duckRestoreFadeDurationMs, ltcFrameRate, ltcDefaultStartOffset,
          scheduledStartDeliveryBoundMs, scheduledStartMarginMs,
-         multisyncFallbackWindowMs]
+         multisyncFallbackWindowMs, multisyncStartLeadMs]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -14635,6 +14640,16 @@ components:
             packet already started that cue's audio, before dispatching
             with no scheduled instant instead (start on arrival). The
             bounds are a typo guard.
+        multisyncStartLeadMs:
+          type: integer
+          minimum: 0
+          maximum: 5000
+          description: >-
+            Read by the NODE, not the coordinator. The fixed lead a
+            MultiSync-triggered Cue audio start waits past the START
+            packet's own arrival before presenting the first sample.
+            Pushed to every node on write and on hello. The bounds are a
+            typo guard.
     AudioSettingsConfigResponse:
       type: object
       description: >-

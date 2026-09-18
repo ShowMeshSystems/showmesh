@@ -405,6 +405,35 @@ func TestToNodePushesDefaultAudioSettings(t *testing.T) {
 	}
 }
 
+// TestToNodePushesMultisyncStartLeadMs proves ADR-051 decision 1's own
+// node-applied field reaches the wire, unlike scheduledStartDeliveryBoundMs/
+// scheduledStartMarginMs and multisyncFallbackWindowMs, which the
+// coordinator reads itself and never pushes.
+func TestToNodePushesMultisyncStartLeadMs(t *testing.T) {
+	cs := newFakeConfigStore()
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "any-node"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok := pub.actionParams("audio.settings.configure")
+	if !ok {
+		t.Fatal("audio.settings.configure was not published")
+	}
+	got, ok := params["multisyncStartLeadMs"].(float64)
+	if !ok {
+		t.Fatalf("multisyncStartLeadMs = %v (%T), want a number", params["multisyncStartLeadMs"], params["multisyncStartLeadMs"])
+	}
+	if int(got) != config.AudioSettingsDefaultPayload.MultisyncStartLeadMs {
+		t.Errorf("multisyncStartLeadMs = %v, want %d", got, config.AudioSettingsDefaultPayload.MultisyncStartLeadMs)
+	}
+	if _, present := params["scheduledStartDeliveryBoundMs"]; present {
+		t.Error("scheduledStartDeliveryBoundMs reached the node; it is coordinator-only")
+	}
+	if _, present := params["multisyncFallbackWindowMs"]; present {
+		t.Error("multisyncFallbackWindowMs reached the node; it is coordinator-only")
+	}
+}
+
 // TestBestEffortNeverPanicsOnPublishFailure proves BestEffort swallows a
 // publish failure rather than propagating or panicking — the write or
 // hello that triggered it must never fail because of this push.
