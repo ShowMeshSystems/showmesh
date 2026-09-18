@@ -14,10 +14,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Paint the ground on body only. It propagates to the canvas, so a single
-   layer covers everything. Backgrounding both html and body composites two
-   identical near-black layers that seam at the body-box edge on a tall page. */
-body {
+/* Paint the ground on the html element only. It maps to the fixed-size canvas,
+   so the color is painted once across the viewport. Painting it on the tall
+   body box instead leaves a faint sub-pixel seam partway down a long page. */
+html {
   background: var(--bg);
 }
 
