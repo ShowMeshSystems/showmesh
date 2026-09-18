@@ -1266,7 +1266,7 @@ func TestNightRunAudioCommand_RefusesNonAdvancingRevision(t *testing.T) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	history := []nightBackgroundAudioHistoryRow{
-		{Step: nightBackgroundAudioStep{Kind: nightBGStepApply}, Row: store.NightCueOutboxRecord{
+		{Step: nightBackgroundAudioStep{Kind: nightBGStepApply}, NodeID: "node-a", Row: store.NightCueOutboxRecord{
 			SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseRestingBackground, CueName: "bg-0005-apply",
 			ActionRevision: 5, State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed,
 		}},

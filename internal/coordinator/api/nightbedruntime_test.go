@@ -1374,3 +1374,79 @@ func reasonMentionsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+// TestNightAdvanceMultiNodeBackgroundAudio_LowerCounterNodePauseAndResumeSucceed
+// is the bed-side companion to the announcement's own order-of-magnitude
+// revision-gap regression (nightannouncement_test.go). node-a's own
+// persisted floor is seeded far above the bed's own shared history
+// counter before the bed even starts, simulating a long night's worth of
+// prior activity on it; node-b's own floor stays at zero, the
+// "lower-counter" node. Unlike the announcement's own per-node revision
+// floor, a bed step always mints from the shared history counter or the
+// node's own persisted floor, whichever is higher (nightBedNodeDispatchRevision),
+// so node-b's own start, pause and resume must all still land confirmed,
+// never refused as stale by node-a's own far larger revision.
+func TestNightAdvanceMultiNodeBackgroundAudio_LowerCounterNodePauseAndResumeSucceed(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	ctx := context.Background()
+
+	if err := st.PutAudioSession(ctx, store.AudioSessionRecord{
+		ID: sessionID, NodeID: "node-a", DesiredJSON: "{}", Revision: 1000,
+	}); err != nil {
+		t.Fatalf("seed node-a's own high persisted revision: %v", err)
+	}
+
+	pub.result = confirmedResultForAction("x", sessionID, "started")
+	const clockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, clockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+
+	history, err := h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestB, ok := nightBackgroundAudioLatestStepForNode(history, "node-b")
+	if !ok || latestB.Step.Kind != nightBGStepStart || latestB.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b latest step = %+v, want a confirmed start - not refused as stale_revision by node-a's own far higher revision", latestB)
+	}
+
+	rec.Cycle++
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(ctx, testNow, rec)
+
+	history, err = h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestB, ok = nightBackgroundAudioLatestStepForNode(history, "node-b")
+	if !ok || latestB.Step.Kind != nightBGStepPause || latestB.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b latest step = %+v, want a confirmed pause - not refused as stale_revision by node-a's own far higher revision", latestB)
+	}
+
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
+
+	history, err = h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestB, ok = nightBackgroundAudioLatestStepForNode(history, "node-b")
+	if !ok || latestB.Step.Kind != nightBGStepResume || latestB.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b latest step = %+v, want a confirmed resume - not refused as stale_revision by node-a's own far higher revision", latestB)
+	}
+}

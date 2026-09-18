@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -397,6 +399,44 @@ func nightBackgroundAudioIssuer(rec store.NightSessionRecord) FPPCommandIssuer {
 	return nightControllerIssuer(rec)
 }
 
+// nightRunAudioCommandLedgerHistory narrows history to the single node
+// target addresses (by NodeID, parsed or not) before it becomes an
+// acceptance ledger: history can carry another node's steps under this
+// same session id, and that node's own revision must never refuse this
+// one's - a target this coordinator never builds with other than exactly
+// one node is answered with history unscoped, its own prior behavior.
+func nightRunAudioCommandLedgerHistory(history []nightBackgroundAudioHistoryRow, target config.ShowActionTarget) []nightBackgroundAudioHistoryRow {
+	if len(target.AudioNodeIDs) != 1 {
+		return history
+	}
+	nodeID := target.AudioNodeIDs[0]
+	out := make([]nightBackgroundAudioHistoryRow, 0, len(history))
+	for _, row := range history {
+		if row.NodeID == nodeID {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// nightPersistLedgerRefusal commits phase/cueName straight to resolved,
+// outcome refused: this coordinator's own acceptance ledger, not the node,
+// refused revision before any dispatch, so there is no in-flight attempt to
+// mark dispatched first. A concurrent duplicate insert reads back the
+// winning row rather than erroring.
+func (h *handlers) nightPersistLedgerRefusal(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, revision int64, reason string) (store.NightCueOutboxRecord, error) {
+	resolvedAt := now
+	row := store.NightCueOutboxRecord{
+		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: phase, CueName: cueName,
+		ActionRevision: revision, State: nightCueStateResolved, ResolvedAt: &resolvedAt,
+		Outcome: nightCueOutcomeRefused, OutcomeReason: reason,
+	}
+	if err := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, row, now); err != nil && !errors.Is(err, store.ErrNightCueOutboxDuplicate) {
+		return store.NightCueOutboxRecord{}, err
+	}
+	return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+}
+
 // nightRunAudioCommand commits (or resumes) one durable background-audio
 // step and dispatches it, reusing nightDispatchAndPersistCue unchanged
 // (nightcuerun.go) - the SAME commit-then-dispatch discipline and crash-
@@ -418,15 +458,26 @@ func (h *handlers) nightRunAudioCommand(ctx context.Context, now time.Time, rec 
 		// than an in-memory value a restart would reset to zero:
 		// RestoreRevisionState rebuilds exactly the state this session
 		// would be in had the coordinator never restarted, and Apply
-		// refuses a revision that does not strictly advance past it.
-		rs := nightBackgroundAudioRevisionState(target.AudioSessionID, history)
+		// refuses a revision that does not strictly advance past it -
+		// scoped to this node's own rows, never another node's.
+		rs := nightBackgroundAudioRevisionState(target.AudioSessionID, nightRunAudioCommandLedgerHistory(history, target))
 		decision := rs.Apply(pkgaudio.InvocationID(idemKey), pkgaudio.Revision(revision))
 		if !decision.Accepted {
 			reason := "revision not accepted"
 			if decision.Result != nil {
 				reason = decision.Result.Reason
 			}
-			return store.NightCueOutboxRecord{}, fmt.Errorf("api: background audio: refusing to commit %s/%s at revision %d: %s (current %d)", phase, cueName, revision, reason, decision.Revision)
+			msg := fmt.Sprintf("api: background audio: refusing to commit %s/%s at revision %d: %s (current %d)", phase, cueName, revision, reason, decision.Revision)
+			// Persisted resolved/refused, never left as a log line alone: a
+			// node-addressed step this coordinator's own ledger refuses
+			// before ever dispatching must be as visible to the operator as
+			// a step the NODE itself refused, on the same outbox row shape
+			// mapNightBackgroundAudio already reads.
+			refusedRow, perr := h.nightPersistLedgerRefusal(ctx, now, rec, phase, cueName, revision, msg)
+			if perr != nil {
+				return store.NightCueOutboxRecord{}, perr
+			}
+			return refusedRow, errors.New(msg)
 		}
 		if cerr := h.nightCommitCueRow(ctx, now, rec, phase, cueName, revision); cerr != nil {
 			if !errors.Is(cerr, store.ErrNightCueOutboxDuplicate) {

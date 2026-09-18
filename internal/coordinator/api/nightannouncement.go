@@ -194,8 +194,9 @@ func nightParseAnnouncementRow(row store.NightCueOutboxRecord) (kind, nodeID str
 }
 
 // nightAnnouncementHistory returns every announcement-session step
-// recorded for rec, across every cycle and cue, so revisions stay
-// strictly increasing regardless of which cue or session a row belongs to.
+// recorded for rec, across every cycle and cue, each row's own NodeID
+// recovered via nightParseAnnouncementRow so a node-scoped acceptance
+// ledger (nightRunAudioCommandLedgerHistory) never sees another node's row.
 func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.NightSessionRecord) ([]nightBackgroundAudioHistoryRow, error) {
 	rows, err := h.deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
 	if err != nil {
@@ -203,7 +204,8 @@ func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.Night
 	}
 	out := make([]nightBackgroundAudioHistoryRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, nightBackgroundAudioHistoryRow{Row: r})
+		_, nodeID, _ := nightParseAnnouncementRow(r)
+		out = append(out, nightBackgroundAudioHistoryRow{Row: r, NodeID: nodeID})
 	}
 	return out, nil
 }
