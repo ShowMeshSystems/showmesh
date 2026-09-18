@@ -591,7 +591,10 @@ type dispatchedResult struct {
 // operation runs: invocation validity, replay/staleness via
 // s.revState.Apply, and — only when newly accepted — exec, with the
 // result cached under invocation and persisted before returning. exec
-// runs with the session already locked and must not itself lock it.
+// runs with the session already locked and must not itself lock it,
+// except for [Manager.start] and [Manager.promote]'s own narrow,
+// documented duck-then-start exception, which briefly releases and
+// reacquires it around [Manager.duckLowerPriority] alone.
 func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exec func() pkgaudio.OutcomeResult) dispatchedResult {
 	return s.dispatchLocked(invocation, revision, false, exec)
 }
