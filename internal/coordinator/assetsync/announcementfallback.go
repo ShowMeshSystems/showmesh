@@ -65,6 +65,15 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 	if err != nil {
 		return nil, fmt.Errorf("assetsync: announcement bindings for show %q: list night.session objects: %w", showID, err)
 	}
+	showAudioNodes, err := ShowAudioNodes(ctx, st, showID)
+	if err != nil {
+		return nil, err
+	}
+	targets, err := loadAudioTargets(ctx, st, "")
+	if err != nil {
+		return nil, err
+	}
+
 	var out []AnnouncementBinding
 	for _, obj := range sessionObjs {
 		if obj.CurrentRevision == 0 {
@@ -101,9 +110,10 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 			if action.Target.Integration != config.ShowActionIntegrationAudio || action.Target.AudioAction != "audio.session.apply" {
 				continue
 			}
+			resolvedNodeIDs, _ := config.ResolveAudioNodes([]string(action.Target.AudioNodeIDs), showAudioNodes, action.Target.ExcludeNodes, targets.defaultNodes())
 			out = append(out, AnnouncementBinding{
 				CueName: cue.Name, ActionID: cue.Action,
-				NodeIDs: []string(action.Target.AudioNodeIDs),
+				NodeIDs: resolvedNodeIDs,
 				Media:   decodeAnnouncementMedia(action.Target.Params),
 			})
 		}

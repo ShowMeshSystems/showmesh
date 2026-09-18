@@ -101,8 +101,8 @@ func TestCmdCueGetDisplaysEmptyTargetsAsResolvingToProgramLTCNode(t *testing.T) 
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "Audio targets:        (resolves to the program+ltc node)") {
-		t.Errorf("stdout = %q, want an absent targets list to say it resolves to the program+ltc node", out)
+	if !strings.Contains(out, "Audio targets:        (inherits the show's audio nodes, or the program+ltc node if none are set)") {
+		t.Errorf("stdout = %q, want an absent targets list to say it inherits the show's audio nodes or falls back to the program+ltc node", out)
 	}
 	if !strings.Contains(out, "LTC target:           (resolves to the program+ltc node)") {
 		t.Errorf("stdout = %q, want an absent LTC target to say it resolves to the program+ltc node", out)

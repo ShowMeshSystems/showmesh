@@ -221,6 +221,16 @@ const (
 	// — see [cueMultisyncTriggerReadiness]'s own doc comment for why it
 	// only ever contributes to Report.Warning.
 	ReadinessCueMultisyncTriggerMissing ReadinessCondition = "cue-multisync-trigger-missing"
+
+	// ReadinessAudioNodesDefaulted (ADR-049 decision 10): the show has no
+	// audioNodes configured, and an audio-bearing object (a Cue's audio or
+	// announcement output, a night bed, or a show.action audio target)
+	// resolves to [config.AudioNodeResolutionDefault] — the installation's
+	// program+ltc node, or its sole audio.node — for lack of its own
+	// explicit list. Never a FailingCondition: decision 1's default still
+	// plays the audio; this only nudges toward naming the show's own
+	// audio nodes once instead of relying on the fleet-wide fallback.
+	ReadinessAudioNodesDefaulted ReadinessCondition = "audio-nodes-defaulted"
 )
 
 // Report is [PlaylistReadiness]'s result.

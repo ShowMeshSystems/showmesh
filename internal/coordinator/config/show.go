@@ -27,6 +27,7 @@ const (
 // recognizes — see rejectUnknownTopLevelKeys (showaction.go).
 var showTopLevelKeys = map[string]bool{
 	"name": true, "notes": true, "fppInstances": true, "resolumeInstances": true,
+	"audioNodes": true,
 }
 
 // ShowPayload is config_revisions.payload_json's decoded, VALIDATED shape
@@ -52,6 +53,13 @@ type ShowPayload struct {
 	Notes             string    `json:"notes"`
 	FPPInstances      *[]string `json:"fppInstances,omitempty"`
 	ResolumeInstances *[]string `json:"resolumeInstances,omitempty"`
+	// AudioNodes is ADR-049 decision 10's show-wide audio node list: an
+	// audio-bearing object with no explicit list of its own resolves
+	// against this list minus its own excludeNodes. Absent or empty both
+	// mean unset, unlike FPPInstances/ResolumeInstances: no object treats
+	// "the show has no audio nodes" differently from "nobody has said
+	// yet", since either way step 3's old default applies.
+	AudioNodes []string `json:"audioNodes,omitempty"`
 }
 
 // ParticipationUnconfigured reports that NEITHER integration has a
@@ -117,7 +125,7 @@ func EncodeShowPayload(p ShowPayload) (string, error) {
 // other optional string field in this package (see decodeOptionalString).
 // fppInstances and resolumeInstances are optional and, unlike notes, keep
 // absent and explicitly empty apart - see [ShowPayload]'s own doc comment.
-func DecodeShowPayload(raw string) (ShowPayload, *ValidationError) {
+func DecodeShowPayload(raw string, audioNodeExists func(string) bool) (ShowPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowPayload{}, verr
@@ -157,10 +165,50 @@ func DecodeShowPayload(raw string) (ShowPayload, *ValidationError) {
 		return ShowPayload{}, verr
 	}
 
+	audioNodes, verr := decodeShowAudioNodes(top, audioNodeExists)
+	if verr != nil {
+		return ShowPayload{}, verr
+	}
+
 	return ShowPayload{
 		Name: name, Notes: notes,
 		FPPInstances: fppInstances, ResolumeInstances: resolumeInstances,
+		AudioNodes: audioNodes,
 	}, nil
+}
+
+// decodeShowAudioNodes reads the optional "audioNodes" list (ADR-049
+// decision 10). Absent or an explicitly empty array both decode to nil:
+// unlike fppInstances/resolumeInstances this field has no operator-visible
+// "explicitly nothing" state to preserve. Each id must name a configured
+// audio.node, and a repeated id is refused rather than deduplicated, for
+// the same reason [decodeShowInstanceSelection] refuses one.
+func decodeShowAudioNodes(top map[string]json.RawMessage, audioNodeExists func(string) bool) ([]string, *ValidationError) {
+	ids, verr := decodeOptionalStringList(top, "audioNodes", "audioNodes")
+	if verr != nil || ids == nil {
+		return nil, verr
+	}
+	seen := make(map[string]bool, len(*ids))
+	for i, id := range *ids {
+		field := fmt.Sprintf("audioNodes[%d]", i)
+		if !audioNodeExists(id) {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldUnknownReference, Field: field,
+				Detail: fmt.Sprintf("%s names %q, which is not a configured audio.node", field, id),
+			}
+		}
+		if seen[id] {
+			return nil, &ValidationError{
+				Code: ValidationCodeInstanceIDDuplicate, Field: field,
+				Detail: fmt.Sprintf("%s repeats audio node id %q; list each node once", field, id),
+			}
+		}
+		seen[id] = true
+	}
+	if len(*ids) == 0 {
+		return nil, nil
+	}
+	return *ids, nil
 }
 
 // decodeShowInstanceSelection reads one participation list: absent stays

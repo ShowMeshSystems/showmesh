@@ -56,6 +56,11 @@ func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.Night
 // another declared target of the SAME bed, for any sequence still
 // uncovered. The first other target (in declared order) holding one wins.
 func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]borrowedAsset, error) {
+	showAudioNodes, err := ShowAudioNodes(ctx, st, showID)
+	if err != nil {
+		return nil, err
+	}
+
 	objs, err := st.ListConfigObjects(ctx, config.NightSessionConfigKind)
 	if err != nil {
 		return nil, fmt.Errorf("assetsync: night bed fallback assets for node %q: list night.session objects: %w", nodeID, err)
@@ -88,12 +93,21 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 			continue
 		}
 		ba := payload.Resting.BackgroundAudio
-		if ba == nil || !ba.HasDeclaredTargets() {
+		if ba == nil {
+			continue
+		}
+		resolvedTargets, resolvedFrom := ba.ResolvedPlaybackNodeIDs(showAudioNodes)
+		if resolvedFrom == config.AudioNodeResolutionDefault {
+			// The per-item legacy default (each node plays only the
+			// items registered for it, [NightSessionBackgroundAudio.
+			// OutputNodeIDs]) is not decision 7's list-valued shape;
+			// this borrow-from-another-target rule applies only once a
+			// bed resolves to an explicit or show-wide node list.
 			continue
 		}
 
 		isTarget := false
-		for _, t := range ba.Targets {
+		for _, t := range resolvedTargets {
 			if t == nodeID {
 				isTarget = true
 				break
@@ -117,7 +131,7 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 			}
 			seenSequences[seq] = true
 
-			for _, t := range ba.Targets {
+			for _, t := range resolvedTargets {
 				if t == nodeID {
 					continue
 				}

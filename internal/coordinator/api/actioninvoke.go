@@ -570,9 +570,10 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		params["invocationId"] = audioIdemKey
 		params["revision"] = uint64(revision)
 
+		resolvedNodeIDs := h.resolveAudioActionTargetNodes(ctx, payload.Show, target)
 		audioNodeID := ""
-		if len(target.AudioNodeIDs) > 0 {
-			audioNodeID = target.AudioNodeIDs[0]
+		if len(resolvedNodeIDs) > 0 {
+			audioNodeID = resolvedNodeIDs[0]
 		}
 		result, problem, err := h.executeAudioSessionDispatch(ctx, h.now(), AudioDispatchInput{
 			Action: target.AudioAction, NodeID: audioNodeID, SessionID: target.AudioSessionID,
