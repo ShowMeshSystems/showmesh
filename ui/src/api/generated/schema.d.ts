@@ -6320,12 +6320,16 @@ export interface components {
             fadeInMs?: number;
             /** @description An optional list of audio.node ids the bed plays on (ADR-049). Absent or empty is today's per-node behavior (each node plays the items registered for it); non-empty makes every listed node play every item, and an item's own target then only selects which registered copy of the file to use, not where it plays. */
             targets?: string[];
+            /** @description ADR-049 decision 10: nodes to remove from the show's own audioNodes list when targets is absent or empty. Valid only together with an absent or empty targets - declaring both is refused. Each id must name a node in the show's audioNodes list, and excluding every one of them is refused. */
+            excludeNodes?: string[];
         };
         /** @description The WRITE shape of the reference form: mediaPlaylist, a media.playlist object id checked for existence at write time, plus the bed's own optional targets, checked against configured audio.node objects at write time. No other property is permitted here - naming any inline-only property selects the inline form instead. */
         ConfigNightSessionBackgroundAudioReferenceWrite: {
             mediaPlaylist: string;
             /** @description An optional list of audio.node ids the bed plays on (ADR-049). Absent or empty is today's per-node behavior (each node plays the items registered for it); non-empty makes every listed node play every item, and an item's own target then only selects which registered copy of the file to use, not where it plays. */
             targets?: string[];
+            /** @description ADR-049 decision 10: nodes to remove from the show's own audioNodes list when targets is absent or empty. Valid only together with an absent or empty targets - declaring both is refused. Each id must name a node in the show's audioNodes list, and excluding every one of them is refused. */
+            excludeNodes?: string[];
         };
         /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" - RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
         ConfigNightSessionRestingWrite: {
