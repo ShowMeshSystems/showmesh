@@ -86,6 +86,13 @@ type multiSyncCueAudioTrigger struct {
 	logger *slog.Logger
 	now    func() time.Time
 
+	// audioReportTrigger, when non-nil, is signalled after a MultiSync
+	// start so the audio report loop (audioreport.go) can publish the
+	// node's own startTrigger evidence immediately instead of waiting for
+	// its resting tick, matching command.go's identical use of the same
+	// channel after a dispatched command.
+	audioReportTrigger chan<- struct{}
+
 	mu           sync.Mutex
 	catalogStore *heldcatalog.FileStore
 	mgr          *audio.Manager
@@ -122,12 +129,27 @@ type multiSyncCueAudioTrigger struct {
 // sources wired yet. now is injected for tests; production passes
 // time.Now, matching every other invocation/revision-minting caller in
 // this package (cueactivationaudio.go's activationRevision).
-func newMultiSyncCueAudioTrigger(logger *slog.Logger, now func() time.Time) *multiSyncCueAudioTrigger {
+func newMultiSyncCueAudioTrigger(logger *slog.Logger, now func() time.Time, audioReportTrigger chan<- struct{}) *multiSyncCueAudioTrigger {
 	return &multiSyncCueAudioTrigger{
-		logger:       logger,
-		now:          now,
-		preparedLate: make(map[string]bool),
-		openWaiters:  make(map[string]chan struct{}),
+		logger:             logger,
+		now:                now,
+		audioReportTrigger: audioReportTrigger,
+		preparedLate:       make(map[string]bool),
+		openWaiters:        make(map[string]chan struct{}),
+	}
+}
+
+// signalAudioReport requests an immediate audio report the same
+// non-blocking way command.go's audioReportTrigger send does: a pending
+// signal already covers "something changed since the last report," so a
+// dropped duplicate here is correct, not lossy.
+func (c *multiSyncCueAudioTrigger) signalAudioReport() {
+	if c.audioReportTrigger == nil {
+		return
+	}
+	select {
+	case c.audioReportTrigger <- struct{}{}:
+	default:
 	}
 }
 
@@ -502,6 +524,7 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 		LeadMs:           int64(leadMs),
 		PreparedLate:     preparedLate,
 	})
+	c.signalAudioReport()
 }
 
 // startLateOnArrival mirrors cueactivationaudio.go's startUnalignedOnArrival:
@@ -534,6 +557,7 @@ func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *
 		SequenceFilename: filename, ArrivalNs: arrivalNs, LeadMs: leadMs,
 		PreparedLate: true, LatenessMs: latenessMs,
 	})
+	c.signalAudioReport()
 }
 
 // sessionAlreadyPlaying reports whether the cue session's own snapshot

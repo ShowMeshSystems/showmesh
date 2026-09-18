@@ -168,7 +168,7 @@ func TestMultiSyncCueAudioArmedStartsAtArrivalPlusLead(t *testing.T) {
 		t.Fatal("no Load was recorded after staging Apply+Prepare; test setup is broken")
 	}
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
@@ -257,7 +257,7 @@ func TestMultiSyncCueAudioColdCuePreparesOnOpenStartsOnStartAndReportsLate(t *te
 	catalogStore := heldcatalog.NewFileStore(dir)
 	newTriggerTestCatalog(t, catalogStore, "cue-cold", "kpop-audio.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
@@ -336,7 +336,7 @@ func TestMultiSyncCueAudioMediaPacketsIgnored(t *testing.T) {
 	catalogStore := heldcatalog.NewFileStore(dir)
 	newTriggerTestCatalog(t, catalogStore, "cue-media", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
 
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
@@ -362,7 +362,7 @@ func TestMultiSyncCueAudioUnknownFilenameIgnored(t *testing.T) {
 	catalogStore := heldcatalog.NewFileStore(dir)
 	newTriggerTestCatalog(t, catalogStore, "cue-known", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
 
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
@@ -399,7 +399,7 @@ func TestMultiSyncCueAudioStopStopsAfterGrace(t *testing.T) {
 		t.Fatalf("start = %+v, want started", r)
 	}
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	// A 10ms known step time makes the 5-frame grace 50ms -- fast enough
 	// for a unit test's real-time sleeps without relying on the 250ms
 	// unknown-step fallback.
@@ -465,7 +465,7 @@ func TestMultiSyncCueAudioUnlockedClockStartsOnArrivalWithReason(t *testing.T) {
 	newTriggerTestCatalog(t, catalogStore, "cue-unlocked", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 1000)
 
 	logger, buf := capturingLogger()
-	trigger := newMultiSyncCueAudioTrigger(logger, clk.now)
+	trigger := newMultiSyncCueAudioTrigger(logger, clk.now, nil)
 	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
 
 	done := make(chan struct{})
@@ -539,7 +539,7 @@ func TestMultiSyncCueAudioLeadSmallerThanOutputLatencyStillStarts(t *testing.T) 
 		t.Fatalf("staging prepare refused: %+v", r)
 	}
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
@@ -630,7 +630,7 @@ func TestMultiSyncCueAudioStartArrivalStampedBeforeSlowOpenPrepare(t *testing.T)
 	catalogStore := heldcatalog.NewFileStore(dir)
 	newTriggerTestCatalog(t, catalogStore, "cue-slow-open", "slow-open.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
@@ -734,7 +734,7 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 		t.Fatalf("staging prepare refused: %+v", r)
 	}
 
-	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
@@ -796,5 +796,70 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	}
 	if rec.Trigger != pkgaudio.StartTriggerMultiSync {
 		t.Fatalf("recorded trigger = %q, want %q", rec.Trigger, pkgaudio.StartTriggerMultiSync)
+	}
+}
+
+// TestMultiSyncCueAudioStartSignalsAudioReportTrigger proves a MultiSync
+// start requests an immediate audio report, the same non-blocking send
+// command.go's own audioReportTrigger use makes after a dispatched
+// command: the coordinator's own fallback wait otherwise misses this
+// node's report on its 15s resting cadence (see this file's own doc
+// comment and audioreport.go).
+func TestMultiSyncCueAudioStartSignalsAudioReportTrigger(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	mgr, fake := newTestAudioManager(t, dir, clk)
+	media := newScriptableClockSource(time.Unix(5_000_000_000, 0))
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 100,
+	})
+	resetTriggerRegistry(t)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-armed", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 2500)
+
+	stagedRef := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+	if _, ok := fake.LastLoadedHandle(); !ok {
+		t.Fatal("no Load was recorded after staging Apply+Prepare; test setup is broken")
+	}
+
+	audioReportTrigger := make(chan struct{}, 1)
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, audioReportTrigger)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	trigger.SetSources(catalogStore, mgr, dir, timeline)
+
+	before := media.reads()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: "wake-up.fseq",
+		})
+	}()
+	media.waitForReads(t, before+2)
+	media.advance(200 * time.Millisecond)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("HandleSequencePacket never returned after the media clock reached T0")
+	}
+
+	select {
+	case <-audioReportTrigger:
+	default:
+		t.Fatal("audioReportTrigger was not signalled after a MultiSync start")
 	}
 }

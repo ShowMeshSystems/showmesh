@@ -540,6 +540,78 @@ func TestDispatchOneCueActivationFallsBackAfterMultiSyncWindowElapses(t *testing
 	}
 }
 
+// cueActivationNodeResultPayloadWithMultiSyncTrigger mirrors
+// cueActivationNodeResultPayload, adding the exact evidence shape
+// internal/agent/cueactivationops.go's activate writes when it finds its
+// Cue's audio session already started by MultiSync (activateAudio's own
+// item 7 restart guard): [pkgaudio.ResultStartTrigger] "multisync" plus
+// its own sequence filename, arrival, lead, and preparedLate fields,
+// alongside the ordinary node outcome fields every result carries.
+func cueActivationNodeResultPayloadWithMultiSyncTrigger(filename string, arrivalNs int64, leadMs int, preparedLate bool) mqttproto.ResultPayload {
+	return mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.cue_activation.outcome",
+			Value: map[string]any{
+				"activationId": "cueact-test-1", "cueId": "cue-1", "cueRevision": int64(1),
+				"outcome":                              cueActivationNodeOutcomeAuthorized,
+				pkgaudio.ResultStartTrigger:            pkgaudio.StartTriggerMultiSync,
+				pkgaudio.ResultTriggerSequenceFilename: filename,
+				pkgaudio.ResultTriggerArrivalNs:        arrivalNs,
+				pkgaudio.ResultStartLeadMs:             leadMs,
+				pkgaudio.ResultPreparedLate:            preparedLate,
+			},
+		},
+	}
+}
+
+// TestDispatchOneCueActivationRecordsMultiSyncFromNodeResultAfterFallbackMiss
+// proves the node's own cue.activate result carries this activation's
+// MultiSync start evidence when the pre-dispatch push-cache poll
+// (waitForMultiSyncStart) missed it entirely: the node's audio report only
+// elevates to its fast cadence during a fade, so a start that lands well
+// inside the fallback window can still be invisible to the push cache by
+// the time this coordinator gives up waiting. The outcome must still
+// report StartTrigger "multisync" with the node's own fields, never
+// "coordinator", once the result itself carries that evidence.
+func TestDispatchOneCueActivationRecordsMultiSyncFromNodeResultAfterFallbackMiss(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 20)
+	setup.pub.result = cueActivationNodeResultPayloadWithMultiSyncTrigger("kpop 2026 MH Test.fseq", 1_700_000_000_000_000_000, 100, true)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	// No push-cache evidence at all: waitForMultiSyncStart's own window
+	// elapses with nothing found, exactly like the fallback test above.
+	deps.Audio = &fakeNodeAudioLister{}
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	if outcome.StartTrigger != "multisync" {
+		t.Errorf("StartTrigger = %q, want %q: the node's own result carried multisync evidence", outcome.StartTrigger, "multisync")
+	}
+	if outcome.TriggerSequenceFilename != "kpop 2026 MH Test.fseq" {
+		t.Errorf("TriggerSequenceFilename = %q, want %q", outcome.TriggerSequenceFilename, "kpop 2026 MH Test.fseq")
+	}
+	if outcome.TriggerArrivalNs != 1_700_000_000_000_000_000 {
+		t.Errorf("TriggerArrivalNs = %d, want %d", outcome.TriggerArrivalNs, int64(1_700_000_000_000_000_000))
+	}
+	if outcome.StartLeadMs != 100 {
+		t.Errorf("StartLeadMs = %d, want 100", outcome.StartLeadMs)
+	}
+	if !outcome.PreparedLate {
+		t.Error("PreparedLate = false, want true")
+	}
+}
+
 // twoNodeCueActivationDispatchTestFixture builds one audio-only Cue whose
 // outputs.audio.targets names two nodes explicitly, both with a real
 // node-inventoried asset, and returns the [cueactivation.Activation] every

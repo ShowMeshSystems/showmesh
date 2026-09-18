@@ -37,6 +37,12 @@ var readBackAssetFunc = readBackAsset
 type assetFetchOperation struct {
 	dir   string
 	token string
+
+	// hashCache, when non-nil, is populated with this landed file's
+	// verified hash below, shared with cue.activate's own assetPresent
+	// check (cueactivationops.go) so it never re-hashes a file this
+	// operation already verified.
+	hashCache *verifiedHashCache
 }
 
 // ErrAssetFilenameUnsafe is returned when a requested filename contains a
@@ -206,6 +212,11 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 	// during download — see OperationResult's doc comment on why Confirmed
 	// must rest on evidence collected after the write.
 	confirmed, readBackSize := readBackAssetFunc(finalPath, contentHash)
+	if confirmed && o.hashCache != nil {
+		if info, statErr := os.Stat(finalPath); statErr == nil {
+			o.hashCache.set(finalPath, info.Size(), info.ModTime(), contentHash)
+		}
+	}
 
 	return OperationResult{
 		Confirmed:  confirmed,
