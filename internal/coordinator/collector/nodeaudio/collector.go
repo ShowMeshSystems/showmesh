@@ -394,8 +394,8 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		)
 	} else {
 		obs = append(obs,
-			buildValue(nodeID, SignalClockDomain, domain, &declaredAt, rep),
-			buildValue(nodeID, SignalClockProvenance, provenance, &declaredAt, rep),
+			buildConfiguredValue(nodeID, SignalClockDomain, domain, declaredAt, rep),
+			buildConfiguredValue(nodeID, SignalClockProvenance, provenance, declaredAt, rep),
 		)
 	}
 
@@ -755,8 +755,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 
 	if sess.GapKnown {
 		obs = append(obs,
-			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
-			buildSessionValue(res, source, SignalSessionItemGapReason, sess.ItemGapReason, sess.ItemGapObservedAt, rep),
+			buildSessionConfiguredValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
+			buildSessionConfiguredValue(res, source, SignalSessionItemGapReason, sess.ItemGapReason, sess.ItemGapObservedAt, rep),
 		)
 	} else {
 		gapReason := sess.ItemGapReason
@@ -835,6 +835,48 @@ func buildSessionValue(res observation.ResourceRef, source string, sig observati
 		return o
 	}
 	opts = append(opts, observation.WithValidFor(DefaultValidFor))
+	o, err := observation.Measured(res, sig, value, *observedAt, opts...)
+	if err != nil {
+		return notCollected(res, sig, source, fmt.Sprintf("internal error building observation: %v", err), rep.receivedAt)
+	}
+	return o
+}
+
+// buildConfiguredValue is [buildValue] for a value that is a configured
+// fact, not a polled reading: it stays true for as long as the
+// configuration that declared it stands, not for a fixed window after
+// observedAt. ValidFor is left at zero, pkg/observation's existing "does
+// not expire on its own" case, so the wire's validForSeconds renders null
+// (see [Observation.StateAt] and internal/coordinator/api/mapping.go's
+// mapEvidence) while observedAt still shows when the configuration was
+// declared.
+func buildConfiguredValue(nodeID string, sig observation.SignalID, value any, observedAt time.Time, rep report) observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	o, err := observation.Measured(res, sig, value, observedAt,
+		observation.WithSource(source), observation.WithCollectedAt(rep.receivedAt))
+	if err != nil {
+		return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)
+	}
+	return o
+}
+
+// buildSessionConfiguredValue is [buildSessionValue]'s counterpart for a
+// measurement taken once at an event: it stays current until the next such
+// event replaces it, or the session ends, never aged by a fixed time
+// window. See [buildConfiguredValue]'s identical node-level rule.
+func buildSessionConfiguredValue(res observation.ResourceRef, source string, sig observation.SignalID, value any, observedAt *time.Time, rep report) observation.Observation {
+	opts := []observation.Option{
+		observation.WithSource(source),
+		observation.WithCollectedAt(rep.receivedAt),
+	}
+	if observedAt == nil {
+		o, err := observation.MeasuredUnknownAge(res, sig, value, opts...)
+		if err != nil {
+			return notCollected(res, sig, source, fmt.Sprintf("internal error building observation: %v", err), rep.receivedAt)
+		}
+		return o
+	}
 	o, err := observation.Measured(res, sig, value, *observedAt, opts...)
 	if err != nil {
 		return notCollected(res, sig, source, fmt.Sprintf("internal error building observation: %v", err), rep.receivedAt)

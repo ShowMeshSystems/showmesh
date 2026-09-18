@@ -579,6 +579,38 @@ func TestPollReportsClockDomainFromConfigNotFromTheNode(t *testing.T) {
 	}
 }
 
+// TestPollClockDomainStaysCurrentLongAfterItWasDeclared proves the owner
+// ruling "static does not mean stale": a configured fact does not age by
+// [DefaultValidFor] the way a polled reading does. ValidFor stays zero
+// (pkg/observation's "does not expire on its own" case) so StateAt reports
+// StateCurrent no matter how long ago declaredAt was, while ObservedAt
+// still shows the declaration's own time.
+func TestPollClockDomainStaysCurrentLongAfterItWasDeclared(t *testing.T) {
+	declaredAt := time.Now().Add(-72 * time.Hour)
+	src := declaredClockDomainSource(t, "single-interface", "one interface, both routes on it", declaredAt)
+	st := NewStore(WithClockDomainSource(src))
+	st.Put("audio-01", samplePayload(), time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	domain := findObs(t, obs, SignalClockDomain)
+	if domain.ValidFor != 0 {
+		t.Errorf("clock domain ValidFor = %s, want 0 (never expires)", domain.ValidFor)
+	}
+	if got := domain.StateAt(time.Now()); got != observation.StateCurrent {
+		t.Errorf("clock domain StateAt(now) = %q, want %q even though it was declared %s ago", got, observation.StateCurrent, time.Since(declaredAt))
+	}
+
+	provenance := findObs(t, obs, SignalClockProvenance)
+	if provenance.ValidFor != 0 {
+		t.Errorf("clock provenance ValidFor = %s, want 0 (never expires)", provenance.ValidFor)
+	}
+	if got := provenance.StateAt(time.Now()); got != observation.StateCurrent {
+		t.Errorf("clock provenance StateAt(now) = %q, want %q even though it was declared %s ago", got, observation.StateCurrent, time.Since(declaredAt))
+	}
+}
+
 // TestPollClockDomainNoSourceWiredIsNotCollected proves the nil-clockSrc
 // default (no WithClockDomainSource option) reports not_collected, never a
 // fabricated "undeclared" reading.
