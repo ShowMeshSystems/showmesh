@@ -53,6 +53,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  Workbench,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -339,6 +340,10 @@ export function ShowNight() {
         </section>
       </div>
 
+      <Workbench
+        wide="side"
+        sideLabel="Run of show and status"
+        main={
       <Section
         id="sn-commands"
         title="Lifecycle commands"
@@ -397,6 +402,8 @@ export function ShowNight() {
           </div>
         )}
       </Section>
+      }
+      side={<>
 
       <Section
         id="sn-run"
@@ -547,6 +554,8 @@ export function ShowNight() {
           </div>
         ))}
       </Section>
+      </>}
+      />
 
       <NightSessionActivation />
 

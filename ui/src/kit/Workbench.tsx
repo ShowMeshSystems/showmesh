@@ -10,13 +10,17 @@ export function Workbench({
   main,
   side,
   sideLabel = 'Status',
+  wide = 'main',
 }: {
   main: ReactNode
   side: ReactNode
   sideLabel?: string
+  /** Which column is wider. Default gives the driving controls the room; set
+   *  'side' when the status column holds the wide tables. */
+  wide?: 'main' | 'side'
 }) {
   return (
-    <div className="sm-workbench">
+    <div className={`sm-workbench${wide === 'side' ? ' sm-workbench--wide-side' : ''}`}>
       <div className="sm-workbench__main">{main}</div>
       <aside className="sm-workbench__side" aria-label={sideLabel}>
         {side}
