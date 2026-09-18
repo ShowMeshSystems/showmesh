@@ -84,8 +84,8 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 		// 179-microsecond false confirm it closes (see this file's own top
 		// comment).
 		return nil, src, false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no %s reading has arrived since this command was dispatched at %s; the most recent evidence is from "+
-				"%s, via %s, and predates dispatch — it cannot confirm this command",
+			"no %s reading has arrived since this command was dispatched at %s; the most recent reading is from "+
+				"%s, via %s, from before dispatch, so it cannot confirm this command",
 			signal, notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
 	}
 
@@ -200,7 +200,7 @@ func evaluateFPPStopGracefullyEvidence(ctx context.Context, lister ObservationLi
 		// owner's own live UI test caught (CLAUDE.md), and an operator
 		// reading "confirmed" must never conclude playback has ended.
 		return true, state, fmt.Sprintf(
-			"FPP accepted the graceful stop. The show has NOT stopped yet — it's still running and will stop once "+
+			"FPP accepted the graceful stop. The show has NOT stopped yet: it's still running and will stop once "+
 				"the current item finishes (fpp.status %q, via %s).", valStr, source)
 	default:
 		return false, state, fmt.Sprintf("fpp.status is %v, not yet stopping or idle (via %s).", value, source)
@@ -281,7 +281,7 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 			// same short "moves on its own" note as the index-movement
 			// branch above.
 			return true, statusState, fmt.Sprintf(
-				"That was the last item — Next ends the playlist. Note: this also moves on its own (fpp.status %q -> %q, via %s).",
+				"That was the last item, so Next ends the playlist. Note: this also moves on its own (fpp.status %q to %q, via %s).",
 				baseline.StatusValue, fppStatusValueIdle, statusSource)
 		}
 	}
@@ -300,17 +300,17 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 		switch {
 		case !baseline.IndexKnown:
 			return false, string(observation.StateNotCollected), fmt.Sprintf(
-				"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated — and %s.", alreadyIdleNote)
+				"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated, and %s.", alreadyIdleNote)
 		case sourceFlipped:
 			return false, indexState, fmt.Sprintf(
 				"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch "+
-					"baseline (%s), so no movement can be attributed to this command — and %s.",
+					"baseline (%s), so no movement can be attributed to this command, and %s.",
 				indexSource, baseline.IndexSource, alreadyIdleNote)
 		case !indexCurrent:
-			return false, indexState, fmt.Sprintf("%s — and %s.", indexReason, alreadyIdleNote)
+			return false, indexState, fmt.Sprintf("%s, and %s.", indexReason, alreadyIdleNote)
 		default:
 			return false, indexState, fmt.Sprintf(
-				"fpp.playlist.index is unchanged (%v, via %s) — and %s.", baseline.IndexValue, baseline.IndexSource, alreadyIdleNote)
+				"fpp.playlist.index is unchanged (%v, via %s), and %s.", baseline.IndexValue, baseline.IndexSource, alreadyIdleNote)
 		}
 	}
 	if !baseline.IndexKnown {
@@ -320,7 +320,7 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 	if sourceFlipped {
 		return false, indexState, fmt.Sprintf(
 			"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch baseline "+
-				"(%s, value %v) — the readings aren't comparable, so no movement can be attributed to this command; "+
+				"(%s, value %v), so the readings aren't comparable and no movement can be attributed to this command; "+
 				"fpp.status has also not reached %q.", indexSource, baseline.IndexSource, baseline.IndexValue, fppStatusValueIdle)
 	}
 	if !indexCurrent {
@@ -367,12 +367,12 @@ func evaluatePrevItemEvidence(ctx context.Context, lister ObservationLister, ins
 	}
 	if indexVal == nil || baseline.IndexValue == nil {
 		return false, indexState, fmt.Sprintf(
-			"fpp.playlist.index carries no value (via %s) — that's not evidence of movement.", indexSource)
+			"fpp.playlist.index carries no value (via %s), so movement can't be confirmed.", indexSource)
 	}
 	if indexSource != baseline.IndexSource {
 		return false, indexState, fmt.Sprintf(
 			"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch baseline "+
-				"(%s, value %v) — the readings aren't comparable, so no movement can be attributed to this command.",
+				"(%s, value %v), so the readings aren't comparable and no movement can be attributed to this command.",
 			indexSource, baseline.IndexSource, baseline.IndexValue)
 	}
 	if fmt.Sprint(indexVal) != fmt.Sprint(baseline.IndexValue) {

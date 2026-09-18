@@ -585,3 +585,74 @@ func TestPlaylistReadinessAssetsMissingNodeHoldsEverythingPasses(t *testing.T) {
 		t.Fatalf("Ready = false, want true (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
 }
+
+// TestPlaylistReadinessCueMultisyncTriggerMissingWarns proves condition 13
+// (ADR-051 decision 2): a Cue with an audio output whose resolved catalog
+// entry has no MultiSync trigger is reported as a Warning naming the Cue,
+// never as a FailingCondition — every other condition here is deliberately
+// made to pass first (an audio asset node-1 genuinely holds, a current
+// catalog acknowledgement, a matching observation), so this warning is the
+// ONLY thing distinguishing this fixture from an all-conditions-pass one.
+func TestPlaylistReadinessCueMultisyncTriggerMissingWarns(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	hash := hash64("a1")
+	// The entry declares no expectedSequenceFilename, so cue-1 has no
+	// playlist-derived trigger; cue-1's own outputs (rewritten to audio-
+	// only below) declare no render output either, so it has none from
+	// that source either.
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putPlaylist(t, st, "playlist-1", p)
+	putCueWithAudio(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	ctx := context.Background()
+	if _, _, err := st.CreateAsset(ctx, store.AssetRecord{
+		ID: "sha256:present-audio-node-1", ShowID: "show-1", SequenceID: "asset-cue-1",
+		TargetKind: store.AssetTargetKindNode, TargetID: "node-1", MediaType: "audio",
+		ContentHash: "sha256:present", RuntimeFilename: "cue-1.wav", SizeBytes: 1024,
+		Backend: "volume", StorageKey: "sha256:present",
+	}); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+		NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+	}); err != nil {
+		t.Fatalf("put node cue catalog ack: %v", err)
+	}
+
+	obs := baseObservation("inst-1")
+	obs.PlaylistName, obs.PlaylistHash, obs.Section, obs.Position = "Main", hash, "mainPlaylist", 0
+	obs.EntryKey = entryKeyFor(t, p, "entry-1")
+	putObservation(t, st, obs)
+
+	if err := st.ReplaceNodeAssetInventory(ctx, "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: "sha256:present", RuntimeFilename: "cue-1.wav", SizeBytes: 1024, VerifiedAt: time.Now()}},
+		store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
+
+	report, err := PlaylistReadiness(ctx, st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true: a missing MultiSync trigger is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
+	}
+	if !containsAll(report.Warning, "cue-1", "no FPP sequence filename starts this cue") {
+		t.Fatalf("Warning = %q, want it to name cue-1 and explain that no trigger starts it", report.Warning)
+	}
+}

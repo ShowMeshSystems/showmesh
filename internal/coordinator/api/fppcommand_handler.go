@@ -452,7 +452,7 @@ const (
 	// proceeds regardless of the audit-write failure. This is the ONLY
 	// call site where "degraded because of the safety-class exemption" is
 	// literally true.
-	degradedAttributionReasonSafetyClassExemption = "ADR-024 decision 11's blackout/stop/power-off safety class exemption (pre-dispatch write)"
+	degradedAttributionReasonSafetyClassExemption = "this action is blackout, stop, or power-off, which always proceeds even if the pre-dispatch audit write fails"
 
 	// degradedAttributionReasonPostDispatch covers every OTHER
 	// [handlers.writeBestEffortAudit]/[handlers.writeBestEffortAuditBounded]
@@ -467,7 +467,7 @@ const (
 	// record of it — ADR-024's own "you cannot act" vs. "you cannot see"
 	// distinction, landing on the "you cannot see" side this time, which
 	// is never acceptable per that record's own reasoning.
-	degradedAttributionReasonPostDispatch = "the event this entry records already happened and cannot be un-recorded; refusing to answer would only deny the operator the record of it (ADR-024: \"you cannot see\", never acceptable), not protect them from anything"
+	degradedAttributionReasonPostDispatch = "the event this entry records already happened and cannot be un-recorded; refusing to answer would only deny the operator the record of it, not protect them from anything"
 
 	// degradedAttributionReasonMacroRunNeverWithheld is
 	// [handlers.dispatchFPPCommand]'s pre-dispatch fallback when the caller
@@ -479,7 +479,7 @@ const (
 	// conflation the two constants above already exist to prevent, and
 	// would make an audit record claim a justification that does not
 	// apply to it.
-	degradedAttributionReasonMacroRunNeverWithheld = "this dispatch belongs to a macro run, which never withholds a command for an audit failure (owner decision 2026-08-14, superseding ADR-024 decision 11's fail-closed default inside a run)"
+	degradedAttributionReasonMacroRunNeverWithheld = "this dispatch belongs to a macro run, which never withholds a command for an audit failure"
 
 	// degradedAttributionReasonAuditNeverBlocks is the pre-dispatch
 	// fallback for a dispatch that reaches [handlers.dispatchFPPCommand],
@@ -501,7 +501,7 @@ const (
 	// from "this ran because audit unavailability no longer blocks
 	// anything" (three different facts about the same command, not one
 	// fact reported three ways).
-	degradedAttributionReasonAuditNeverBlocks = "ADR-024 decision 11's audit-unavailability-never-blocks rule (owner ruling 2026-08-26): this action is not a member of the blackout/stop/power-off safety class and does not belong to a macro run, and still proceeds without a durable pre-dispatch audit entry"
+	degradedAttributionReasonAuditNeverBlocks = "this action does not belong to the blackout/stop/power-off safety class or to a macro run, but still proceeds without a durable pre-dispatch audit entry"
 )
 
 // writeBestEffortAuditBounded is [handlers.writeBestEffortAudit] with its

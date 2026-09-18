@@ -1204,6 +1204,15 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
+| `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+
+**`cue-multisync-trigger-missing` is warning-only, not a `failingCondition`.**
+Every condition above this row can make `ready` false; this one never does
+(ADR-051 decision 2: a Cue with an audio output and no trigger still plays,
+from the coordinator's own fallback, only later). It is registered here
+because it is still part of the same closed, script-branchable vocabulary
+this section exists to protect, even though it surfaces on `warning`
+rather than `failingCondition`.
 
 **Lane 20.1's three audio-target conditions are registered here after the
 fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a

@@ -1,6 +1,6 @@
 # ADR-049: A Cue's Audio Plays on Several Nodes at One Instant
 
-Status: Accepted (owner, 2026-09-15; decisions 6 to 9 added 2026-09-16)
+Status: Accepted (owner, 2026-09-15; decisions 6 to 9 added 2026-09-16); decisions 3 and 6 narrowed to the fallback start by [ADR-051](ADR-051-cue-audio-starts-on-the-multisync-start-packet.md) (2026-09-18)
 Date: 2026-09-15
 
 ## Context

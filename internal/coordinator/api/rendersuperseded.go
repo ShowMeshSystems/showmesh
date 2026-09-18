@@ -192,7 +192,7 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 			sc.show, sc.generation, active.ShowID, active.Generation,
 		)
 		if sc.haveRevision && sc.revision != catalog.Revision {
-			reason += fmt.Sprintf("; the held catalog revision %q no longer matches the active resolution %q (evidence only — a Show/generation match alone is what decides this verdict)", sc.revision, catalog.Revision)
+			reason += fmt.Sprintf("; the render was built against catalog %q, and the active catalog is now %q. That alone doesn't change this verdict: only the show/generation match above does.", sc.revision, catalog.Revision)
 		}
 		superseded := out[sc.pipelineIdx]
 		superseded.Value = mqttproto.RenderPipelineStateSuperseded

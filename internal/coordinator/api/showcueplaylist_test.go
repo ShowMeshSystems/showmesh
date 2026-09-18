@@ -811,3 +811,80 @@ func TestPutShowPlaylistRevisionPreconditionWiring(t *testing.T) {
 		t.Fatalf("If-None-Match against an already-created playlist: status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 }
+
+// --- sequence filename claim conflict (ADR-051 decision 2) ---
+
+// TestPutShowPlaylistRejectsDuplicateSequenceFilenameClaim proves a
+// SECOND fpp-runner Playlist whose entry claims a filename an existing
+// Playlist's entry already claims for a DIFFERENT Cue is refused, naming
+// the type distinct from every other refusal a client would need to
+// dispatch on differently.
+func TestPutShowPlaylistRejectsDuplicateSequenceFilenameClaim(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustPutCue(t, api, token, "thriller", validCueBody)
+	otherCue := `{"show":"halloween-2026","name":"Other","outputs":{"render":{"sequence":"other"}}}`
+	mustPutCue(t, api, token, "other", otherCue)
+
+	first := `{
+		"show": "halloween-2026", "name": "Main show", "runner": "fpp",
+		"fpp": {"instanceUuid": "u1", "playlistName": "p1", "playlistHash": "` + playlistHash64 + `"},
+		"entries": [{"id": "e1", "cue": "thriller", "fpp": {"section": "main", "position": 0, "expectedSequenceFilename": "Thriller.fseq"}}]
+	}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/main", first, map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed playlist: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	second := `{
+		"show": "halloween-2026", "name": "Second show", "runner": "fpp",
+		"fpp": {"instanceUuid": "u2", "playlistName": "p2", "playlistHash": "` + playlistHash64 + `"},
+		"entries": [{"id": "e1", "cue": "other", "fpp": {"section": "main", "position": 0, "expectedSequenceFilename": "Thriller.fseq"}}]
+	}`
+	req2 := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/second", second, map[string]string{"Authorization": "Bearer " + token})
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (thriller and other both claim Thriller.fseq); body: %s", resp2.StatusCode, body2)
+	}
+	problem := decodeMap(t, body2)
+	if problem["type"] != ProblemTypeSequenceFilenameClaimDuplicate {
+		t.Errorf("problem.type = %v, want %v", problem["type"], ProblemTypeSequenceFilenameClaimDuplicate)
+	}
+	if !containsAllSubstrings(string(body2), "thriller", "other", "Thriller.fseq") {
+		t.Errorf("detail must name both cues and the filename; body: %s", body2)
+	}
+}
+
+// TestPutShowPlaylistAllowsRewritingItsOwnSequenceFilenameClaim proves a
+// Playlist can be rewritten (same id) without colliding with the claims
+// its OWN prior revision already held — excludeID's whole reason for
+// existing in checkSequenceFilenameClaims, matching the showmesh-audio
+// single-playlist-per-show check's identical self-exclusion.
+func TestPutShowPlaylistAllowsRewritingItsOwnSequenceFilenameClaim(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustPutCue(t, api, token, "thriller", validCueBody)
+
+	body := `{
+		"show": "halloween-2026", "name": "Main show", "runner": "fpp",
+		"fpp": {"instanceUuid": "u1", "playlistName": "p1", "playlistHash": "` + playlistHash64 + `"},
+		"entries": [{"id": "e1", "cue": "thriller", "fpp": {"section": "main", "position": 0, "expectedSequenceFilename": "Thriller.fseq"}}]
+	}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/main", body, map[string]string{"Authorization": "Bearer " + token})
+	if resp, respBody := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed playlist: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+
+	// Rewrite "main" with the identical entry (same cue, same filename) —
+	// must not collide with itself.
+	req2 := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/main", body, map[string]string{"Authorization": "Bearer " + token})
+	if resp2, respBody2 := doRawRequest(t, api.Handler, req2); resp2.StatusCode != http.StatusOK {
+		t.Fatalf("rewrite own playlist: status = %d, want 200; body: %s", resp2.StatusCode, respBody2)
+	}
+}
