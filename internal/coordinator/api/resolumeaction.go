@@ -306,7 +306,7 @@ func quotedResolumeActionNames(descriptors []ResolumeActionDescriptor) string {
 		quoted[i] = strconv.Quote(n)
 	}
 	if len(quoted) == 0 {
-		return "(none — no ResolumeActionDispatcher is configured on this coordinator)"
+		return "(none: no ResolumeActionDispatcher is configured on this coordinator)"
 	}
 	return strings.Join(quoted, ", ")
 }
@@ -325,7 +325,7 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	rawParams, hasParams := top["params"]
 	if hasParams && isJSONNull(rawParams) {
 		p := invalidParameterProblem(fmt.Sprintf(
-			"params must not be null for action %q; omit the field entirely (or send {}) — an explicit null is not "+
+			"params must not be null for action %q; omit the field entirely (or send {}), since an explicit null is not "+
 				"the same as an omitted field", desc.Name))
 		return nil, &p
 	}

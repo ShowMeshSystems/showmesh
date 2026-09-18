@@ -551,14 +551,14 @@ func TestPutFPPEndpointsConfigDeferredMigrationGivesANonDestructiveRemedy(t *tes
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
-	if !strings.Contains(detail, "Do NOT remove SHOWMESH_FPP_ENDPOINTS") {
-		t.Errorf("detail = %q, want an explicit warning against removing the variable while the migration is deferred", detail)
+	if !strings.Contains(detail, "do not clear SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("detail = %q, want an explicit warning against clearing the variable while the migration is deferred", detail)
 	}
 	// The exact instruction the standard 409 gives, which is destructive
 	// here. Asserting its ABSENCE is the load-bearing half: a handler that
 	// forgot to branch would still contain the phrase above if it were
 	// added to both messages, but cannot contain this one.
-	if strings.Contains(detail, "Remove SHOWMESH_FPP_ENDPOINTS from this coordinator's environment and restart it once") {
+	if strings.Contains(detail, "Remove SHOWMESH_FPP_ENDPOINTS, restart this coordinator, then retry") {
 		t.Errorf("detail = %q, must NOT give the standard remedy: with the migration deferred, removing the variable "+
 			"discards the only copy of the endpoint list", detail)
 	}
@@ -593,7 +593,7 @@ func TestGetFPPEndpointsConfigDeferredMigrationStatesItRatherThanReportingNothin
 	if strings.Contains(detail, "has been created yet") {
 		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: one IS in effect", detail)
 	}
-	for _, want := range []string{"SHOWMESH_FPP_ENDPOINTS", "could not be", "GET /api/v1/fpp"} {
+	for _, want := range []string{"SHOWMESH_FPP_ENDPOINTS", "unwritable", "GET /api/v1/fpp"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", detail, want)
 		}

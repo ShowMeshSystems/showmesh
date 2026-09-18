@@ -271,12 +271,12 @@ func (h *handlers) cueActivationPinStatus(mode string) v1.CueActivationPin {
 // per ADR-033 decision 3.
 func cueActivationPinEffect(mode string, pinned bool) string {
 	if mode != config.ShowModeShow {
-		return "program mode: cue activation re-resolves the current show.cue configuration on its own next tick, so a saved edit reaches every node within one tick, with no restart needed."
+		return "Program mode: a saved cue edit reaches every node within one tick. No restart needed."
 	}
 	if !pinned {
-		return "show mode: no active show has been resolved yet, so there is nothing to pin. Cue authorization will freeze at whatever show.cue configuration is in effect the moment a show becomes active."
+		return "Show mode: no active show yet, so nothing is pinned. The show.cue configuration in effect when a show starts will freeze there."
 	}
-	return "show mode: this coordinator is holding the cue authorization identity it captured for the show and generation named above. A show.cue edit saved now is STAGED: it will not reach any node until the show is stopped and a new show generation begins authorizing activations."
+	return "Show mode: cue edits are saved but will not reach nodes until the show is stopped and restarted."
 }
 
 // showModeResolumeEffect is [v1.ShowModeConfigResponse.

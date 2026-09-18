@@ -389,9 +389,8 @@ func fppEndpointsEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_FPP_ENDPOINTS is still set",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because SHOWMESH_FPP_ENDPOINTS is still set in this coordinator's environment " +
-			"— accepting it now would conflict with that variable on the next restart. Remove SHOWMESH_FPP_ENDPOINTS " +
-			"and restart this coordinator once, then retry.",
+		Detail: "SHOWMESH_FPP_ENDPOINTS is still set, so this write was refused: it would conflict with that " +
+			"variable on the next restart. Remove SHOWMESH_FPP_ENDPOINTS, restart this coordinator, then retry.",
 	}
 }
 
@@ -415,13 +414,10 @@ func fppEndpointsEnvVarSetProblem() v1.Problem {
 func fppEndpointsMigrationDeferredProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_ENDPOINTS was deferred",
+		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because the SHOWMESH_FPP_ENDPOINTS migration could not be saved on this boot, " +
-			"so the store holds no endpoint configuration yet. Do NOT remove SHOWMESH_FPP_ENDPOINTS — it is " +
-			"currently the only copy of this coordinator's endpoint list, and removing it now would leave zero " +
-			"endpoints on the next restart. Check the coordinator's data volume (often full, read-only, or damaged) " +
-			"and restart; the migration retries on every boot. Once it succeeds, remove the variable and retry.",
+		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
+			"volume and restart; do not clear SHOWMESH_FPP_ENDPOINTS.",
 	}
 }
 
@@ -435,9 +431,9 @@ func resolumeInstancesEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_RESOLUME_URL is still set",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because SHOWMESH_RESOLUME_URL is still set in this coordinator's environment " +
-			"— accepting it now would conflict with that variable on the next restart. Remove SHOWMESH_RESOLUME_URL " +
-			"and SHOWMESH_RESOLUME_ID and restart this coordinator once, then retry.",
+		Detail: "SHOWMESH_RESOLUME_URL is still set, so this write was refused: it would conflict with that " +
+			"variable on the next restart. Remove SHOWMESH_RESOLUME_URL and SHOWMESH_RESOLUME_ID, restart this " +
+			"coordinator, then retry.",
 	}
 }
 
@@ -449,13 +445,10 @@ func resolumeInstancesEnvVarSetProblem() v1.Problem {
 func resolumeInstancesMigrationDeferredProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Configuration write refused: the startup migration of SHOWMESH_RESOLUME_URL was deferred",
+		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because the SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID migration could not be " +
-			"saved on this boot, so the store holds no resolume.instances configuration yet. Do NOT remove " +
-			"SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID — they are currently the only copy of this coordinator's " +
-			"Resolume instance. Check the coordinator's data volume (often full, read-only, or damaged) and restart; " +
-			"the migration retries on every boot. Once it succeeds, remove the variables and retry.",
+		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
+			"volume and restart; do not clear SHOWMESH_RESOLUME_URL or SHOWMESH_RESOLUME_ID.",
 	}
 }
 
@@ -469,10 +462,10 @@ func fppMQTTEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_FPP_MQTT_BROKER_URL is still set",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because SHOWMESH_FPP_MQTT_BROKER_URL is still set in this coordinator's " +
-			"environment — accepting it now would conflict with that variable on the next restart. Remove " +
-			"SHOWMESH_FPP_MQTT_BROKER_URL, SHOWMESH_FPP_MQTT_USERNAME, SHOWMESH_FPP_MQTT_PASSWORD, " +
-			"SHOWMESH_FPP_MQTT_TOPIC_PREFIX, and SHOWMESH_FPP_MQTT_HOSTS and restart this coordinator once, then retry.",
+		Detail: "SHOWMESH_FPP_MQTT_BROKER_URL is still set, so this write was refused: it would conflict with that " +
+			"variable on the next restart. Remove SHOWMESH_FPP_MQTT_BROKER_URL, SHOWMESH_FPP_MQTT_USERNAME, " +
+			"SHOWMESH_FPP_MQTT_PASSWORD, SHOWMESH_FPP_MQTT_TOPIC_PREFIX, and SHOWMESH_FPP_MQTT_HOSTS, restart this " +
+			"coordinator, then retry.",
 	}
 }
 
@@ -484,13 +477,10 @@ func fppMQTTEnvVarSetProblem() v1.Problem {
 func fppMQTTMigrationDeferredProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_MQTT_BROKER_URL was deferred",
+		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because the SHOWMESH_FPP_MQTT_* migration could not be saved on this boot, " +
-			"so the store holds no fpp.mqtt configuration yet. Do NOT remove SHOWMESH_FPP_MQTT_* — they are " +
-			"currently the only copy of this coordinator's FPP MQTT configuration. Check the coordinator's data " +
-			"volume (often full, read-only, or damaged) and restart; the migration retries on every boot. Once it " +
-			"succeeds, remove the variables and retry.",
+		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
+			"volume and restart; do not clear the SHOWMESH_FPP_MQTT_* variables.",
 	}
 }
 
@@ -505,11 +495,10 @@ func assetsSettingsEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: one or more SHOWMESH_ASSET_* settings variables are still set",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because one or more of SHOWMESH_ASSET_CONTENT_BASE_URL, " +
-			"SHOWMESH_ASSET_MAX_UPLOAD_BYTES, SHOWMESH_ASSET_SYNC_INTERVAL, or SHOWMESH_ASSET_INVENTORY_INTERVAL is " +
-			"still set in this coordinator's environment — accepting it now would conflict with those variables on " +
-			"the next restart. Remove all four from your environment (SHOWMESH_ASSET_DIR is unaffected — it stays " +
-			"environment-only) and restart this coordinator once, then retry.",
+		Detail: "One or more of SHOWMESH_ASSET_CONTENT_BASE_URL, SHOWMESH_ASSET_MAX_UPLOAD_BYTES, " +
+			"SHOWMESH_ASSET_SYNC_INTERVAL, or SHOWMESH_ASSET_INVENTORY_INTERVAL is still set, so this write was " +
+			"refused: it would conflict with those variables on the next restart. Remove all four from your " +
+			"environment (SHOWMESH_ASSET_DIR stays environment-only) and restart this coordinator, then retry.",
 	}
 }
 
@@ -522,13 +511,10 @@ func assetsSettingsEnvVarSetProblem() v1.Problem {
 func assetsSettingsMigrationDeferredProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Configuration write refused: the startup migration of the SHOWMESH_ASSET_* settings variables was deferred",
+		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "This write is refused because the SHOWMESH_ASSET_* settings migration could not be saved on this " +
-			"boot, so the store holds no assets.settings configuration yet. Do NOT remove those variables — they are " +
-			"currently the only copy of this coordinator's asset store settings. Check the coordinator's data volume " +
-			"(often full, read-only, or damaged) and restart; the migration retries on every boot. Once it succeeds, " +
-			"remove the variables and retry.",
+		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
+			"volume and restart; do not clear the SHOWMESH_ASSET_* settings variables.",
 	}
 }
 
@@ -607,7 +593,7 @@ func discoveryRunConflictProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Discovery run already in progress",
 		Status: http.StatusConflict,
-		Detail: "another discovery run is currently in progress on this coordinator; this request is refused outright rather than queued — wait for the in-progress run to finish and try again",
+		Detail: "Another discovery run is already in progress, so this request was refused rather than queued. Wait for it to finish, then try again.",
 	}
 }
 
@@ -694,7 +680,7 @@ func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string
 		Title:  "Start Playlist refused: evidence needed to evaluate ifBusy is not current",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Can't tell whether instance %q is busy — this needs CURRENT evidence of %s, and the most recent "+
+			"Can't tell whether instance %q is busy: this needs current evidence of %s, and the most recent "+
 				"reading isn't current (%s). Retry once fresh evidence arrives, or resend with ifBusy=%q to start "+
 				"anyway.",
 			instanceID, signal, reason, fppIfBusyReplace),

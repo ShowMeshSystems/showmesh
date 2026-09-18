@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func TestReconcileOnStartup_AmbiguousEvidenceDegradesWithRecoveryAction(t *testi
 				ContentAnchorJSON: encodeNightContentAnchor(nightRestartAnchor(nightAnchorPurposeRestingOneShot, "halloween-resting", started)),
 			},
 			obs:  nightPlayingObservations("player-01", "something-else", now),
-			want: "contradicts",
+			want: "a different playlist is now playing than expected",
 		},
 		{
 			name: "no current status evidence at all",
@@ -187,7 +188,7 @@ func TestReconcileOnStartup_AmbiguousEvidenceDegradesWithRecoveryAction(t *testi
 				ContentAnchorJSON: encodeNightContentAnchor(nightRestartAnchor(nightAnchorPurposeRestingRepeat, "halloween-resting", started)),
 			},
 			obs:  nil,
-			want: "no current fpp.status evidence",
+			want: "no current status from instance",
 		},
 		{
 			name: "no usable anchor for the persisted state",
@@ -196,7 +197,7 @@ func TestReconcileOnStartup_AmbiguousEvidenceDegradesWithRecoveryAction(t *testi
 				State: nightStateLive, StateEnteredAt: started, Cycle: 1,
 			},
 			obs:  nightPlayingObservations("player-01", "halloween-show", now),
-			want: "no usable content anchor",
+			want: "no record of",
 		},
 		{
 			name: "caught mid-transition",
@@ -221,8 +222,11 @@ func TestReconcileOnStartup_AmbiguousEvidenceDegradesWithRecoveryAction(t *testi
 			if !strings.Contains(got.DegradedReason, tc.want) {
 				t.Fatalf("degradedReason = %q, want it to contain %q", got.DegradedReason, tc.want)
 			}
-			if !strings.Contains(got.DegradedReason, "end-session") || !strings.Contains(got.DegradedReason, "prepare-site") {
-				t.Fatalf("degradedReason = %q, want it to name the recovery action", got.DegradedReason)
+			// The recovery action now lives once in nightDegradedGuidance's
+			// own template, not repeated inside the stored reason itself.
+			guidance := fmt.Sprintf(nightDegradedGuidance, got.DegradedReason)
+			if !strings.Contains(guidance, "End Session") || !strings.Contains(guidance, "Prepare Site") {
+				t.Fatalf("guidance = %q, want it to name the recovery action", guidance)
 			}
 		})
 	}
