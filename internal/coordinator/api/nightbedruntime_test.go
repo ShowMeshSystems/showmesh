@@ -1374,3 +1374,105 @@ func reasonMentionsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+// TestNightAdvanceMultiNodeBackgroundAudio_ReportedPausedNodeResumesDespiteStalledFadedown
+// reproduces the field defect this lane closes: node-a's own fadedown
+// never reports settled (its fade-state evidence never arrives at all,
+// exactly [TestNightStopBackgroundAudioIfRunning_NoObservationYetWithholdsPause]'s
+// own scenario), so its per-node history stalls on an unconfirmed-settled
+// fadedown - no pause step is ever committed for it. Only once night
+// returns to resting does node-a's own telemetry finally report it
+// Paused (a node-side cut can pause a session well before its own next
+// report reaches this coordinator). This proves node-a still resumes and
+// fades back up despite the ledger never recording its own pause, and
+// that node-b - which paused normally - is never delayed behind node-a's
+// own stall: both resume in the SAME tick, not after
+// [nightBedReadyStepBound]'s own wait for a straggler.
+func TestNightAdvanceMultiNodeBackgroundAudio_ReportedPausedNodeResumesDespiteStalledFadedown(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	fadeOutMs, fadeInMs := 200, 800
+	ba.FadeOutMs, ba.FadeInMs = &fadeOutMs, &fadeInMs
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("x", sessionID, "started")
+	const startClockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, startClockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+	rec.Cycle++
+
+	// Leaving resting: both nodes dispatch a fadedown, confirmed the
+	// instant the ramp is accepted (never proof it finished). Neither has
+	// reported any fade-state or session-state evidence yet, so both are
+	// withheld from pause. fadeUpCountFromStart accounts for the
+	// configured FadeInMs's own fade-up, one per node, already dispatched
+	// while starting.
+	fadeUpCountFromStart := countDispatchedAction(pub, "audio.gain.fade")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if got := countDispatchedAction(pub, "audio.gain.fade") - fadeUpCountFromStart; got != 2 {
+		t.Fatalf("audio.gain.fade dispatch count since leaving resting = %d, want 2 (both nodes fade down)", got)
+	}
+
+	// node-b settles normally: its fade-state evidence arrives, its pause
+	// commits and confirms with a real bookmark.
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-b", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if _, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.pause"); !ok {
+		t.Fatalf("node-b: no audio.session.pause dispatched")
+	}
+	if _, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.pause"); ok {
+		t.Fatalf("node-a: audio.session.pause was dispatched despite no fade-settled evidence ever arriving for it - precondition broken")
+	}
+
+	// Night returns to resting. node-a's own telemetry only now reports
+	// it Paused - its ledger still shows nothing past the unconfirmed-
+	// settled fadedown.
+	audio.setObservations("node-a", []observation.Observation{
+		sessionStateObservation(sessionID, string(pkgaudio.StatePaused), testNow, testNow),
+	})
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	resumeA, okA := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
+	resumeB, okB := dispatchedByNodeAction(pub, "node-b", "audio.session.resume")
+	if !okA {
+		t.Fatalf("node-a: no audio.session.resume dispatched despite reporting itself paused (whatever step its own ledger stalled on)")
+	}
+	if !okB {
+		t.Fatalf("node-b: no audio.session.resume dispatched in the same tick as node-a - it was delayed behind node-a's own stall")
+	}
+	_, _ = resumeA, resumeB
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok := nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepResume {
+		t.Fatalf("node-a latest step = %+v, want resume", latestA)
+	}
+
+	// A second tick lets the per-node machine see the now-confirmed
+	// resume and chain into the configured fade-in for both nodes.
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	if _, ok := dispatchedByNodeAction(pub, "node-a", "audio.gain.fade"); !ok {
+		t.Fatalf("node-a: no fade-up dispatched after its own resume confirmed")
+	}
+	fadeUpB, ok := dispatchedByNodeAction(pub, "node-b", "audio.gain.fade")
+	if !ok {
+		t.Fatalf("node-b: no fade-up dispatched after its own resume confirmed")
+	}
+	if fadeUpB["targetGain"] == 0.0 {
+		t.Fatalf("node-b fade-up params = %v, want a ramp toward maxGainDb, not toward silence", fadeUpB)
+	}
+}

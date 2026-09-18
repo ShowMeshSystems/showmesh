@@ -483,3 +483,63 @@ func TestInterruptReleasePreservesAnUnrelatedStandingFault(t *testing.T) {
 		t.Fatalf("bg.fault = %q after the announcement released, want %q (an unrelated standing fault must survive)", bg.fault, pkgaudio.FaultFreeze)
 	}
 }
+
+// mutation target: cutOneBackgroundBedLocked must resolve a fade the cut
+// interrupts mid-ramp, exactly as Stop and Clear already do
+// (TestFadePendingResolvedByStop/Clear, mix_test.go). Without it,
+// fadePending stays true forever: the session is now Paused, not ramping,
+// so checkFadeCompletionLocked's own FadeActive poll can never see it end,
+// and the coordinator's own audio_session.fade.state signal latches at
+// "in_progress" for the rest of the night.
+func TestCutBackgroundBedDuringFadeLeavesNoFadePending(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, "bg", fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	bg, ok := m.get("bg")
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	bg.mu.Lock()
+	if !bg.fadePending || bg.fadeState != FadeStateInProgress {
+		pending, state := bg.fadePending, bg.fadeState
+		bg.mu.Unlock()
+		t.Fatalf("precondition: fade should be pending and in progress, got fadePending=%v fadeState=%q", pending, state)
+	}
+	bg.mu.Unlock()
+
+	// The fade's own 5s duration has not elapsed: the cut interrupts it
+	// well short of its target, the same way a show cue's own START
+	// arrives mid-fade in practice.
+	c.advance(time.Second)
+	if !m.CutBackgroundBed(ctx) {
+		t.Fatal("CutBackgroundBed reported nothing was cut")
+	}
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if bg.state != pkgaudio.StatePaused {
+		t.Fatalf("bg.state after CutBackgroundBed = %q, want paused", bg.state)
+	}
+	if bg.fadePending {
+		t.Fatal("fadePending is still true after CutBackgroundBed interrupted it; it will never reach a terminal outcome")
+	}
+	if bg.fadeState != FadeStateNone {
+		t.Fatalf("bg.fadeState after CutBackgroundBed = %q, want %q", bg.fadeState, FadeStateNone)
+	}
+	result, ok := bg.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by CutBackgroundBed = %+v, want Unconfirmable", result)
+	}
+}
