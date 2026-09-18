@@ -28,6 +28,21 @@
   font: var(--t-small);
 }
 
+/* Tabular figures so the ticking position does not jitter the head row. */
+.sm-lc-transport__head .sm-data {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The evidence badge column is fixed so a long "last confirmed" value or an
+   UNKNOWN_AGE state cannot reflow the table. The badge wraps within it. */
+.sm-lc-output-when {
+  width: 150px;
+}
+
+.sm-lc-output-when .sm-status {
+  white-space: normal;
+}
+
 /* The select gets a real width; Repeat sits beside it; Start playlist never wraps.
    Centered so the picker sits under the middle of the transport panel. */
 .sm-lc-transport__playlist-row {

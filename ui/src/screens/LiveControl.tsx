@@ -499,7 +499,7 @@ export function LiveControl() {
                   <tr>
                     <th scope="col">Output</th>
                     <th scope="col">Doing what</th>
-                    <th scope="col">Last confirmed</th>
+                    <th scope="col" className="sm-lc-output-when">Last confirmed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -519,7 +519,7 @@ export function LiveControl() {
                           </>
                         )}
                       </td>
-                      <td>
+                      <td className="sm-lc-output-when">
                         <StatusPair tone={row.tone} label={row.evidence} />
                       </td>
                     </tr>
