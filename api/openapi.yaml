@@ -14970,6 +14970,12 @@ components:
         anyway" affordance) resends the identical request with `override:
         true` to accept it and deploy anyway, the one refusal this route
         allows bypassing.
+        One is ADR-051 decision 2's own addition: "sequence-filename-claim-duplicate"
+        (`PUT /config/show.playlist/{id}` refused because the write would
+        make two different show.cue objects in one Show claim the same
+        FPP sequence filename, `400`, naming both Cues and the filename) -
+        a node's MultiSync START packet for that filename would otherwise
+        be ambiguous about which Cue's audio it starts.
         Two are Step 8's own additions, both scoped to
         `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current"
         (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the
@@ -15047,6 +15053,7 @@ components:
             - https://showmesh.dev/problems/credential-in-url
             - https://showmesh.dev/problems/conflict
             - https://showmesh.dev/problems/cue-catalog-claim-conflict
+            - https://showmesh.dev/problems/sequence-filename-claim-duplicate
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
             - https://showmesh.dev/problems/fpp-start-playlist-busy
             - https://showmesh.dev/problems/fpp-transition-gain-write-failed
@@ -19408,9 +19415,18 @@ components:
           $ref: "#/components/schemas/CueCatalogAnnouncementOutput"
     CueCatalogEntry:
       type: object
-      description: One Cue's row in a resolved catalog (Track H seam H3).
+      description: >-
+        One Cue's row in a resolved catalog (Track H seam H3). triggers is
+        the sorted, de-duplicated list of FPP sequence filenames that
+        start this Cue's audio (ADR-051 decision 2): a node starts a
+        Cue's audio when it receives a MultiSync START packet naming one
+        of these filenames. Resolved from every bound fpp-runner
+        show.playlist entry naming this Cue whose
+        fpp.expectedSequenceFilename is set, plus this Cue's own resolved
+        render output filename when it has one. Always present, an empty
+        array when there is no trigger yet.
       additionalProperties: false
-      required: [cueId, cueRevision, outputs]
+      required: [cueId, cueRevision, outputs, triggers]
       properties:
         cueId:
           type: string
@@ -19418,6 +19434,10 @@ components:
           type: integer
         outputs:
           $ref: "#/components/schemas/CueCatalogOutputs"
+        triggers:
+          type: array
+          items:
+            type: string
     CueCatalogResponse:
       type: object
       description: >-

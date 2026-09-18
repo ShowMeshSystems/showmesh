@@ -48,11 +48,19 @@ type CueCatalogOutputs struct {
 	Announcement *CueCatalogAnnouncementOutput `json:"announcement,omitempty"`
 }
 
-// CueCatalogEntry is one Cue's row in a resolved catalog.
+// CueCatalogEntry is one Cue's row in a resolved catalog. Triggers is the
+// sorted, de-duplicated list of FPP sequence filenames that start this
+// Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it
+// receives a MultiSync START packet naming one of these filenames.
+// Resolved from every bound fpp-runner show.playlist entry naming this
+// Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own
+// resolved render output filename when it has one. Never absent — an
+// empty array, never null, mirroring AssetHashes' own rule.
 type CueCatalogEntry struct {
 	CueID       string            `json:"cueId"`
 	CueRevision int64             `json:"cueRevision"`
 	Outputs     CueCatalogOutputs `json:"outputs"`
+	Triggers    []string          `json:"triggers"`
 }
 
 // CueCatalogResponse is GET /nodes/{nodeId}/cue-catalog's body. Configured

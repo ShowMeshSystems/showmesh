@@ -211,6 +211,16 @@ const (
 	// See [assetsMissingReadiness]'s own doc comment for what this
 	// condition deliberately leaves out.
 	ReadinessAssetsMissing ReadinessCondition = "assets-missing"
+
+	// ReadinessCueMultisyncTriggerMissing: a referenced Cue declares
+	// outputs.audio and its resolved catalog entry's
+	// [cuecatalog.Entry.Triggers] is empty (ADR-051 decision 2: "A Cue
+	// with an audio output and no trigger is a readiness warning: it will
+	// start from the fallback in decision 4"). Unlike every other
+	// condition above, this one is deliberately never a FailingCondition
+	// — see [cueMultisyncTriggerReadiness]'s own doc comment for why it
+	// only ever contributes to Report.Warning.
+	ReadinessCueMultisyncTriggerMissing ReadinessCondition = "cue-multisync-trigger-missing"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -509,6 +519,16 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// after condition 11 so an asset failure is always reported on its own
 	// terms, never silently replaced by a warning.
 	if warning, err := audioTargetClockReadiness(ctx, st, logger, clock, time.Now(), p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 13 (ADR-051 decision 2): a referenced Cue declares
+	// outputs.audio and its resolved catalog entry has no MultiSync
+	// trigger. Never a failure — see [cueMultisyncTriggerReadiness]'s own
+	// doc comment.
+	if warning, err := cueMultisyncTriggerReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
@@ -980,6 +1000,62 @@ func catalogHasAnyOutput(catalog assetsync.Catalog) bool {
 		}
 	}
 	return false
+}
+
+// cueMultisyncTriggerReadiness implements condition 13 (see
+// [PlaylistReadiness]'s own doc comment): ADR-051 decision 2's "A Cue with
+// an audio output and no trigger is a readiness warning: it will start
+// from the fallback in decision 4." It reuses [assetsync.ResolveCueCatalog]'s
+// own resolved [cuecatalog.Entry.Triggers] rather than re-deriving trigger
+// logic a second way, matching this file's other conditions that reuse
+// resolvers instead (assetsMissingReadiness, nodeCatalogReadiness).
+//
+// Deliberately never a failing condition, unlike every other condition in
+// this file: a Cue with no trigger still plays correctly, only later and
+// only by the coordinator's own fallback path (ADR-051 decision 4) rather
+// than on the node's own MultiSync trigger — a degraded, not broken,
+// outcome, so it is reported as a warning, on
+// [audioTargetClockReadiness]'s own precedent for a condition that can
+// never itself make Ready false.
+//
+// Skipped entirely when p.Show is not the currently active show
+// ([assetsync.ResolveCueCatalog] only resolves a meaningful catalog for
+// the active show's generation), matching [nodeCatalogReadiness]'s and
+// [assetsMissingReadiness]'s identical reasoning.
+//
+// Every declared node is checked, in id order, and the first Cue with an
+// audio output and no trigger is named — deterministic regardless of
+// store iteration order, matching this file's other fleet-wide
+// conditions.
+func cueMultisyncTriggerReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return "", nil
+	}
+
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		for _, e := range catalog.Entries {
+			if e.Outputs.Audio != nil && len(e.Triggers) == 0 {
+				return fmt.Sprintf(
+					"cue %q: no FPP sequence filename starts this cue; audio will start from the coordinator's fallback",
+					e.CueID), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // cueReady implements condition 5's narrow Cue check (see

@@ -93,6 +93,19 @@ type Entry struct {
 	CueID       string  `json:"cueId"`
 	CueRevision int64   `json:"cueRevision"`
 	Outputs     Outputs `json:"outputs"`
+
+	// Triggers is the sorted, de-duplicated list of FPP sequence
+	// filenames that start this Cue's audio: a node starts cue audio on
+	// FPP's MultiSync START packet, which names the sequence filename it
+	// is playing, and this list is what lets a node map that filename
+	// back to a Cue. It is resolved from every bound fpp-runner
+	// show.playlist entry naming this Cue whose fpp.expectedSequenceFilename
+	// is set, plus this Cue's own resolved render output runtime
+	// filename (Outputs.Render.Filename) when it has one. Never nil, so
+	// two callers resolving a Cue with no trigger yet agree on an empty
+	// array rather than one producing null and the other [] (matching
+	// AssetHashes' own determinism rule below).
+	Triggers []string `json:"triggers"`
 }
 
 // RevisionInput is EXACTLY what the catalog revision hash covers (H3 spec
@@ -108,11 +121,12 @@ type Entry struct {
 // node would then only agree on a revision when those ALSO matched, which
 // is not what section 3.1 promises ("the revision identifies the content,
 // not the delivery"). Entries must be sorted by CueID, and each Entry's
-// AssetHashes sorted, by the caller before this type is built: JSON Schema
-// canonicalization (RFC 8785, via pkg/fppidentity) sorts object member
-// names but never reorders an array, so an unstable Entries or AssetHashes
-// order would make two structurally-identical catalogs hash differently
-// depending only on iteration order.
+// AssetHashes and Triggers sorted, by the caller before this type is
+// built: JSON Schema canonicalization (RFC 8785, via pkg/fppidentity)
+// sorts object member names but never reorders an array, so an unstable
+// Entries, AssetHashes, or Triggers order would make two
+// structurally-identical catalogs hash differently depending only on
+// iteration order.
 type RevisionInput struct {
 	Show       string  `json:"show"`
 	Generation int64   `json:"generation"`

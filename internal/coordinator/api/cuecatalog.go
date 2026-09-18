@@ -287,6 +287,7 @@ func mapCueCatalogEntries(entries []cuecatalog.Entry) []v1.CueCatalogEntry {
 	for _, e := range entries {
 		out = append(out, v1.CueCatalogEntry{
 			CueID: e.CueID, CueRevision: e.CueRevision, Outputs: mapCueCatalogOutputs(e.Outputs),
+			Triggers: emptyIfNil(e.Triggers),
 		})
 	}
 	return out
