@@ -277,7 +277,7 @@ describe('Live Control', () => {
       principal: { id: 'p', name: 'op', role: 'operator', disabled: false }, session: null,
       credentialForm: 'session', scopes: ['resolume:action'], scopesState: 'current', bootstrapRequired: false,
     } as never })
-    fireEvent.click(screen.getByRole('button', { name: 'Blackout' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resolume blackout' }))
     expect(await screen.findByText('Confirmed')).toBeInTheDocument()
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })

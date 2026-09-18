@@ -562,6 +562,8 @@ export function LiveControl() {
             </Button>
           </ButtonRow>
 
+          <ResolumeBlackout gate={resolumeGate} />
+
           <div className="sm-lc-emergency__hardstop">
             <ButtonRow>
               <Button
@@ -795,7 +797,7 @@ export function LiveControl() {
         </p>
       </Section>
 
-      <ResolumeQuickStrip gate={resolumeGate} />
+      <ResolumeQuickStrip />
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <p className="sm-small sm-muted">
@@ -1771,7 +1773,8 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   )
 }
 
-function ResolumeQuickStrip({ gate }: { gate: Gate }) {
+/** Just the Resolume blackout: an immediate-recovery control that sits with the emergency stops. */
+function ResolumeBlackout({ gate }: { gate: Gate }) {
   const [outcome, setOutcome] = useState<ResolumeActionResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -1781,13 +1784,20 @@ function ResolumeQuickStrip({ gate }: { gate: Gate }) {
   }
 
   return (
-    <Section id="lc-resolume" title="Resolume" aside={<Link to="/control/resolume">Open Resolume control →</Link>}>
-      <p className="sm-small sm-muted">The clip grid and layer controls have their own wide workspace. Blackout remains here for immediate recovery.</p>
+    <div className="sm-lc-emergency__resolume">
       <ButtonRow>
-        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={blackout}>Blackout</Button>
+        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? 'Blacks out Resolume immediately, without stopping FPP.' : gate.reason} onClick={blackout}>Resolume blackout</Button>
       </ButtonRow>
       {outcome !== null && <ResolumeOutcome result={outcome} />}
       {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
+    </div>
+  )
+}
+
+function ResolumeQuickStrip() {
+  return (
+    <Section id="lc-resolume" title="Resolume" aside={<Link to="/control/resolume">Open Resolume control →</Link>}>
+      <p className="sm-small sm-muted">The clip grid and layer controls have their own wide workspace. Blackout is with the emergency stops.</p>
     </Section>
   )
 }
