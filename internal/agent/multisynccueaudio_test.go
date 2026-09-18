@@ -65,6 +65,12 @@ func (f *scriptableClockSource) Now(context.Context) agentclock.MediaTime {
 	return agentclock.MediaTime{Time: f.media, Valid: true}
 }
 
+// Last reports no cached status: this fake always exercises the live Poll
+// path, matching a node whose clock report loop has never run.
+func (f *scriptableClockSource) Last() (agentclock.Status, time.Time, bool) {
+	return agentclock.Status{}, time.Time{}, false
+}
+
 // setBeforeRead installs (or clears, with nil) this clock's own beforeRead
 // hook.
 func (f *scriptableClockSource) setBeforeRead(hook func(callNum int)) {
@@ -441,6 +447,12 @@ func (fixedFailedMultiSyncClockSource) Poll(context.Context) agentclock.Status {
 
 func (fixedFailedMultiSyncClockSource) Now(context.Context) agentclock.MediaTime {
 	return agentclock.MediaTime{Valid: false, Reason: "no clock reading while the provider has failed"}
+}
+
+// Last reports no cached status: this fixed source always exercises the
+// live Poll path, matching a node whose clock report loop has never run.
+func (fixedFailedMultiSyncClockSource) Last() (agentclock.Status, time.Time, bool) {
+	return agentclock.Status{}, time.Time{}, false
 }
 
 // TestMultiSyncCueAudioUnlockedClockStartsOnArrivalWithReason proves

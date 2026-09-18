@@ -587,6 +587,12 @@ func (fixedFailedClockSource) Now(context.Context) agentclock.MediaTime {
 	return agentclock.MediaTime{Valid: false, Reason: "no clock reading while the provider has failed"}
 }
 
+// Last reports no cached status: this fixed source always exercises the
+// live Poll path, matching a node whose clock report loop has never run.
+func (fixedFailedClockSource) Last() (agentclock.Status, time.Time, bool) {
+	return agentclock.Status{}, time.Time{}, false
+}
+
 // TestCueActivationScheduledStartUnusableClockConfirmsUnalignedNamingTheClock
 // proves the other half of the missed-instant fallback above: a Cue
 // activation carrying a coordinator-chosen ScheduledAtNs, on a node whose
@@ -670,6 +676,12 @@ func (f fixedLockedClockSource) Poll(context.Context) agentclock.Status {
 
 func (f fixedLockedClockSource) Now(context.Context) agentclock.MediaTime {
 	return agentclock.MediaTime{Time: f.media, Valid: true}
+}
+
+// Last reports no cached status: this fixed source always exercises the
+// live Poll path, matching a node whose clock report loop has never run.
+func (f fixedLockedClockSource) Last() (agentclock.Status, time.Time, bool) {
+	return agentclock.Status{}, time.Time{}, false
 }
 
 // TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned

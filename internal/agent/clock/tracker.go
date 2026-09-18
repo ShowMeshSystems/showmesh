@@ -72,6 +72,13 @@ type Tracker struct {
 	lastStepAt    time.Time
 	lastStepNs    int64
 	lastStepKnown bool
+
+	// lastStatus/lastStatusAt/lastStatusKnown cache the most recent Poll
+	// result so [Tracker.Last] can serve a caller that needs current clock
+	// evidence without paying Poll's own provider round trip.
+	lastStatus      Status
+	lastStatusAt    time.Time
+	lastStatusKnown bool
 }
 
 // NewTracker builds a Tracker polling p, starting in [StateAcquiring]
@@ -114,7 +121,18 @@ func (t *Tracker) Poll(ctx context.Context) Status {
 		t.transitionUnlocked(raw, now)
 	}
 
-	return t.buildStatus(raw, now)
+	status := t.buildStatus(raw, now)
+	t.lastStatus, t.lastStatusAt, t.lastStatusKnown = status, now, true
+	return status
+}
+
+// Last reports the [Status] built by this Tracker's most recent Poll, and
+// when that poll happened, without polling the wrapped [Provider] again.
+// ok is false before the first Poll has ever completed.
+func (t *Tracker) Last() (Status, time.Time, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastStatus, t.lastStatusAt, t.lastStatusKnown
 }
 
 // transitionFailed handles RES-019 section 9's immediate-failure case:

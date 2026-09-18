@@ -147,6 +147,20 @@ func (m *Manager) Poll(ctx context.Context) Status {
 	return t.Poll(ctx)
 }
 
+// Last is [Manager.Poll]'s non-blocking counterpart: the current
+// [Tracker]'s most recently polled [Status], with no provider round trip.
+// ok is false for an unconfigured Manager or one whose tracker has never
+// polled.
+func (m *Manager) Last() (Status, time.Time, bool) {
+	m.mu.Lock()
+	t := m.tracker
+	m.mu.Unlock()
+	if t == nil {
+		return Status{}, time.Time{}, false
+	}
+	return t.Last()
+}
+
 // Now reports this node's media clock, delegating to whatever [Provider]
 // is currently configured (every Provider is also a [MediaClock] by
 // construction). A Manager with no accepted configuration reports an
