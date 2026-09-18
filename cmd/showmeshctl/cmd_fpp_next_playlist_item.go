@@ -34,7 +34,7 @@ func cmdFPPNextPlaylistItem(args []string, stdout, stderr io.Writer, clock func(
 		_, _ = fmt.Fprintln(stderr, "(docs/bench/fpp-command-vocabulary.md section 3.5). Neither signal is")
 		_, _ = fmt.Fprintln(stderr, "uniquely attributable to this command — both also advance on FPP's own")
 		_, _ = fmt.Fprintln(stderr, "item boundaries — and the printed outcome reason says so.")
-		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success (ADR-003): this command prints and")
+		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success: this command prints and")
 		_, _ = fmt.Fprintln(stderr, "exits on the response body's own \"confirmed\"/\"unconfirmed\" outcome, never")
 		_, _ = fmt.Fprintln(stderr, "on the HTTP status alone. A fresh idempotency key is minted for every")
 		_, _ = fmt.Fprintln(stderr, "invocation of this command.")

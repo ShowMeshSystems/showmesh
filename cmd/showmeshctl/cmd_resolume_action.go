@@ -150,7 +150,7 @@ func reportResolumeActionWarnings(stderr io.Writer, cmdLabel string, result reso
 	}
 	if result.AttributionDegraded {
 		_, _ = fmt.Fprintf(stderr, "showmeshctl %s: WARNING: the coordinator's audit write "+
-			"failed for this command; it proceeded anyway (ADR-024 decision 11's safety class) with degraded "+
+			"failed for this command; it proceeded anyway, with degraded "+
 			"attribution recorded only to its own stderr\n", cmdLabel)
 	}
 }
@@ -248,7 +248,7 @@ func printResolumeActionUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl resolume action <subcommand> [args] [flags]
 
 Dispatch one of the seven Resolume actions, or list the vocabulary this
-coordinator supports. Every reference below is a NAME (ADR-037) — the
+coordinator supports. Every reference below is a NAME: the
 coordinator resolves it against the stored composition; no Resolume object
 id ever appears on this command line. Every dispatch subcommand requires
 the resolume:action scope, mints a fresh idempotency key per invocation,
@@ -466,7 +466,7 @@ func cmdResolumeBlackout(args []string, stdout, stderr io.Writer, clock func() t
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl resolume action blackout [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nDisconnect every tracked layer. Requires resolume:action. Exempt from")
-		_, _ = fmt.Fprintln(stderr, "ADR-024 decision 11's fail-closed audit rule: still dispatches even if")
+		_, _ = fmt.Fprintln(stderr, "the fail-closed audit rule: still dispatches even if")
 		_, _ = fmt.Fprintln(stderr, "this coordinator's audit store is currently failing.")
 		fs.PrintDefaults()
 	}

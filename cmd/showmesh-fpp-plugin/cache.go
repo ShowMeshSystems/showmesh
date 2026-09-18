@@ -122,11 +122,11 @@ func updateMacroCache(configDir string, macroID string, cfg showMacroConfigRespo
 func localPolicyStatement(configDir, macroID string, now time.Time) string {
 	c, err := loadMacroCache(configDir)
 	if err != nil {
-		return fmt.Sprintf("local policy for macro %q is unknown: this plugin's cached macro definitions could not be read", macroID)
+		return fmt.Sprintf("The local policy for macro %q is unknown because its cached definition could not be read.", macroID)
 	}
 	entry, ok := c.Macros[macroID]
 	if !ok || len(entry.Steps) == 0 {
-		return fmt.Sprintf("local policy for macro %q is unknown: no successful authenticated read of this macro's definition has been cached on this host yet", macroID)
+		return fmt.Sprintf("The local policy for macro %q is unknown because this host has not cached its definition yet.", macroID)
 	}
 
 	name := entry.Label
@@ -141,7 +141,7 @@ func localPolicyStatement(configDir, macroID string, now time.Time) string {
 	// entry.Steps is already in the order the definition declared them,
 	// which the coordinator preserves on read.
 	for _, s := range entry.Steps {
-		fmt.Fprintf(&b, "\n  step %q: %s — %s", s.StepID, localFallbackClassPlainText(s.LocalFallbackClass), s.LocalFallbackReason)
+		fmt.Fprintf(&b, "\n  step %q: %s, %s", s.StepID, localFallbackClassPlainText(s.LocalFallbackClass), s.LocalFallbackReason)
 	}
 	return b.String()
 }

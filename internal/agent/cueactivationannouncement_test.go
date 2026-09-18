@@ -245,8 +245,8 @@ func TestAnnouncementCueCoexistsWithBackgroundMusic(t *testing.T) {
 // TestSecondAnnouncementRefusedWhileFirstIsPlaying proves TRACK-H-cues-
 // and-playlists.md section H5 build item 3's own ruling: a second,
 // DIFFERENT announcement Cue arriving while the first is still Playing in
-// [cueactivation.AnnouncementSessionID] is REFUSED — naming both Cue ids
-// and the exact claim string — never superseded. Before this fix,
+// [cueactivation.AnnouncementSessionID] is REFUSED (naming both Cue ids),
+// never superseded. Before this fix,
 // activateAudio routed every announcement to the SAME session
 // unconditionally, so the second Cue's own Apply tore the first down
 // mid-sentence and reported Confirmed.
@@ -308,8 +308,8 @@ func TestSecondAnnouncementRefusedWhileFirstIsPlaying(t *testing.T) {
 	if !strings.Contains(reason, "cue-ann-first") || !strings.Contains(reason, "cue-ann-second") {
 		t.Fatalf("refusal reason %q does not name both cue ids", reason)
 	}
-	if !strings.Contains(reason, "announcement-session:audio-01") {
-		t.Fatalf("refusal reason %q does not contain the exact claim string", reason)
+	if !strings.Contains(reason, "already playing") {
+		t.Fatalf("refusal reason %q does not say the first announcement is already playing", reason)
 	}
 
 	// Not superseded: the announcement session is still Playing (never

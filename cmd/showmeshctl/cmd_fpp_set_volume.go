@@ -30,7 +30,7 @@ func cmdFPPSetVolume(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "clamps an out-of-range value and coerces a non-numeric one to zero rather")
 		_, _ = fmt.Fprintln(stderr, "than rejecting it (docs/bench/fpp-command-vocabulary.md section 1.5), so")
 		_, _ = fmt.Fprintln(stderr, "this command validates it itself before ever dispatching.")
-		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success (ADR-003): this command prints and")
+		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success: this command prints and")
 		_, _ = fmt.Fprintln(stderr, "exits on the response body's own \"confirmed\"/\"unconfirmed\" outcome, never")
 		_, _ = fmt.Fprintln(stderr, "on the HTTP status alone. A fresh idempotency key is minted for every")
 		_, _ = fmt.Fprintln(stderr, "invocation of this command.")

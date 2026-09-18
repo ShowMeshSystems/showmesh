@@ -68,9 +68,9 @@ func cmdFPPMQTT(args []string, stdout, stderr io.Writer, clock func() time.Time)
 func printFPPMQTTUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl fpp-mqtt <subcommand> [flags]
 
-Read or write the coordinator's fpp.mqtt configuration (Track G seam G-3,
-ADR-039): the Step 5 FPP MQTT collector's broker, credentials, topic
-prefix, and host map, moved out of SHOWMESH_FPP_MQTT_* into the
+Read or write the coordinator's fpp.mqtt configuration: the FPP MQTT
+collector's broker, credentials, topic prefix, and host map, moved out
+of SHOWMESH_FPP_MQTT_* into the
 coordinator's authoritative store. Every subcommand requires the
 config:write scope (admin only).
 
@@ -81,7 +81,7 @@ Subcommands:
         named on the command line; every other field, including a
         previously stored password, is left exactly as it was
 
-A configuration change here takes effect without a restart (ADR-036): the
+A configuration change here takes effect without a restart: the
 FPP MQTT collector follows within about ten seconds.
 
 While SHOWMESH_FPP_MQTT_BROKER_URL is still set in the coordinator's own
@@ -189,7 +189,7 @@ func cmdFPPMQTTSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp-mqtt set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fpp.mqtt configuration revision, changing only the fields")
 		_, _ = fmt.Fprintln(stderr, "named below (requires config:write, admin only). A field never named on")
-		_, _ = fmt.Fprintln(stderr, "the command line keeps its currently stored value (ADR-039 decision 5) —")
+		_, _ = fmt.Fprintln(stderr, "the command line keeps its currently stored value,")
 		_, _ = fmt.Fprintln(stderr, "in particular, omitting --password leaves a previously stored password")
 		_, _ = fmt.Fprintln(stderr, "untouched, since \"fpp-mqtt get\" never returns it to re-submit.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")

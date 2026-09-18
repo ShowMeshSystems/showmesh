@@ -258,8 +258,8 @@ func TestToNodeFormattingFailureRecordsDroppedStatus(t *testing.T) {
 	if reason.Signal != SignalChannelRangeReason || !ok || reasonStr == "" {
 		t.Errorf("reason observation = %+v, want a non-empty string reason", reason)
 	}
-	if !strings.Contains(reasonStr, "120-byte") {
-		t.Errorf("reason = %q, want it to name the actual refusal (120-byte ping field)", reasonStr)
+	if !strings.Contains(reasonStr, "120 bytes") {
+		t.Errorf("reason = %q, want it to name the actual refusal (over 120 bytes)", reasonStr)
 	}
 }
 

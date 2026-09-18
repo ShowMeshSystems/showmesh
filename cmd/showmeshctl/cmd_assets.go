@@ -278,7 +278,7 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 func printAssetsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl assets <subcommand> [flags]
 
-Read or write the coordinator's asset store (Track E, ADR-028): FSEQ,
+Read or write the coordinator's asset store: FSEQ,
 audio, and other show media, identified by show + sequence + target +
 content hash, never by filename alone. Reads require show:macro:run OR
 config:write, matching "show"/"surface". Writing (upload) requires
@@ -305,7 +305,7 @@ Subcommands:
                    "assets manifest"/"assets get" for this node
   settings         read or write the asset store's own configuration
                    (content base URL, upload limit, sync/inventory
-                   intervals — Track G seam G-4, ADR-039)
+                   intervals)
 
 Run "showmeshctl assets <subcommand> --help" for flags specific to one
 subcommand.
@@ -508,7 +508,7 @@ func cmdAssetsUpload(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "idempotent when that identity is still current (prints the existing")
 		_, _ = fmt.Fprintln(stderr, "asset, no new row). Different bytes for the same identity supersede the")
 		_, _ = fmt.Fprintln(stderr, "previous current asset. Re-uploading bytes that match a SUPERSEDED")
-		_, _ = fmt.Fprintln(stderr, "identity is a ROLLBACK (ADR-028 decision 10): that asset becomes")
+		_, _ = fmt.Fprintln(stderr, "identity is a ROLLBACK: that asset becomes")
 		_, _ = fmt.Fprintln(stderr, "current again, superseding whatever was current, in one transaction.")
 		_, _ = fmt.Fprintln(stderr, "The response leads with a ROLLBACK line when this happens.")
 		fs.PrintDefaults()

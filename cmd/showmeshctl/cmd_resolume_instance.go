@@ -83,8 +83,8 @@ func cmdResolumeInstance(args []string, stdout, stderr io.Writer, clock func() t
 func printResolumeInstanceUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl resolume instance <subcommand> [flags]
 
-Read or write the coordinator's resolume.instances configuration (Track G
-seam G-2, ADR-039): which Resolume Arena instance this coordinator
+Read or write the coordinator's resolume.instances configuration: which
+Resolume Arena instance this coordinator
 connects to, moved out of SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID into
 the coordinator's authoritative store. Every subcommand requires the
 config:write scope (admin only) — there is no config:read scope; reading
@@ -96,7 +96,7 @@ Subcommands:
             (--id, --url); at most one instance is supported today
   remove    write a new configuration revision naming zero instances
 
-A configuration change here takes effect without a restart (ADR-036): the
+A configuration change here takes effect without a restart: the
 Resolume collector set follows within about ten seconds. "resolume
 instance set" and "resolume instance list" both print this fact.
 
@@ -168,8 +168,8 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.instances configuration revision naming exactly")
 		_, _ = fmt.Fprintln(stderr, "one instance (requires config:write, admin only). Validated before")
 		_, _ = fmt.Fprintln(stderr, "activation: an invalid payload, or one colliding with a configured")
-		_, _ = fmt.Fprintln(stderr, "fpp.endpoints id, is rejected and appends no revision (ADR-009).")
-		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the collector set")
+		_, _ = fmt.Fprintln(stderr, "fpp.endpoints id, is rejected and appends no revision.")
+		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart: the collector set")
 		_, _ = fmt.Fprintln(stderr, "follows within about ten seconds.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
@@ -243,7 +243,7 @@ func cmdResolumeInstanceRemove(args []string, stdout, stderr io.Writer, clock fu
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl resolume instance remove [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.instances configuration revision naming zero")
 		_, _ = fmt.Fprintln(stderr, "instances (requires config:write, admin only).")
-		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the collector set")
+		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart: the collector set")
 		_, _ = fmt.Fprintln(stderr, "stops within about ten seconds.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")

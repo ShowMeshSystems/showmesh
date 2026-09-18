@@ -115,10 +115,10 @@ func (c credentialDirCheck) Note() string {
 	case !c.Checked || c.OK && !c.Repaired:
 		return ""
 	case c.Repaired:
-		return fmt.Sprintf("the credential directory %s had mode %04o (wanted %04o); this program repaired it in place",
+		return fmt.Sprintf("Credential directory %s had open permissions (%04o, wanted %04o). It has been repaired.",
 			resolveCredentialDir(), c.FoundMode, c.WantMode)
 	default:
-		return fmt.Sprintf("the credential directory %s has mode %04o (wanted %04o) and this program's attempt to repair it FAILED (%v); proceeding with the run anyway, since refusing would not un-expose a credential that is already exposed",
+		return fmt.Sprintf("Credential directory %s has open permissions (%04o, wanted %04o) and could not be locked down: %v. Fix the directory permissions.",
 			resolveCredentialDir(), c.FoundMode, c.WantMode, c.RepairErr)
 	}
 }
@@ -246,9 +246,7 @@ func loadCredential() (string, error) {
 	}
 	if mode := info.Mode().Perm(); mode != requiredCredentialMode {
 		return "", fmt.Errorf(
-			"credential file %s has mode %04o; refusing to run until it is exactly 0600 (owner read/write only, "+
-				"nothing else) — a credential file readable by anything other than its owner cannot be trusted on "+
-				"this host",
+			"credential file %s has mode %04o; it must be exactly 0600 (owner read/write only) before this program will run, fix the file permissions",
 			path, mode)
 	}
 	raw, err := os.ReadFile(path)

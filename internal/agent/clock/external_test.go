@@ -86,11 +86,11 @@ func TestExternalProviderNowNoPHCUsesRealtimeRegardlessOfDeclaration(t *testing.
 	if mt.Time.Before(before) || mt.Time.After(after) {
 		t.Errorf("Time = %v, want between %v and %v (CLOCK_REALTIME, not a PHC read)", mt.Time, before, after)
 	}
-	if !strings.Contains(mt.Reason, "no PHC") {
-		t.Errorf("Reason = %q, want it to state this interface has no PHC", mt.Reason)
+	if !strings.Contains(mt.Reason, "no hardware clock") {
+		t.Errorf("Reason = %q, want it to state this interface has no hardware clock", mt.Reason)
 	}
 	// The software fallback must never be mistaken for a PHC read.
-	if strings.Contains(mt.Reason, "operator-declared") {
+	if strings.Contains(mt.Reason, "Media time is from the hardware clock") {
 		t.Errorf("Reason = %q, a software-timestamp reading must never claim to be a PHC read", mt.Reason)
 	}
 }
@@ -108,7 +108,7 @@ func TestExternalProviderNowRefusesDeclaredPHCOnAnInterfaceWithNone(t *testing.T
 	if mt.Valid {
 		t.Fatalf("Valid = true, want false: phcDevice was declared but eth0 has no PHC at all")
 	}
-	if !strings.Contains(mt.Reason, "/dev/ptp0") || !strings.Contains(mt.Reason, "eth0") || !strings.Contains(mt.Reason, "no PHC") {
+	if !strings.Contains(mt.Reason, "/dev/ptp0") || !strings.Contains(mt.Reason, "eth0") || !strings.Contains(mt.Reason, "no hardware clock") {
 		t.Errorf("Reason = %q, want it to name both the declared device and the interface", mt.Reason)
 	}
 }
@@ -124,8 +124,8 @@ func TestExternalProviderNowRefusesPHCPresentWithNoDeclaration(t *testing.T) {
 	if mt.Valid {
 		t.Fatalf("Valid = true, want false: a PHC exists and nothing confirms the observed ptp4l reached hardware timestamping")
 	}
-	if !strings.Contains(mt.Reason, "eno2") || !strings.Contains(mt.Reason, "cannot tell whether the ptp4l it observes reached hardware timestamping") {
-		t.Errorf("Reason = %q, want the original refusal wording naming the interface", mt.Reason)
+	if !strings.Contains(mt.Reason, "eno2") || !strings.Contains(mt.Reason, "cannot tell if it is being used") {
+		t.Errorf("Reason = %q, want the refusal wording naming the interface", mt.Reason)
 	}
 }
 
@@ -160,8 +160,8 @@ func TestExternalProviderNowReadsDeclaredMatchingPHCDevice(t *testing.T) {
 	if !mt.Time.Equal(time.Unix(1_700_000_000, 0)) {
 		t.Errorf("Time = %v, want the fake PHC reading", mt.Time)
 	}
-	if !strings.Contains(mt.Reason, "operator-declared") || !strings.Contains(mt.Reason, "/dev/ptp0") {
-		t.Errorf("Reason = %q, want it to say the reading is an operator-declared PHC, never a verified hardware-timestamping read", mt.Reason)
+	if !strings.Contains(mt.Reason, "Media time is from the hardware clock") || !strings.Contains(mt.Reason, "/dev/ptp0") {
+		t.Errorf("Reason = %q, want it to say media time is from the declared hardware clock", mt.Reason)
 	}
 }
 
