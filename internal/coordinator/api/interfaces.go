@@ -848,4 +848,16 @@ type AlignmentRunStore interface {
 type AssetStore interface {
 	GetAsset(ctx context.Context, id string) (store.AssetRecord, error)
 	ListAssets(ctx context.Context, filter store.AssetFilter) ([]store.AssetRecord, error)
+	// GetAudioRendition returns one audio asset's rendition row by its
+	// ORIGINAL content hash, or [store.ErrAudioRenditionNotFound] if none
+	// has ever been queued, see mapAssetRendition (assets.go).
+	GetAudioRendition(ctx context.Context, originalContentHash string) (store.AudioRenditionRecord, error)
+}
+
+// AudioRenditionNudger requests that the coordinator's background audio
+// rendition service (internal/coordinator/audiorendition.Service) wake up
+// immediately rather than waiting for its next reconcile tick, mirroring
+// [AssetSyncNudger.Nudge]'s identical shape one concern over.
+type AudioRenditionNudger interface {
+	Nudge()
 }

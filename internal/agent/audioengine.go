@@ -653,6 +653,10 @@ func (r *audioEngineRebuilder) bind(engine audio.Engine) {
 // function so agent.go's wiring reads as one call rather than an inline
 // struct literal.
 func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
+	leadMs := audio.DefaultSettings.MultisyncStartLeadMs
+	if p.MultisyncStartLeadMs != nil {
+		leadMs = *p.MultisyncStartLeadMs
+	}
 	return audio.Settings{
 		DriftIgnoreThresholdMs:    p.DriftIgnoreThresholdMs,
 		DefaultFadeCurve:          pkgaudio.FadeCurve(p.DefaultFadeCurve),
@@ -663,6 +667,7 @@ func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 		DuckRestoreFadeDurationMs: p.DuckRestoreFadeDurationMs,
 		LTCFrameRate:              pkgaudio.LTCFrameRate(p.LTCFrameRate),
 		LTCDefaultStartOffset:     pkgaudio.LTCTimecode(p.LTCDefaultStartOffset),
+		MultisyncStartLeadMs:      leadMs,
 	}
 }
 

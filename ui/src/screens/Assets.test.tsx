@@ -239,4 +239,28 @@ describe('Assets library', () => {
     expect(await screen.findByText(/Failed at/)).toBeInTheDocument()
     expect(screen.getByText(/dial tcp: connection refused/)).toBeInTheDocument()
   })
+
+  it('an audio asset with a ready rendition shows its format and duration', async () => {
+    const a = asset({
+      mediaType: 'audio',
+      runtimeFilename: 'carol-of-the-bells.mp3',
+      rendition: { status: 'ready', format: 'wav48k16s', durationMillis: 183000 },
+    })
+    setup(['asset:write'], [a])
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
+    await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
+
+    fireEvent.click(within(region).getByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    expect(await screen.findByText('wav48k16s, 3 m')).toBeInTheDocument()
+  })
+
+  it('an audio asset with no rendition yet says nodes still play the original', async () => {
+    const a = asset({ mediaType: 'audio', runtimeFilename: 'carol-of-the-bells.mp3', rendition: null })
+    setup(['asset:write'], [a])
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
+    await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
+
+    fireEvent.click(within(region).getByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    expect(await screen.findByText('Not built yet. Nodes still play the original file.')).toBeInTheDocument()
+  })
 })

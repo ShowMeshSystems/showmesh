@@ -2912,6 +2912,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assets/{id}/rendition/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audio asset's rendition bytes (PCM show audio)
+         * @description Same `node:read` gate as `GET /assets/{id}/content`, but serves the asset's separately content-addressed 48kHz/16-bit/stereo WAV rendition instead of the original upload. 404 when the asset has no rendition at all, or none that is ready yet - a node is only ever told to fetch this route once the coordinator's own expected-set computation has substituted a ready rendition for this asset. Supports `Range`. `ETag` is the rendition's own content hash, quoted, distinct from the original asset's.
+         */
+        get: operations["getAssetRenditionContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets/manifest": {
         parameters: {
             query?: never;
@@ -6620,6 +6640,19 @@ export interface components {
             supersededAt: string | null;
             /** @description True exactly when supersededAt is null. */
             current: boolean;
+            /** @description This asset's 48kHz/16-bit/stereo WAV rendition state (owner ruling 2026-09-18, PCM show audio). Present only when mediaType is "audio". Null when mediaType is "audio" but no rendition has ever been queued for this asset's content - the coordinator's own reconcile pass has not reached it yet, and the original file is what every node still fetches and plays. */
+            rendition?: components["schemas"]["AssetRendition"] | null;
+        };
+        /** @description One audio asset's rendition state, as read back on Asset.rendition. The rendition is a second, separately content-addressed WAV blob; the operator's own uploaded file (Asset.contentHash) is never rewritten. */
+        AssetRendition: {
+            /** @enum {string} */
+            status: "rendering" | "ready" | "failed";
+            /** @description The rendition's fixed format string. Set only when status is "ready". */
+            format?: string;
+            /** @description The rendition's playable duration in milliseconds. Set only when status is "ready". */
+            durationMillis?: number;
+            /** @description Why the last transcode attempt failed. Set only when status is "failed". The original file is still served to every node regardless. */
+            failureReason?: string;
         };
         /** @description The body of POST /assets and GET /assets/{id}. `rolledBack` is true only when a POST matched a SUPERSEDED identity and performed ADR-028 decision 10's rollback (un-superseding `asset` and superseding whatever was current); it is always false on GET. */
         AssetResponse: {
@@ -13119,6 +13152,58 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             /** @description An internal error, OR (see `detail`) the stored blob's on-disk size disagrees with its recorded size: a corrupted or truncated asset is reported, never served. */
+            500: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAssetRenditionContent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Standard HTTP byte-range request, e.g. "bytes=0-1023". */
+                Range?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. The complete rendition bytes. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    /** @description The rendition's content hash, quoted. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial Content, honoring a `Range` request header. */
+            206: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description An internal error, OR (see `detail`) the stored rendition blob's on-disk size disagrees with its recorded size: a corrupted or truncated rendition is reported, never served. */
             500: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

@@ -396,6 +396,15 @@ type Dependencies struct {
 	// API failing" posture.
 	AssetSyncNudger AssetSyncNudger
 
+	// AudioRenditionNudger is the background audio rendition service's own
+	// out-of-band trigger, see [AudioRenditionNudger]'s own doc comment.
+	// In practice the real value is *audiorendition.Service, wired by
+	// coordinator.go. A nil field is replaced by [noAudioRenditionNudger],
+	// under which Nudge is a no-op: an audio upload degrades to waiting
+	// out the service's own reconcile interval, matching
+	// [Dependencies.AssetSyncNudger]'s identical posture.
+	AudioRenditionNudger AudioRenditionNudger
+
 	// InventoryRequester asks a node to publish a fresh asset inventory
 	// report now, stamped with a caller-supplied issuer, see
 	// [InventoryRequester]'s own doc comment (noderesync.go). In practice
@@ -704,6 +713,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
+	if d.AudioRenditionNudger == nil {
+		d.AudioRenditionNudger = noAudioRenditionNudger{}
+	}
 	if d.InventoryRequester == nil {
 		d.InventoryRequester = noInventoryRequester{}
 	}
@@ -895,6 +907,13 @@ type noAssetSyncNudger struct{}
 func (noAssetSyncNudger) Nudge()                               {}
 func (noAssetSyncNudger) RequestNode(string)                   {}
 func (noAssetSyncNudger) RecordResyncIntent(string, time.Time) {}
+
+// noAudioRenditionNudger is [Dependencies.AudioRenditionNudger]'s nil-safe
+// default: Nudge is a no-op, matching [noAssetSyncNudger]'s identical
+// posture one dependency over.
+type noAudioRenditionNudger struct{}
+
+func (noAudioRenditionNudger) Nudge() {}
 
 // noInventoryRequester is [Dependencies.InventoryRequester]'s nil-safe
 // default: RequestNodeInventory reports the same "no broker wired in"
@@ -1264,6 +1283,10 @@ func (noAssetStore) GetAsset(context.Context, string) (store.AssetRecord, error)
 
 func (noAssetStore) ListAssets(context.Context, store.AssetFilter) ([]store.AssetRecord, error) {
 	return nil, nil
+}
+
+func (noAssetStore) GetAudioRendition(context.Context, string) (store.AudioRenditionRecord, error) {
+	return store.AudioRenditionRecord{}, store.ErrAudioRenditionNotFound
 }
 
 // errAssetBackendNotConfigured is [noAssetBackend.Put]'s uniform failure,
@@ -2153,6 +2176,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
 	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
+	// Same node:read gate as .../content, one route below it: an audio
+	// asset's separately content-addressed rendition bytes rather than the
+	// original upload (PCM show audio). See handleGetAssetRenditionContent.
+	mux.HandleFunc("GET /api/v1/assets/{id}/rendition/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetRenditionContent))
 
 	// Seam E5 (assetmanifest.go): "what should a node hold" versus "what
 	// does it hold" — read-only, same showConfigReadScopes posture as

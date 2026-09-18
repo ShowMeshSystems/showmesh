@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
@@ -70,5 +71,43 @@ func TestAudioSettingsFromWireCarriesDuckTargetGain(t *testing.T) {
 	}
 	if got := audioSettingsFromWire(p).DuckTargetGain; got != pkgaudio.Gain(0.2) {
 		t.Fatalf("DuckTargetGain reaching audio.Settings = %v, want 0.2", got)
+	}
+}
+
+// TestDecodeAudioSettingsConfigMultisyncStartLeadMsIsOptional proves
+// ADR-051 decision 1's own wire boundary rule: multisyncStartLeadMs is
+// optional with no migration, so an existing coordinator that has never
+// sent it must keep working (absent decodes with no error and no value),
+// a negative one is refused, and a valid one decodes as given.
+func TestDecodeAudioSettingsConfigMultisyncStartLeadMsIsOptional(t *testing.T) {
+	absent := validAudioSettingsParams()
+	p, err := decodeAudioSettingsConfig(absent)
+	if err != nil {
+		t.Fatalf("params with no multisyncStartLeadMs: unexpected error: %v", err)
+	}
+	if p.MultisyncStartLeadMs != nil {
+		t.Fatalf("MultisyncStartLeadMs = %v, want nil (absent means no value pushed)", *p.MultisyncStartLeadMs)
+	}
+	if got := audioSettingsFromWire(p).MultisyncStartLeadMs; got != audio.DefaultSettings.MultisyncStartLeadMs {
+		t.Fatalf("audioSettingsFromWire with an absent lead = %d, want the package default %d", got, audio.DefaultSettings.MultisyncStartLeadMs)
+	}
+
+	negative := validAudioSettingsParams()
+	negative["multisyncStartLeadMs"] = float64(-1)
+	if _, err := decodeAudioSettingsConfig(negative); err == nil {
+		t.Fatal("multisyncStartLeadMs -1 was accepted, want it refused")
+	}
+
+	given := validAudioSettingsParams()
+	given["multisyncStartLeadMs"] = float64(150)
+	p, err = decodeAudioSettingsConfig(given)
+	if err != nil {
+		t.Fatalf("params with multisyncStartLeadMs=150: unexpected error: %v", err)
+	}
+	if p.MultisyncStartLeadMs == nil || *p.MultisyncStartLeadMs != 150 {
+		t.Fatalf("MultisyncStartLeadMs = %v, want 150", p.MultisyncStartLeadMs)
+	}
+	if got := audioSettingsFromWire(p).MultisyncStartLeadMs; got != 150 {
+		t.Fatalf("audioSettingsFromWire with lead=150 = %d, want 150", got)
 	}
 }

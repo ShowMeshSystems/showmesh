@@ -739,6 +739,113 @@ func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(
 	}
 }
 
+// noRestartCountingEngine counts Start, Seek, and Load calls, so a test
+// can prove a coordinator activation that finds its Cue's audio already
+// started by MultiSync touches the engine not at all (ADR-051 decision
+// 6/item 7), rather than merely ending up in the right state by
+// coincidence (a redundant Start-at-0-then-Seek would reach an identical
+// snapshot).
+type noRestartCountingEngine struct {
+	activationAvailableEngine
+	starts, seeks, loads int
+}
+
+func (e *noRestartCountingEngine) Start(ctx context.Context, handle audio.EngineHandle, position time.Duration) (audio.EngineObservation, error) {
+	e.starts++
+	return e.activationAvailableEngine.Start(ctx, handle, position)
+}
+
+func (e *noRestartCountingEngine) Seek(ctx context.Context, handle audio.EngineHandle, position time.Duration) (audio.EngineObservation, error) {
+	e.seeks++
+	return e.activationAvailableEngine.Seek(ctx, handle, position)
+}
+
+func (e *noRestartCountingEngine) Load(ctx context.Context, handle audio.EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (audio.EngineObservation, error) {
+	e.loads++
+	return e.activationAvailableEngine.Load(ctx, handle, media, duration)
+}
+
+// TestCueActivationAfterMultiSyncStartDoesNotRestart proves ADR-051
+// decision 6/item 7: when this node's own MultiSync listener has already
+// started a Cue's audio for the SAME Cue and media, a coordinator
+// "cue.activate" for that same activation must not restart or reseek it
+// -- it reports started, carrying the trigger evidence, and never touches
+// the engine.
+func TestCueActivationAfterMultiSyncStartDoesNotRestart(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	fake := audio.NewFakeEngine(clock.now)
+	counting := &noRestartCountingEngine{activationAvailableEngine: activationAvailableEngine{fake}}
+	mgr := audio.NewManager(counting, audio.NewFileSessionStore(dir), dir, fixedAudioDecoder{}, clock.now, nil)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+	})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-multisync-first", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}, StartOffsetMillis: 3000},
+		},
+		Triggers: []string{"wake-up.fseq"},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	// Simulate the MultiSync listener having already started this exact
+	// Cue's audio: a real Apply+Start against the session (one engine
+	// Start, counted below as the baseline) plus the registry record
+	// activateAudio's own item 7 check reads.
+	ref := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
+	if r := mgr.Apply(context.Background(), cueActivationAudioSessionID, "ms-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply refused: %+v", r)
+	}
+	if r := mgr.StartAtPosition(context.Background(), cueActivationAudioSessionID, "ms-start", 2, clock.now().UnixNano(), 3000*time.Millisecond); r.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("start = %+v, want started", r)
+	}
+	target := audio.TargetMediaIdentity(ref)
+	cueActivationTriggerRegistry = newAudioStartTriggerRegistry()
+	t.Cleanup(func() { cueActivationTriggerRegistry = nil })
+	cueActivationTriggerRegistry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
+		Trigger: pkgaudio.StartTriggerMultiSync, CueID: "cue-multisync-first", MediaIdentity: target,
+		SequenceFilename: "wake-up.fseq", ArrivalNs: 1_700_000_000_000_000_000, LeadMs: 100,
+	})
+
+	startsBefore, seeksBefore, loadsBefore := counting.starts, counting.seeks, counting.loads
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-after-multisync", "cue-multisync-first", 1, "halloween-2026", 3, "rev-a", 3000)
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+	if counting.starts != startsBefore || counting.seeks != seeksBefore || counting.loads != loadsBefore {
+		t.Fatalf("engine calls after activate: starts %d->%d, seeks %d->%d, loads %d->%d; want none of them to change",
+			startsBefore, counting.starts, seeksBefore, counting.seeks, loadsBefore, counting.loads)
+	}
+
+	value, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result.Value = %#v, want a map", result.Value)
+	}
+	if got := value[pkgaudio.ResultStartTrigger]; got != pkgaudio.StartTriggerMultiSync {
+		t.Fatalf("value[%q] = %v, want %q", pkgaudio.ResultStartTrigger, got, pkgaudio.StartTriggerMultiSync)
+	}
+	if got := value[pkgaudio.ResultTriggerSequenceFilename]; got != "wake-up.fseq" {
+		t.Fatalf("value[%q] = %v, want wake-up.fseq", pkgaudio.ResultTriggerSequenceFilename, got)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	if len(snaps) != 1 || snaps[0].State != pkgaudio.StatePlaying {
+		t.Fatalf("session snapshots = %+v, want exactly one, still playing", snaps)
+	}
+}
+
 // TestCueActivationScheduledStartTooFarAheadStaysARefused proves the
 // fallback is scoped to scheduled_start_in_past only: any other
 // StartAtPosition refusal keeps today's behavior, no fallback attempted.

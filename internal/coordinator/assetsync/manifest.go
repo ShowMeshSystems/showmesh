@@ -108,6 +108,15 @@ type ExpectedAsset struct {
 	Filename    string
 	SizeBytes   int64
 	Source      AssetSource
+
+	// Rendition is true when ContentHash, Filename, and SizeBytes name a
+	// ready audio rendition ([substituteAudioRenditions]) rather than the
+	// asset's own original upload. AssetID is unchanged either way: it
+	// always names the original asset row, since that is what inventory
+	// and the manifest identify an asset by. The fetch dispatch (sync.go)
+	// uses this to route to the rendition content route instead of the
+	// original one.
+	Rendition bool
 }
 
 // borrowedAsset is a store.AssetRecord borrowed from another target's own
@@ -229,6 +238,15 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	}
 
 	supersededHashes, err := supersededHashesByAssetID(ctx, st, showID, combined)
+	if err != nil {
+		return ExpectedSet{}, err
+	}
+
+	// Substituted last, after supersededHashes is computed from the raw
+	// asset rows: that computation is about the operator's own upload
+	// history and stays keyed on the original content hash regardless of
+	// whether a rendition now exists.
+	assets, err = substituteAudioRenditions(ctx, st, assets)
 	if err != nil {
 		return ExpectedSet{}, err
 	}
@@ -452,6 +470,12 @@ type MissingAsset struct {
 	Filename    string
 	ContentHash string
 	SizeBytes   int64
+
+	// Rendition mirrors [ExpectedAsset.Rendition]: true when Filename/
+	// ContentHash/SizeBytes name a ready audio rendition rather than the
+	// asset's own original upload. The sync service's own dispatch
+	// (sync.go) needs this to route the fetch it issues correctly.
+	Rendition bool
 }
 
 // ExtraAsset is one asset a node holds that this manifest did not expect.
@@ -601,6 +625,12 @@ func StalenessWindow(inventoryInterval time.Duration) time.Duration {
 // returns before either is computed). A report that is stale (case 3)
 // never populates Extra or Verdicts: what a stale report says a node
 // holds is exactly as unreliable as what it says a node lacks.
+//
+// A node's inventory may hold one content hash under more than one
+// filename (schemaV37): each inventory row is judged against Extra
+// independently, so the row matching an expected asset's own filename is
+// never Extra while a second, genuinely unrecognized filename for that
+// same hash still is — see the Extra-computation loop's own comment below.
 func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet, report *store.NodeAssetReportRecord, reportFresh bool, inventory []store.NodeAssetInventoryRecord) NodeManifest {
 	m := NodeManifest{NodeID: nodeID}
 
@@ -660,7 +690,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		}
 		missing = append(missing, MissingAsset{
 			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, Rendition: a.Rendition,
 		})
 		state := AssetVerdictAbsent
 		for oldHash := range expected.SupersededHashes[a.AssetID] {
@@ -676,15 +706,43 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	}
 	m.Verdicts = verdicts
 
-	expectedHashes := make(map[string]bool, len(expected.Assets))
+	// expectedUnderFilename is the same hash-and-filename join as
+	// heldUnderFilename, but keyed from expected.Assets instead of
+	// inventory: heldUnderFilename is built FROM inventory itself, so
+	// every inventory row is trivially "held" by its own key and cannot
+	// tell an inventory row matching an expected asset apart from one that
+	// does not. expectedUnderFilename is what the Extra loop below needs
+	// instead — whether THIS row is the one an expected asset named.
+	expectedUnderFilename := make(map[string]bool, len(expected.Assets))
 	for _, a := range expected.Assets {
-		expectedHashes[a.ContentHash] = true
+		expectedUnderFilename[heldKey(a.ContentHash, a.Filename)] = true
+	}
+
+	// missingHashes names every expected content hash NOT held under its
+	// own expected filename — [TestComputeNodeManifestHeldUnderWrongFilenameRendersMissing]'s
+	// wrongly-named copy is exempted from Extra by this set, matching that
+	// test's "expected content, never an unrelated extra file" rule. A hash
+	// exempted here only by virtue of being missing stops being exempted
+	// the moment some OTHER inventory row holds it under the correct name
+	// (expectedUnderFilename below already excludes that row directly), so
+	// a node reporting the SAME hash under both its expected filename and a
+	// second, genuinely unrecognized one (schemaV37's own two-filenames
+	// scenario) still reports that second row as Extra.
+	missingHashes := make(map[string]bool, len(expected.Assets))
+	for _, a := range expected.Assets {
+		if !heldUnderFilename[heldKey(a.ContentHash, a.Filename)] {
+			missingHashes[a.ContentHash] = true
+		}
 	}
 	var extra []ExtraAsset
 	for _, item := range inventory {
-		if !expectedHashes[item.ContentHash] {
-			extra = append(extra, ExtraAsset{ContentHash: item.ContentHash, Filename: item.RuntimeFilename, SizeBytes: item.SizeBytes})
+		if expectedUnderFilename[heldKey(item.ContentHash, item.RuntimeFilename)] {
+			continue
 		}
+		if missingHashes[item.ContentHash] {
+			continue
+		}
+		extra = append(extra, ExtraAsset{ContentHash: item.ContentHash, Filename: item.RuntimeFilename, SizeBytes: item.SizeBytes})
 	}
 	m.Extra = extra
 

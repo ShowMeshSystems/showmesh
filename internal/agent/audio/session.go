@@ -531,7 +531,7 @@ func (s *Session) currentItemLocked() (pkgaudio.PlaylistItem, bool) {
 		return s.desired.Playlist.Items[s.currentIndex], true
 	}
 	if s.desired.Media != nil {
-		return pkgaudio.PlaylistItem{ItemID: "media", Index: 0, Media: *s.desired.Media}, true
+		return pkgaudio.PlaylistItem{ItemID: nonPlaylistItemID, Index: 0, Media: *s.desired.Media}, true
 	}
 	return pkgaudio.PlaylistItem{}, false
 }
@@ -757,6 +757,24 @@ func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem)
 // asset behind an unchanged ItemID is detected as a change, not missed.
 func itemIdentity(item pkgaudio.PlaylistItem) string {
 	return item.ItemID + "|" + item.Media.AssetID + "|" + item.Media.ContentHash
+}
+
+// nonPlaylistItemID is the constant [Session.currentItemLocked] uses for a
+// session desiring a single [pkgaudio.MediaRef] rather than a playlist:
+// see that method's own "media" literal. Named here so [TargetMediaIdentity]
+// reproduces the identical identity [itemIdentity] would compute once such
+// a media is actually Applied, rather than a second, separately spelled
+// copy of the same literal.
+const nonPlaylistItemID = "media"
+
+// TargetMediaIdentity is the identity a session would hold once media is
+// Applied to it directly (never as part of a playlist) and prepared: the
+// same string [itemIdentity] computes from the resulting session state,
+// computed here from the media alone so a caller can check whether a
+// session ALREADY holds a candidate media ([Manager.LoadedMediaIdentity])
+// before ever calling Apply.
+func TargetMediaIdentity(media pkgaudio.MediaRef) string {
+	return itemIdentity(pkgaudio.PlaylistItem{ItemID: nonPlaylistItemID, Media: media})
 }
 
 // mediaFaultToSessionFault maps a pre-flight [MediaFault] (C2's ProbeAsset

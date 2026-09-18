@@ -36,20 +36,30 @@ import (
 
 // assetRecord mirrors v1.Asset.
 type assetRecord struct {
-	ID                     string     `json:"id"`
-	Show                   string     `json:"show"`
-	Sequence               string     `json:"sequence"`
-	TargetKind             string     `json:"targetKind"`
-	Target                 string     `json:"target"`
-	MediaType              string     `json:"mediaType"`
-	ContentHash            string     `json:"contentHash"`
-	RuntimeFilename        string     `json:"runtimeFilename"`
-	SizeBytes              int64      `json:"sizeBytes"`
-	CreatedAt              time.Time  `json:"createdAt"`
-	CreatedByPrincipalID   *string    `json:"createdByPrincipalId"`
-	CreatedByPrincipalName *string    `json:"createdByPrincipalName"`
-	SupersededAt           *time.Time `json:"supersededAt"`
-	Current                bool       `json:"current"`
+	ID                     string          `json:"id"`
+	Show                   string          `json:"show"`
+	Sequence               string          `json:"sequence"`
+	TargetKind             string          `json:"targetKind"`
+	Target                 string          `json:"target"`
+	MediaType              string          `json:"mediaType"`
+	ContentHash            string          `json:"contentHash"`
+	RuntimeFilename        string          `json:"runtimeFilename"`
+	SizeBytes              int64           `json:"sizeBytes"`
+	CreatedAt              time.Time       `json:"createdAt"`
+	CreatedByPrincipalID   *string         `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string         `json:"createdByPrincipalName"`
+	SupersededAt           *time.Time      `json:"supersededAt"`
+	Current                bool            `json:"current"`
+	Rendition              *assetRendition `json:"rendition"`
+}
+
+// assetRendition mirrors v1.AssetRendition: an audio asset's 48kHz/16-bit/
+// stereo WAV rendition state.
+type assetRendition struct {
+	Status         string `json:"status"`
+	Format         string `json:"format,omitempty"`
+	DurationMillis int64  `json:"durationMillis,omitempty"`
+	FailureReason  string `json:"failureReason,omitempty"`
 }
 
 // assetResponse is the body of POST /api/v1/assets and GET /api/v1/assets/{id}.
@@ -1043,14 +1053,18 @@ func printAssetsTable(w io.Writer, resp assetsListResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "ID\tSHOW\tSEQUENCE\tTARGET\tMEDIA TYPE\tSIZE\tCURRENT\tFILENAME")
+	_, _ = fmt.Fprintln(tw, "ID\tSHOW\tSEQUENCE\tTARGET\tMEDIA TYPE\tSIZE\tCURRENT\tFILENAME\tRENDITION")
 	for _, a := range resp.Assets {
 		target := a.Target
 		if a.TargetKind == "show" {
 			target = "(show)"
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
-			a.ID, a.Show, a.Sequence, target, a.MediaType, formatByteSize(a.SizeBytes), a.Current, a.RuntimeFilename)
+		rendition := ""
+		if a.MediaType == "audio" {
+			rendition = renditionSummary(a.Rendition)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\t%s\n",
+			a.ID, a.Show, a.Sequence, target, a.MediaType, formatByteSize(a.SizeBytes), a.Current, a.RuntimeFilename, rendition)
 	}
 	_ = tw.Flush()
 }
@@ -1080,6 +1094,27 @@ func printAssetDetail(w io.Writer, a assetRecord) {
 		_, _ = fmt.Fprintf(w, "current:          no (superseded at %s)\n", a.SupersededAt.Format(time.RFC3339))
 	} else {
 		_, _ = fmt.Fprintln(w, "current:          no")
+	}
+	if a.Rendition != nil {
+		_, _ = fmt.Fprintf(w, "rendition:        %s\n", renditionSummary(a.Rendition))
+	}
+}
+
+// renditionSummary is [assetRendition]'s one-line, human-facing summary,
+// shared by the table and detail views.
+func renditionSummary(r *assetRendition) string {
+	if r == nil {
+		return "(not built yet)"
+	}
+	switch r.Status {
+	case "ready":
+		return fmt.Sprintf("ready, %s, %s", r.Format, (time.Duration(r.DurationMillis) * time.Millisecond).String())
+	case "rendering":
+		return "rendering"
+	case "failed":
+		return fmt.Sprintf("failed: %s", r.FailureReason)
+	default:
+		return r.Status
 	}
 }
 

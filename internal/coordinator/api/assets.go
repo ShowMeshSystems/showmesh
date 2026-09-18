@@ -14,6 +14,8 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audiorendition"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -327,6 +329,20 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// An audio upload is checked against its own actual content, never its
+	// filename, before anything is registered (owner ruling 2026-09-18,
+	// PCM show audio): the full transcode into a 48kHz/16-bit/stereo WAV
+	// rendition runs off this request path (see [Dependencies.
+	// AudioRenditionNudger]), but a file this coordinator cannot decode at
+	// all is refused synchronously, exactly like every other upload
+	// validation in this handler.
+	if fields.mediaType == "audio" {
+		if perr := h.probeAudioUpload(r.Context(), blob.ContentHash); perr != nil {
+			writeProblem(w, h.logger, now, invalidParameterProblem(perr.Error()))
+			return
+		}
+	}
+
 	var created store.AssetRecord
 	var rolledBack bool
 	var writeNow time.Time
@@ -395,7 +411,15 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	switch {
 	case errors.As(writeErr, &existsErr):
 		// Still-current identity match: idempotent no-op, no audit entry.
-		jsonWrite(w, mapAssetResponse(writeNow, existsErr.Existing, false))
+		if fields.mediaType == "audio" {
+			h.deps.AudioRenditionNudger.Nudge()
+		}
+		a, aerr := h.mapAssetWithRendition(r.Context(), existsErr.Existing)
+		if aerr != nil {
+			h.writeInternalError(w, now, "read asset rendition", aerr)
+			return
+		}
+		jsonWrite(w, assetResponse(writeNow, a, false))
 		return
 	case writeErr != nil:
 		h.writeInternalError(w, now, "write asset", writeErr)
@@ -406,8 +430,18 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	// showtime. A rollback changes what the manifest expects exactly like a
 	// fresh upload does, so it nudges the same way.
 	h.deps.AssetSyncNudger.Nudge()
+	if fields.mediaType == "audio" {
+		// The transcode itself runs off this request path (owner ruling
+		// 2026-09-18): only a wake-up is sent here, never a wait for it.
+		h.deps.AudioRenditionNudger.Nudge()
+	}
 
-	jsonWrite(w, mapAssetResponse(writeNow, created, rolledBack))
+	a, aerr := h.mapAssetWithRendition(r.Context(), created)
+	if aerr != nil {
+		h.writeInternalError(w, now, "read asset rendition", aerr)
+		return
+	}
+	jsonWrite(w, assetResponse(writeNow, a, rolledBack))
 }
 
 // --- GET /assets, GET /assets/{id} ---
@@ -428,7 +462,12 @@ func (h *handlers) handleListAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]v1.Asset, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, mapAsset(rec))
+		a, aerr := h.mapAssetWithRendition(r.Context(), rec)
+		if aerr != nil {
+			h.writeInternalError(w, now, "read asset rendition", aerr)
+			return
+		}
+		out = append(out, a)
 	}
 	jsonWrite(w, v1.AssetsListResponse{ServerTime: formatTime(now), Assets: out})
 }
@@ -449,7 +488,12 @@ func (h *handlers) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "get asset", err)
 		return
 	}
-	jsonWrite(w, mapAssetResponse(now, rec, false))
+	a, aerr := h.mapAssetWithRendition(r.Context(), rec)
+	if aerr != nil {
+		h.writeInternalError(w, now, "read asset rendition", aerr)
+		return
+	}
+	jsonWrite(w, assetResponse(now, a, false))
 }
 
 // --- GET /assets/{id}/content ---
@@ -505,6 +549,70 @@ func (h *handlers) handleGetAssetContent(w http.ResponseWriter, r *http.Request)
 	http.ServeContent(w, r, rec.RuntimeFilename, rec.CreatedAt, rc)
 }
 
+// --- GET /assets/{id}/rendition/content ---
+
+func assetRenditionNotFoundProblem(id string) v1.Problem {
+	return resourceNotFoundProblem(fmt.Sprintf("no ready rendition exists for asset %q", id))
+}
+
+// handleGetAssetRenditionContent serves GET /api/v1/assets/{id}/rendition/
+// content: the SAME id as GET /api/v1/assets/{id}/content, but the audio
+// asset's own separately content-addressed rendition blob, never the
+// original upload. A node is only ever dispatched this route once
+// [assetsync]'s expected-set computation has substituted a ready
+// rendition for this asset, so a 404 here (no rendition row, or one not
+// yet ready) means that node's own manifest is stale relative to what the
+// coordinator now expects.
+func (h *handlers) handleGetAssetRenditionContent(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	id := r.PathValue("id")
+
+	rec, err := h.deps.Assets.GetAsset(r.Context(), id)
+	if errors.Is(err, store.ErrAssetNotFound) {
+		writeProblem(w, h.logger, now, assetNotFoundProblem(id))
+		return
+	}
+	if err != nil {
+		h.writeInternalError(w, now, "get asset for rendition content", err)
+		return
+	}
+
+	rend, err := h.deps.Assets.GetAudioRendition(r.Context(), rec.ContentHash)
+	switch {
+	case errors.Is(err, store.ErrAudioRenditionNotFound):
+		writeProblem(w, h.logger, now, assetRenditionNotFoundProblem(id))
+		return
+	case err != nil:
+		h.writeInternalError(w, now, "get asset rendition for content", err)
+		return
+	case rend.Status != store.AudioRenditionStatusReady:
+		writeProblem(w, h.logger, now, assetRenditionNotFoundProblem(id))
+		return
+	}
+
+	// Same write-deadline extension as handleGetAssetContent, sized from
+	// the rendition's own recorded size rather than the original's.
+	writeDeadline := time.Now().Add(assetstore.UploadBudget(rend.SizeBytes))
+	_ = http.NewResponseController(w).SetWriteDeadline(writeDeadline)
+
+	rc, size, err := h.deps.AssetBackend.Open(r.Context(), rend.ContentHash)
+	if err != nil {
+		h.writeInternalError(w, now, fmt.Sprintf("open stored rendition for asset %q", id), err)
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	if size != rend.SizeBytes {
+		h.writeInternalError(w, now, fmt.Sprintf("serve rendition for asset %q", id),
+			fmt.Errorf("stored rendition blob is %d bytes but the recorded size is %d bytes: refusing to serve a truncated or corrupted rendition", size, rend.SizeBytes))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("ETag", strconv.Quote(rend.ContentHash))
+	http.ServeContent(w, r, assetsync.RenditionFilename(rec.RuntimeFilename), rec.CreatedAt, rc)
+}
+
 // --- mapping: store.AssetRecord -> v1 wire types ---
 
 func mapAsset(rec store.AssetRecord) v1.Asset {
@@ -521,6 +629,54 @@ func mapAsset(rec store.AssetRecord) v1.Asset {
 	}
 }
 
-func mapAssetResponse(now time.Time, rec store.AssetRecord, rolledBack bool) v1.AssetResponse {
-	return v1.AssetResponse{ServerTime: formatTime(now), Asset: mapAsset(rec), RolledBack: rolledBack}
+// mapAssetWithRendition maps rec and, for a "audio" MediaType, attaches its
+// rendition state (owner ruling 2026-09-18): nil when no rendition has
+// ever been queued, matching [substituteAudioRenditions]'s identical
+// "never built yet" reading in the sync package.
+func (h *handlers) mapAssetWithRendition(ctx context.Context, rec store.AssetRecord) (v1.Asset, error) {
+	out := mapAsset(rec)
+	if rec.MediaType != "audio" {
+		return out, nil
+	}
+
+	rend, err := h.deps.Assets.GetAudioRendition(ctx, rec.ContentHash)
+	if errors.Is(err, store.ErrAudioRenditionNotFound) {
+		return out, nil
+	}
+	if err != nil {
+		return v1.Asset{}, err
+	}
+
+	r := &v1.AssetRendition{Status: rend.Status}
+	switch rend.Status {
+	case store.AudioRenditionStatusReady:
+		r.Format = rend.Format
+		r.DurationMillis = rend.DurationMillis
+	case store.AudioRenditionStatusFailed:
+		r.FailureReason = rend.FailureReason
+	}
+	out.Rendition = r
+	return out, nil
+}
+
+func assetResponse(now time.Time, a v1.Asset, rolledBack bool) v1.AssetResponse {
+	return v1.AssetResponse{ServerTime: formatTime(now), Asset: a, RolledBack: rolledBack}
+}
+
+// probeAudioUpload runs [audiorendition.DetectFormat] against the just-
+// staged blob's own bytes, reading only what identifying its format needs
+// (never the whole file, and never a full decode): the fast, synchronous
+// half of PCM show audio's two-part check. The full transcode is
+// [Dependencies.AudioRenditionNudger]'s job, off this request path.
+func (h *handlers) probeAudioUpload(ctx context.Context, contentHash string) error {
+	rc, _, err := h.deps.AssetBackend.Open(ctx, contentHash)
+	if err != nil {
+		return fmt.Errorf("open uploaded audio to detect its format: %w", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	if _, err := audiorendition.DetectFormat(rc); err != nil {
+		return err
+	}
+	return nil
 }

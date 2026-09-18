@@ -208,6 +208,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 
 	var applyErrs []string
 	var unalignedReason string
+	var startTrigger *audioStartTriggerRecord
 	if entry.Outputs.Render != nil {
 		if o.render == nil {
 			applyErrs = append(applyErrs, "This Cue needs a render surface, but none are configured on this node.")
@@ -229,10 +230,11 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 			// called, so its own Apply/Prepare never tears down the
 			// in-flight announcement mid-sentence.
 			applyErrs = append(applyErrs, concurrentAnnouncementReason)
-		} else if reason, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
+		} else if reason, trigger, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
 			applyErrs = append(applyErrs, err.Error())
 		} else {
 			unalignedReason = reason
+			startTrigger = trigger
 			if entry.Outputs.Announcement != nil {
 				o.recordAnnouncementActivation(act)
 			}
@@ -264,6 +266,17 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 	}
 	if unalignedReason != "" {
 		value["unalignedReason"] = unalignedReason
+	}
+	// ADR-051 decision 6: written only when this activation found its
+	// Cue's audio session already started by MultiSync (activateAudio's
+	// own item 7 restart guard), so the coordinator that dispatched this
+	// activation knows it did not restart or reseek anything, and why.
+	if startTrigger != nil {
+		value[pkgaudio.ResultStartTrigger] = startTrigger.Trigger
+		value[pkgaudio.ResultTriggerSequenceFilename] = startTrigger.SequenceFilename
+		value[pkgaudio.ResultTriggerArrivalNs] = startTrigger.ArrivalNs
+		value[pkgaudio.ResultStartLeadMs] = startTrigger.LeadMs
+		value[pkgaudio.ResultPreparedLate] = startTrigger.PreparedLate
 	}
 	return OperationResult{
 		Confirmed:  true,
