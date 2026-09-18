@@ -450,6 +450,189 @@ func TestAssetFetchOperationNoTokenSendsNoAuthHeader(t *testing.T) {
 	}
 }
 
+// TestAssetFetchOperationReusesLocalBytesWithoutDownloading proves the
+// central claim of this seam: when this node already holds the requested
+// content hash under a different filename, asset.fetch creates the new
+// filename from those local bytes and never sends an HTTP request. The
+// existing filename is left in place (both names survive), and the
+// inventory walk then reports both.
+func TestAssetFetchOperationReusesLocalBytesWithoutDownloading(t *testing.T) {
+	content := []byte("bytes this node already holds under another filename")
+	hash := sha256Hash(content)
+
+	dir := t.TempDir()
+	existingPath := filepath.Join(dir, "Opening.fseq")
+	if err := os.WriteFile(existingPath, content, 0o644); err != nil {
+		t.Fatalf("seeding existing asset: %v", err)
+	}
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	op := assetFetchOperation{dir: dir}
+	clock := &fakeClock{t: time.Now()}
+
+	params := fetchParams(srv, "/asset", "asset-1", hash, "Thriller.fseq", len(content))
+	result, err := op.run(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("Confirmed = false, want true; result = %+v", result)
+	}
+	if hits != 0 {
+		t.Fatalf("HTTP server received %d request(s), want 0: local reuse must never download", hits)
+	}
+	if source := result.Value.(map[string]any)["source"]; source != "reused" {
+		t.Fatalf("result.Value[source] = %v, want %q", source, "reused")
+	}
+
+	newPath := filepath.Join(dir, "Thriller.fseq")
+	got, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatalf("reading new asset: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("new asset content = %q, want %q", got, content)
+	}
+
+	// The original name must survive: removing one name never affects the
+	// other, whether the reuse used a hard link or a copy.
+	got, err = os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatalf("original asset was removed by reuse: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("original asset content changed: got %q, want %q", got, content)
+	}
+
+	stagingEntries, err := os.ReadDir(filepath.Join(dir, ".staging"))
+	if err != nil {
+		t.Fatalf("reading staging dir: %v", err)
+	}
+	if len(stagingEntries) != 0 {
+		t.Fatalf("staging dir has %d leftover entries, want 0 after a successful reuse", len(stagingEntries))
+	}
+
+	assets, complete, reason := enumerateAssets(dir, map[string]hashCacheEntry{}, time.Now)
+	if !complete {
+		t.Fatalf("enumerateAssets incomplete: %s", reason)
+	}
+	names := map[string]bool{}
+	for _, a := range assets {
+		if a.ContentHash != hash {
+			t.Fatalf("asset %q has ContentHash %q, want %q", a.Filename, a.ContentHash, hash)
+		}
+		names[a.Filename] = true
+	}
+	if !names["Opening.fseq"] || !names["Thriller.fseq"] {
+		t.Fatalf("inventory after reuse = %v, want both Opening.fseq and Thriller.fseq", names)
+	}
+}
+
+// TestAssetFetchOperationDownloadsWhenHashNotHeld proves a fetch for a
+// content hash this node does not hold under any filename downloads exactly
+// as before, even when an unrelated file already exists in the directory.
+func TestAssetFetchOperationDownloadsWhenHashNotHeld(t *testing.T) {
+	unrelated := []byte("bytes belonging to a completely different asset")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Opening.fseq"), unrelated, 0o644); err != nil {
+		t.Fatalf("seeding unrelated asset: %v", err)
+	}
+
+	content := []byte("bytes that must be downloaded because no local candidate holds them")
+	hash := sha256Hash(content)
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	op := assetFetchOperation{dir: dir}
+	clock := &fakeClock{t: time.Now()}
+
+	params := fetchParams(srv, "/asset", "asset-1", hash, "Thriller.fseq", len(content))
+	result, err := op.run(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil", err)
+	}
+	if hits != 1 {
+		t.Fatalf("HTTP server received %d request(s), want exactly 1", hits)
+	}
+	if source := result.Value.(map[string]any)["source"]; source != "downloaded" {
+		t.Fatalf("result.Value[source] = %v, want %q", source, "downloaded")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "Thriller.fseq"))
+	if err != nil {
+		t.Fatalf("reading downloaded asset: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("downloaded asset content = %q, want %q", got, content)
+	}
+}
+
+// TestAssetFetchOperationFallsThroughWhenLocalCandidateBytesDoNotMatch
+// proves that a file whose on-disk bytes no longer match the content its
+// name would otherwise suggest is never trusted as a reuse source: it is
+// re-hashed directly from disk, found not to match the requested content
+// hash, and the fetch falls through to an ordinary download that leaves the
+// tampered file untouched.
+func TestAssetFetchOperationFallsThroughWhenLocalCandidateBytesDoNotMatch(t *testing.T) {
+	content := []byte("the real bytes this node is being asked to fetch")
+	hash := sha256Hash(content)
+
+	dir := t.TempDir()
+	tamperedPath := filepath.Join(dir, "Opening.fseq")
+	tampered := []byte("bytes that were altered on disk after they were written")
+	if err := os.WriteFile(tamperedPath, tampered, 0o644); err != nil {
+		t.Fatalf("seeding tampered asset: %v", err)
+	}
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	op := assetFetchOperation{dir: dir}
+	clock := &fakeClock{t: time.Now()}
+
+	params := fetchParams(srv, "/asset", "asset-1", hash, "Thriller.fseq", len(content))
+	result, err := op.run(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil", err)
+	}
+	if hits != 1 {
+		t.Fatalf("HTTP server received %d request(s), want exactly 1: a tampered candidate must fall through to download", hits)
+	}
+	if source := result.Value.(map[string]any)["source"]; source != "downloaded" {
+		t.Fatalf("result.Value[source] = %v, want %q", source, "downloaded")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "Thriller.fseq"))
+	if err != nil {
+		t.Fatalf("reading downloaded asset: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("downloaded asset content = %q, want %q", got, content)
+	}
+
+	stillTampered, err := os.ReadFile(tamperedPath)
+	if err != nil {
+		t.Fatalf("tampered file was removed: %v", err)
+	}
+	if string(stillTampered) != string(tampered) {
+		t.Fatalf("tampered file content changed: got %q, want %q", stillTampered, tampered)
+	}
+}
+
 // TestDownloadToStagingResumesViaRange proves a staging file left over from
 // a prior attempt (matched by content hash) is resumed with a Range
 // request rather than re-downloaded from scratch, and that the final hash
