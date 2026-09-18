@@ -501,6 +501,9 @@
   min-width: 0;
   padding: 22px 28px 80px;
   max-width: var(--page-max);
+  /* Centered in its track once it stops growing, so a wide monitor frames it
+     rather than leaving all the slack on one side. */
+  margin-inline: auto;
 }
 
 /* Two-pane screens: list plus inspector. */
