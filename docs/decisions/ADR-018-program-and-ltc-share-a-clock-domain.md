@@ -1,6 +1,6 @@
 # ADR-018: Program Audio and LTC Share One Clock Domain
 
-Status: Accepted  
+Status: Accepted   Terminology and the operator declaration are changed by [ADR-052](ADR-052-global-clock-and-local-clock.md); the rule stands.
 Date: 2026-08-10
 Amended: 2026-08-19 — SM-78 clarified that channels 1–2/3 are the stereo reference layout and explicit non-overlapping channel indices also permit mono program plus LTC.
 
