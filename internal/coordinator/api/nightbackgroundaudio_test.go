@@ -13,6 +13,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -260,6 +261,116 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	}
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_AppliesReadyRenditionMedia proves a bed
+// item's dispatched media names a ready rendition's own hash and a .wav
+// filename, not the original upload. An item with no ready rendition
+// keeps naming the original, unchanged.
+func TestNightAdvanceBackgroundAudio_AppliesReadyRenditionMedia(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:asset-1", store.AudioRenditionReady{
+		ContentHash: "sha256:asset-1-rendition", SizeBytes: 4242, DurationMillis: 9999, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	playlist, ok := pub.lastParams["playlist"].(map[string]any)
+	if !ok {
+		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
+	}
+	itemsAny, ok := playlist["items"].([]any)
+	if !ok || len(itemsAny) != 2 {
+		t.Fatalf("playlist.items = %v, want 2 items", playlist["items"])
+	}
+	items := make([]map[string]any, len(itemsAny))
+	for i, it := range itemsAny {
+		m, ok := it.(map[string]any)
+		if !ok {
+			t.Fatalf("playlist.items[%d] = %v, want a JSON object", i, it)
+		}
+		items[i] = m
+	}
+	if items[0]["filename"] != "asset-1.wav" {
+		t.Errorf("item 0 filename = %v, want asset-1.wav (the ready rendition's own runtime filename)", items[0]["filename"])
+	}
+	if items[0]["contentHash"] != "sha256:asset-1-rendition" {
+		t.Errorf("item 0 contentHash = %v, want the rendition's own hash sha256:asset-1-rendition", items[0]["contentHash"])
+	}
+	if items[0]["sizeBytes"] != float64(4242) {
+		t.Errorf("item 0 sizeBytes = %v, want the rendition's own size 4242", items[0]["sizeBytes"])
+	}
+	if items[1]["filename"] != "asset-2.mp3" {
+		t.Errorf("item 1 filename = %v, want asset-2.mp3 unchanged: no ready rendition exists for it", items[1]["filename"])
+	}
+	if items[1]["contentHash"] != "sha256:asset-2" {
+		t.Errorf("item 1 contentHash = %v, want the original sha256:asset-2", items[1]["contentHash"])
+	}
+}
+
+// TestNightBackgroundAudio_DispatchedMediaAgreesWithTheManifest proves the
+// asset-sync manifest's expected-asset entry and this bed's dispatched
+// item media never disagree for the same asset: both resolve through
+// [assetsync.ResolveAudioMedia], keyed by the same original content hash.
+func TestNightBackgroundAudio_DispatchedMediaAgreesWithTheManifest(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:asset-1", store.AudioRenditionReady{
+		ContentHash: "sha256:asset-1-rendition", SizeBytes: 4242, DurationMillis: 9999, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	manifest, err := assetsync.ExpectedAssetsForNode(context.Background(), st, "halloween", "node-a")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v", err)
+	}
+	var manifestAsset1 *assetsync.ExpectedAsset
+	for i, a := range manifest.Assets {
+		if a.AssetID == "asset-1" {
+			manifestAsset1 = &manifest.Assets[i]
+		}
+	}
+	if manifestAsset1 == nil {
+		t.Fatalf("manifest carries no entry for asset-1: %+v", manifest.Assets)
+	}
+	if !manifestAsset1.Rendition {
+		t.Fatalf("manifest entry for asset-1 = %+v, want Rendition true (a ready rendition was seeded)", manifestAsset1)
+	}
+
+	playlist, ok := pub.lastParams["playlist"].(map[string]any)
+	if !ok {
+		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
+	}
+	itemsAny, ok := playlist["items"].([]any)
+	if !ok || len(itemsAny) != 2 {
+		t.Fatalf("playlist.items = %v, want 2 items", playlist["items"])
+	}
+	item0, ok := itemsAny[0].(map[string]any)
+	if !ok {
+		t.Fatalf("playlist.items[0] = %v, want a JSON object", itemsAny[0])
+	}
+
+	if item0["filename"] != manifestAsset1.Filename {
+		t.Errorf("dispatched item filename = %v, manifest expected filename = %v: these must always agree", item0["filename"], manifestAsset1.Filename)
+	}
+	if item0["contentHash"] != manifestAsset1.ContentHash {
+		t.Errorf("dispatched item contentHash = %v, manifest expected content hash = %v: these must always agree", item0["contentHash"], manifestAsset1.ContentHash)
 	}
 }
 
