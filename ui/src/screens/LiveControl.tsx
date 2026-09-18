@@ -801,6 +801,9 @@ export function LiveControl() {
             </div>
           </div>
         )}
+        <div className="sm-lc-transport__audio">
+          <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
+        </div>
       </Section>
 
 
@@ -826,8 +829,6 @@ export function LiveControl() {
         />
         <Outcome outcome={nightOutcome} />
       </Section>
-
-      <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
 
       <RunList
         id="lc-macros"
@@ -1365,33 +1366,23 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
     options.length === 0 ? 'No sessions known.' : `${options.length} known session${options.length === 1 ? '' : 's'}.`
 
   return (
-    <Section
-      id="lc-audio"
-      title="Audio sessions"
-      aside={
-        nodesState.kind === 'loaded' && nodesState.nodes.length > 0 ? (
-          <span className="sm-small sm-muted">{audioSummary}</span>
-        ) : undefined
-      }
-    >
-      {nodesState.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading this deployment's declared audio nodes." />
-      ) : nodesState.kind === 'failed' ? (
-        <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
-      ) : nodesState.nodes.length === 0 ? (
-        <RuledStrip
-          absence="empty"
-          label="No audio nodes"
-          fact="No node advertises an audio engine."
-          detail="Settings › Node routing is where an audio.node object is declared."
-        />
-      ) : (
-        <ButtonRow>
-          <Button variant="primary" onClick={() => setDrawerOpen(true)}>
-            Audio sessions…
-          </Button>
-        </ButtonRow>
-      )}
+    <>
+      <Button
+        size="gloved"
+        disabled={nodesState.kind !== 'loaded' || nodesState.nodes.length === 0}
+        title={
+          nodesState.kind === 'loading'
+            ? "Reading this deployment's declared audio nodes."
+            : nodesState.kind === 'failed'
+              ? nodesState.reason
+              : nodesState.kind === 'loaded' && nodesState.nodes.length === 0
+                ? 'No node advertises an audio engine. Settings › Node routing is where an audio.node object is declared.'
+                : audioSummary
+        }
+        onClick={() => setDrawerOpen(true)}
+      >
+        Audio sessions…
+      </Button>
 
       <Drawer
         open={drawerOpen}
@@ -1774,7 +1765,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
           <Outcome outcome={outcome} />
         </Section>
       </Drawer>
-    </Section>
+    </>
   )
 }
 

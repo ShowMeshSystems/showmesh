@@ -245,8 +245,7 @@ describe('Live Control', () => {
         ? () => Promise.reject(new Error('unavailable'))
         : () => Promise.resolve({ payload: { ltcFrameRate: opts.fps } } as never)
     renderScreen({ session: audioAllowedSession })
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
@@ -258,7 +257,6 @@ describe('Live Control', () => {
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
       'Night lifecycle',
-      'Audio sessions',
       'Macros',
       'Announcements',
       'Actions',
@@ -888,8 +886,7 @@ describe('Live Control', () => {
     stubs.pauseAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.pause' })))
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
@@ -1069,8 +1066,7 @@ describe('Live Control', () => {
       } as never,
     })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
@@ -1079,16 +1075,16 @@ describe('Live Control', () => {
     expect(prepare).toHaveAttribute('title', expect.stringContaining('audio:command'))
   })
 
-  it('renders the empty state when no audio node is declared', async () => {
+  it('disables the audio sessions button when no audio node is declared', async () => {
     stubs.listConfigObjects = ((kind: string) => {
       if (kind === 'audio.node') return Promise.resolve({ objects: [] })
       return Promise.resolve({ objects: [] })
     }) as never
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    expect(within(region).getByText('No audio nodes')).toBeInTheDocument()
-    expect(within(region).getByText('No node advertises an audio engine.')).toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: /Audio sessions…/ })
+    await waitFor(() => expect(button).toBeDisabled())
+    expect(button.getAttribute('title')).toContain('No node advertises an audio engine')
   })
 
   it('collapses the target, known sessions and transport into one drawer behind one button, with a one-line summary on the section itself', async () => {
@@ -1100,12 +1096,12 @@ describe('Live Control', () => {
       Promise.resolve({ observations: [observation('audio_session.state', 'started', 'current', 'audio_session', 'bg-holiday-01')] })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    expect(await within(region).findByText('1 known session.')).toBeInTheDocument()
-    expect(within(region).queryByText(/Loading media into a session/)).not.toBeInTheDocument()
-    expect(within(region).queryByLabelText('Session id')).not.toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: /Audio sessions…/ })
+    await waitFor(() => expect(button.getAttribute('title')).toContain('1 known session.'))
+    expect(screen.queryByText(/Loading media into a session/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Session id')).not.toBeInTheDocument()
 
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(button)
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByLabelText('Node')).toBeInTheDocument()
     expect(within(dialog).getByLabelText('Known sessions')).toBeInTheDocument()
@@ -1115,8 +1111,8 @@ describe('Live Control', () => {
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
     expect(within(dialog).getByRole('button', { name: 'Prepare' })).toBeInTheDocument()
-    // The caption states a count only; it never grows an "open" clause, reachable or not.
-    expect(within(region).getByText('1 known session.')).toBeInTheDocument()
+    // The trigger's summary states a count only; it never grows an "open" clause, reachable or not.
+    expect(button.getAttribute('title')).toContain('1 known session.')
   })
 
   it('reports a known session as playing, and another as stale, before the operator has picked or typed any session id', async () => {
@@ -1133,8 +1129,7 @@ describe('Live Control', () => {
       })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
 
     // No session id has been picked or typed yet.
@@ -1161,8 +1156,7 @@ describe('Live Control', () => {
       })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
 
     expect(await within(dialog).findByText('bg-holiday-01')).toBeInTheDocument()

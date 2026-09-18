@@ -89,6 +89,11 @@
   order: 0;
 }
 
+/* The audio-sessions trigger sits inside the transport box, below the panel. */
+.sm-lc-transport__audio {
+  margin-top: var(--s-3);
+}
+
 .sm-lc-emergency {
   display: grid;
   gap: var(--s-3);
