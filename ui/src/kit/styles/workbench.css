@@ -8,6 +8,7 @@
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   column-gap: 28px;
   align-items: start;
+  margin-top: 32px;
 }
 
 /* The status column carries the wide tables, so it takes the wider track. */

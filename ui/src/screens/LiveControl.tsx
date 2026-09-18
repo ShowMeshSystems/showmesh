@@ -58,6 +58,7 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  ConfirmDialog,
   DefinitionStrip,
   Drawer,
   Field,
@@ -335,6 +336,7 @@ export function LiveControl() {
   const [startRepeat, setStartRepeat] = useState(false)
   const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
   const [emergencyOutcome, setEmergencyOutcome] = useState<EmergencyOutcomeState | null>(null)
   const [emergencyBusy, setEmergencyBusy] = useState<EmergencyLevel | false>(false)
   const [hardStopArm, setHardStopArm] = useState<{ armToken: string; expiresAt: string } | null>(null)
@@ -533,6 +535,9 @@ export function LiveControl() {
             </p>
           </>
         )}
+        <div className="sm-lc-output-audio">
+          <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
+        </div>
       </Section>
   )
   const emergencySection = (
@@ -801,34 +806,46 @@ export function LiveControl() {
             </div>
           </div>
         )}
-        <div className="sm-lc-transport__audio">
-          <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
-        </div>
       </Section>
 
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
-        <p className="sm-small sm-muted">
-          Every command here answers 202. The UI reports that it was accepted, never that it is done; Show Night carries
-          what the session then reports.
-        </p>
         <LifecycleCommands
-          groups={nightLifecycleGroups(
-            nightGate,
-            night,
-            <label className="sm-choice sm-choice--gloved">
-              <input
+          dense
+          groups={[
+            {
+              id: 'lc-lifecycle-row',
+              commands: nightLifecycleGroups(nightGate, (command) =>
+                command === 'start-night' ? setStartNightConfirmOpen(true) : night(command),
+              ).flatMap((group) => group.commands),
+            },
+          ]}
+        />
+        <ConfirmDialog
+          open={startNightConfirmOpen}
+          title="Start the night and its first cycle?"
+          detail={
+            <>
+              <p className="sm-body">This commits the armed definition and starts the show. It is accepted here, then the session reports what it does.</p>
+              <Choice
                 type="checkbox"
                 checked={skipEnterShowLead}
-                disabled={!nightGate.allowed}
                 onChange={(event) => setSkipEnterShowLead(event.target.checked)}
+                label="Skip the enter-show lead. An enter-show announcement cue still dispatches."
               />
-              <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
-            </label>,
-          )}
+            </>
+          }
+          confirmLabel="Start night"
+          onConfirm={() => {
+            setStartNightConfirmOpen(false)
+            night('start-night')
+          }}
+          onCancel={() => setStartNightConfirmOpen(false)}
         />
         <Outcome outcome={nightOutcome} />
       </Section>
+
+      <Announcements show={show} />
 
       <RunList
         id="lc-macros"
@@ -837,11 +854,8 @@ export function LiveControl() {
         show={show}
         list={macros}
         gate={configGate}
-        detail="Each step confirms separately. A macro is accepted, then its steps report their own outcomes."
         onRun={(id) => submitMacroRun(id)}
       />
-
-      <Announcements show={show} />
 
       <RunList
         id="lc-actions"
@@ -850,7 +864,6 @@ export function LiveControl() {
         show={show}
         list={actions}
         gate={configGate}
-        detail="One integration command each. Macros are built from these; these are here for when you need just the one step."
         onRun={(id) => invokeAction(id)}
       />
 
@@ -1056,13 +1069,14 @@ function Announcements({ show }: { show: string | null }) {
               {cue.uploaded ? (
                 <Button
                   variant="primary"
+                  size="gloved"
                   disabled={fireState[cue.id]?.kind === 'firing'}
                   onClick={() => fireCue(cue.id)}
                 >
                   {fireState[cue.id]?.kind === 'firing' ? 'Firing…' : 'Fire'}
                 </Button>
               ) : (
-                <Button variant="primary" disabled title="Its audio asset has not been uploaded.">
+                <Button variant="primary" size="gloved" disabled title="Its audio asset has not been uploaded.">
                   Fire
                 </Button>
               )}
@@ -1367,8 +1381,9 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
 
   return (
     <>
-      <Button
-        size="gloved"
+      <button
+        type="button"
+        className="sm-linkbutton"
         disabled={nodesState.kind !== 'loaded' || nodesState.nodes.length === 0}
         title={
           nodesState.kind === 'loading'
@@ -1381,8 +1396,8 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
         }
         onClick={() => setDrawerOpen(true)}
       >
-        Audio sessions…
-      </Button>
+        Audio sessions →
+      </button>
 
       <Drawer
         open={drawerOpen}
@@ -1794,7 +1809,6 @@ function PageHeader() {
   return (
     <>
       <h1 className="sm-page__title">Live Control</h1>
-      <p className="sm-page__lede">Acting on the show that is running now.</p>
     </>
   )
 }
@@ -1808,7 +1822,6 @@ function RunList({
   show,
   list,
   gate,
-  detail,
   onRun,
 }: {
   id: string
@@ -1817,7 +1830,6 @@ function RunList({
   show: string | null
   list: { items: ConfigObjectSummary[] | null; error: string | null }
   gate: Gate
-  detail: string
   onRun: (id: string) => Promise<unknown>
 }) {
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
@@ -1834,7 +1846,6 @@ function RunList({
         )
       }
     >
-      <p className="sm-small sm-muted">{detail}</p>
       {show === null ? (
         <RuledStrip
           absence="empty"

@@ -33,13 +33,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The evidence badge column is fixed so a long "last confirmed" value or an
-   UNKNOWN_AGE state cannot reflow the table. The badge wraps within it. */
+/* The evidence badge is a fixed size and left-anchored, so a changing age or an
+   unknown-age state cannot resize it or reflow the outputs table. Long values
+   wrap within it. */
 .sm-lc-output-when {
   width: 150px;
 }
 
 .sm-lc-output-when .sm-status {
+  width: 9rem;
+  justify-content: flex-start;
   white-space: normal;
 }
 
@@ -104,8 +107,8 @@
   order: 0;
 }
 
-/* The audio-sessions trigger sits inside the transport box, below the panel. */
-.sm-lc-transport__audio {
+/* The audio-sessions link sits below the outputs table. */
+.sm-lc-output-audio {
   margin-top: var(--s-3);
 }
 

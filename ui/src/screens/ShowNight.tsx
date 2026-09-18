@@ -361,11 +361,6 @@ export function ShowNight() {
       <div role="group" aria-label="Night lifecycle" className="sm-rails">
         <Rail title="Tonight" steps={tonight} />
         <Rail title={`Cycle ${session.cycle}`} steps={cycleRail(session, nowIso)} />
-        <p className="sm-section__footnote">
-          The bottom row repeats: rest, then show, then rest again, for as many cycles as the night allows.{' '}
-          <strong>Request final show</strong> closes admission and sends the last cycle to end-of-night instead of back
-          to resting.
-        </p>
       </div>
 
       <div className="sm-nownext">

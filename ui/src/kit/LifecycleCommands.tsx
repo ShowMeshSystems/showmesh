@@ -29,7 +29,7 @@ export type LifecycleCommandGroup = {
 function LifecycleCommandCell({ command, label, detail, disabled = false, disabledReason, onRun, options, dense = false }: LifecycleCommandSpec & { dense?: boolean }) {
   return (
     <div className={`sm-lifecycle-command sm-lifecycle-command--${command}`}>
-      <Button size="gloved" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={onRun}>
+      <Button size="gloved" disabled={disabled} title={disabled ? disabledReason : dense ? detail : undefined} onClick={onRun}>
         {label}
       </Button>
       {!dense && <p className="sm-small sm-muted">{disabled && disabledReason !== undefined ? disabledReason : detail}</p>}
