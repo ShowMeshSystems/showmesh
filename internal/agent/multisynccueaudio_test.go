@@ -32,6 +32,11 @@ type scriptableClockSource struct {
 	state    agentclock.State
 	media    time.Time
 	nowCalls int
+
+	// beforeRead, if set, runs inside Now before it reads f.media, given
+	// that call's 1-based number, so a test can block one call
+	// deterministically instead of racing a real-time advance against it.
+	beforeRead func(callNum int)
 }
 
 func newScriptableClockSource(start time.Time) *scriptableClockSource {
@@ -46,9 +51,26 @@ func (f *scriptableClockSource) Poll(context.Context) agentclock.Status {
 
 func (f *scriptableClockSource) Now(context.Context) agentclock.MediaTime {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.nowCalls++
+	n := f.nowCalls
+	hook := f.beforeRead
+	f.mu.Unlock()
+
+	if hook != nil {
+		hook(n)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return agentclock.MediaTime{Time: f.media, Valid: true}
+}
+
+// setBeforeRead installs (or clears, with nil) this clock's own beforeRead
+// hook.
+func (f *scriptableClockSource) setBeforeRead(hook func(callNum int)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.beforeRead = hook
 }
 
 func (f *scriptableClockSource) reads() int {
@@ -240,12 +262,14 @@ func TestMultiSyncCueAudioColdCuePreparesOnOpenStartsOnStartAndReportsLate(t *te
 	trigger.SetSources(catalogStore, mgr, dir, timeline)
 
 	// OPEN: nothing was armed, so this must apply and prepare on the cue
-	// session directly. No clock scheduling is involved (Prepare never
-	// consults a media clock), so this call returns synchronously.
+	// session directly. handleOpen's own cold prepare runs on its own
+	// goroutine (so a slow prepare never delays reading a later START),
+	// so this test waits for it via the same waitOpen a real START would.
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
 		Action: multisync.SyncActionOpen, FileType: multisync.SyncFileTypeSequence,
 		Filename: "kpop-audio.fseq",
 	})
+	trigger.waitOpen("kpop-audio.fseq")
 
 	identity, ok := mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	if !ok {
@@ -480,5 +504,297 @@ func TestMultiSyncCueAudioUnlockedClockStartsOnArrivalWithReason(t *testing.T) {
 
 	if !strings.Contains(buf.String(), pkgaudio.ReasonScheduledStartIgnored) || !strings.Contains(buf.String(), string(agentclock.StateFailed)) {
 		t.Fatalf("log output = %q, want it to name %q and the clock provider's %q state", buf.String(), pkgaudio.ReasonScheduledStartIgnored, agentclock.StateFailed)
+	}
+}
+
+// TestMultiSyncCueAudioLeadSmallerThanOutputLatencyStillStarts proves a
+// configured lead smaller than the engine's own calibrated output latency
+// still starts (bumping T0 and reporting the lead actually applied),
+// never a scheduled_start_in_past refusal for an already-armed cue.
+func TestMultiSyncCueAudioLeadSmallerThanOutputLatencyStillStarts(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	mgr, fake := newTestAudioManager(t, dir, clk)
+	base := time.Unix(5_000_000_000, 0)
+	media := newScriptableClockSource(base)
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 10,
+	})
+	mgr.SetOutputLatency(500_000) // 500ms, well past the 10ms configured lead
+	resetTriggerRegistry(t)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-latency", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
+
+	stagedRef := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	trigger.SetSources(catalogStore, mgr, dir, timeline)
+
+	before := media.reads()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: "wake-up.fseq",
+		})
+	}()
+	// arrival, this hook's own output-latency check, and the engine's own
+	// schedule check: three reads before the bumped instant is honored.
+	media.waitForReads(t, before+3)
+	media.advance(50 * time.Millisecond) // past the margin the bumped T0 needs
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("HandleSequencePacket never returned after the media clock reached the bumped T0")
+	}
+
+	if _, ok := fake.LastLoadedHandle(); !ok {
+		t.Fatal("no Load was ever recorded")
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var got *audio.SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == cueActivationAudioSessionID {
+			got = &snaps[i]
+		}
+	}
+	if got == nil || got.State != pkgaudio.StatePlaying {
+		t.Fatalf("session snapshots = %+v, want the cue session playing", snaps)
+	}
+
+	rec, ok := cueActivationTriggerRegistry.get(cueActivationAudioSessionID)
+	if !ok {
+		t.Fatal("no start-trigger evidence recorded")
+	}
+	if rec.PreparedLate {
+		t.Fatal("recorded preparedLate = true, want false: this start reached its bumped instant, not the late fallback")
+	}
+	if rec.LeadMs <= 10 {
+		t.Fatalf("recorded lead = %dms, want it bumped well past the configured 10ms", rec.LeadMs)
+	}
+}
+
+// blockingLoadEngine is a [audio.FakeEngine] whose Load blocks on a test-
+// controlled gate, standing in for a real engine's own cold decode taking
+// measurable time, deterministically rather than via a real sleep.
+type blockingLoadEngine struct {
+	*audio.FakeEngine
+	loadStarted chan struct{}
+	release     chan struct{}
+}
+
+func (e *blockingLoadEngine) Available() (bool, string) { return true, "" }
+
+func (e *blockingLoadEngine) Load(ctx context.Context, handle audio.EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (audio.EngineObservation, error) {
+	close(e.loadStarted)
+	<-e.release
+	return e.FakeEngine.Load(ctx, handle, media, duration)
+}
+
+// TestMultiSyncCueAudioStartArrivalStampedBeforeSlowOpenPrepare proves a
+// START packet's own arrival is stamped at actual receipt, not after this
+// hook waits for that same sequence's own slow OPEN prepare to finish.
+func TestMultiSyncCueAudioStartArrivalStampedBeforeSlowOpenPrepare(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	fake := audio.NewFakeEngine(clk.now)
+	blocking := &blockingLoadEngine{FakeEngine: fake, loadStarted: make(chan struct{}), release: make(chan struct{})}
+	mgr := audio.NewManager(blocking, audio.NewFileSessionStore(dir), dir, fixedAudioDecoder{}, clk.now, nil)
+	base := time.Unix(5_000_000_000, 0)
+	media := newScriptableClockSource(base)
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 50,
+	})
+	resetTriggerRegistry(t)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-slow-open", "slow-open.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	trigger.SetSources(catalogStore, mgr, dir, timeline)
+
+	before := media.reads()
+	// OPEN returns as soon as it registers the in-flight prepare: the cold
+	// Load below is still blocked on blocking.release when this call
+	// returns, proving OPEN never delays reading the next packet.
+	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+		Action: multisync.SyncActionOpen, FileType: multisync.SyncFileTypeSequence,
+		Filename: "slow-open.fseq",
+	})
+
+	select {
+	case <-blocking.loadStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("OPEN's own cold prepare never reached the engine's Load")
+	}
+	if got := media.reads(); got != before+1 {
+		t.Fatalf("media clock read %d times after OPEN, want %d (OPEN's own arrival read)", got, before+1)
+	}
+
+	early := base.Add(500 * time.Millisecond)
+	media.advance(500 * time.Millisecond)
+
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: "slow-open.fseq",
+		})
+	}()
+	media.waitForReads(t, before+2)
+
+	select {
+	case <-startDone:
+		t.Fatal("START returned before OPEN's own slow prepare finished")
+	default:
+	}
+
+	// The clock keeps moving while OPEN's prepare is still in flight: if
+	// arrival had been captured late, it would read this value instead.
+	media.advance(400 * time.Millisecond)
+	close(blocking.release)
+
+	select {
+	case <-startDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("START never returned after OPEN's own prepare finished")
+	}
+
+	rec, ok := cueActivationTriggerRegistry.get(cueActivationAudioSessionID)
+	if !ok {
+		t.Fatal("no start-trigger evidence recorded")
+	}
+	if rec.ArrivalNs != early.UnixNano() {
+		t.Fatalf("recorded arrival = %d, want %d (the reading taken when START actually arrived)", rec.ArrivalNs, early.UnixNano())
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var got *audio.SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == cueActivationAudioSessionID {
+			got = &snaps[i]
+		}
+	}
+	if got == nil || got.State != pkgaudio.StatePlaying {
+		t.Fatalf("session snapshots = %+v, want the cue session playing", snaps)
+	}
+}
+
+// TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness proves a
+// START whose computed T0 has already passed starts immediately instead
+// of being refused, recording PreparedLate and how late it was.
+func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	mgr, fake := newTestAudioManager(t, dir, clk)
+	base := time.Unix(5_000_000_000, 0)
+	media := newScriptableClockSource(base)
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 100,
+	})
+	resetTriggerRegistry(t)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-late", "late-start.fseq", "cue-song-asset", "cue-song.wav", hash, 1500)
+
+	// Stage the exact media so handleStart takes its usePromote branch,
+	// exactly as TestMultiSyncCueAudioArmedStartsAtArrivalPlusLead does.
+	stagedRef := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	trigger.SetSources(catalogStore, mgr, dir, timeline)
+
+	// Block the schedule check's own read (call 2; call 1 is arrival)
+	// until the clock has already advanced past T0, so the refusal is
+	// deterministic rather than a race against a real-time advance.
+	gate := make(chan struct{})
+	media.setBeforeRead(func(n int) {
+		if n == 2 {
+			<-gate
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: "late-start.fseq",
+		})
+	}()
+	media.waitForReads(t, 1)
+	media.advance(1100 * time.Millisecond) // 1000ms past the 100ms lead
+	close(gate)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("HandleSequencePacket never returned after the media clock passed T0")
+	}
+
+	if _, ok := fake.LastLoadedHandle(); !ok {
+		t.Fatal("no Load was ever recorded")
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var got *audio.SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == cueActivationAudioSessionID {
+			got = &snaps[i]
+		}
+	}
+	if got == nil || got.State != pkgaudio.StatePlaying {
+		t.Fatalf("session snapshots = %+v, want the cue session playing", snaps)
+	}
+	if got.PositionKnown && got.Position != 1500*time.Millisecond {
+		t.Fatalf("session position = %v, want 1.5s (the Cue's startOffsetMillis)", got.Position)
+	}
+
+	rec, ok := cueActivationTriggerRegistry.get(cueActivationAudioSessionID)
+	if !ok {
+		t.Fatal("no start-trigger evidence recorded")
+	}
+	if !rec.PreparedLate {
+		t.Fatal("recorded preparedLate = false, want true: this start missed its computed instant")
+	}
+	if rec.LatenessMs != 1000 {
+		t.Fatalf("recorded lateness = %dms, want 1000ms", rec.LatenessMs)
+	}
+	if rec.Trigger != pkgaudio.StartTriggerMultiSync {
+		t.Fatalf("recorded trigger = %q, want %q", rec.Trigger, pkgaudio.StartTriggerMultiSync)
 	}
 }

@@ -560,6 +560,7 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 			r.TriggerArrivalNs = rec.ArrivalNs
 			r.StartLeadMs = rec.LeadMs
 			r.PreparedLate = rec.PreparedLate
+			r.TriggerLatenessMs = rec.LatenessMs
 		}
 	}
 	return r

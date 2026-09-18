@@ -846,6 +846,75 @@ func TestCueActivationAfterMultiSyncStartDoesNotRestart(t *testing.T) {
 	}
 }
 
+// TestCueActivationAfterMultiSyncTouchButNotPlayingUsesNowBasedRevisions
+// proves a touched-but-not-playing session's wall-clock revision (past
+// act.EvidenceAt) forces activateAudio to derive from now() instead.
+func TestCueActivationAfterMultiSyncTouchButNotPlayingUsesNowBasedRevisions(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 10, 0, time.UTC)}
+	fake := audio.NewFakeEngine(clock.now)
+	mgr := audio.NewManager(activationAvailableEngine{fake}, audio.NewFileSessionStore(dir), dir, fixedAudioDecoder{}, clock.now, nil)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+	})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-multisync-touched", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}, StartOffsetMillis: 2000},
+		},
+		Triggers: []string{"wake-up.fseq"},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	// Simulate the MultiSync listener having applied (but not started)
+	// this exact Cue's audio, at a wall-clock revision later than
+	// act.EvidenceAt but earlier than this test's own now.
+	ref := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
+	msTouchedAt := time.Date(2026, 8, 23, 20, 0, 5, 0, time.UTC)
+	msRevision := pkgaudio.Revision(cueactivation.AudioSessionRevision(msTouchedAt, cueactivation.AudioSessionStepApply))
+	if r := mgr.Apply(context.Background(), cueActivationAudioSessionID, "ms-apply", msRevision, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply refused: %+v", r)
+	}
+	target := audio.TargetMediaIdentity(ref)
+	cueActivationTriggerRegistry = newAudioStartTriggerRegistry()
+	t.Cleanup(func() { cueActivationTriggerRegistry = nil })
+	cueActivationTriggerRegistry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
+		Trigger: pkgaudio.StartTriggerMultiSync, CueID: "cue-multisync-touched", MediaIdentity: target,
+		SequenceFilename: "wake-up.fseq",
+	})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	// act.EvidenceAt (testActivation's fixed date) predates msTouchedAt, so
+	// deriving from it alone would be refused stale against the apply above.
+	act := testActivation("act-after-multisync-touch", "cue-multisync-touched", 1, "halloween-2026", 3, "rev-a", 2000)
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var got *audio.SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == cueActivationAudioSessionID {
+			got = &snaps[i]
+		}
+	}
+	if got == nil || got.State != pkgaudio.StatePlaying {
+		t.Fatalf("session snapshots = %+v, want the cue session playing", snaps)
+	}
+	if got.PositionKnown && got.Position != 2000*time.Millisecond {
+		t.Fatalf("session position = %v, want 2s (the activation's PositionMS)", got.Position)
+	}
+}
+
 // TestCueActivationScheduledStartTooFarAheadStaysARefused proves the
 // fallback is scoped to scheduled_start_in_past only: any other
 // StartAtPosition refusal keeps today's behavior, no fallback attempted.

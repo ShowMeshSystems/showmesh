@@ -173,8 +173,8 @@ type cueActivationDispatchOutcome struct {
 	Err error
 }
 
-// dispatchCueActivations is ADR-051 decisions 1-3's shared arm-then-
-// dispatch step for the Playlist path (cuefire.go's own direct-fire route
+// dispatchCueActivations is ADR-051 decisions 1-3's shared dispatch step
+// for the Playlist path (cuefire.go's own direct-fire route
 // calls [handlers.scheduleCueActivations] and
 // [dispatchCueActivationsConcurrently] directly, for the identical reason
 // its own doc comment already gives for never calling this function: it
@@ -186,8 +186,8 @@ type cueActivationDispatchOutcome struct {
 // This function no longer runs [handlers.scheduleCueActivations]: ADR-051
 // decision 4 narrows that probe-and-select round to the fallback only, and
 // the automatic FPP-observation-driven path this function serves never
-// reaches it — see [handlers.dispatchArmCurrentAudio]'s own doc comment for
-// the arming step that replaces it here. It authorizes and dispatches one
+// reaches it; the node's own MultiSync start (or the fallback window in
+// [handlers.dispatchOneCueActivation]) is what replaces it here. It authorizes and dispatches one
 // cue.activate per (nodeID, Activation) in activations, one node at a time
 // no longer: every node dispatches CONCURRENTLY (ADR-049 decision 3's "one
 // node refusing... never stops... the others"), so one node's own up-to-
@@ -200,14 +200,9 @@ type cueActivationDispatchOutcome struct {
 // any other.
 func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
 	return dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
-		// Best-effort, ahead of cue N's own dispatch below: see
-		// dispatchArmCurrentAudio's own doc comment (cueactivationloop.go)
-		// for why a wrong or stale read here costs nothing. Carries its own
-		// recover; this whole closure is additionally wrapped by
-		// dispatchCueActivationsConcurrently's own recover, so a panic here
-		// becomes this one node's own Err, never a crash of the whole
-		// coordinator process.
-		h.safeDispatchArmCurrentAudio(ctx, now, nodeID, act, issuer, pin)
+		// Never arm [cueactivation.AudioSessionID] (the live show session)
+		// here: it used the same act.EvidenceAt-derived revision cue.activate
+		// below also uses, so the node's anti-rewind ledger refused it as stale.
 		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, pin)
 		// Best-effort, independent of cue N's own outcome above: see
 		// dispatchPrepareAheadAudio's own doc comment (cueactivationloop.go)

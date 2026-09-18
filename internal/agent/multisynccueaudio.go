@@ -110,6 +110,12 @@ type multiSyncCueAudioTrigger struct {
 	stateMu      sync.Mutex
 	generation   uint64
 	preparedLate map[string]bool
+
+	// openMu guards openWaiters: filename -> a channel closed once that
+	// filename's own OPEN-triggered cold prepare has finished, so START
+	// can wait for it without blocking the packet read loop.
+	openMu      sync.Mutex
+	openWaiters map[string]chan struct{}
 }
 
 // newMultiSyncCueAudioTrigger constructs a trigger consumer with no
@@ -121,6 +127,7 @@ func newMultiSyncCueAudioTrigger(logger *slog.Logger, now func() time.Time) *mul
 		logger:       logger,
 		now:          now,
 		preparedLate: make(map[string]bool),
+		openWaiters:  make(map[string]chan struct{}),
 	}
 }
 
@@ -261,13 +268,59 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 	switch pkt.Action {
 	case multisync.SyncActionOpen:
 		c.bumpGeneration()
-		c.handleOpen(ctx, mgr, assetDir, entry, pkt.Filename)
+		c.handleOpenAsync(ctx, mgr, assetDir, entry, pkt.Filename)
 	case multisync.SyncActionStart:
 		c.bumpGeneration()
+		c.waitOpen(pkt.Filename)
 		c.handleStart(ctx, mgr, assetDir, registry, entry, pkt.Filename, arrival)
 	case multisync.SyncActionStop:
 		gen := c.bumpGeneration()
 		c.handleStop(ctx, mgr, timeline, entry, pkt.Filename, gen)
+	}
+}
+
+// handleOpenAsync runs handleOpen's own cold prepare on its own goroutine,
+// so it never delays this hook's caller (the listener's single read loop)
+// from promptly reading and timestamping this sequence's own START.
+func (c *multiSyncCueAudioTrigger) handleOpenAsync(ctx context.Context, mgr *audio.Manager, assetDir string, entry cueAudioTriggerEntry, filename string) {
+	done := c.beginOpen(filename)
+	go func() {
+		defer c.endOpen(filename, done)
+		c.handleOpen(ctx, mgr, assetDir, entry, filename)
+	}()
+}
+
+// beginOpen registers filename as having an OPEN prepare in flight and
+// returns the channel waitOpen blocks on, called synchronously so a later
+// START for the same filename always finds it already registered.
+func (c *multiSyncCueAudioTrigger) beginOpen(filename string) chan struct{} {
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
+	done := make(chan struct{})
+	c.openWaiters[filename] = done
+	return done
+}
+
+// endOpen marks filename's OPEN prepare finished, waking any waitOpen call
+// blocked on it.
+func (c *multiSyncCueAudioTrigger) endOpen(filename string, done chan struct{}) {
+	close(done)
+	c.openMu.Lock()
+	if c.openWaiters[filename] == done {
+		delete(c.openWaiters, filename)
+	}
+	c.openMu.Unlock()
+}
+
+// waitOpen blocks until filename's own in-flight OPEN prepare, if any, has
+// finished. A no-op when OPEN was never seen for filename (RES-002's own
+// "a robust listener must also accept START without a preceding OPEN").
+func (c *multiSyncCueAudioTrigger) waitOpen(filename string) {
+	c.openMu.Lock()
+	done, ok := c.openWaiters[filename]
+	c.openMu.Unlock()
+	if ok {
+		<-done
 	}
 }
 
@@ -393,6 +446,19 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 		arrivalNs = arrival.Time.UnixNano()
 	}
 	t0 := arrivalNs + int64(leadMs)*int64(time.Millisecond)
+
+	// resolveScheduleLocked subtracts the engine's own calibrated output
+	// latency from t0, so a lead smaller than that latency always refuses
+	// as in-past. Bump t0 (and the lead actually applied) past it first.
+	if outputLatencyNs := mgr.OutputLatencyUs() * int64(time.Microsecond); outputLatencyNs > 0 {
+		if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
+			minHonorable := mediaNow.Time.UnixNano() + outputLatencyNs + int64(multisyncScheduleMargin)
+			if minHonorable > t0 {
+				t0 = minHonorable
+				leadMs = int((t0 - arrivalNs) / int64(time.Millisecond))
+			}
+		}
+	}
 	position := time.Duration(entry.Audio.StartOffsetMillis) * time.Millisecond
 
 	now := c.now()
@@ -406,6 +472,10 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 		startOutcome = mgr.StartAtPosition(ctx, cueActivationAudioSessionID, invocation, revision, t0, position)
 	}
 	if audioOutcomeFailed(startOutcome) {
+		if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
+			c.startLateOnArrival(ctx, mgr, registry, entry, filename, position, t0, arrivalNs, int64(leadMs), target, startOutcome.Reason)
+			return
+		}
 		c.logger.Warn("multisync: cue audio did not start on its sequence's START packet",
 			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", startOutcome.Outcome, "reason", startOutcome.Reason)
 		return
@@ -431,6 +501,38 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 		ArrivalNs:        arrivalNs,
 		LeadMs:           int64(leadMs),
 		PreparedLate:     preparedLate,
+	})
+}
+
+// startLateOnArrival mirrors cueactivationaudio.go's startUnalignedOnArrival:
+// a T0 already past starts immediately at the Cue's own position, never a
+// refusal. The cue session already carries this media, so Start reuses it.
+func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *audio.Manager, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, position time.Duration, t0, arrivalNs, leadMs int64, target, missedReason string) {
+	now := c.now()
+	startOutcome := mgr.Start(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "start-late", now), c.revision(now, unalignedFallbackStepStart))
+	if audioOutcomeFailed(startOutcome) {
+		c.logger.Warn("multisync: cue audio did not start on its sequence's START packet after a missed scheduled instant",
+			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", startOutcome.Outcome, "reason", startOutcome.Reason)
+		return
+	}
+	seekOutcome := mgr.Seek(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "seek-late", now), c.revision(now, unalignedFallbackStepSeek), position)
+	if audioOutcomeFailed(seekOutcome) {
+		c.logger.Warn("multisync: cue audio did not move to its cue position after a late start",
+			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", seekOutcome.Outcome, "reason", seekOutcome.Reason)
+		return
+	}
+
+	var latenessMs int64
+	if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
+		latenessMs = mediaNow.Time.Sub(time.Unix(0, t0)).Milliseconds()
+	}
+	c.logger.Info("multisync: cue audio started late instead of being refused",
+		"cue_id", entry.CueID, "sequence_filename", filename, "lateness_ms", latenessMs, "reason", missedReason)
+
+	registry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
+		Trigger: pkgaudio.StartTriggerMultiSync, CueID: entry.CueID, MediaIdentity: target,
+		SequenceFilename: filename, ArrivalNs: arrivalNs, LeadMs: leadMs,
+		PreparedLate: true, LatenessMs: latenessMs,
 	})
 }
 
@@ -468,6 +570,14 @@ const stopBlankingGrace = 250 * time.Millisecond
 // applied to audio the same way FPP's own remotes apply it to lighting so
 // a back-to-back stop/start does not audibly blink.
 const stopBlankingGraceFrames = 5
+
+// multisyncScheduleMargin is added past the engine's own calibrated
+// output-latency adjustment when bumping a start's own T0, so processing
+// time between that computation and the engine's own check does not
+// itself turn the bumped instant into a fresh in-past refusal.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED.
+const multisyncScheduleMargin = 20 * time.Millisecond
 
 // handleStop is ADR-051 decision 1's own stop path: wait a blanking
 // grace, then stop the cue's audio session, unless a later OPEN, START,

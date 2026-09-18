@@ -1454,7 +1454,14 @@ type AudioSessionReport struct {
 	// of the START packet: the node had to apply and prepare it in
 	// reaction to the sequence's own OPEN packet (or, failing that, to
 	// the START packet itself), rather than finding it already prepared.
+	// Also true when the start's own computed instant had already passed
+	// by the time the engine was called: see TriggerLatenessMs.
 	PreparedLate bool `json:"preparedLate"`
+
+	// TriggerLatenessMs is how far past its own computed instant a
+	// MultiSync start actually began, when it missed that instant and
+	// started immediately instead of being refused. Zero otherwise.
+	TriggerLatenessMs int64 `json:"triggerLatenessMs"`
 }
 
 // AudioPayload is the payload of the showmesh.node.audio/v1 schema,
@@ -1838,7 +1845,7 @@ func (p AudioPayload) Validate() error {
 			if sess.TriggerSequenceFilename == "" {
 				return fmt.Errorf("%w: sessions[%d].triggerSequenceFilename (required whenever startTrigger is \"multisync\")", ErrPayloadMissingField, i)
 			}
-		} else if sess.TriggerSequenceFilename != "" || sess.TriggerArrivalNs != 0 || sess.StartLeadMs != 0 || sess.PreparedLate {
+		} else if sess.TriggerSequenceFilename != "" || sess.TriggerArrivalNs != 0 || sess.StartLeadMs != 0 || sess.PreparedLate || sess.TriggerLatenessMs != 0 {
 			return fmt.Errorf("%w: sessions[%d] trigger fields must be empty/zero when startTrigger is not \"multisync\"", ErrPayloadInconsistentField, i)
 		}
 	}
