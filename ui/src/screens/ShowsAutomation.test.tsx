@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   type ActionBinding,
+  type Asset,
   type ConfigObjectSummary,
   type ConfigShowAction,
   type ConfigShowActionTarget,
@@ -145,6 +146,26 @@ function signedIn(scopes: string[]): SessionResponse {
 
 function assetsEmpty() {
   return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [] })
+}
+
+function audioAsset(overrides: Partial<Asset> = {}): Asset {
+  return {
+    id: 'welcome-audio',
+    show: 'winter-ridge-2026',
+    sequence: 'welcome-announcement',
+    targetKind: 'show',
+    target: '',
+    mediaType: 'audio',
+    contentHash: `sha256:${'a'.repeat(64)}`,
+    runtimeFilename: 'welcome.wav',
+    sizeBytes: 24000,
+    createdAt: '2026-08-30T18:22:00Z',
+    createdByPrincipalId: 'p1',
+    createdByPrincipalName: 'erbartos',
+    supersededAt: null,
+    current: true,
+    ...overrides,
+  }
 }
 
 function withContents(kind: string, macros: ConfigObjectSummary[], actions: ConfigObjectSummary[]) {
@@ -763,13 +784,13 @@ describe('Shows · Automation tab', () => {
       return { id, label, show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' }
     }
 
-    function setupWithAudioAction(target: Partial<ConfigShowActionTarget>) {
+    function setupWithAudioAction(target: Partial<ConfigShowActionTarget>, assets: Asset[] = []) {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => {
         if (kind === 'audio.node') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [nodeSummary('a', 'Node A'), nodeSummary('b', 'Node B')] })
         return withContents(kind, [], [actionSummary()])
       }
-      stubs.listAssets = assetsEmpty
+      stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets })
       stubs.getShowAction = (id: string) =>
         Promise.resolve(
           actionResponse(
@@ -880,6 +901,78 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(save)
       await waitFor(() => expect(sent).not.toBeNull())
       expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a'])
+    })
+
+    it('changing only the node list on an announcement keeps params.media and sourceRole unchanged', async () => {
+      const storedParams = {
+        sourceRole: 'announcement',
+        media: { assetId: 'welcome-audio', contentHash: `sha256:${'a'.repeat(64)}`, filename: 'welcome.wav', sizeBytes: 24000 },
+      }
+      setupWithAudioAction({ audioNodeId: 'a', audioAction: 'audio.session.apply', params: storedParams } as Partial<ConfigShowActionTarget>)
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
+      fireEvent.click(boxB)
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a', 'b'])
+      expect((sent as unknown as ConfigShowActionTarget).params).toEqual(storedParams)
+    })
+
+    it('selecting a media asset writes assetId, contentHash, filename, and sizeBytes, and defaults sourceRole to announcement', async () => {
+      setupWithAudioAction({ audioNodeId: 'a', audioAction: 'audio.session.apply' } as Partial<ConfigShowActionTarget>, [audioAsset()])
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      const media = await within(aside).findByLabelText('Media')
+      fireEvent.change(media, { target: { value: 'welcome-audio' } })
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      const params = (sent as unknown as ConfigShowActionTarget).params as Record<string, unknown>
+      expect(params.media).toEqual({ assetId: 'welcome-audio', contentHash: `sha256:${'a'.repeat(64)}`, filename: 'welcome.wav', sizeBytes: 24000 })
+      expect(params.sourceRole).toBe('announcement')
+    })
+
+    it('editing gain overlays only the gain key and leaves stored media and sourceRole untouched', async () => {
+      const storedParams = {
+        gainDb: -6,
+        media: { assetId: 'welcome-audio', contentHash: `sha256:${'a'.repeat(64)}`, filename: 'welcome.wav', sizeBytes: 24000 },
+        sourceRole: 'announcement',
+      }
+      setupWithAudioAction({ audioNodeId: 'a', audioAction: 'audio.gain.set', params: storedParams } as Partial<ConfigShowActionTarget>)
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      const gain = await within(aside).findByLabelText('Gain')
+      fireEvent.change(gain, { target: { value: '-3' } })
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      const params = (sent as unknown as ConfigShowActionTarget).params as Record<string, unknown>
+      expect(params.gainDb).toBe(-3)
+      expect(params.media).toEqual(storedParams.media)
+      expect(params.sourceRole).toBe('announcement')
     })
   })
 })
