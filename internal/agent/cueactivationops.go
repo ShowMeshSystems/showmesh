@@ -70,6 +70,7 @@ type cueActivationOperation struct {
 	audioMgr     *audio.Manager
 	nodeID       string
 	hashCache    *verifiedHashCache
+	weatherDelay *WeatherDelayHolder
 
 	// announcementMu guards announcementActivationID/announcementCueID:
 	// TRACK-H-cues-and-playlists.md section H5 build item 3's own state,
@@ -241,6 +242,18 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 	}
 
 	executedAt := now()
+
+	if o.weatherDelay != nil && o.weatherDelay.Current().Active {
+		return OperationResult{
+			Confirmed: false,
+			Signal:    "node.cue_activation.outcome",
+			Value: map[string]any{
+				"activationId": act.ActivationID, "runner": act.Runner, "cueId": act.CueID, "cueRevision": act.CueRevision,
+				"outcome": "weather-delay-active", "reason": weatherDelayActiveReason,
+			},
+			ExecutedAt: executedAt, ObservedAt: now(),
+		}, nil
+	}
 
 	held, entry, entryFound, err := o.heldStateAndEntry(act.CueID)
 	if err != nil {

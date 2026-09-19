@@ -581,12 +581,13 @@ func fppConnectModelEntryFromAssignment(a pipeline.Assignment, logger *slog.Logg
 // fppConnectServer holds the fixed, per-node values this listener's
 // handlers serve, computed once at construction rather than per request.
 type fppConnectServer struct {
-	view   fppConnectView
-	nodeID string
-	uuid   string
-	held   *fppConnectHeldStore
-	now    func() time.Time
-	logger *slog.Logger
+	view         fppConnectView
+	nodeID       string
+	uuid         string
+	held         *fppConnectHeldStore
+	now          func() time.Time
+	logger       *slog.Logger
+	weatherDelay weatherDelayHTTPConfig
 }
 
 // newFPPConnectHandler builds the complete handler for this node's FPP
@@ -604,17 +605,33 @@ type fppConnectServer struct {
 // held is FC2's upload/binding state; now is this server's clock,
 // threaded through rather than read from time.Now directly so a test can
 // control it.
-func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) http.Handler {
+func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHeldStore, weatherDelay weatherDelayHTTPConfig, now func() time.Time, logger *slog.Logger) http.Handler {
 	srv := &fppConnectServer{
-		view:   view,
-		nodeID: nodeID,
-		uuid:   fppConnectNodeUUID(nodeID).String(),
-		held:   held,
-		now:    now,
-		logger: logger,
+		view:         view,
+		nodeID:       nodeID,
+		uuid:         fppConnectNodeUUID(nodeID).String(),
+		held:         held,
+		now:          now,
+		logger:       logger,
+		weatherDelay: weatherDelay,
 	}
 
-	return fppConnectRequireEnabled(view, http.HandlerFunc(srv.route), logger)
+	inner := fppConnectRequireEnabled(view, http.HandlerFunc(srv.route), logger)
+
+	// ADR-053 decision 9 supersedes ADR-044 decision 3 for exactly one
+	// route: the signed weather delay start, matched and served here,
+	// AHEAD of fppConnectRequireEnabled, so it works regardless of this
+	// node's fppconnect.settings.enabled: a weather delay must not
+	// depend on an unrelated FPP Connect setting. Every other request,
+	// including any other method on this exact path, falls through to
+	// the ordinary enabled-gated routing unchanged.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() == weatherDelayStartPath && r.Method == http.MethodPost {
+			srv.handleWeatherDelayStart(w, r)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
 }
 
 // route is this listener's entire dispatch table, deliberately not built on
@@ -1027,9 +1044,9 @@ func fppConnectWriteJSON(w http.ResponseWriter, status int, v any) {
 // finding 1, the actual bug that test exists to catch) would otherwise
 // only break a hand-copied literal nobody was still keeping in sync,
 // rather than the test itself.
-func newFPPConnectProductionServer(view fppConnectView, nodeID string, held *fppConnectHeldStore, logger *slog.Logger) *http.Server {
+func newFPPConnectProductionServer(view fppConnectView, nodeID string, held *fppConnectHeldStore, weatherDelay weatherDelayHTTPConfig, logger *slog.Logger) *http.Server {
 	return &http.Server{
-		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now, logger),
+		Handler:           newFPPConnectHandler(view, nodeID, held, weatherDelay, time.Now, logger),
 		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
 		// ReadTimeout is fppConnectServerReadTimeoutFloor (15 minutes),
 		// not 0 (review round 3 finding 8): a generous floor under the
@@ -1085,7 +1102,7 @@ func newFPPConnectProductionServer(view fppConnectView, nodeID string, held *fpp
 // the listener still renders, still answers MQTT"): it is recorded on
 // status, exactly like runMultiSyncListener's identical bind-failure
 // handling in multisync.go, and this function simply returns.
-func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, logger *slog.Logger) {
+func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, weatherDelay weatherDelayHTTPConfig, logger *slog.Logger) {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
@@ -1095,7 +1112,7 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 		return
 	}
 
-	srv := newFPPConnectProductionServer(view, nodeID, held, logger)
+	srv := newFPPConnectProductionServer(view, nodeID, held, weatherDelay, logger)
 
 	// The first status is a real poll of view.Enabled(), not a blind
 	// "listening, no reason": a node whose fppconnect.settings.enabled is

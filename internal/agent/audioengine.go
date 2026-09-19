@@ -331,9 +331,9 @@ func (r *audioEngineRebuilder) SetPHCInterfaceSource(f func() (string, bool)) {
 // only it directly, does NOT exercise Run's own call site at all, which
 // a review round confirmed by deleting that call site outright and
 // finding go test ./internal/agent/ still green.
-func installAudioCapabilityRepublish(rebuilder *audioEngineRebuilder, ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) {
+func installAudioCapabilityRepublish(rebuilder *audioEngineRebuilder, ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, status *fppConnectHTTPStatus, logger *slog.Logger) {
 	rebuilder.SetAvailabilityChangeCallback(func() {
-		scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger)
+		scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, status, logger)
 	})
 }
 
@@ -352,12 +352,12 @@ func installAudioCapabilityRepublish(rebuilder *audioEngineRebuilder, ctx contex
 // narrower TestInstallAudioCapabilityRepublishRepublishesOnRebuild below
 // does not, since it calls installAudioCapabilityRepublish directly and
 // so cannot see whether Run's own call site still exists).
-func connectAndInstallCapabilityRepublish(connect func() (Conn, error), rebuilder *audioEngineRebuilder, ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) (Conn, error) {
+func connectAndInstallCapabilityRepublish(connect func() (Conn, error), rebuilder *audioEngineRebuilder, ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, status *fppConnectHTTPStatus, logger *slog.Logger) (Conn, error) {
 	conn, err := connect()
 	if err != nil {
 		return nil, err
 	}
-	installAudioCapabilityRepublish(rebuilder, ctx, conn, cfg, bootID, startedAt, logger)
+	installAudioCapabilityRepublish(rebuilder, ctx, conn, cfg, bootID, startedAt, status, logger)
 	return conn, nil
 }
 

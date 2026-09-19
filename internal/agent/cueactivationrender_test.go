@@ -971,12 +971,12 @@ func TestActivateRenderRefreshedAssignmentSurvivesBootResumeWhereStaleWouldNot(t
 	// surface's assignment happens to say.
 	held := heldcatalog.HeldCatalog{Show: "halloween-2026", Generation: 3, Revision: "rev-new"}
 
-	refreshedDecision := decideBootResume(refreshedAssignment, held, true)
+	refreshedDecision := decideBootResume(refreshedAssignment, held, true, false)
 	if !refreshedDecision.Authorized {
 		t.Fatalf("decideBootResume discarded the refreshed assignment at boot: %s (refreshAssignmentAuth exists to prevent exactly this)", refreshedDecision.Reason)
 	}
 
-	staleDecision := decideBootResume(staleAssignment, held, true)
+	staleDecision := decideBootResume(staleAssignment, held, true, false)
 	if staleDecision.Authorized {
 		t.Fatalf("test setup error: decideBootResume authorized the pre-deploy assignment against the post-deploy held catalog; the two states must differ for this test to prove anything")
 	}

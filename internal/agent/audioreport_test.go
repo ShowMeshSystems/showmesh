@@ -1414,7 +1414,7 @@ func TestHandleMessageAudioReportTriggerSignalsOnlyForGainFade(t *testing.T) {
 	}
 
 	trigger := make(chan struct{}, 1)
-	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, mgr, trigger, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, mgr, trigger, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	echoCmd := baseEchoCmd("cmd-1", "idem-1")

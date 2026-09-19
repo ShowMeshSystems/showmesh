@@ -98,6 +98,7 @@ type multiSyncCueAudioTrigger struct {
 	mgr          *audio.Manager
 	assetDir     string
 	timeline     *multisync.Timeline
+	weatherDelay *WeatherDelayHolder
 
 	tableMu       sync.Mutex
 	tableRevision string
@@ -160,19 +161,30 @@ func (c *multiSyncCueAudioTrigger) signalAudioReport() {
 // it is cueActivationTriggerRegistry, a package-level var this hook reads
 // directly, matching activateAudio's own identical convention, see that
 // var's own doc comment (audiostarttrigger.go).
-func (c *multiSyncCueAudioTrigger) SetSources(catalogStore *heldcatalog.FileStore, mgr *audio.Manager, assetDir string, timeline *multisync.Timeline) {
+func (c *multiSyncCueAudioTrigger) SetSources(catalogStore *heldcatalog.FileStore, mgr *audio.Manager, assetDir string, timeline *multisync.Timeline, weatherDelay *WeatherDelayHolder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.catalogStore = catalogStore
 	c.mgr = mgr
 	c.assetDir = assetDir
 	c.timeline = timeline
+	c.weatherDelay = weatherDelay
 }
 
 func (c *multiSyncCueAudioTrigger) sources() (*heldcatalog.FileStore, *audio.Manager, string, *multisync.Timeline) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.catalogStore, c.mgr, c.assetDir, c.timeline
+}
+
+// weatherDelayActive reports whether this node currently holds an active
+// weather delay, read fresh at the point of decision, see
+// [WeatherDelayHolder.Current]'s own doc comment.
+func (c *multiSyncCueAudioTrigger) weatherDelayActive() bool {
+	c.mu.Lock()
+	holder := c.weatherDelay
+	c.mu.Unlock()
+	return holder != nil && holder.Current().Active
 }
 
 // lookup resolves filename against this node's current held catalog,
@@ -284,6 +296,15 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 
 	entry, ok := c.lookup(pkt.Filename, catalogStore)
 	if !ok {
+		return
+	}
+
+	// ADR-053 decision 3: while a weather delay is active, no MultiSync
+	// packet may start show output. OPEN and START are both refused;
+	// STOP is left alone, since stopping never starts anything.
+	if (pkt.Action == multisync.SyncActionOpen || pkt.Action == multisync.SyncActionStart) && c.weatherDelayActive() {
+		c.logger.Info("multisync: ignoring a sequence OPEN/START packet because a weather delay is active",
+			"cue_id", entry.CueID, "sequence_filename", pkt.Filename, "action", pkt.Action)
 		return
 	}
 

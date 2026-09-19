@@ -2036,7 +2036,7 @@ func TestFPPConnectUploadDrippedOverTenSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserving a port: %v", err)
 	}
-	srv := newFPPConnectProductionServer(view, "node-1", held, discardLogger())
+	srv := newFPPConnectProductionServer(view, "node-1", held, weatherDelayHTTPConfig{}, discardLogger())
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

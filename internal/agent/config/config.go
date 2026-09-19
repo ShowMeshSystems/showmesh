@@ -146,6 +146,14 @@ type Config struct {
 	// DiagnosticSurface is this node's own locally configured diagnostic
 	// idle surface. See [DiagnosticSurface].
 	DiagnosticSurface DiagnosticSurface
+
+	// WeatherDelayCoordinatorPublicKeyPath names a file holding the
+	// coordinator's Ed25519 public key, base64 standard encoded, that this
+	// node uses to verify a signed weather delay start over HTTP
+	// (ADR-053 decision 9, ADR-025's node-side key pinning). Empty (the
+	// default) means this node holds no such key: the route answers 503
+	// and does nothing, which is a valid, degraded state, not an error.
+	WeatherDelayCoordinatorPublicKeyPath string
 }
 
 // DiagnosticSurface is the node-local diagnostic idle output an operator
@@ -201,6 +209,8 @@ const (
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 	envFPPConnectListenAddr   = "SHOWMESH_FPPCONNECT_LISTEN_ADDR"
+
+	envWeatherDelayCoordinatorPublicKeyPath = "SHOWMESH_WEATHERDELAY_COORDINATOR_PUBLIC_KEY_PATH"
 
 	envDiagnosticSurface       = "SHOWMESH_RENDER_DIAGNOSTIC_SURFACE"
 	envDiagnosticWidth         = "SHOWMESH_RENDER_DIAGNOSTIC_WIDTH"
@@ -362,6 +372,8 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
 		FPPConnectListenAddr:   getEnvDefault(lookup, envFPPConnectListenAddr, defaultFPPConnectListenAddr),
 		DiagnosticSurface:      diagnostic,
+
+		WeatherDelayCoordinatorPublicKeyPath: getEnvDefault(lookup, envWeatherDelayCoordinatorPublicKeyPath, ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -611,5 +623,6 @@ func (c Config) LogValue() slog.Value {
 		slog.String("multisync_interface", c.MultiSyncInterface),
 		slog.String("fppconnect_listen_addr", c.FPPConnectListenAddr),
 		slog.String("diagnostic_surface_id", c.DiagnosticSurface.SurfaceID),
+		slog.String("weatherdelay_coordinator_public_key_path", c.WeatherDelayCoordinatorPublicKeyPath),
 	)
 }
