@@ -3,6 +3,14 @@
 Status: Accepted (owner, 2026-09-19)
 Date: 2026-09-19
 
+> **THIS IS NOT A LIFE-SAFETY SYSTEM.**
+>
+> **Weather delay is not an emergency-alert receiver, it is not a substitute
+> for one, and it guarantees nothing. Any part of it can fail. It must never be
+> the only thing standing between a person and a hazard. It exists so that the
+> display does its best not to be the hazard, and the operator remains
+> responsible for the safety of the site and the audience.**
+
 ## Context
 
 An outdoor display puts tall metal structures, energized lighting and an
@@ -24,12 +32,16 @@ a MultiSync packet that a stopped player never sends.
 public-safety interruption of all playout" as a separate future safety
 design. This record is that design.
 
-The owner's requirement, taken from broadcast alerting practice, is that an
-alert has more than one way out. An earlier decision that leaves an alert with
-one delivery path is superseded here for that alert, not weighed against it.
-
-This is not a life-safety system, it is not an emergency-alert receiver, and it
-guarantees nothing. It is the display doing its best not to be the hazard.
+Broadcast engineering practice is that an alerting system has more than one
+path by which an alert can arrive, and depends on none of them. United States
+Emergency Alert System rules require a participant to monitor two sources
+([47 CFR 11.52(d)(1)](https://www.ecfr.gov/current/title-47/section-11.52)) so
+that the loss of one does not silence an alert. ShowMesh is not an Emergency
+Alert System participant and claims no compliance with those rules; it borrows
+the practice. An alert that arrives on one path is acted on exactly as an alert
+that arrives on every path, and no path waits for another. An earlier decision
+that leaves this alert with a single delivery path is superseded for this
+alert.
 
 ## Decision
 
