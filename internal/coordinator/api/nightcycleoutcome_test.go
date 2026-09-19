@@ -3,14 +3,72 @@ package api
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
+
+// nightLoopTestHandlersWithEntryEvidence mirrors [nightLoopTestHandlers],
+// additionally wiring Config, FPP and FPPObservations so
+// [handlers.nightResolveCycleOutcome] has evidence to read: the plain
+// [nightLoopTestHandlers] fixture leaves all three unwired (nil-safe
+// defaults), which is exactly the "no evidence" case those tests want.
+func nightLoopTestHandlersWithEntryEvidence(t *testing.T, now func() time.Time, obs *fakeObservationLister, fpp *fakeFPPLister) (*handlers, *store.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(now))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	deps := Dependencies{NightSessions: st, Observations: obs, Config: st, FPP: fpp, FPPObservations: st}.withDefaults()
+	return &handlers{deps: deps, clock: now, logger: testLogger()}, st
+}
+
+// twoEntryShowPlaylist is a two-sequence show.playlist bound to
+// instanceID, with entries at FPP positions 0 and 1, both in the default
+// (unnamed) "mainPlaylist" section.
+func twoEntryShowPlaylist(instanceID string) config.ShowPlaylistPayload {
+	return config.ShowPlaylistPayload{
+		Show: "halloween", Name: "halloween-show", Runner: "fpp",
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: instanceID + "-uuid", PlaylistName: "halloween-show", PlaylistHash: hash64ForTest("show"),
+		},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "seq-1", Cue: "cue-1", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "seq-2", Cue: "cue-2", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	}
+}
+
+// fppViewWithUUID is one [FPPInstanceView] naming instanceID's reported
+// system uuid, the shape [handlers.nightResolveInstanceUUID] reads.
+func fppViewWithUUID(instanceID, uuid string) FPPInstanceView {
+	return FPPInstanceView{InstanceID: instanceID, InstanceUUID: &store.FPPInstanceUUIDRecord{EndpointID: instanceID, UUID: uuid}}
+}
+
+// putPlaylistEntryObservationForTest seeds instanceUUID's latest playlist
+// entry observation at the given section/position, observed at observedAt
+// - mirroring [putFailToBlackObservation]'s established shape one file
+// over, without that fixture's entry-key derivation this package's tests
+// don't need here.
+func putPlaylistEntryObservationForTest(t *testing.T, st *store.Store, instanceUUID, playlistName, section string, position, sequence int64, observedAt time.Time) {
+	t.Helper()
+	if err := st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: instanceUUID, SchemaVersion: 1, Sequence: sequence, Action: "playing",
+		PlaylistName: playlistName, PlaylistHash: hash64ForTest("show"),
+		Section: section, Position: position, EntryKey: hash64ForTest("entry"),
+		ObservedAt: observedAt, ReceivedAt: observedAt,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+}
 
 // Track F night-cycle-outcomes tests: the loop's own existing evidence and
 // commands, instrumented to open and close night_cycle_outcomes rows,
@@ -45,17 +103,24 @@ func TestNightAdvanceTransitionToShow_EnteringLiveOpensCycleOutcome(t *testing.T
 	}
 }
 
-// TestNightAdvanceLive_CompletionClosesCycleOutcomeAsCompleted proves rule
-// 4's own evidence-based commit closes the open cycle outcome as completed,
-// with no reason (nothing to explain about a normal finish).
-func TestNightAdvanceLive_CompletionClosesCycleOutcomeAsCompleted(t *testing.T) {
+// TestNightAdvanceLive_LastEntryObservedClosesCycleOutcomeAsCompleted
+// proves the owner's own reproduced fault is fixed: idle-with-no-playlist
+// alone never means completed (a mid-show FPP restart reports the exact
+// same evidence). Completed requires proof the bound show playlist's LAST
+// entry was actually observed playing during this cycle; here it was, so
+// the cycle closes completed with no reason.
+func TestNightAdvanceLive_LastEntryObservedClosesCycleOutcomeAsCompleted(t *testing.T) {
 	dispatchedAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
 	now := dispatchedAt.Add(20 * time.Second)
 	obs := &fakeObservationLister{obs: []observation.Observation{
 		statusObservation("player-01", fppStatusValueIdle, now),
 		playlistNameObservation("player-01", "", now),
 	}}
-	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	fpp := &fakeFPPLister{views: []FPPInstanceView{fppViewWithUUID("player-01", "instance-uuid-1")}}
+	h, st := nightLoopTestHandlersWithEntryEvidence(t, func() time.Time { return now }, obs, fpp)
+	playlist := twoEntryShowPlaylist("player-01")
+	putPlaylistForTest(t, st, "halloween-show", playlist)
+	putPlaylistEntryObservationForTest(t, st, "instance-uuid-1", playlist.FPP.PlaylistName, "mainPlaylist", 1, 2, dispatchedAt.Add(15*time.Second))
 	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", dispatchedAt)
 	mustCreateLiveSession(t, st, dispatchedAt, anchor)
 	if err := st.OpenNightCycleOutcome(context.Background(), "sess-1", 0, dispatchedAt); err != nil {
@@ -80,6 +145,84 @@ func TestNightAdvanceLive_CompletionClosesCycleOutcomeAsCompleted(t *testing.T) 
 	}
 	if rec.Reason != "" {
 		t.Errorf("Reason = %q, want empty for a normal completion", rec.Reason)
+	}
+}
+
+// TestNightAdvanceLive_OnlyFirstEntryObservedClosesCycleOutcomeAsInterrupted
+// reproduces the owner's own motivating case: the player restarted mid-show,
+// so only the FIRST of two entries was ever observed playing before the
+// player reported idle with no playlist. That is never "completed".
+func TestNightAdvanceLive_OnlyFirstEntryObservedClosesCycleOutcomeAsInterrupted(t *testing.T) {
+	dispatchedAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := dispatchedAt.Add(20 * time.Second)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValueIdle, now),
+		playlistNameObservation("player-01", "", now),
+	}}
+	fpp := &fakeFPPLister{views: []FPPInstanceView{fppViewWithUUID("player-01", "instance-uuid-1")}}
+	h, st := nightLoopTestHandlersWithEntryEvidence(t, func() time.Time { return now }, obs, fpp)
+	playlist := twoEntryShowPlaylist("player-01")
+	putPlaylistForTest(t, st, "halloween-show", playlist)
+	putPlaylistEntryObservationForTest(t, st, "instance-uuid-1", playlist.FPP.PlaylistName, "mainPlaylist", 0, 1, dispatchedAt.Add(5*time.Second))
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", dispatchedAt)
+	mustCreateLiveSession(t, st, dispatchedAt, anchor)
+	if err := st.OpenNightCycleOutcome(context.Background(), "sess-1", 0, dispatchedAt); err != nil {
+		t.Fatalf("seed open cycle outcome: %v", err)
+	}
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	rows, err := st.ListNightCycleOutcomes(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListNightCycleOutcomes: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListNightCycleOutcomes = %+v, want exactly one row", rows)
+	}
+	rec := rows[0]
+	if rec.Outcome != store.NightCycleOutcomeInterrupted {
+		t.Errorf("Outcome = %q, want %q", rec.Outcome, store.NightCycleOutcomeInterrupted)
+	}
+	if rec.Reason == "" {
+		t.Error("Reason is empty, want an operator-readable explanation")
+	}
+}
+
+// TestNightAdvanceLive_NoEntryObservationsClosesCycleOutcomeAsUnknown
+// proves that with no fpp_playlist_entry_observations evidence for this
+// cycle at all, the outcome is unknown, never guessed as completed.
+func TestNightAdvanceLive_NoEntryObservationsClosesCycleOutcomeAsUnknown(t *testing.T) {
+	dispatchedAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := dispatchedAt.Add(20 * time.Second)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValueIdle, now),
+		playlistNameObservation("player-01", "", now),
+	}}
+	fpp := &fakeFPPLister{views: []FPPInstanceView{fppViewWithUUID("player-01", "instance-uuid-1")}}
+	h, st := nightLoopTestHandlersWithEntryEvidence(t, func() time.Time { return now }, obs, fpp)
+	playlist := twoEntryShowPlaylist("player-01")
+	putPlaylistForTest(t, st, "halloween-show", playlist)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", dispatchedAt)
+	mustCreateLiveSession(t, st, dispatchedAt, anchor)
+	if err := st.OpenNightCycleOutcome(context.Background(), "sess-1", 0, dispatchedAt); err != nil {
+		t.Fatalf("seed open cycle outcome: %v", err)
+	}
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	rows, err := st.ListNightCycleOutcomes(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListNightCycleOutcomes: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListNightCycleOutcomes = %+v, want exactly one row", rows)
+	}
+	rec := rows[0]
+	if rec.Outcome != store.NightCycleOutcomeUnknown {
+		t.Errorf("Outcome = %q, want %q", rec.Outcome, store.NightCycleOutcomeUnknown)
+	}
+	if rec.Reason == "" {
+		t.Error("Reason is empty, want an operator-readable explanation")
 	}
 }
 
