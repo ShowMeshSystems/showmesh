@@ -58,10 +58,14 @@ type EmergencyStopRequest struct {
 // across this tree (fppcommand_reconcile.go, resolumeaction.go,
 // audionodesilence.go) - never a parallel vocabulary minted for this
 // endpoint alone.
+// EmergencyStopTargetKindRender is the fourth target kind (ADR-053
+// decision 6): a render surface clear to every render node, reported like
+// the other three.
 const (
 	EmergencyStopTargetKindFPP      = "fpp"
 	EmergencyStopTargetKindNode     = "node"
 	EmergencyStopTargetKindResolume = "resolume"
+	EmergencyStopTargetKindRender   = "render"
 )
 
 // EmergencyStopInstanceOutcome is one target's own stop dispatch outcome,

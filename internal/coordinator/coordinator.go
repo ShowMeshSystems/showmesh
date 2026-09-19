@@ -651,6 +651,9 @@ func Run() int {
 	// Everything from here to api.New is the adapter layer
 	// (internal/coordinator/apiwiring.go) that makes the store and config
 	// satisfy those interfaces.
+	// weatherDelayState is shared by the API, the Resolume gate and the
+	// republish loop, so a start whose write failed is held by all three.
+	weatherDelayState := api.NewWeatherDelayStateKeeper(st)
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -876,7 +879,7 @@ func Run() int {
 		// to hold (noResolumeActionDispatcher, noResolumeLister,
 		// noResolumeRecoveryProvider) were a startup-only snapshot of
 		// exactly one condition: cfg.ResolumeURL != "".
-		ResolumeActions:    resolumeMgr,
+		ResolumeActions:    api.WeatherDelayGatedResolumeActions(resolumeMgr, weatherDelayState),
 		ResolumeReferences: resolumeReferences,
 		Resolume:           resolumeMgr,
 		ResolumeRecovery:   resolumeMgr,
@@ -928,6 +931,27 @@ func Run() int {
 		// always report "no session" against api.noNightSessionStore's
 		// no-op default.
 		NightSessions: st,
+		// WeatherDelay reads and writes the stored state through the
+		// keeper above instead of api.noWeatherDelayStore's no-op default.
+		WeatherDelay: weatherDelayState,
+		// WeatherDelayPublisher: the SAME bm already satisfies
+		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
+		// adapter, matching AudioPublisher's identical wiring above.
+		WeatherDelayPublisher: bm,
+		// WeatherDelayNodeAddrs: a node's address for the direct start
+		// comes from its own retained hello, never from operator config.
+		WeatherDelayNodeAddrs: inv,
+		// WeatherDelaySigner: signingMgr already satisfies
+		// api.WeatherDelaySigner (Sign) with no adapter, the SAME key
+		// fallbackReconcile above signs with (ADR-025).
+		WeatherDelaySigner: signingMgr,
+		// WeatherDelayAssetSync: assetSync already satisfies
+		// api.WeatherDelayAssetSync (EnsureAssetOnNode plus
+		// AssetPresence) with no adapter.
+		WeatherDelayAssetSync: assetSync,
+		// WeatherDelayEvents: *store.Store already satisfies
+		// api.WeatherDelayEventAppender (AppendEvent) with no adapter.
+		WeatherDelayEvents: st,
 		// Nudger is the post-dispatch poll nudge's dependency (owner
 		// decision, 2026-08-13; api.FPPPollNudger's own doc comment has
 		// the full contract): fppRunnerNudger wraps the SAME
@@ -1353,6 +1377,14 @@ func Run() int {
 	// installation-wide message, never a per-node command re-dispatch.
 	spawnBackground(func() {
 		runShowMode(ctx, showModeSrc, resolumeMgr, bm, time.Now, logger, showModeReconcileInterval)
+	})
+
+	// runWeatherDelay owns ADR-053 decision 2's own republish loop
+	// (weatherdelay.go): it re-publishes the current stored weather delay
+	// state on a short interval, the same "keep the retained message
+	// fresh" role runShowMode plays for show.mode one state over.
+	spawnBackground(func() {
+		runWeatherDelay(ctx, st, weatherDelayState, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
 	})
 
 	serveErrCh := make(chan error, 1)

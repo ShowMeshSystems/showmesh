@@ -224,6 +224,15 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 	case l.inFlight <- struct{}{}:
 		go func() {
 			defer func() { <-l.inFlight }()
+			// ADR-053 decision 3: while a weather delay is active, the cue
+			// activation loop dispatches nothing, checked fresh from the
+			// store every tick, mirroring nightTick's identical gate.
+			if active, err := l.h.weatherDelayActive(ctx); err != nil {
+				l.logger.Warn("cue activation loop: failed to read weather delay state; holding this tick as a precaution", "error", err)
+				return
+			} else if active {
+				return
+			}
 			pin, err := l.resolvePin(ctx)
 			if err != nil {
 				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)

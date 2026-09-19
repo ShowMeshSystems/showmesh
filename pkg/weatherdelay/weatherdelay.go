@@ -160,3 +160,28 @@ func (sr SignedStartRequest) Verify(publicKey ed25519.PublicKey) error {
 	}
 	return sr.Signature.Verify(payload, publicKey)
 }
+
+// Signer produces a [coordsig.Signature] over a payload.
+// [internal/coordinator/signingkey.Manager]'s Sign method already
+// satisfies this with no adapter.
+type Signer interface {
+	Sign(payload []byte) (coordsig.Signature, error)
+}
+
+// Sign builds a [SignedStartRequest] over req, signed with signer. req must
+// already be valid; a caller building it fresh should set IssuedAt and a
+// freshly generated Nonce.
+func Sign(req StartRequest, signer Signer) (SignedStartRequest, error) {
+	if err := req.Validate(); err != nil {
+		return SignedStartRequest{}, err
+	}
+	payload, err := req.CanonicalBytes()
+	if err != nil {
+		return SignedStartRequest{}, err
+	}
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		return SignedStartRequest{}, fmt.Errorf("weatherdelay: sign start request: %w", err)
+	}
+	return SignedStartRequest{Request: req, Signature: sig}, nil
+}

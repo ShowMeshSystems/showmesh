@@ -63,9 +63,7 @@ var exemptWritePaths = map[string]string{
 		"unconditionally (requireScope), the installed FPP plugin principal, not a general operator read " +
 		"scope. Neither needs a CLI verb of its own in this PR; growing one is future work, not a gap this " +
 		"exemption hides.",
-	"/weather-delay/start":        "Always answers 501; the CLI verb ships with the behavior.",
-	"/weather-delay/cancel-night": "Always answers 501; the CLI verb ships with the behavior.",
-	"/weather-delay/resume":       "Always answers 501; the CLI verb ships with the behavior.",
+	"/weather-delay/cancel-night": "Always answers 501; a later branch ships the CLI verb with the behavior.",
 	"/config/show.weatherdelay":   "The CLI verb ships with the weather delay behavior that reads this configuration.",
 }
 
@@ -178,6 +176,12 @@ var dynamicWritePathCoverage = map[string]string{
 	"POST /emergency-stop/stop-power-down": "cmd_emergency_stop.go cmdEmergencyStopLevel builds its own " +
 		"apiPath parameter, called with \"/api/v1/emergency-stop/stop-power-down\" from cmdEmergencyStop's " +
 		"own \"stop-power-down\" case (showmeshctl emergency-stop stop-power-down)",
+	"POST /weather-delay/start": "cmd_weather_delay.go cmdWeatherDelayAction builds its own apiPath " +
+		"parameter, called with \"/api/v1/weather-delay/start\" from cmdWeatherDelay's own \"start\" case " +
+		"(showmeshctl weather-delay start)",
+	"POST /weather-delay/resume": "cmd_weather_delay.go cmdWeatherDelayAction builds its own apiPath " +
+		"parameter, called with \"/api/v1/weather-delay/resume\" from cmdWeatherDelay's own \"resume\" case " +
+		"(showmeshctl weather-delay resume)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

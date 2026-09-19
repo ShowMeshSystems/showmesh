@@ -5,11 +5,13 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -528,6 +530,45 @@ type NightSessionStore interface {
 type WeatherDelayStore interface {
 	GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error)
 	SetWeatherDelayState(ctx context.Context, rec store.WeatherDelayStateRecord) error
+}
+
+// WeatherDelayPublisher is the coordinator's MQTT publish-and-await
+// capability weather delay start/resume depend on, declared at the
+// consumer exactly as [AudioSessionPublisher] is: *broker.BrokerManager
+// already satisfies this with no adapter.
+type WeatherDelayPublisher interface {
+	Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error
+	AwaitResponse(ctx context.Context, req broker.ResponseRequest) (broker.Message, error)
+}
+
+// WeatherDelayNodeAddrs answers ADR-053 decision 8's own "one node's
+// address, if it has reported one" question. *inventory.Manager's
+// InboundListener method already satisfies this with no adapter.
+type WeatherDelayNodeAddrs interface {
+	InboundListener(nodeID string) (addr string, ok bool)
+}
+
+// WeatherDelaySigner signs a weather delay start request for the direct
+// HTTP path (ADR-053 decision 8). *signingkey.Manager already satisfies
+// this with no adapter.
+type WeatherDelaySigner interface {
+	Sign(payload []byte) (coordsig.Signature, error)
+}
+
+// WeatherDelayAssetSync pushes one alert asset to one plan node ahead of
+// time, and reports whether a node already holds one, both through the
+// coordinator's existing asset sync (internal/coordinator/assetsync).
+// *assetsync.Service already satisfies this with no adapter.
+type WeatherDelayAssetSync interface {
+	EnsureAssetOnNode(ctx context.Context, assetID, nodeID string) error
+	AssetPresence(ctx context.Context, nodeID, contentHash string) (bool, error)
+}
+
+// WeatherDelayEventAppender appends the weather delay change-stream event.
+// *store.Store already satisfies this with no
+// adapter.
+type WeatherDelayEventAppender interface {
+	AppendEvent(ctx context.Context, ev store.EventRecord) (int64, error)
 }
 
 // FPPObservationStore is the playlist-entry observation contract's store dependency: the latest accepted

@@ -250,6 +250,39 @@ func TestDecodeHelloPayloadValidation(t *testing.T) {
 			mutate:  func(p HelloPayload) HelloPayload { p.StartedAt = time.Time{}; return p },
 			wantErr: ErrPayloadMissingField,
 		},
+		{
+			name:   "valid inbound listener",
+			mutate: func(p HelloPayload) HelloPayload { p.InboundListener = "10.0.0.5:8090"; return p },
+		},
+		{
+			name:    "inbound listener missing port",
+			mutate:  func(p HelloPayload) HelloPayload { p.InboundListener = "10.0.0.5"; return p },
+			wantErr: ErrPayloadInvalidInboundListener,
+		},
+		{
+			name:    "inbound listener unspecified host",
+			mutate:  func(p HelloPayload) HelloPayload { p.InboundListener = "0.0.0.0:8090"; return p },
+			wantErr: ErrPayloadInvalidInboundListener,
+		},
+		{
+			name:    "inbound listener port out of range",
+			mutate:  func(p HelloPayload) HelloPayload { p.InboundListener = "10.0.0.5:70000"; return p },
+			wantErr: ErrPayloadInvalidInboundListener,
+		},
+		{
+			name:   "inbound listener hostname",
+			mutate: func(p HelloPayload) HelloPayload { p.InboundListener = "node-01.local:8090"; return p },
+		},
+		{
+			name:    "inbound listener host carrying a path",
+			mutate:  func(p HelloPayload) HelloPayload { p.InboundListener = "evil.example/x@10.0.0.5:8090"; return p },
+			wantErr: ErrPayloadInvalidInboundListener,
+		},
+		{
+			name:    "inbound listener named port",
+			mutate:  func(p HelloPayload) HelloPayload { p.InboundListener = "10.0.0.5:http"; return p },
+			wantErr: ErrPayloadInvalidInboundListener,
+		},
 	}
 
 	for _, tt := range tests {
