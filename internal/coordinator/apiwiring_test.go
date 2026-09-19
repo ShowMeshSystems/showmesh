@@ -981,3 +981,5 @@ func TestFPPInstanceListerDuplicateExcludesRemovedEndpoint(t *testing.T) {
 		t.Errorf("DuplicateInstanceUUIDEndpointIDs = %v, want empty (the other claimant is not currently configured)", views[0].DuplicateInstanceUUIDEndpointIDs)
 	}
 }
+
+// throwaway: SM-676 CI ui_only verification, do not merge
