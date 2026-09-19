@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 )
 
 func TestStateValidateActive(t *testing.T) {
@@ -147,5 +149,38 @@ func TestSignedStartRequestVerifyRejectsWrongKey(t *testing.T) {
 	sr := SignedStartRequest{Request: req, Signature: sig}
 	if err := sr.Verify(otherPub); err == nil {
 		t.Fatal("Verify() = nil, want error for the wrong public key")
+	}
+}
+
+type fixedSigner struct {
+	priv ed25519.PrivateKey
+}
+
+func (s fixedSigner) Sign(payload []byte) (coordsig.Signature, error) {
+	return coordsig.Signature(ed25519.Sign(s.priv, payload)), nil
+}
+
+func TestSignRoundTripsThroughVerify(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey() = %v", err)
+	}
+	req := StartRequest{Kind: KindDelay, IssuedAt: time.Now().UTC(), Nonce: "n1"}
+	sr, err := Sign(req, fixedSigner{priv: priv})
+	if err != nil {
+		t.Fatalf("Sign() = %v, want nil", err)
+	}
+	if err := sr.Verify(pub); err != nil {
+		t.Fatalf("Verify() = %v, want nil", err)
+	}
+}
+
+func TestSignRejectsInvalidRequest(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey() = %v", err)
+	}
+	if _, err := Sign(StartRequest{}, fixedSigner{priv: priv}); err == nil {
+		t.Fatal("Sign() = nil, want error for an invalid request")
 	}
 }

@@ -21,10 +21,12 @@ import (
 )
 
 // Three emergency-stop levels, each dispatching CONCURRENTLY, immediately,
-// to three target kinds - stopPlaylist to every configured FPP instance,
-// audio.node.silence to every declared audio.node, and resolume.blackout
-// to every configured Resolume instance (see [v1.EmergencyStopTargetKindFPP]
-// and its siblings) - each with its own OPTIONAL, best-effort follow-up
+// to four target kinds - stopPlaylist to every configured FPP instance,
+// audio.node.silence to every declared audio.node, resolume.blackout to
+// every configured Resolume instance, and render.surface.clear to every
+// declared render surface (ADR-053 decision 6; see
+// [v1.EmergencyStopTargetKindFPP] and its siblings) - each with its own
+// OPTIONAL, best-effort follow-up
 // show.action list (show.emergencystop.go handles that configuration
 // kind's own GET/PUT/revisions; this file is the four trigger routes).
 // Every one of those three families lands in StopOutcomes carrying which
@@ -499,9 +501,9 @@ func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now ti
 // dispatch itself has already completed by the time this order is
 // applied, so it affects nothing but readability.
 func (h *handlers) emergencyStopDispatchAllTargets(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) (outcomes []v1.EmergencyStopInstanceOutcome, noInstancesConfigured bool) {
-	var fppOutcomes, nodeOutcomes, resolumeOutcomes []v1.EmergencyStopInstanceOutcome
+	var fppOutcomes, nodeOutcomes, resolumeOutcomes, renderOutcomes []v1.EmergencyStopInstanceOutcome
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		fppOutcomes, noInstancesConfigured = h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
@@ -514,12 +516,17 @@ func (h *handlers) emergencyStopDispatchAllTargets(ctx context.Context, now time
 		defer wg.Done()
 		resolumeOutcomes = h.emergencyStopAllResolumeInstances(ctx, now)
 	}()
+	go func() {
+		defer wg.Done()
+		renderOutcomes = h.clearAllRenderSurfaces(ctx, now, idempotencyKey, ac.result.Principal.ID, ac.result.Principal.Name, ac.result.Form, ac.result.CredentialID, clientAddr)
+	}()
 	wg.Wait()
 
-	outcomes = make([]v1.EmergencyStopInstanceOutcome, 0, len(fppOutcomes)+len(nodeOutcomes)+len(resolumeOutcomes))
+	outcomes = make([]v1.EmergencyStopInstanceOutcome, 0, len(fppOutcomes)+len(nodeOutcomes)+len(resolumeOutcomes)+len(renderOutcomes))
 	outcomes = append(outcomes, fppOutcomes...)
 	outcomes = append(outcomes, nodeOutcomes...)
 	outcomes = append(outcomes, resolumeOutcomes...)
+	outcomes = append(outcomes, renderOutcomes...)
 	return outcomes, noInstancesConfigured
 }
 

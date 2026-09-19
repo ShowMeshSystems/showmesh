@@ -109,6 +109,14 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cueID := r.PathValue("id")
 
+	if active, err := h.weatherDelayActive(ctx); err != nil {
+		h.writeInternalError(w, now, "check weather delay state", err)
+		return
+	} else if active {
+		writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume the show to activate Cues."))
+		return
+	}
+
 	if h.deps.AssetManifests == nil {
 		h.writeInternalError(w, now, "activate cue", errors.New("no asset manifest store is configured on this coordinator"))
 		return

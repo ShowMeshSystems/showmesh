@@ -928,6 +928,32 @@ func Run() int {
 		// always report "no session" against api.noNightSessionStore's
 		// no-op default.
 		NightSessions: st,
+		// WeatherDelay is ADR-053's own dependency: *store.Store already
+		// satisfies api.WeatherDelayStore with no adapter — wiring it in
+		// is what makes GET/POST /api/v1/weather-delay/* read and write
+		// real state instead of api.noWeatherDelayStore's no-op default.
+		WeatherDelay: st,
+		// WeatherDelayPublisher: the SAME bm already satisfies
+		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
+		// adapter, matching AudioPublisher's identical wiring above.
+		WeatherDelayPublisher: bm,
+		// WeatherDelayNodeAddrs: inv already satisfies
+		// api.WeatherDelayNodeAddrs (InboundListener) with no adapter —
+		// this is ADR-053 decision 8's own answer to "how does the
+		// coordinator know a node's address" (owner ruling: the node's
+		// own retained hello, not operator-entered configuration).
+		WeatherDelayNodeAddrs: inv,
+		// WeatherDelaySigner: signingMgr already satisfies
+		// api.WeatherDelaySigner (Sign) with no adapter, the SAME key
+		// fallbackReconcile above signs with (ADR-025).
+		WeatherDelaySigner: signingMgr,
+		// WeatherDelayAssetSync: assetSync already satisfies
+		// api.WeatherDelayAssetSync (EnsureAssetOnNode plus
+		// AssetPresence) with no adapter.
+		WeatherDelayAssetSync: assetSync,
+		// WeatherDelayEvents: *store.Store already satisfies
+		// api.WeatherDelayEventAppender (AppendEvent) with no adapter.
+		WeatherDelayEvents: st,
 		// Nudger is the post-dispatch poll nudge's dependency (owner
 		// decision, 2026-08-13; api.FPPPollNudger's own doc comment has
 		// the full contract): fppRunnerNudger wraps the SAME
@@ -1353,6 +1379,14 @@ func Run() int {
 	// installation-wide message, never a per-node command re-dispatch.
 	spawnBackground(func() {
 		runShowMode(ctx, showModeSrc, resolumeMgr, bm, time.Now, logger, showModeReconcileInterval)
+	})
+
+	// runWeatherDelay owns ADR-053 decision 2's own republish loop
+	// (weatherdelay.go): it re-publishes the current stored weather delay
+	// state on a short interval, the same "keep the retained message
+	// fresh" role runShowMode plays for show.mode one state over.
+	spawnBackground(func() {
+		runWeatherDelay(ctx, st, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
 	})
 
 	serveErrCh := make(chan error, 1)

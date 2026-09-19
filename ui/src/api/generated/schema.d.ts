@@ -2093,8 +2093,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start a weather delay (ADR-053) - not yet available
-         * @description Behind `show:weatherdelay:invoke`. The route, scope, and request shape are fixed by this record; dispatching an actual delay is later work. Always answers `501` today.
+         * Start a weather delay (ADR-053)
+         * @description Behind `show:weatherdelay:invoke`. No confirmation step (ADR-053 decision 1). Persists the state as active BEFORE any stop is sent, then concurrently dispatches the emergency-stop level 1 fan-out, a render surface clear, the weatherdelay.start node command over MQTT and a signed direct HTTP request to each plan node, and audio.node.silence to every declared node outside the plan. A failed target is reported, never hidden, and never rolls the state back. Starting while already active re-sends everything and does not reset `startedAt`.
          */
         post: operations["startWeatherDelay"];
         delete?: never;
@@ -2133,8 +2133,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Resume from a weather delay (ADR-053) - not yet available
-         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Always answers `501` today.
+         * Resume from a weather delay (ADR-053)
+         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Persists not active, publishes retained, and sends weatherdelay.resume to the nodes over MQTT only, never HTTP.
          */
         post: operations["resumeFromWeatherDelay"];
         delete?: never;
@@ -5085,10 +5085,50 @@ export interface components {
             startedBy?: string;
             /** @description Monotonic per change. Fits a JS safe integer - never derived from a timestamp. */
             revision: number;
+            /** @description Per plan node, whether each configured alert asset is present and hash-verified there (ADR-053 decision 7's own alert asset), so an operator can see on a calm day that the alert is ready. Empty when no alert asset is configured. */
+            assets?: components["schemas"]["WeatherDelayNodeAssets"][];
+        };
+        WeatherDelayNodeAssets: {
+            nodeId: string;
+            delayAsset?: components["schemas"]["WeatherDelayAssetStatus"];
+            cancelNightAsset?: components["schemas"]["WeatherDelayAssetStatus"];
+        };
+        WeatherDelayAssetStatus: {
+            assetId: string;
+            present: boolean;
+            filename?: string;
         };
         /** @description The body of POST /weather-delay/start, /cancel-night, and /resume. */
         WeatherDelayActionRequest: {
             idempotencyKey: string;
+        };
+        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), or node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached). */
+        WeatherDelayTargetOutcome: {
+            instanceId: string;
+            /** @enum {string} */
+            targetKind: "fpp" | "node" | "resolume" | "render" | "node-command";
+            outcome: string;
+            outcomeReason: string;
+            /** @enum {string} */
+            deliveredVia?: "mqtt" | "http" | "both" | "none";
+            /** Format: date-time */
+            dispatchedAt?: string | null;
+        };
+        WeatherDelayActionResult: {
+            kind: string;
+            idempotencyKey: string;
+            active: boolean;
+            /** Format: date-time */
+            startedAt?: string;
+            startedBy?: string;
+            revision: number;
+            targets: components["schemas"]["WeatherDelayTargetOutcome"][];
+        };
+        /** @description The body of POST /weather-delay/start and /weather-delay/resume. */
+        WeatherDelayActionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            result: components["schemas"]["WeatherDelayActionResult"];
         };
         /** @description The optional alert an active delay or cancel-night plays (ADR-053 decision 7). Every field is optional with a working default: delayAssetId/cancelNightAssetId empty means no alert asset is configured for that kind; nodeIds empty means every declared audio node, never "no nodes"; repeatCount defaults to 10. */
         ConfigWeatherDelayAlertPayload: {
@@ -11561,20 +11601,21 @@ export interface operations {
             };
         };
         responses: {
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            /** @description Not implemented yet. */
-            501: {
+            /** @description OK */
+            200: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["WeatherDelayActionResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     cancelNightForWeather: {
@@ -11619,20 +11660,21 @@ export interface operations {
             };
         };
         responses: {
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            /** @description Not implemented yet. */
-            501: {
+            /** @description OK */
+            200: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["WeatherDelayActionResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     getWeatherDelayConfig: {

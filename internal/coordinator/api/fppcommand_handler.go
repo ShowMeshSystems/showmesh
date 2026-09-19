@@ -275,6 +275,20 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-053 decision 3: the playlist start commands are refused while a
+	// weather delay is active — stop, blackout, power-off and emergency
+	// stop are never refused or delayed by this state (decision 13), so
+	// only the two commands that START output are gated here.
+	if action == "startPlaylist" || action == "resumePlaylist" {
+		if active, err := h.weatherDelayActive(ctx); err != nil {
+			h.writeInternalError(w, now, "check weather delay state", err)
+			return
+		} else if active {
+			writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume the show to start playback."))
+			return
+		}
+	}
+
 	var idempotencyKey string
 	if idemRaw, hasIdem := top["idempotencyKey"]; hasIdem {
 		// A non-string or explicit null both leave idempotencyKey at its

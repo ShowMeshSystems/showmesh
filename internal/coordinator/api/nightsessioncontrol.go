@@ -312,6 +312,20 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-053 decision 3: the night lifecycle commands that start output
+	// are refused while a weather delay is active; every stop-direction
+	// command (fade-out, power-down, end-session) stays available, per
+	// decision 13.
+	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight {
+		if active, err := h.weatherDelayActive(ctx); err != nil {
+			h.writeInternalError(w, now, "check weather delay state", err)
+			return
+		} else if active {
+			writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume the show to start it."))
+			return
+		}
+	}
+
 	ac := authFromContext(ctx)
 	issuer := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
