@@ -270,6 +270,7 @@ export type {
   NightBackgroundAudioStep,
   NightBackgroundAudio,
   NightAuthorization,
+  NightCycleOutcome,
   NightSessionState,
   NightSessionResponse,
   NightInterlockOverride,
