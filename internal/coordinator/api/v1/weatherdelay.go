@@ -1,8 +1,28 @@
 package v1
 
 // EventKindWeatherDelayChanged is the change-stream event kind for a
-// weather delay state change. Reserved; nothing publishes it yet.
+// weather delay state change, both the recorded event (see
+// appendWeatherDelayChangedEvent) and the stream frame (see
+// [WeatherDelayChangedEvent]).
 const EventKindWeatherDelayChanged = "weatherDelay.changed"
+
+// WeatherDelayChangedEvent is the "weatherDelay.changed" stream frame, one
+// kind for the delay's own state change (start, resume, cancel) and a
+// power group's own confirmedDark flip, mirroring
+// [NightSessionChangedEvent]'s identical "full state, not delta" posture:
+// this stream is not resumable, so a reconnecting client re-fetches
+// GET /api/v1/weather-delay on any gap rather than reconstructing state
+// from a transition history.
+type WeatherDelayChangedEvent struct {
+	Seq         uint64                         `json:"seq"`
+	ServerTime  string                         `json:"serverTime"`
+	Active      bool                           `json:"active"`
+	Kind        string                         `json:"kind,omitempty"`
+	StartedAt   string                         `json:"startedAt,omitempty"`
+	StartedBy   string                         `json:"startedBy,omitempty"`
+	Revision    int64                          `json:"revision"`
+	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+}
 
 // WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
 // StartedAt and StartedBy are omitted while Active is false. Assets

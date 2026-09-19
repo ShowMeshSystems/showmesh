@@ -789,6 +789,7 @@ export interface paths {
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+         *       | `weatherDelay.changed` | `WeatherDelayChangedEvent` | every connection |
          *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
          *       | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
@@ -6896,6 +6897,21 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
+        };
+        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) and a power group's own confirmedDark flip, mirroring NightSessionChangedEvent's own "full state, not delta" posture — the fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
+        WeatherDelayChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            active: boolean;
+            /** @enum {string} */
+            kind?: "delay" | "cancelNight";
+            /** Format: date-time */
+            startedAt?: string;
+            startedBy?: string;
+            revision: number;
+            powerGroups: components["schemas"]["WeatherDelayPowerGroupStatus"][];
         };
         /** @description One entry of NightCommandRequest.interlockOverrides (RESTING-MODE.md §10.1, Track F seam F6): a request to override a named "block" interlock rule currently withholding the command's own phase. Honored only when that rule declares `overridePolicy: authorized-operator`, the caller separately holds `night:override`, and the rule is actually withholding the phase being entered (server-side; not expressible here). Every accepted override is audited with the rule, phase, reason, and a bounded (this-invocation-only) scope. */
         NightInterlockOverride: {
