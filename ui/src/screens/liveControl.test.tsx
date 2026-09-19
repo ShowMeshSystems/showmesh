@@ -6,6 +6,7 @@ import { PROBLEM_TYPE } from '../api/problem'
 import type { AudioSessionCommandResult, FPPCommandResult, Model, Node, ResolumeActionResult } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
+import { WeatherDelayProvider } from '../app/WeatherDelayContext'
 import { LiveControl } from './LiveControl'
 import { describeFPPOutcome, formatPosition, outputRows, transportState } from './liveControlModel'
 
@@ -39,6 +40,10 @@ const stubs = vi.hoisted(() => ({
   armEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   fireEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   activateCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getWeatherDelayState: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  startWeatherDelay: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  cancelNightForWeather: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  resumeFromWeatherDelay: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -74,6 +79,10 @@ vi.mock('../api', async () => {
     armEmergencyStopHardStop: (...args: never[]) => stubs.armEmergencyStopHardStop(...args),
     fireEmergencyStopHardStop: (...args: never[]) => stubs.fireEmergencyStopHardStop(...args),
     activateCue: (...args: never[]) => stubs.activateCue(...args),
+    getWeatherDelayState: (...args: never[]) => stubs.getWeatherDelayState(...args),
+    startWeatherDelay: (...args: never[]) => stubs.startWeatherDelay(...args),
+    cancelNightForWeather: (...args: never[]) => stubs.cancelNightForWeather(...args),
+    resumeFromWeatherDelay: (...args: never[]) => stubs.resumeFromWeatherDelay(...args),
   }
 })
 
@@ -110,7 +119,9 @@ function renderScreen(model: Partial<Model>) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), ...model }}>
       <MemoryRouter>
-        <LiveControl />
+        <WeatherDelayProvider>
+          <LiveControl />
+        </WeatherDelayProvider>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -168,6 +179,10 @@ describe('Live Control', () => {
     stubs.armEmergencyStopHardStop = () => new Promise(() => {})
     stubs.fireEmergencyStopHardStop = () => new Promise(() => {})
     stubs.activateCue = () => new Promise(() => {})
+    stubs.getWeatherDelayState = () => new Promise(() => {})
+    stubs.startWeatherDelay = () => new Promise(() => {})
+    stubs.cancelNightForWeather = () => new Promise(() => {})
+    stubs.resumeFromWeatherDelay = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -207,6 +222,17 @@ describe('Live Control', () => {
     session: null,
     credentialForm: 'session',
     scopes: ['show:emergencystop:invoke'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+
+  const weatherDelayAllowedSession = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['show:weatherdelay:invoke'],
     scopesState: 'current',
     bootstrapRequired: false,
   } as never
@@ -448,6 +474,99 @@ describe('Live Control', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fire hard stop' }))
     expect(await screen.findByText('No night session was active.')).toBeInTheDocument()
     expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledExactlyOnceWith('token-2')
+  })
+
+  it('gates Weather delay and Cancel night on show:weatherdelay:invoke, disabled with the real reason, never hidden', () => {
+    renderScreen({
+      session: {
+        serverTime: '2026-08-28T21:07:00Z',
+        authenticated: true,
+        principal: { id: 'p', name: 'op', role: 'viewer', disabled: false },
+        session: null,
+        credentialForm: 'session',
+        scopes: [],
+        scopesState: 'current',
+        bootstrapRequired: false,
+      } as never,
+    })
+    const region = screen.getByRole('region', { name: 'Emergency stop' })
+    const weatherDelay = within(region).getByRole('button', { name: 'Weather delay' })
+    const cancelNight = within(region).getByRole('button', { name: 'Cancel night' })
+    for (const button of [weatherDelay, cancelNight]) {
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', expect.stringMatching(/operator|sign in|permission/i))
+    }
+  })
+
+  it('presses Weather delay with no confirmation, and groups the dispatch outcome by target kind including a node reached by only one delivery path', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    stubs.startWeatherDelay = vi.fn(() =>
+      Promise.resolve({
+        kind: 'delay',
+        idempotencyKey: 'wd-1',
+        active: true,
+        startedAt: '2026-08-28T21:07:00Z',
+        startedBy: 'op',
+        revision: 1,
+        targets: [
+          { instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: 'Stopped.' },
+          { instanceId: 'stage-node', targetKind: 'node', outcome: 'confirmed', outcomeReason: 'Silenced.' },
+          { instanceId: 'stage-node', targetKind: 'node-command', outcome: 'unconfirmed', outcomeReason: 'MQTT delivered; HTTP unreachable.', deliveredVia: 'mqtt' },
+        ],
+      }),
+    )
+    renderScreen({ session: weatherDelayAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Weather delay' }))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(await screen.findByText('main-player')).toBeInTheDocument()
+    expect(screen.getAllByText('stage-node')).toHaveLength(2)
+    expect(screen.getByText('Delivered via mqtt.')).toBeInTheDocument()
+    expect(stubs.startWeatherDelay).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the coordinator’s own notSaved sentence verbatim when a start could not be persisted', async () => {
+    stubs.startWeatherDelay = vi.fn(() =>
+      Promise.resolve({
+        kind: 'delay',
+        idempotencyKey: 'wd-2',
+        active: true,
+        revision: 1,
+        targets: [],
+        notSaved: true,
+        notSavedMessage: 'The delay is active on this coordinator but could not be saved, so a restart will lose it.',
+      }),
+    )
+    renderScreen({ session: weatherDelayAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Weather delay' }))
+    expect(await screen.findByText('The delay is active on this coordinator but could not be saved, so a restart will lose it.')).toBeInTheDocument()
+  })
+
+  it('presses Cancel night with no confirmation, renders the coordinator’s own refusal verbatim, and never stamps it Not wired', async () => {
+    stubs.cancelNightForWeather = vi.fn(() => Promise.reject(new ApiError('Cancel night is not available on this coordinator yet.', 501)))
+    renderScreen({ session: weatherDelayAllowedSession })
+    const button = screen.getByRole('button', { name: 'Cancel night' })
+    fireEvent.click(button)
+    expect(await screen.findByText(/Cancel night is not available on this coordinator yet\./)).toBeInTheDocument()
+    expect(stubs.cancelNightForWeather).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Not wired')).not.toBeInTheDocument()
+    expect(button).not.toBeDisabled()
+  })
+
+  it('renders per-node alert readiness from GET /weather-delay, and nothing when the API reports none', async () => {
+    stubs.getWeatherDelayState = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        active: false,
+        revision: 0,
+        assets: [
+          { nodeId: 'stage-node', delayAsset: { assetId: 'a1', present: true, filename: 'storm.wav' }, cancelNightAsset: { assetId: 'a2', present: false } },
+        ],
+      }),
+    )
+    renderScreen({ session: weatherDelayAllowedSession })
+    expect(await screen.findByRole('region', { name: 'Weather delay, alert readiness per node' })).toBeInTheDocument()
+    expect(screen.getByText('storm.wav')).toBeInTheDocument()
+    expect(screen.getByText('Missing on node')).toBeInTheDocument()
   })
 
   it('wires an uploaded announcement’s Fire button to POST /cues/{id}/activate, reporting accepted then each node’s own outcome', async () => {

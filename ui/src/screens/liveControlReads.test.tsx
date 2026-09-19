@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
+import { WeatherDelayProvider } from '../app/WeatherDelayContext'
 
 let listCalls = 0
 let cueCalls = 0
@@ -50,6 +51,7 @@ vi.mock('../api', async () => {
     },
     listObservations: () => Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', observations: [] }),
     getAudioSettingsConfig: () => Promise.reject(new Error('not stubbed')),
+    getWeatherDelayState: () => Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', active: false, revision: 0 }),
   }
 })
 
@@ -73,7 +75,9 @@ describe('LiveControl reads', () => {
         }}
       >
         <MemoryRouter>
-          <LiveControl />
+          <WeatherDelayProvider>
+            <LiveControl />
+          </WeatherDelayProvider>
         </MemoryRouter>
       </ModelContext.Provider>,
     )

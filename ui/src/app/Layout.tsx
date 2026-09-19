@@ -14,6 +14,7 @@ import {
   RailLink,
   RuledStrip,
   ShellBody,
+  WeatherDelayBanner,
   type Connection,
 } from '../kit'
 import {
@@ -33,7 +34,7 @@ import {
   type ShowActiveConfigResponse,
   type ShowModeConfigResponse,
 } from '../api'
-import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
+import { ageMs, CLOCK_SKEW_WARNING_THRESHOLD_MS, effectiveServerTimeIso, formatDuration } from '../domain/time'
 import { describeApiError, describeSignInState, evaluateScope, type SignInState } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from '../screens/StaleWrite'
@@ -41,7 +42,85 @@ import { liveCycle } from '../screens/settingsModel'
 import { fppElapsedFraction } from '../screens/liveControlModel'
 import { nowPlaying as fppNowPlaying } from '../screens/showNightModel'
 import { useModelContext } from './ModelContext'
+import { useWeatherDelay, WeatherDelayProvider } from './WeatherDelayContext'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
+
+const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
+  delay: 'Weather delay',
+  cancelNight: 'Night cancelled for weather',
+}
+
+/**
+ * ADR-053: the one non-dismissible banner shown on every screen while a
+ * weather delay or a weather cancel-night is active. `startedAt` ticks a
+ * live elapsed time off the server-corrected clock, the same way the
+ * hard-stop arm countdown does on Live Control.
+ */
+function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authenticated: boolean }) {
+  const weatherDelay = useWeatherDelay()
+  const resumeGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:resume')
+  const invokeGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:invoke')
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (weatherDelay.state.kind !== 'loaded' || !weatherDelay.state.response.active) return
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [weatherDelay.state])
+  void tick
+
+  if (!authenticated) return null
+  if (weatherDelay.state.kind !== 'loaded' || !weatherDelay.state.response.active) return null
+  const response = weatherDelay.state.response
+  const kind = response.kind ?? 'delay'
+  const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
+  const elapsed = response.startedAt === undefined ? null : ageMs(response.startedAt, nowIso)
+  const elapsedLabel = elapsed === null ? 'Start time not reported' : `Started ${formatDuration(elapsed)} ago`
+  const startedByLabel = response.startedBy === undefined || response.startedBy === '' ? 'Who started this is not reported' : `Started by ${response.startedBy}`
+  // notSaved/notSavedMessage ride only the start/resume response, never
+  // GET /weather-delay - a browser that did not make that call has no way
+  // to know, so it says nothing rather than guess "saved".
+  const savedLabel =
+    weatherDelay.outcome.kind === 'result' && (weatherDelay.outcome.action === 'start' || weatherDelay.outcome.action === 'resume')
+      ? weatherDelay.outcome.result.notSaved === true
+        ? (weatherDelay.outcome.result.notSavedMessage ?? 'Not saved')
+        : 'Saved'
+      : undefined
+  const resumeErrorMessage =
+    weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'resume' ? weatherDelay.outcome.message : undefined
+  const cancelNightErrorMessage =
+    weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'cancelNight' ? weatherDelay.outcome.message : undefined
+
+  const cancelNightAction =
+    kind === 'delay'
+      ? {
+          label: 'Cancel night',
+          onClick: weatherDelay.cancelNight,
+          disabled: !invokeGate.allowed || weatherDelay.busy !== false,
+          busy: weatherDelay.busy === 'cancelNight',
+          ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
+        }
+      : undefined
+
+  return (
+    <WeatherDelayBanner
+      kindLabel={WEATHER_DELAY_KIND_LABEL[kind]}
+      elapsedLabel={elapsedLabel}
+      startedByLabel={startedByLabel}
+      {...(savedLabel === undefined ? {} : { savedLabel })}
+      resume={{
+        label: kind === 'cancelNight' ? 'Clear cancellation' : 'Resume',
+        onClick: weatherDelay.resume,
+        disabled: !resumeGate.allowed || weatherDelay.busy !== false,
+        busy: weatherDelay.busy === 'resume',
+        ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
+      }}
+      {...(cancelNightAction === undefined ? {} : { cancelNight: cancelNightAction })}
+      {...(resumeErrorMessage ?? cancelNightErrorMessage
+        ? { error: resumeErrorMessage ?? cancelNightErrorMessage }
+        : {})}
+    />
+  )
+}
 
 const CONNECTION_LABEL: Record<Connection, string> = {
   live: 'Live',
@@ -593,6 +672,7 @@ export function Layout() {
   const signedOutBand = useSignedOutBand()
 
   return (
+    <WeatherDelayProvider>
     <div className="sm-shell">
       <ChromeBar
         showPicker={<ShowPicker model={model} signInKind={signIn.kind} />}
@@ -625,6 +705,7 @@ export function Layout() {
           explanation={model.auditStore.reason ?? 'Commands continue, but this coordinator cannot durably write their audit entries.'}
         />
       )}
+      <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>
         <Rail>
           <RailGroup>Operate</RailGroup>
@@ -653,5 +734,6 @@ export function Layout() {
         </main>
       </ShellBody>
     </div>
+    </WeatherDelayProvider>
   )
 }

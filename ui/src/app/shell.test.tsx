@@ -3,7 +3,7 @@ import path from 'node:path'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CSRFRejectedError, TooManyRequestsError } from '../api'
+import { ApiError, CSRFRejectedError, TooManyRequestsError } from '../api'
 import type { Model, SessionResponse } from '../api'
 import { clearStoredToken, setStoredToken } from '../api/token'
 import { initialModel } from '../api/domain'
@@ -23,6 +23,9 @@ const listConfigObjectsMock = vi.fn()
 const getShowActiveMock = vi.fn()
 const putShowActiveMock = vi.fn()
 const getServiceDescriptorMock = vi.fn()
+const getWeatherDelayStateMock = vi.fn()
+const resumeFromWeatherDelayMock = vi.fn()
+const cancelNightForWeatherMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -38,6 +41,9 @@ vi.mock('../api', async () => {
     getShowActive: (...args: unknown[]) => getShowActiveMock(...args),
     putShowActive: (...args: unknown[]) => putShowActiveMock(...args),
     getServiceDescriptor: (...args: unknown[]) => getServiceDescriptorMock(...args),
+    getWeatherDelayState: (...args: unknown[]) => getWeatherDelayStateMock(...args),
+    resumeFromWeatherDelay: (...args: unknown[]) => resumeFromWeatherDelayMock(...args),
+    cancelNightForWeather: (...args: unknown[]) => cancelNightForWeatherMock(...args),
   }
 })
 
@@ -94,6 +100,9 @@ describe('app shell', () => {
     getShowActiveMock.mockReset().mockReturnValue(new Promise(() => {}))
     putShowActiveMock.mockReset()
     getServiceDescriptorMock.mockReset().mockReturnValue(new Promise(() => {}))
+    getWeatherDelayStateMock.mockReset().mockResolvedValue({ serverTime: '2026-09-01T00:00:00Z', active: false, revision: 0 })
+    resumeFromWeatherDelayMock.mockReset()
+    cancelNightForWeatherMock.mockReset()
     clearStoredToken()
   })
   afterEach(cleanup)
@@ -724,6 +733,76 @@ describe('app shell', () => {
 
       expect(confirmSpy.mock.calls[0]?.[0]).toContain('Switching to Program mode now is allowed, but it stops treating the audience as present.')
       expect(putShowModeConfigMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('ADR-053 the weather delay banner', () => {
+    it('stays off the page while no delay is active', async () => {
+      renderShell({ session: authenticatedSession() })
+      await waitFor(() => expect(getWeatherDelayStateMock).toHaveBeenCalled())
+      expect(screen.queryByText('Weather delay')).not.toBeInTheDocument()
+    })
+
+    it('shows kind, elapsed time and who started it, and resumes on one press', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:06:00Z',
+        active: true,
+        kind: 'delay',
+        startedAt: '2026-09-01T00:00:00Z',
+        startedBy: 'erbartos',
+        revision: 4,
+      })
+      resumeFromWeatherDelayMock.mockResolvedValue({
+        kind: 'resume',
+        idempotencyKey: 'k1',
+        active: false,
+        revision: 5,
+        targets: [],
+      })
+
+      renderShell({ session: authenticatedSession({ scopes: ['config:write', 'show:weatherdelay:resume'] }) })
+      await screen.findByText('Weather delay')
+      expect(screen.getByText(/Started by erbartos/)).toBeInTheDocument()
+
+      getWeatherDelayStateMock.mockResolvedValue({ serverTime: '2026-09-01T00:06:05Z', active: false, revision: 5 })
+      fireEvent.click(screen.getByRole('button', { name: /^resume$/i }))
+      await waitFor(() => expect(resumeFromWeatherDelayMock).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.queryByText('Weather delay')).not.toBeInTheDocument())
+    })
+
+    it('offers Clear cancellation, not Resume, while the night is cancelled for weather, and no Cancel night button', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:06:00Z',
+        active: true,
+        kind: 'cancelNight',
+        startedAt: '2026-09-01T00:00:00Z',
+        startedBy: 'erbartos',
+        revision: 2,
+      })
+
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Night cancelled for weather')
+      expect(screen.getByRole('button', { name: /^clear cancellation$/i })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^cancel night$/i })).not.toBeInTheDocument()
+    })
+
+    it('leaves the banner up and shows the refused message on a resume 403', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:06:00Z',
+        active: true,
+        kind: 'delay',
+        startedAt: '2026-09-01T00:00:00Z',
+        startedBy: 'erbartos',
+        revision: 4,
+      })
+      resumeFromWeatherDelayMock.mockRejectedValue(new ApiError('This principal cannot resume a weather delay.', 403))
+
+      renderShell({ session: authenticatedSession({ scopes: ['config:write', 'show:weatherdelay:resume'] }) })
+      await screen.findByText('Weather delay')
+      fireEvent.click(screen.getByRole('button', { name: /^resume$/i }))
+
+      await screen.findByText('This principal cannot resume a weather delay.')
+      expect(screen.getByText('Weather delay')).toBeInTheDocument()
     })
   })
 })

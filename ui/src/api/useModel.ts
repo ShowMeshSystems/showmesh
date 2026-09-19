@@ -76,6 +76,10 @@ import type {
   ResolumeRecoveryResponse,
   ResolumeRecoveryRestoreResponse,
   ServiceDescriptor,
+  WeatherDelayActionResult,
+  WeatherDelayStateResponse,
+  WeatherDelayConfigResponse,
+  ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
   SetPrincipalRoleRequest,
   TokensResponse,
@@ -493,6 +497,34 @@ export function armEmergencyStopHardStop(): Promise<EmergencyStopArmResponse> {
 
 export function fireEmergencyStopHardStop(armToken: string): Promise<EmergencyStopResult> {
   return store.fireEmergencyStopHardStop(armToken)
+}
+
+export function getWeatherDelayState(): Promise<WeatherDelayStateResponse> {
+  return store.getWeatherDelayState()
+}
+
+export function startWeatherDelay(): Promise<WeatherDelayActionResult> {
+  return store.startWeatherDelay()
+}
+
+export function cancelNightForWeather(): Promise<WeatherDelayActionResult> {
+  return store.cancelNightForWeather()
+}
+
+export function resumeFromWeatherDelay(): Promise<WeatherDelayActionResult> {
+  return store.resumeFromWeatherDelay()
+}
+
+export function getWeatherDelayConfig(): Promise<WeatherDelayConfigResponse> {
+  return store.getWeatherDelayConfig()
+}
+
+export function putWeatherDelayConfig(payload: ConfigWeatherDelayPayload): Promise<WeatherDelayConfigResponse> {
+  return store.putWeatherDelayConfig(payload)
+}
+
+export function getWeatherDelayConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getWeatherDelayConfigRevisions()
 }
 
 // Track B seam B2b-front: the three render.* dispatch endpoints. Same

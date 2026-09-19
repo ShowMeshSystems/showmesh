@@ -319,6 +319,45 @@
   white-space: nowrap;
 }
 
+/* Full-width, non-dismissible strip shown on every screen while a weather
+   delay or a weather cancel-night is active (ADR-053). */
+.sm-wdbanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-5);
+  background: var(--bad-bg);
+  border-bottom: 1px solid var(--bad-border);
+  color: var(--bad-fg);
+  font: var(--t-small);
+}
+
+.sm-wdbanner__fact {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.sm-wdbanner__kind {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sm-wdbanner__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.sm-wdbanner__error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--bad-fg);
+}
+
 /* Rail and page spine. */
 .sm-shell-body {
   display: grid;
