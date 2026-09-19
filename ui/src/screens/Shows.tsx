@@ -199,7 +199,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
           ) : (
             <>
               <FieldGrid>
-                <Field label="Activate a show" help="Switches which show can affect the running system. This is an audited change, not a view filter.">
+                <Field label="Activate a show">
                   {(props) => (
                     <Select {...props} value={selected} onChange={(e) => setSelected(e.target.value)}>
                       <option value="">Choose a show…</option>
@@ -224,10 +224,6 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
               </ButtonRow>
             </>
           )}
-
-          <p className="sm-small sm-faint">
-            The show.active pointer cannot be cleared once set: the contract requires a non-empty show name.
-          </p>
         </>
       )}
       {stale !== null && (
@@ -326,10 +322,6 @@ export function Shows() {
                 </tbody>
               </Table>
             </TableWrap>
-            <p className="sm-section__footnote">
-              Switching the active show invalidates the previous show&rsquo;s authority and requires readiness for the
-              new one. It is an audited change, not a view filter.
-            </p>
           </>
         )}
       </Section>

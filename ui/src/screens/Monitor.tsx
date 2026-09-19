@@ -37,7 +37,7 @@ import { attentionItems, fleetCounts, fppDetail, nodesDetail, type Participation
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
   participating: "Participating in tonight's show.",
   not_participating: "Not participating in tonight's show.",
-  selection_unrecorded: "No selection recorded for tonight's show.",
+  selection_unrecorded: '',
   unknown: 'Participation unknown.',
   not_configured: 'No active show.',
 }
@@ -99,9 +99,6 @@ export function MonitorHead({ model }: { model: Model }) {
       <div className="sm-page__head">
         <div>
           <h1 className="sm-page__title">Monitor</h1>
-          <p className="sm-page__lede">
-            Every resource the coordinator observes, in one place. Health is what was reported, never what was assumed.
-          </p>
         </div>
         <ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />
       </div>
@@ -207,7 +204,7 @@ export function Monitor() {
                       </>
                     }
                     detail={
-                      participationSentence === null ? (
+                      !participationSentence ? (
                         item.detail
                       ) : (
                         <>
@@ -239,7 +236,6 @@ export function Monitor() {
                 ))}
               </div>
             }
-            detail="One table instead of three lists. Kind is a column, because the question is about the installation, not about a resource type."
           >
             {shown.length === 0 ? (
               <RuledStrip
@@ -280,7 +276,6 @@ export function Monitor() {
             id="mo-activity"
             title="Activity"
             aside={<Link to="/monitor/activity">Full history →</Link>}
-            detail="System events and operator actions in one stream: you usually need to know both, in order."
           >
             {activity.length === 0 ? (
               <RuledStrip
@@ -313,10 +308,11 @@ export function Monitor() {
                     </tbody>
                   </Table>
                 </TableWrap>
-                <p className="sm-section__footnote">
-                  Operator actions are audit records and need an audit-read scope; system events do not.
-                  {model.eventsGap && ' Some history is permanently lost to retention, so this stream has a gap.'}
-                </p>
+                {model.eventsGap && (
+                  <p className="sm-section__footnote">
+                    Some history is permanently lost to retention, so this stream has a gap.
+                  </p>
+                )}
               </>
             )}
           </Section>

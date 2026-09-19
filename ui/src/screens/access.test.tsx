@@ -165,7 +165,6 @@ describe('Access', () => {
     await waitFor(() => expect(screen.getByText('scheduler-host')).toBeInTheDocument())
     expect(screen.getByText('principal:read')).toBeInTheDocument()
     expect(within(screen.getByRole('row', { name: 'View credentials for scheduler-host' })).getByText('scheduler')).toBeInTheDocument()
-    expect(screen.getByText('Shows your own scopes; other principals show their role.')).toBeInTheDocument()
   })
 
   it('never renders a token value from a list read, and shows the issue response’s value once, gone after dismissal', async () => {
@@ -370,7 +369,6 @@ describe('Access', () => {
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: nightSession({ attributionDegraded: true }) })
     renderScreen()
     await waitFor(() => expect(screen.getByText(/no authorizing principal recorded/)).toBeInTheDocument())
-    expect(screen.getByText(/never clears for the rest of the session/)).toBeInTheDocument()
   })
 
   it('does not render the attribution row when attributionDegraded is false', async () => {
@@ -590,6 +588,5 @@ describe('Access, the credential in use', () => {
     await waitFor(() => expect(screen.getByText('sm_live_…4a91')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'In use' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument()
-    expect(screen.getByText(/Which of these it is, is not reported/)).toBeInTheDocument()
   })
 })

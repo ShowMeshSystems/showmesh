@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import {
   assetContentUrl,
   getAssetContent,
@@ -16,7 +15,7 @@ import {
   type NodeAssetManifest,
   type UploadProgress,
 } from '../api'
-import { Button, ButtonRow, Callout, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, type Tone } from '../kit'
+import { Button, ButtonRow, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, type Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
@@ -342,17 +341,6 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
               </Button>
             }
           >
-            <Callout>
-              Sync runs on upload and on a timer, never because a show started. Nodes always play from their own disk, so a node missing an asset is a
-              readiness fault found before a show, not during one. Click a row for the full per-node breakdown; see also{' '}
-              <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link>.
-            </Callout>
-
-            <p className="sm-small sm-muted sm-stack-4">
-              One row per current file. Status summarises every node expected to hold it; open a row for what each node holds, why it was expected to, and
-              its last transfer.
-            </p>
-
             {manifest.state.kind === 'failed' && (
               <RuledStrip absence="stale" label="Readiness unread" fact={manifest.state.reason} detail="Status shows as Unknown below until this succeeds." />
             )}

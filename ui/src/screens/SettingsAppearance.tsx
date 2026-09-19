@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RuledStrip, Segmented } from '../kit'
+import { Segmented } from '../kit'
 import { useTheme } from '../app/useTheme'
 
 type BaseTheme = 'system' | 'dark' | 'light'
@@ -24,13 +24,6 @@ export function SettingsAppearance() {
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Appearance</p>
       <h2 className="sm-section__title">How this browser looks</h2>
 
-      <RuledStrip
-        absence="unavailable"
-        label="Local only"
-        fact="Everything on this page is stored in this browser."
-        detail="No one else sees it, and there is no Save button."
-      />
-
       <section aria-labelledby="st-theme" className="sm-section">
         <h3 id="st-theme" className="sm-eyebrow">Theme</h3>
         <Segmented
@@ -42,7 +35,6 @@ export function SettingsAppearance() {
             setTheme(value)
           }}
         />
-        <p className="sm-small sm-muted sm-stack-3">Dark is the show-time default. Light is for daylight setup work.</p>
       </section>
 
       <section aria-labelledby="st-hc" className="sm-section">
@@ -55,13 +47,7 @@ export function SettingsAppearance() {
               setTheme(e.target.checked ? 'contrast' : baseTheme)
             }}
           />
-          <span>
-            <span className="sm-body sm-flat" style={{ fontWeight: 500 }}>Maximum legibility mode</span>
-            <span className="sm-small sm-muted" style={{ display: 'block', marginTop: 5 }}>
-              Pure black, pure white, saturated status colours, thicker borders. For outdoors at night, in the cold,
-              with gloves. Turn it on deliberately, not because a system setting inferred it.
-            </span>
-          </span>
+          <span className="sm-body sm-flat" style={{ fontWeight: 500 }}>Maximum legibility mode</span>
         </label>
       </section>
     </>

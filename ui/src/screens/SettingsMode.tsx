@@ -11,7 +11,6 @@ import {
 import { Button, ButtonRow, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { formatDateClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { liveCycle } from './settingsModel'
@@ -52,12 +51,12 @@ const MODE_OPTIONS: readonly { value: ConfigShowModePayload['mode']; title: stri
   {
     value: 'show',
     title: 'Show mode',
-    consequence: 'There is an audience. When something cannot be resolved, output is held rather than guessed, and destructive changes ask twice.',
+    consequence: 'For a live audience. Output holds instead of guessing, and destructive changes confirm twice.',
   },
   {
     value: 'program',
     title: 'Program mode',
-    consequence: 'Setup and authoring. Nothing assumes an audience is watching, so reconfiguration is expected rather than guarded.',
+    consequence: 'For setup and authoring. No audience is assumed, so changes apply freely.',
   },
 ]
 
@@ -122,7 +121,6 @@ export function SettingsMode() {
     <>
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Mode</p>
       <h2 className="sm-section__title">What this installation is for right now</h2>
-      <p className="sm-page__lede">Installation-wide, and every screen reads it. Changing it creates a coordinator revision attributed to you.</p>
 
       {state.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the current mode." />
@@ -160,7 +158,6 @@ export function SettingsMode() {
               absence="stale"
               label="Show in progress"
               fact={`Cycle ${cycle.cycle} is live.`}
-              detail="Switching to Program mode now is allowed, but it stops treating the audience as present."
             />
           )}
 
@@ -179,24 +176,6 @@ export function SettingsMode() {
               </span>
             )}
           </ButtonRow>
-          <p className="sm-small sm-muted sm-stack-3">{state.response.resolumeWebSocketEffect}</p>
-          {state.response.cueActivationPin !== undefined && (
-            <p className="sm-small sm-muted sm-stack-3">
-              {state.response.cueActivationPin.effect}
-              {state.response.cueActivationPin.pinned && (
-                <>
-                  {' '}Pinned to show <span className="sm-data">{state.response.cueActivationPin.show}</span>, generation{' '}
-                  <span className="sm-data">{state.response.cueActivationPin.generation}</span>
-                  {state.response.cueActivationPin.pinnedAt !== undefined && `, since ${formatDateClock(state.response.cueActivationPin.pinnedAt) ?? 'an unrecorded time'}`}
-                  .
-                </>
-              )}
-            </p>
-          )}
-          <p className="sm-small sm-muted sm-stack-3">
-            Playlist mismatch handling is expected to follow this setting rather than being configured per playlist.
-            That wiring does not exist yet. Today the per-playlist control on Shows is what takes effect.
-          </p>
         </>
       )}
 

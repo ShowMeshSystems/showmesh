@@ -187,10 +187,6 @@ export function SettingsAudioDefaults() {
     <>
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Audio <span className="sm-faint">/</span> Installation defaults</p>
       <h2 className="sm-section__title">Audio behaviour every node starts from</h2>
-      <p className="sm-page__lede">
-        Installation-wide. A node's own routing decides where sound goes; these decide how it behaves once it gets
-        there.
-      </p>
 
       {state.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for audio defaults." />
@@ -200,7 +196,7 @@ export function SettingsAudioDefaults() {
         <>
           <Section id="st-fades" title="Fades and gain">
             <div className="sm-grid sm-grid--auto">
-              <Field label="Default fade curve" help="Linear is the only curve implemented.">
+              <Field label="Default fade curve">
                 {(props) => (
                   <p {...props} className="sm-input sm-data sm-muted">
                     linear
@@ -221,7 +217,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Max background gain (dB)" help="Ceiling for the bed; a night session can lower it, never raise it.">
+              <Field label="Max background gain (dB)">
                 {(props) => (
                   <Input
                     {...props}
@@ -234,7 +230,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck target gain (dB)" help="Below zero; a cue may override it, and this default is provisional, not measured.">
+              <Field label="Duck target gain (dB)">
                 {(props) => (
                   <Input
                     {...props}
@@ -247,7 +243,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck fade duration (ms)" help="How long a bed takes to fade down into a duck once a higher-priority session starts ducking it.">
+              <Field label="Duck fade duration (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -261,10 +257,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field
-                label="Duck restore fade duration (ms)"
-                help="How long a bed takes to fade back up once its last ducker releases it, longer than the duck fade duration by default so it comes back slower than it went down."
-              >
+              <Field label="Duck restore fade duration (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -283,7 +276,7 @@ export function SettingsAudioDefaults() {
 
           <Section id="st-timing" title="Timing and LTC">
             <div className="sm-grid sm-grid--auto">
-              <Field label="Drift ignore threshold (ms)" help="Below this, drift is not corrected at all.">
+              <Field label="Drift ignore threshold (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -297,10 +290,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field
-                label="Scheduled start delivery bound (ms)"
-                help="Read by the coordinator, not by a node. How long a start command is assumed to take to reach the slowest node and finish its preroll. A guess, not a measurement."
-              >
+              <Field label="Scheduled start delivery bound (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -315,10 +305,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field
-                label="Scheduled start margin (ms)"
-                help="Read by the coordinator, not by a node. Slack held back beyond the delivery bound. A judgement, and it stays one after the bound is measured."
-              >
+              <Field label="Scheduled start margin (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -333,10 +320,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field
-                label="MultiSync fallback window (ms)"
-                help="Read by the coordinator, not by a node. How long it waits for a node's own evidence that a MultiSync packet already started a cue's audio before it starts that cue itself."
-              >
+              <Field label="MultiSync fallback window (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -351,10 +335,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field
-                label="MultiSync start lead (ms)"
-                help="Read by the node, not the coordinator. The fixed lead a MultiSync-triggered cue's audio waits past the START packet's own arrival before presenting the first sample. Pushed to every node on write and on hello."
-              >
+              <Field label="MultiSync start lead (ms)">
                 {(props) => (
                   <Input
                     {...props}
@@ -369,7 +350,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="LTC frame rate" help="Must match what Resolume expects, or timecode reads as drift.">
+              <Field label="LTC frame rate">
                 {(props) => (
                   <Select
                     {...props}
@@ -387,7 +368,7 @@ export function SettingsAudioDefaults() {
                   </Select>
                 )}
               </Field>
-              <Field label="LTC default start offset" help="HH:MM:SS:FF, non-drop-frame; a cue's own offset wins over this default.">
+              <Field label="LTC default start offset">
                 {(props) => (
                   <Input
                     {...props}
@@ -399,18 +380,6 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-            </div>
-            <p className="sm-section__footnote">Drift is corrected at track boundaries, never by continuously changing playback rate.</p>
-          </Section>
-
-          <Section id="st-loss" title="If the audio device disappears">
-            <div className="sm-panel">
-              <p className="sm-body" style={{ fontWeight: 500, margin: 0 }}>Fails silent, not configurable</p>
-              <p className="sm-small sm-muted sm-stack-2">
-                A lost audio device produces silence rather than falling back to another route. Uncontrolled gain into
-                an FM transmitter is worse than nothing, so this is a recorded exception to the local-fallback rule and
-                has no toggle.
-              </p>
             </div>
           </Section>
         </>

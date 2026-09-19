@@ -5,10 +5,7 @@ import { AssetsSurface } from './AssetsSurface'
 export function Assets() {
   return (
     <>
-      <PageTitle
-        title="Assets"
-        lede="Every show's assets in one list. Identity is show, sequence, target kind and target; node-by-node sync state is Monitor › Manifest's own facet."
-      />
+      <PageTitle title="Assets" />
       <AssetsSurface scope={{ kind: 'all' }} />
     </>
   )

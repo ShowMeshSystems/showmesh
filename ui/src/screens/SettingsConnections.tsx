@@ -270,10 +270,6 @@ export function SettingsConnections() {
     <>
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Connections</p>
       <h2 className="sm-section__title">Reaching the systems ShowMesh talks to</h2>
-      <p className="sm-page__lede">
-        Addresses must be reachable from the coordinator, not from this browser. Saving does not disturb a running
-        show. The coordinator re-polls on the next cycle.
-      </p>
 
       <NotWiredBanner
         what="Test"
@@ -447,7 +443,7 @@ export function SettingsConnections() {
         <RevisionHistory id="st-res-rev" fetch={getResolumeInstancesConfigRevisions} reloadKey={attempt} />
       </Section>
 
-      <Section id="st-mqtt" title="Event feed" detail="How FPP's plugin reaches the coordinator. Playlist-entry identity arrives here.">
+      <Section id="st-mqtt" title="Event feed">
         {mqttLoad.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the event feed configuration." />
         ) : mqttLoad.kind === 'failed' ? (
@@ -501,7 +497,6 @@ export function SettingsConnections() {
                     setMqttDirty(true)
                   }}
                 />
-                <span className="sm-field__help">The stored password is never sent back to this browser; leave this blank to keep it unchanged.</span>
               </label>
             </div>
             <div className="sm-stack-3" data-testid="mqtt-hosts">
@@ -575,10 +570,6 @@ export function SettingsConnections() {
           Discard changes
         </Button>
       </ButtonRow>
-      <p className="sm-small sm-faint">
-        A test is a live check from the coordinator. It is not saved, and it does not prove the address will still
-        answer at showtime.
-      </p>
     </>
   )
 }
@@ -619,7 +610,7 @@ function FPPConnectSettings() {
   }
 
   return (
-    <Section id="st-fppconnect" title="FPP Connect" detail="Controls xLights ingestion on the coordinator; byte limits are enforced before files enter a node asset directory.">
+    <Section id="st-fppconnect" title="FPP Connect">
       {load.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for FPP Connect settings." /> : load.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={load.reason} /> : (
         <>
           <Choice type="checkbox" checked={enabled} onChange={(e) => { setEnabled(e.target.checked); setDirty(true) }} label="Enable the xLights ingestion listener" />

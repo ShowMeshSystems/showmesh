@@ -67,7 +67,7 @@ export function MonitorManifest() {
             Refresh
           </Button>
         }
-        detail="What each node should hold against what it reported holding, from GET /assets/manifest. Not part of the live model: read on demand."
+        detail="What asset each node holds."
       >
         {state.kind === 'failed' && (
           <RuledStrip

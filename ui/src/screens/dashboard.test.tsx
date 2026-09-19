@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FPPInstance, Model, NightSessionState, Node, ResolumeInstance } from '../api'
@@ -329,9 +329,4 @@ describe('Dashboard', () => {
     expect(verdict?.state).toBe('Readiness unknown')
   })
 
-  it('puts the health footnote under the tiles, not above them', () => {
-    renderDashboard({})
-    const section = screen.getByRole('region', { name: 'System health' })
-    expect(within(section).getByText(/Health is each resource's own report/)).toBeInTheDocument()
-  })
 })
