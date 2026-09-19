@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, CSRFRejectedError, TooManyRequestsError } from '../api'
-import type { Model, SessionResponse } from '../api'
+import type { Event, Model, SessionResponse } from '../api'
 import { clearStoredToken, setStoredToken } from '../api/token'
 import { initialModel } from '../api/domain'
 import { makeCurrentRun, makeCurrentRuns, makeEvidence, makeFPPInstance } from '../api/test-support/fixtures'
@@ -74,8 +74,8 @@ function signInSubmitButton(): HTMLButtonElement {
   return button
 }
 
-function renderShell(model: Partial<Model>, route = '/') {
-  return render(
+function shellTree(model: Partial<Model>, route = '/') {
+  return (
     <ModelContext.Provider value={{ ...initialModel(), ...model }}>
       <MemoryRouter initialEntries={[route]}>
         <Routes>
@@ -84,8 +84,36 @@ function renderShell(model: Partial<Model>, route = '/') {
           </Route>
         </Routes>
       </MemoryRouter>
-    </ModelContext.Provider>,
+    </ModelContext.Provider>
   )
+}
+
+function renderShell(model: Partial<Model>, route = '/') {
+  return render(shellTree(model, route))
+}
+
+function recordedEvent(seq: number, category: string): Event {
+  return {
+    seq,
+    recordedAt: '2026-09-01T00:00:00Z',
+    occurredAt: '2026-09-01T00:00:00Z',
+    source: 'weather-delay',
+    resource: { kind: 'coordinator', id: 'weather-delay' },
+    category,
+    severity: 'info',
+    summary: category,
+    details: {},
+    correlationId: null,
+  } as unknown as Event
+}
+
+const ACTIVE_DELAY = {
+  serverTime: '2026-09-01T00:06:00Z',
+  active: true,
+  kind: 'delay',
+  startedAt: '2026-09-01T00:00:00Z',
+  startedBy: 'operator-a',
+  revision: 4,
 }
 
 describe('app shell', () => {
@@ -110,7 +138,7 @@ describe('app shell', () => {
   function authenticatedSession(overrides: Partial<SessionResponse> = {}): SessionResponse {
     return session({
       authenticated: true,
-      principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' },
+      principal: { id: 'p1', name: 'operator-a', kind: 'human', role: 'admin' },
       scopes: ['config:write'],
       scopesState: 'current',
       ...overrides,
@@ -134,7 +162,7 @@ describe('app shell', () => {
       payload: { show },
       updatedAt: '2026-08-31T00:00:00Z',
       createdByPrincipalId: 'p1',
-      createdByPrincipalName: 'erbartos',
+      createdByPrincipalName: 'operator-a',
       source: 'api',
     }
   }
@@ -147,7 +175,7 @@ describe('app shell', () => {
       payload: { mode: 'show' as const },
       updatedAt: '2026-08-30T18:00:00Z',
       createdByPrincipalId: 'p1',
-      createdByPrincipalName: 'erbartos',
+      createdByPrincipalName: 'operator-a',
       source: 'api',
       resolumeWebSocketEffect: 'closed in show mode',
       cueActivationPin: { effect: 'A show.cue edit saved now applies immediately.', ...pin },
@@ -398,20 +426,20 @@ describe('app shell', () => {
     const deviceField = screen.getByLabelText(/This device.s name/)
     expect(deviceField).toBeRequired()
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'erbartos' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'operator-a' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     fireEvent.click(signInSubmitButton())
     expect(loginMock).not.toHaveBeenCalled()
 
     fireEvent.change(deviceField, { target: { value: 'porch tablet' } })
     fireEvent.click(signInSubmitButton())
-    expect(loginMock).toHaveBeenCalledExactlyOnceWith('erbartos', 'hunter2', 'porch tablet')
+    expect(loginMock).toHaveBeenCalledExactlyOnceWith('operator-a', 'hunter2', 'porch tablet')
   })
 
   it('renders the cross-site refusal as a headline plus its explanation', async () => {
     loginMock.mockRejectedValue(new CSRFRejectedError('neither Sec-Fetch-Site nor a matching Origin'))
     renderShell({ session: session({ authenticated: false }) })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'erbartos' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'operator-a' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     fireEvent.change(screen.getByLabelText(/This device.s name/), { target: { value: 'porch tablet' } })
     fireEvent.click(signInSubmitButton())
@@ -426,7 +454,7 @@ describe('app shell', () => {
   it('renders the rate-limit refusal as a headline naming the wait plus its explanation', async () => {
     loginMock.mockRejectedValue(new TooManyRequestsError('too many attempts', 30))
     renderShell({ session: session({ authenticated: false }) })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'erbartos' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'operator-a' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     fireEvent.change(screen.getByLabelText(/This device.s name/), { target: { value: 'porch tablet' } })
     fireEvent.click(signInSubmitButton())
@@ -498,7 +526,7 @@ describe('app shell', () => {
   })
 
   it('offers Sign out only once signed in, never on a signed-out or bootstrap device', () => {
-    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'operator-a', kind: 'human', role: 'admin' } }) })
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
     cleanup()
 
@@ -511,14 +539,14 @@ describe('app shell', () => {
   })
 
   it('does not call logout on the first click: it arms a confirm step first', () => {
-    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'operator-a', kind: 'human', role: 'admin' } }) })
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(logoutMock).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Confirm sign out' })).toBeInTheDocument()
   })
 
   it('cancels the sign-out confirm without calling logout', () => {
-    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'operator-a', kind: 'human', role: 'admin' } }) })
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(logoutMock).not.toHaveBeenCalled()
@@ -527,7 +555,7 @@ describe('app shell', () => {
 
   it('calls logout only on the confirm click, and lands on the signed-out band through the existing session state', async () => {
     logoutMock.mockImplementation(() => Promise.resolve())
-    const { rerender } = renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    const { rerender } = renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'operator-a', kind: 'human', role: 'admin' } }) })
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm sign out' }))
     expect(logoutMock).toHaveBeenCalledExactlyOnceWith(undefined)
@@ -749,7 +777,7 @@ describe('app shell', () => {
         active: true,
         kind: 'delay',
         startedAt: '2026-09-01T00:00:00Z',
-        startedBy: 'erbartos',
+        startedBy: 'operator-a',
         revision: 4,
       })
       resumeFromWeatherDelayMock.mockResolvedValue({
@@ -762,7 +790,7 @@ describe('app shell', () => {
 
       renderShell({ session: authenticatedSession({ scopes: ['config:write', 'show:weatherdelay:resume'] }) })
       await screen.findByText('Weather delay')
-      expect(screen.getByText(/Started by erbartos/)).toBeInTheDocument()
+      expect(screen.getByText(/Started by operator-a/)).toBeInTheDocument()
 
       getWeatherDelayStateMock.mockResolvedValue({ serverTime: '2026-09-01T00:06:05Z', active: false, revision: 5 })
       fireEvent.click(screen.getByRole('button', { name: /^resume$/i }))
@@ -776,7 +804,7 @@ describe('app shell', () => {
         active: true,
         kind: 'cancelNight',
         startedAt: '2026-09-01T00:00:00Z',
-        startedBy: 'erbartos',
+        startedBy: 'operator-a',
         revision: 2,
       })
 
@@ -792,7 +820,7 @@ describe('app shell', () => {
         active: true,
         kind: 'delay',
         startedAt: '2026-09-01T00:00:00Z',
-        startedBy: 'erbartos',
+        startedBy: 'operator-a',
         revision: 4,
       })
       resumeFromWeatherDelayMock.mockRejectedValue(new ApiError('This principal cannot resume a weather delay.', 403))
@@ -803,6 +831,63 @@ describe('app shell', () => {
 
       await screen.findByText('This principal cannot resume a weather delay.')
       expect(screen.getByText('Weather delay')).toBeInTheDocument()
+    })
+
+    it('says the state is unknown when the read fails, rather than showing nothing', async () => {
+      getWeatherDelayStateMock.mockRejectedValue(new ApiError('Coordinator unreachable.', 503))
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Weather delay state unknown')
+      expect(screen.getByText('Coordinator unreachable.')).toBeInTheDocument()
+    })
+
+    it('keeps an active banner up when a later read fails, and refreshes when the tab is seen again', async () => {
+      getWeatherDelayStateMock.mockResolvedValue(ACTIVE_DELAY)
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Weather delay')
+
+      getWeatherDelayStateMock.mockRejectedValue(new ApiError('Coordinator unreachable.', 503))
+      document.dispatchEvent(new window.Event('visibilitychange'))
+      await screen.findByText(/Could not refresh this banner/)
+      expect(screen.getByText('Weather delay')).toBeInTheDocument()
+    })
+
+    it('ignores a slow read that answers after a newer one', async () => {
+      getWeatherDelayStateMock.mockResolvedValue(ACTIVE_DELAY)
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Weather delay')
+
+      let answerSlow: (value: unknown) => void = () => {}
+      getWeatherDelayStateMock.mockReturnValueOnce(new Promise((resolve) => (answerSlow = resolve)))
+      window.dispatchEvent(new window.Event('focus'))
+      getWeatherDelayStateMock.mockResolvedValue({ serverTime: '2026-09-01T00:06:05Z', active: false, revision: 5 })
+      window.dispatchEvent(new window.Event('focus'))
+      await waitFor(() => expect(screen.queryByText('Weather delay')).not.toBeInTheDocument())
+
+      answerSlow(ACTIVE_DELAY)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByText('Weather delay')).not.toBeInTheDocument()
+    })
+
+    it('refreshes on a weatherDelay.changed event even when a newer event arrived with it', async () => {
+      const base = { session: authenticatedSession(), events: [recordedEvent(1, 'control_plane')] }
+      const view = renderShell(base)
+      await waitFor(() => expect(getWeatherDelayStateMock).toHaveBeenCalled())
+      const calls = getWeatherDelayStateMock.mock.calls.length
+
+      getWeatherDelayStateMock.mockResolvedValue(ACTIVE_DELAY)
+      view.rerender(shellTree({ ...base, events: [recordedEvent(3, 'control_plane'), recordedEvent(2, 'weatherDelay.changed'), ...base.events] }))
+      await screen.findByText('Weather delay')
+      expect(getWeatherDelayStateMock.mock.calls.length).toBeGreaterThan(calls)
+    })
+
+    it('refreshes on a first-class weatherDelay.changed stream frame', async () => {
+      const base = { session: authenticatedSession() }
+      const view = renderShell(base)
+      await waitFor(() => expect(getWeatherDelayStateMock).toHaveBeenCalled())
+
+      getWeatherDelayStateMock.mockResolvedValue(ACTIVE_DELAY)
+      view.rerender(shellTree({ ...base, weatherDelayFrames: 1 }))
+      await screen.findByText('Weather delay')
     })
   })
 })

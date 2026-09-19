@@ -475,6 +475,18 @@ describe('Settings › Weather delay', () => {
     })
   })
 
+  it('shows a saved alert asset by its id when the asset list does not include it, not as No alert asset', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({ alert: { delayAssetId: 'asset-siren' } }))
+    stubs.listAssets = () => Promise.reject(new ApiError('Assets could not be listed.', 503))
+
+    renderAt('/settings/recovery')
+
+    await screen.findByText('Weather delay')
+    expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
+    expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
+  })
+
   it('refuses a save while a delay is active and shows the coordinator’s own message verbatim', async () => {
     stubs.getRenderSettingsConfig = () => new Promise(() => {})
     stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))

@@ -14,7 +14,7 @@ import { useModelContext } from './ModelContext'
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: WeatherDelayStateResponse }
-  | { kind: 'failed'; reason: string }
+  | { kind: 'failed'; reason: string; lastKnown: WeatherDelayStateResponse | null }
 
 type WeatherDelayActionName = 'start' | 'cancelNight' | 'resume'
 
@@ -61,10 +61,22 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState<WeatherDelayActionName | false>(false)
   const [outcome, setOutcome] = useState<ActionOutcome>({ kind: 'idle' })
 
+  // Only the newest request may set state, so a slow poll cannot overwrite a newer resume.
+  const requestSeq = useRef(0)
   const refresh = useCallback(() => {
+    const seq = ++requestSeq.current
     getWeatherDelayState()
-      .then((response) => setState({ kind: 'loaded', response }))
-      .catch((err: unknown) => setState({ kind: 'failed', reason: describeApiError(err) }))
+      .then((response) => {
+        if (seq === requestSeq.current) setState({ kind: 'loaded', response })
+      })
+      .catch((err: unknown) => {
+        if (seq !== requestSeq.current) return
+        setState((prev) => ({
+          kind: 'failed',
+          reason: describeApiError(err),
+          lastKnown: prev.kind === 'loaded' ? prev.response : prev.kind === 'failed' ? prev.lastKnown : null,
+        }))
+      })
   }, [])
 
   useEffect(() => {
@@ -75,11 +87,29 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
   const lastEventSeq = useRef<number | null>(null)
   useEffect(() => {
     if (!authenticated) return
-    const latest = model.events[0]
-    if (latest === undefined || lastEventSeq.current === latest.seq) return
-    lastEventSeq.current = latest.seq
-    if (latest.category === 'weatherDelay.changed') refresh()
+    const seen = lastEventSeq.current
+    const fresh = seen === null ? model.events : model.events.filter((event) => event.seq > seen)
+    if (model.events[0] !== undefined) lastEventSeq.current = model.events[0].seq
+    if (fresh.some((event) => event.category === 'weatherDelay.changed')) refresh()
   }, [authenticated, model.events, refresh])
+
+  useEffect(() => {
+    if (authenticated && model.weatherDelayFrames > 0) refresh()
+  }, [authenticated, model.weatherDelayFrames, refresh])
+
+  // A hidden tab's timers are throttled, so catch up the moment it is seen again.
+  useEffect(() => {
+    if (!authenticated) return
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [authenticated, refresh])
 
   // A `stream.reset` or a fresh reconnect carries no guarantee of its own
   // event.recorded frame for state that changed while disconnected; the
@@ -94,7 +124,7 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!authenticated) return
-    const active = state.kind === 'loaded' && state.response.active
+    const active = state.kind !== 'loaded' || state.response.active
     const id = setInterval(refresh, active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
     return () => clearInterval(id)
   }, [authenticated, state, refresh])

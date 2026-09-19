@@ -770,6 +770,38 @@ describe('ApiStore: supplementary coverage', () => {
     expect(store.getSnapshot().events.map((e) => e.seq)).toEqual([3, 2, 1])
   })
 
+  it('counts a first-class weatherDelay.changed frame so the weather delay reader refetches', async () => {
+    let streamRes = null as import('node:http').ServerResponse | null
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ latestEventSeq: 0 }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse({ events: [], latestSeq: 0, gap: false, oldestRetainedSeq: null }))
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    expect(store.getSnapshot().weatherDelayFrames).toBe(0)
+    if (streamRes === null) throw new Error('no open /stream response captured')
+
+    writeSSEFrame(streamRes, 'weatherDelay.changed', { serverTime: new Date().toISOString() })
+    await waitFor(() => store.getSnapshot().weatherDelayFrames === 1, {
+      message: 'a weatherDelay.changed frame was ignored',
+    })
+  })
+
   it('reconciles a re-snapshot with events already held live, instead of discarding them (D1)', async () => {
     // The initial /events page covers only seq 1. A live event.recorded
     // for seq 2 arrives afterward. The connection is then killed and

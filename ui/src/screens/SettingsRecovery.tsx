@@ -11,7 +11,7 @@ import {
   type RenderSettingsConfigResponse,
   type WeatherDelayConfigResponse,
 } from '../api'
-import { Button, ButtonRow, ChoiceGroup, Field, Input, RevisionHistory, RuledStrip, Section, Select } from '../kit'
+import { Button, ButtonRow, Choice, ChoiceGroup, Field, Input, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -329,6 +329,7 @@ function WeatherAlertAssetPicker({
       {(props) => (
         <Select {...props} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">No alert asset</option>
+          {value !== '' && !assets.some((asset) => asset.id === value) && <option value={value}>{value}</option>}
           {assets.map((asset) => (
             <option key={asset.id} value={asset.id}>
               {asset.label}
@@ -417,7 +418,7 @@ function WeatherDelaySettingsSection() {
         }
       })
       .catch(() => {
-        // The picker degrades to an id-only fallback rather than blocking the rest of the form.
+        // The picker still shows a saved asset by its id rather than blocking the rest of the form.
       })
     return () => {
       cancelled = true
@@ -511,7 +512,7 @@ function WeatherDelaySettingsSection() {
       <Section
         id="st-weatherdelay"
         title="Weather delay"
-        detail="ADR-053's optional alert, power groups, and automatic triggers. Every field is optional; an installation that does not want this leaves it unconfigured."
+        detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it."
       >
         {state.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for weather delay settings." />
@@ -586,7 +587,7 @@ function WeatherDelaySettingsSection() {
                 <RuledStrip absence="empty" label="No power groups" fact="No power group is configured." />
               ) : (
                 powerGroups.map((group) => (
-                  <div key={group.key} className="sm-panel" style={{ display: 'grid', gap: 'var(--s-3)', marginBottom: 'var(--s-3)' }}>
+                  <div key={group.key} className="sm-panel sm-grid sm-stack-3">
                     <div className="sm-grid sm-grid--auto">
                       <Field label="Id">
                         {(props) => (
@@ -610,14 +611,12 @@ function WeatherDelaySettingsSection() {
                         )}
                       </Field>
                     </div>
-                    <label className="sm-choice">
-                      <input
-                        type="checkbox"
-                        checked={group.heartbeatEnabled}
-                        onChange={(e) => updatePowerGroup(group.key, { heartbeatEnabled: e.target.checked })}
-                      />
-                      <span>Publish this group's dark heartbeat</span>
-                    </label>
+                    <Choice
+                      type="checkbox"
+                      label="Publish this group's dark heartbeat"
+                      checked={group.heartbeatEnabled}
+                      onChange={(e) => updatePowerGroup(group.key, { heartbeatEnabled: e.target.checked })}
+                    />
                     <ChoiceGroup
                       label="FPP instances"
                       options={fppOptions}

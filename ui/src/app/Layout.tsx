@@ -51,26 +51,37 @@ const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
 }
 
 /**
- * ADR-053: the one non-dismissible banner shown on every screen while a
- * weather delay or a weather cancel-night is active. `startedAt` ticks a
- * live elapsed time off the server-corrected clock, the same way the
- * hard-stop arm countdown does on Live Control.
+ * ADR-053: the non-dismissible banner on every screen while a weather delay
+ * or cancel-night is active. A failed read never hides it: it says the state
+ * is unknown. Elapsed time ticks off the server-corrected clock.
  */
 function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authenticated: boolean }) {
   const weatherDelay = useWeatherDelay()
   const resumeGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:resume')
   const invokeGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:invoke')
   const [tick, setTick] = useState(0)
+  const shown = weatherDelay.state.kind === 'loaded' ? weatherDelay.state.response : weatherDelay.state.kind === 'failed' ? weatherDelay.state.lastKnown : null
+  const readFailure = weatherDelay.state.kind === 'failed' ? weatherDelay.state.reason : null
   useEffect(() => {
-    if (weatherDelay.state.kind !== 'loaded' || !weatherDelay.state.response.active) return
+    if (shown === null || !shown.active) return
     const id = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(id)
-  }, [weatherDelay.state])
+  }, [shown])
   void tick
 
   if (!authenticated) return null
-  if (weatherDelay.state.kind !== 'loaded' || !weatherDelay.state.response.active) return null
-  const response = weatherDelay.state.response
+  if (readFailure !== null && (shown === null || !shown.active)) {
+    return (
+      <WeatherDelayBanner
+        unknown
+        kindLabel="Weather delay state unknown"
+        elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
+        error={readFailure}
+      />
+    )
+  }
+  if (shown === null || !shown.active) return null
+  const response = shown
   const kind = response.kind ?? 'delay'
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const elapsed = response.startedAt === undefined ? null : ageMs(response.startedAt, nowIso)
@@ -89,6 +100,11 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
     weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'resume' ? weatherDelay.outcome.message : undefined
   const cancelNightErrorMessage =
     weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'cancelNight' ? weatherDelay.outcome.message : undefined
+
+  const errors = [
+    resumeErrorMessage ?? cancelNightErrorMessage,
+    readFailure === null ? undefined : `Could not refresh this banner, so it may be out of date. ${readFailure}`,
+  ].filter((message): message is string => message !== undefined)
 
   const cancelNightAction =
     kind === 'delay'
@@ -115,9 +131,7 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
         ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
       }}
       {...(cancelNightAction === undefined ? {} : { cancelNight: cancelNightAction })}
-      {...(resumeErrorMessage ?? cancelNightErrorMessage
-        ? { error: resumeErrorMessage ?? cancelNightErrorMessage }
-        : {})}
+      {...(errors.length > 0 ? { error: errors.join(' ') } : {})}
     />
   )
 }

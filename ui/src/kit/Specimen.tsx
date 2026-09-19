@@ -380,10 +380,15 @@ export function Specimen() {
             <WeatherDelayBanner
               kindLabel="Weather delay"
               elapsedLabel="Started 6 m 12 s ago"
-              startedByLabel="Started by erbartos"
+              startedByLabel="Started by operator"
               savedLabel="Saved"
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
               cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <WeatherDelayBanner
+              unknown
+              kindLabel="Weather delay state unknown"
+              elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
             />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">

@@ -4046,6 +4046,11 @@ export class ApiStore {
         })
         return
       }
+      case 'weatherDelay.changed': {
+        if (gen !== this.generation) return
+        this.setModel({ ...this.model, weatherDelayFrames: this.model.weatherDelayFrames + 1 })
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).

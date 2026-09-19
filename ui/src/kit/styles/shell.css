@@ -320,7 +320,7 @@
 }
 
 /* Full-width, non-dismissible strip shown on every screen while a weather
-   delay or a weather cancel-night is active (ADR-053). */
+   delay or cancel-night is active, or while that state cannot be read. */
 .sm-wdbanner {
   display: flex;
   align-items: center;
@@ -332,6 +332,12 @@
   border-bottom: 1px solid var(--bad-border);
   color: var(--bad-fg);
   font: var(--t-small);
+}
+
+.sm-wdbanner--unknown {
+  background: var(--warn-bg);
+  border-bottom-color: var(--warn-border);
+  color: var(--warn-fg);
 }
 
 .sm-wdbanner__fact {
@@ -355,7 +361,6 @@
 .sm-wdbanner__error {
   flex-basis: 100%;
   margin: 0;
-  color: var(--bad-fg);
 }
 
 /* Rail and page spine. */

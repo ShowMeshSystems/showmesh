@@ -710,6 +710,8 @@ export interface Model {
    * record of data permanently lost.
    */
   sessionFetchFailed: boolean
+  /** Count of first-class `weatherDelay.changed` stream frames received; a change tells the weather delay reader to refetch. */
+  weatherDelayFrames: number
 }
 
 export function initialModel(): Model {
@@ -737,5 +739,6 @@ export function initialModel(): Model {
     session: null,
     sessionReceivedAt: null,
     sessionFetchFailed: false,
+    weatherDelayFrames: 0,
   }
 }
