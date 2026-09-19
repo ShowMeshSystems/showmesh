@@ -1,5 +1,7 @@
 package v1
 
+import "github.com/showmeshsystems/showmesh/pkg/weatherdelay"
+
 // EventKindWeatherDelayChanged is the change-stream event kind for a
 // weather delay state change, both the recorded event (see
 // appendWeatherDelayChangedEvent) and the stream frame (see
@@ -10,15 +12,16 @@ const EventKindWeatherDelayChanged = "weatherDelay.changed"
 // state change or a power group flip. It is full state, not a delta; a
 // reconnecting client re-reads GET /api/v1/weather-delay.
 type WeatherDelayChangedEvent struct {
-	Seq         uint64                         `json:"seq"`
-	ServerTime  string                         `json:"serverTime"`
-	Active      bool                           `json:"active"`
-	Kind        string                         `json:"kind,omitempty"`
-	StartedAt   string                         `json:"startedAt,omitempty"`
-	StartedBy   string                         `json:"startedBy,omitempty"`
-	Revision    int64                          `json:"revision"`
-	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
-	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+	Seq           uint64                         `json:"seq"`
+	ServerTime    string                         `json:"serverTime"`
+	Active        bool                           `json:"active"`
+	Kind          string                         `json:"kind,omitempty"`
+	StartedAt     string                         `json:"startedAt,omitempty"`
+	StartedBy     string                         `json:"startedBy,omitempty"`
+	StartedByName string                         `json:"startedByName,omitempty"`
+	Revision      int64                          `json:"revision"`
+	PowerGroups   []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers   []WeatherDelayHeldPlayer       `json:"heldPlayers"`
 }
 
 // WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
@@ -27,15 +30,17 @@ type WeatherDelayChangedEvent struct {
 // and hash-verified there, so an operator can see on
 // a calm day that the alert is ready.
 type WeatherDelayStateResponse struct {
-	ServerTime  string                         `json:"serverTime"`
-	Active      bool                           `json:"active"`
-	Kind        string                         `json:"kind,omitempty"`
-	StartedAt   string                         `json:"startedAt,omitempty"`
-	StartedBy   string                         `json:"startedBy,omitempty"`
-	Revision    int64                          `json:"revision"`
-	Assets      []WeatherDelayNodeAssets       `json:"assets"`
-	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
-	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+	ServerTime      string                         `json:"serverTime"`
+	Active          bool                           `json:"active"`
+	Kind            string                         `json:"kind,omitempty"`
+	StartedAt       string                         `json:"startedAt,omitempty"`
+	StartedBy       string                         `json:"startedBy,omitempty"`
+	StartedByName   string                         `json:"startedByName,omitempty"`
+	Revision        int64                          `json:"revision"`
+	Assets          []WeatherDelayNodeAssets       `json:"assets"`
+	PowerGroups     []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers     []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+	LastNotifyError string                         `json:"lastNotifyError,omitempty"`
 }
 
 // WeatherDelayHeldPlayer is a player whose gate reads closed while no delay
@@ -121,6 +126,7 @@ type WeatherDelayActionResult struct {
 	Active         bool                        `json:"active"`
 	StartedAt      string                      `json:"startedAt,omitempty"`
 	StartedBy      string                      `json:"startedBy,omitempty"`
+	StartedByName  string                      `json:"startedByName,omitempty"`
 	Revision       int64                       `json:"revision"`
 	Targets        []WeatherDelayTargetOutcome `json:"targets"`
 	// NotSaved is true when start could not store the active state; this
@@ -171,12 +177,37 @@ type ConfigWeatherDelayTriggersPayload struct {
 	RestartMinutes            int `json:"restartMinutes"`
 }
 
+// ConfigWeatherDelayNotifyPayload is [config.WeatherDelayNotifyPayload]'s
+// wire projection. An empty WebhookURL means no webhook is configured.
+type ConfigWeatherDelayNotifyPayload struct {
+	WebhookURL string `json:"webhookUrl"`
+}
+
 // ConfigWeatherDelayPayload is the show.weatherdelay payload: the PUT body
 // and the GET "payload" member. Every member is optional.
 type ConfigWeatherDelayPayload struct {
 	Alert       ConfigWeatherDelayAlertPayload        `json:"alert"`
 	PowerGroups []ConfigWeatherDelayPowerGroupPayload `json:"powerGroups"`
 	Triggers    ConfigWeatherDelayTriggersPayload     `json:"triggers"`
+	Notify      ConfigWeatherDelayNotifyPayload       `json:"notify"`
+}
+
+// WeatherDelayPresignedStartRequest is the body of POST
+// /api/v1/weather-delay/presigned-start.
+type WeatherDelayPresignedStartRequest struct {
+	Kind      string `json:"kind"`
+	ValidDays int    `json:"validDays"`
+}
+
+// WeatherDelayPresignedStartResponse is that route's response: the signed
+// request document to hold, and every node URL it can be POSTed to today.
+// The node list is a convenience, not a promise: an installation's plan
+// nodes can change, so an outside system should treat it as advisory and
+// fall back to broadcasting to every node address it otherwise knows.
+type WeatherDelayPresignedStartResponse struct {
+	ServerTime string                          `json:"serverTime"`
+	Request    weatherdelay.SignedStartRequest `json:"request"`
+	NodeURLs   []string                        `json:"nodeUrls"`
 }
 
 // WeatherDelayConfigResponse is the body of GET and PUT

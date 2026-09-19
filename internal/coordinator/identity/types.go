@@ -549,4 +549,5 @@ const (
 	AuditActionShowWeatherDelayCancelNight = "show.weatherdelay.cancel_night"
 	AuditActionShowWeatherDelayResume      = "show.weatherdelay.resume"
 	AuditActionShowWeatherDelayEnforce     = "show.weatherdelay.enforce"
+	AuditActionShowWeatherDelayPresign     = "show.weatherdelay.presign"
 )

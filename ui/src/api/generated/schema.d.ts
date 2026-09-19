@@ -2114,10 +2114,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Cancel the night for weather (ADR-053) - not yet available
-         * @description Behind `show:weatherdelay:invoke`, the same umbrella scope as `/weather-delay/start` (ADR-053 decision 1: both are one press, both are API-first). Always answers `501` today.
+         * Cancel the night for weather (ADR-053)
+         * @description Behind `show:weatherdelay:invoke`, the same umbrella scope as `/weather-delay/start` (ADR-053 decision 1: both are one press, both are API-first, and a delay can be changed to a cancel while active). Same mechanism as start: the state is persisted first (kind cancelNight), then the same concurrent stop fan-out and node dispatch. An already-active delay is changed to a cancel in place - a new revision, `startedAt` unchanged. An already-active cancel is idempotent. Once cancelled, this route cannot turn it back into a mere delay; only /weather-delay/resume clears it. After the cancel alert finishes on the plan's own nodes (or a ceiling passes), the coordinator runs the same graceful night shutdown emergency stop's stop-power-down level does, in the background.
          */
         post: operations["cancelNightForWeather"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/weather-delay/presigned-start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a pre-signed weather-delay start (ADR-053 decision 8)
+         * @description Behind `config:write`. Returns a signed start request an outside system can hold and POST directly to a node's own inbound listener when this coordinator is down, plus every node URL it can be sent to today (advisory, not a promise: an installation's plan nodes can change). validDays sets an explicit notAfter; a node accepts the request until then and rejects it afterward (at most 400 days from issuedAt). Replaying it can only start a delay or a cancel night, never a resume.
+         */
+        post: operations["presignWeatherDelayStart"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5084,8 +5104,12 @@ export interface components {
             startedAt?: string;
             /** @description An operator principal id, or a configured trigger source name. */
             startedBy?: string;
+            /** @description An operator-recognizable name for startedBy: a principal's login or token label, or a trigger source name. Absent for a state written before this field existed. */
+            startedByName?: string;
             /** @description Monotonic per change. Fits a JS safe integer - never derived from a timestamp. */
             revision: number;
+            /** @description The optional show.weatherdelay.notify webhook's own most recent delivery failure, if any (ADR-053 decision 13). Absent when the last delivery succeeded, or none was ever attempted. */
+            lastNotifyError?: string;
             /** @description Per plan node, whether each configured alert asset is present and hash-verified there (ADR-053 decision 7's own alert asset), so an operator can see on a calm day that the alert is ready. Empty when no alert asset is configured. */
             assets?: components["schemas"]["WeatherDelayNodeAssets"][];
             /** @description Every configured power group's own dark confirmation (ADR-053 decision 10). Empty when no power group is configured; nothing else about this response changes. */
@@ -5150,6 +5174,8 @@ export interface components {
             /** Format: date-time */
             startedAt?: string;
             startedBy?: string;
+            /** @description An operator-recognizable name for startedBy. */
+            startedByName?: string;
             revision: number;
             targets: components["schemas"]["WeatherDelayTargetOutcome"][];
             /** @description Start only. True when the active state could not be stored: every target was still dispatched and this coordinator process holds the delay, but it will not survive a coordinator restart. Absent when the state was stored. */
@@ -5162,6 +5188,40 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             result: components["schemas"]["WeatherDelayActionResult"];
+        };
+        /** @description The body of POST /weather-delay/presigned-start. */
+        WeatherDelayPresignedStartRequest: {
+            /** @enum {string} */
+            kind: "delay" | "cancelNight";
+            /** @description How many days from issuedAt this presigned start stays acceptable to a node. */
+            validDays: number;
+        };
+        /** @description The pre-signed request itself (pkg/weatherdelay.StartRequest): what a node verifies and, on success, acts on. */
+        WeatherDelaySignedStartRequestBody: {
+            /** @enum {string} */
+            kind: "delay" | "cancelNight";
+            /** Format: date-time */
+            issuedAt: string;
+            nonce: string;
+            /**
+             * Format: date-time
+             * @description When this request stops being acceptable. Absent means the node's own fixed 24 hour age rule applies instead.
+             */
+            notAfter?: string;
+        };
+        /** @description pkg/weatherdelay.SignedStartRequest: the signed document a node verifies. */
+        WeatherDelaySignedStartRequest: {
+            request: components["schemas"]["WeatherDelaySignedStartRequestBody"];
+            /** @description base64-encoded Ed25519 signature over the request's canonical bytes. */
+            signature: string;
+        };
+        /** @description The body of POST /weather-delay/presigned-start. */
+        WeatherDelayPresignedStartResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            request: components["schemas"]["WeatherDelaySignedStartRequest"];
+            /** @description Every plan node's own reported inbound listener address, as a full URL to POST the signed request to. Advisory, not a promise: an installation's plan nodes can change. */
+            nodeUrls: string[];
         };
         /** @description The optional alert an active delay or cancel-night plays (ADR-053 decision 7). Every field is optional with a working default: delayAssetId/cancelNightAssetId empty means no alert asset is configured for that kind; nodeIds empty means every declared audio node, never "no nodes"; repeatCount defaults to 10. */
         ConfigWeatherDelayAlertPayload: {
@@ -5190,11 +5250,17 @@ export interface components {
             cancelAnswerWindowSeconds?: number;
             restartMinutes?: number;
         };
+        /** @description The optional webhook (ADR-053 decision 13). Empty webhookUrl means none is configured. When set, the coordinator POSTs a small JSON document on delay started, changed to cancel night, cancel night started, resumed, or cleared: best effort, a 3 second timeout, no redirects, and it never blocks or fails the operator's own request. A failure only shows up as GET /weather-delay's own lastNotifyError. */
+        ConfigWeatherDelayNotifyPayload: {
+            /** @description An absolute http or https URL with no embedded username or password, at most 2048 characters. */
+            webhookUrl?: string;
+        };
         /** @description The "show.weatherdelay" configuration kind's decoded payload: the body PUT /config/show.weatherdelay accepts (a full replacement, every member optional with a working default - UNLIKE ConfigEmergencyStopPayload), and the "payload" member of GET /config/show.weatherdelay's response. An empty `{}` body is a valid, fully-defaulted configuration. */
         ConfigWeatherDelayPayload: {
             alert?: components["schemas"]["ConfigWeatherDelayAlertPayload"];
             powerGroups?: components["schemas"]["ConfigWeatherDelayPowerGroupPayload"][];
             triggers?: components["schemas"]["ConfigWeatherDelayTriggersPayload"];
+            notify?: components["schemas"]["ConfigWeatherDelayNotifyPayload"];
         };
         /** @description The body of GET and PUT /config/show.weatherdelay. Never `404`s: every field has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written. */
         WeatherDelayConfigResponse: {
@@ -6917,6 +6983,7 @@ export interface components {
             /** Format: date-time */
             startedAt?: string;
             startedBy?: string;
+            startedByName?: string;
             revision: number;
             powerGroups: components["schemas"]["WeatherDelayPowerGroupStatus"][];
             heldPlayers: components["schemas"]["WeatherDelayHeldPlayer"][];
@@ -11681,20 +11748,51 @@ export interface operations {
             };
         };
         responses: {
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            /** @description Not implemented yet. */
-            501: {
+            /** @description OK */
+            200: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["WeatherDelayActionResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    presignWeatherDelayStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeatherDelayPresignedStartRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeatherDelayPresignedStartResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     resumeFromWeatherDelay: {

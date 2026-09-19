@@ -2082,6 +2082,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/weather-delay/start", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayStart))
 	mux.HandleFunc("POST /api/v1/weather-delay/cancel-night", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayCancelNight))
 	mux.HandleFunc("POST /api/v1/weather-delay/resume", h.writeGuard(&scopeShowWeatherDelayResume, h.handleWeatherDelayResume))
+	mux.HandleFunc("POST /api/v1/weather-delay/presigned-start", h.writeGuard(&scopeConfigWrite, h.handleWeatherDelayPresignedStart))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

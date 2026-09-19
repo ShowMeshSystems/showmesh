@@ -123,7 +123,7 @@ func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind stri
 // sequence and a clear stops the alert.
 func (o *weatherDelayOperations) react(ctx context.Context, transition weatherDelayTransition, kind string) {
 	switch transition {
-	case weatherDelayStarted:
+	case weatherDelayStarted, weatherDelayKindChanged:
 		playing, reason, unsilenced := o.runStartSequence(ctx, kind)
 		o.holder.log().Warn("weather delay started from the coordinator state topic", "kind", kind, "alert_playing", playing, "alert_reason", reason, "unsilenced", unsilenced)
 	case weatherDelayCleared:

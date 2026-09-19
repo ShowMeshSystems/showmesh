@@ -194,6 +194,11 @@ const (
 	weatherDelayUnchanged weatherDelayTransition = iota
 	weatherDelayStarted
 	weatherDelayCleared
+	// weatherDelayKindChanged is an active delay changed into a cancel (or,
+	// in principle, the reverse) in place: the alert to play changes but
+	// StartedAt does not (ADR-053 decision 1's "a delay can be changed to
+	// a cancel while it is active").
+	weatherDelayKindChanged
 )
 
 // SetFromMessage applies a retained state message. Active starts a delay only
@@ -215,6 +220,14 @@ func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage) w
 		h.rec.StartedBy = msg.StartedBy
 		h.rec.HeldRevision = msg.Revision
 		transition = weatherDelayStarted
+	case msg.Active && h.rec.Active && msg.Kind != h.rec.Kind:
+		// Changed in place: StartedAt stays the delay's original start: the
+		// active window never ended. HeldRevision advances so an older
+		// not-active message still cannot clear it.
+		h.rec.Kind = msg.Kind
+		h.rec.StartedBy = msg.StartedBy
+		h.rec.HeldRevision = msg.Revision
+		transition = weatherDelayKindChanged
 	case !msg.Active && h.rec.Active && msg.Revision > h.rec.HeldRevision:
 		h.clearLocked()
 		transition = weatherDelayCleared

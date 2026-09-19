@@ -47,10 +47,21 @@ func newWeatherDelayHTTPTestFixture(t *testing.T, enabled bool) *weatherDelayHTT
 	return &weatherDelayHTTPTestFixture{srvURL: srv.URL, pub: pub, priv: priv, holder: holder, mgr: mgr, dir: dir}
 }
 
-// sign builds a valid SignedStartRequest for kind, issued at issuedAt.
+// sign builds a valid SignedStartRequest for kind, issued at issuedAt, with
+// no notAfter.
 func (f *weatherDelayHTTPTestFixture) sign(t *testing.T, kind string, issuedAt time.Time) weatherdelay.SignedStartRequest {
 	t.Helper()
+	return f.signWithNotAfter(t, kind, issuedAt, time.Time{})
+}
+
+// signWithNotAfter builds a valid SignedStartRequest carrying an explicit
+// notAfter; the zero time.Time leaves it unset.
+func (f *weatherDelayHTTPTestFixture) signWithNotAfter(t *testing.T, kind string, issuedAt, notAfter time.Time) weatherdelay.SignedStartRequest {
+	t.Helper()
 	req := weatherdelay.StartRequest{Kind: kind, IssuedAt: issuedAt.UTC(), Nonce: "nonce-1"}
+	if !notAfter.IsZero() {
+		req.NotAfter = notAfter.UTC()
+	}
 	payload, err := req.CanonicalBytes()
 	if err != nil {
 		t.Fatalf("CanonicalBytes: %v", err)
@@ -215,6 +226,65 @@ func TestWeatherDelayHTTPFutureRequestRejected(t *testing.T) {
 	resp := postStart(t, f.srvURL, body)
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("a request 10 minutes in the future was accepted")
+	}
+}
+
+// TestWeatherDelayHTTPNotAfterAcceptedPast24Hours proves a request older
+// than the fixed 24 hour rule still verifies when its own notAfter has not
+// passed.
+func TestWeatherDelayHTTPNotAfterAcceptedPast24Hours(t *testing.T) {
+	f := newWeatherDelayHTTPTestFixture(t, true)
+	hash := writeAssetFixture(t, f.dir, "alert.wav", []byte("alert audio content"))
+	f.holder.rec.Plan = weatherDelayTestPlan(weatherdelay.KindDelay, "alert-asset", hash, "alert.wav", 3)
+
+	issuedAt := time.Now().Add(-48 * time.Hour)
+	signed := f.signWithNotAfter(t, weatherdelay.KindDelay, issuedAt, time.Now().Add(24*time.Hour))
+	body, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	resp := postStart(t, f.srvURL, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a request past 24 hours old but before its own notAfter", resp.StatusCode)
+	}
+}
+
+// TestWeatherDelayHTTPNotAfterExpiredRejected proves a request whose own
+// notAfter has passed is refused, even though it is fresh.
+func TestWeatherDelayHTTPNotAfterExpiredRejected(t *testing.T) {
+	f := newWeatherDelayHTTPTestFixture(t, true)
+	signed := f.signWithNotAfter(t, weatherdelay.KindDelay, time.Now().Add(-time.Hour), time.Now().Add(-time.Minute))
+	body, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	resp := postStart(t, f.srvURL, body)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("a request past its own notAfter was accepted")
+	}
+	if f.holder.Current().Active {
+		t.Fatal("holder went active from an expired-notAfter request")
+	}
+}
+
+// TestWeatherDelayHTTPNotAfterBeyond400DaysRejected proves signed.Verify's
+// own [weatherdelay.StartRequest.Validate] refuses a notAfter more than
+// 400 days past issuedAt, since the route calls Verify before any age
+// check of its own.
+func TestWeatherDelayHTTPNotAfterBeyond400DaysRejected(t *testing.T) {
+	f := newWeatherDelayHTTPTestFixture(t, true)
+	issuedAt := time.Now()
+	signed := f.signWithNotAfter(t, weatherdelay.KindDelay, issuedAt, issuedAt.Add(401*24*time.Hour))
+	body, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	resp := postStart(t, f.srvURL, body)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("a request with notAfter more than 400 days past issuedAt was accepted")
 	}
 }
 

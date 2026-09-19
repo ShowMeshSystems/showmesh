@@ -276,15 +276,6 @@ func invalidParameterProblem(detail string) v1.Problem {
 	}
 }
 
-func notImplementedProblem(detail string) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeNotImplemented,
-		Title:  "Not implemented",
-		Status: http.StatusNotImplemented,
-		Detail: detail,
-	}
-}
-
 func unauthorizedProblem(detail string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeUnauthorized,

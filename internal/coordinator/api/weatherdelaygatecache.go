@@ -9,12 +9,38 @@ import (
 // gate and each power group's darkness, read by GET /api/v1/weather-delay so
 // a request never waits on an FPP host. coordinator.go shares one instance.
 type WeatherDelayGateCache struct {
-	mu         sync.Mutex
-	gates      map[string]weatherDelayGateStatus
-	groups     map[string]weatherDelayGroupStatus
-	idleReads  map[string]time.Time
-	heartbeats map[string]time.Time
-	gateWrites map[string]*sync.Mutex
+	mu              sync.Mutex
+	gates           map[string]weatherDelayGateStatus
+	groups          map[string]weatherDelayGroupStatus
+	idleReads       map[string]time.Time
+	heartbeats      map[string]time.Time
+	gateWrites      map[string]*sync.Mutex
+	lastNotifyError string
+}
+
+// setNotifyError records the webhook's own most recent delivery failure
+// (empty clears it), reported by GET /api/v1/weather-delay as
+// lastNotifyError. It is this process's own count, not a durable one: a
+// restart clears it, matching every other best-effort evidence this cache
+// already holds.
+func (c *WeatherDelayGateCache) setNotifyError(reason string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.lastNotifyError = reason
+	c.mu.Unlock()
+}
+
+// notifyError returns the webhook's last recorded delivery failure, or ""
+// when the last delivery (or the first attempt) succeeded.
+func (c *WeatherDelayGateCache) notifyError() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastNotifyError
 }
 
 // weatherDelayGateStatus is one FPP instance's most recently read gate

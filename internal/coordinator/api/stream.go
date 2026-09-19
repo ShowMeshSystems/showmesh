@@ -695,7 +695,7 @@ func (h *Hub) render(ctx context.Context) {
 			const key = "weatherdelay:current"
 			state := v1.WeatherDelayChangedEvent{Active: rec.Active, Revision: rec.Revision, PowerGroups: groups, HeldPlayers: held}
 			if rec.Active {
-				state.Kind, state.StartedAt, state.StartedBy = rec.Kind, formatTime(rec.StartedAt), rec.StartedBy
+				state.Kind, state.StartedAt, state.StartedBy, state.StartedByName = rec.Kind, formatTime(rec.StartedAt), rec.StartedBy, rec.StartedByName
 			}
 			if h.updateRendered(key, state) {
 				pending = append(pending, pendingFrame{event: "weatherDelay.changed", serverTime: formatTime(now), weatherDelay: &state})

@@ -99,20 +99,31 @@ func DecodeState(data []byte) (State, error) {
 	return s, nil
 }
 
+// MaxPresignValidDays is the longest a minted NotAfter may extend past
+// IssuedAt. A node refuses a request whose NotAfter exceeds this, and the
+// presigned-start endpoint refuses to mint one that would.
+const MaxPresignValidDays = 400
+
 // StartRequest is the pre-signed start (ADR-053 decision 8). No field or
 // Kind value expresses a resume. Replay is not tracked here because
-// replaying a start can only cause darkness.
+// replaying a start can only cause darkness. NotAfter is optional: the
+// zero value means the node applies its own fixed-age rule instead of an
+// explicit expiry, so a request minted before NotAfter existed keeps
+// working unchanged.
 type StartRequest struct {
 	Kind     string    `json:"kind"`
 	IssuedAt time.Time `json:"issuedAt"`
 	Nonce    string    `json:"nonce"`
+	NotAfter time.Time `json:"notAfter,omitzero"`
 }
 
 // ErrInvalidStartRequest is wrapped by every error [StartRequest.Validate]
 // returns.
 var ErrInvalidStartRequest = errors.New("weatherdelay: invalid start request")
 
-// Validate checks Kind, IssuedAt and Nonce are all set and Kind is known.
+// Validate checks Kind, IssuedAt and Nonce are all set and Kind is known,
+// and, when NotAfter is set, that it is after IssuedAt and no more than
+// [MaxPresignValidDays] past it.
 func (r StartRequest) Validate() error {
 	if !ValidKind(r.Kind) {
 		return fmt.Errorf("%w: kind %q must be one of %q or %q", ErrInvalidStartRequest, r.Kind, KindDelay, KindCancelNight)
@@ -122,6 +133,14 @@ func (r StartRequest) Validate() error {
 	}
 	if r.Nonce == "" {
 		return fmt.Errorf("%w: nonce is empty", ErrInvalidStartRequest)
+	}
+	if !r.NotAfter.IsZero() {
+		if !r.NotAfter.After(r.IssuedAt) {
+			return fmt.Errorf("%w: notAfter %s must be after issuedAt %s", ErrInvalidStartRequest, r.NotAfter, r.IssuedAt)
+		}
+		if r.NotAfter.After(r.IssuedAt.Add(MaxPresignValidDays * 24 * time.Hour)) {
+			return fmt.Errorf("%w: notAfter must be no more than %d days after issuedAt", ErrInvalidStartRequest, MaxPresignValidDays)
+		}
 	}
 	return nil
 }

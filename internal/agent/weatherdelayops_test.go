@@ -369,6 +369,125 @@ func TestWeatherDelaySecondStartDoesNotStackTheAlert(t *testing.T) {
 	}
 }
 
+// TestWeatherDelayChangeInPlaceReplacesTheAlert proves ADR-053 decision 1:
+// while a delay's alert is playing, a start for cancelNight replaces it
+// with the cancel alert on the same session, rather than stacking or being
+// ignored as "already active."
+func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
+
+	delayHash := writeAssetFixture(t, dir, "delay.wav", []byte("delay alert audio"))
+	cancelHash := writeAssetFixture(t, dir, "cancel.wav", []byte("cancel alert audio"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = mqttproto.WeatherDelayPlan{
+		RepeatCount: 10,
+		Delay:       &mqttproto.WeatherDelayAlertAssetRef{AssetID: "delay-asset", ContentHash: delayHash, Filename: "delay.wav"},
+		CancelNight: &mqttproto.WeatherDelayAlertAssetRef{AssetID: "cancel-asset", ContentHash: cancelHash, Filename: "cancel.wav"},
+	}
+
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	played1, reason1, _ := ops.doStart(context.Background(), "delay", clock.now())
+	if !played1 {
+		t.Fatalf("delay start did not play: %s", reason1)
+	}
+	played2, reason2, _ := ops.doStart(context.Background(), "cancelNight", clock.now())
+	if !played2 {
+		t.Fatalf("cancelNight start did not play: %s", reason2)
+	}
+
+	state := holder.Current()
+	if state.Kind != "cancelNight" {
+		t.Fatalf("holder kind = %q, want cancelNight", state.Kind)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		calls := engine.snapshot()
+		startCount := 0
+		for _, c := range calls {
+			if c.kind == "start" {
+				startCount++
+			}
+		}
+		if startCount >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("engine Start calls = %d after 5s, want 2 (the cancel alert must replace the delay alert)", startCount)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestWeatherDelayStateMessageKindChangeReplacesTheAlert proves the same
+// change-in-place over the retained state topic path (SetFromMessage +
+// react), not just the direct weatherdelay.start operation: StartedAt
+// stays the delay's original start, and the alert switches.
+func TestWeatherDelayStateMessageKindChangeReplacesTheAlert(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
+
+	delayHash := writeAssetFixture(t, dir, "delay.wav", []byte("delay alert audio"))
+	cancelHash := writeAssetFixture(t, dir, "cancel.wav", []byte("cancel alert audio"))
+	plan := mqttproto.WeatherDelayPlan{
+		RepeatCount: 10,
+		Delay:       &mqttproto.WeatherDelayAlertAssetRef{AssetID: "delay-asset", ContentHash: delayHash, Filename: "delay.wav"},
+		CancelNight: &mqttproto.WeatherDelayAlertAssetRef{AssetID: "cancel-asset", ContentHash: cancelHash, Filename: "cancel.wav"},
+	}
+
+	holder := NewWeatherDelayHolder(dir, discardLogger())
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	startedAt := time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)
+	startMsg, err := mqttproto.NewWeatherDelayMessage(true, "delay", startedAt, "op-1", 1, plan, startedAt)
+	if err != nil {
+		t.Fatalf("NewWeatherDelayMessage(delay): %v", err)
+	}
+	if transition := holder.SetFromMessage(startMsg); transition != weatherDelayStarted {
+		t.Fatalf("first message transition = %v, want weatherDelayStarted", transition)
+	}
+	ops.react(context.Background(), weatherDelayStarted, "delay")
+
+	changeMsg, err := mqttproto.NewWeatherDelayMessage(true, "cancelNight", startedAt, "op-2", 2, plan, startedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("NewWeatherDelayMessage(cancelNight): %v", err)
+	}
+	transition := holder.SetFromMessage(changeMsg)
+	if transition != weatherDelayKindChanged {
+		t.Fatalf("kind-change transition = %v, want weatherDelayKindChanged", transition)
+	}
+	ops.react(context.Background(), transition, "cancelNight")
+
+	state := holder.Current()
+	if state.Kind != "cancelNight" {
+		t.Fatalf("holder kind = %q, want cancelNight", state.Kind)
+	}
+	if !state.StartedAt.Equal(startedAt) {
+		t.Fatalf("holder startedAt = %v, want unchanged %v", state.StartedAt, startedAt)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		calls := engine.snapshot()
+		startCount := 0
+		for _, c := range calls {
+			if c.kind == "start" {
+				startCount++
+			}
+		}
+		if startCount >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("engine Start calls = %d after 5s, want 2 (the cancel alert must replace the delay alert)", startCount)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences proves a
 // plan with no alert still mutes and stops other sessions, and reports why
 // no alert played rather than failing.

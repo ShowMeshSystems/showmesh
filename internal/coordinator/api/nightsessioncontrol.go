@@ -17,6 +17,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
+	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
 // Track F seam F2: the persisted night-session lifecycle controller
@@ -315,12 +316,17 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	// ADR-053 decision 3: the night lifecycle commands that start output
 	// are refused while a weather delay is active; every stop-direction
 	// command (fade-out, power-down, end-session) stays available, per
-	// decision 13.
+	// decision 13. A cancelled night gets its own sentence: it stays
+	// refused until an operator clears it, not merely resumes it.
 	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight {
-		if active, err := h.weatherDelayActive(ctx); err != nil {
+		wdRec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
+		if err != nil {
 			h.writeInternalError(w, now, "check weather delay state", err)
 			return
-		} else if active {
+		} else if wdRec.Active && wdRec.Kind == weatherdelay.KindCancelNight {
+			writeProblem(w, h.logger, now, weatherDelayActiveProblem("Tonight's show was cancelled for weather. Clear the cancellation to start a show."))
+			return
+		} else if wdRec.Active {
 			writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume the show to start it."))
 			return
 		}
