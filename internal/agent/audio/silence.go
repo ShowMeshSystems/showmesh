@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"sync"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -28,13 +29,37 @@ type SessionSilenceOutcome struct {
 // not stall the sessions waiting behind it or the result this operation
 // reports.
 func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
+	return m.silenceSessions(ctx, m.liveSessionsExcept(""))
+}
+
+// SilenceAllExcept is [Manager.SilenceAll] for every session other than
+// excludeID — ADR-053 decision 7's own stop step, run after the alert
+// session (excludeID) has already been started, and never confused with
+// it: a weather delay alert must keep playing while every other session
+// this node holds is silenced the identical way SilenceAll would silence
+// it too.
+func (m *Manager) SilenceAllExcept(ctx context.Context, excludeID pkgaudio.SessionID) []SessionSilenceOutcome {
+	return m.silenceSessions(ctx, m.liveSessionsExcept(excludeID))
+}
+
+// liveSessionsExcept snapshots this Manager's live sessions, omitting
+// excludeID (an empty id matches nothing, so [SilenceAll] excludes
+// none).
+func (m *Manager) liveSessionsExcept(excludeID pkgaudio.SessionID) []*Session {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	sessions := make([]*Session, 0, len(m.sessions))
-	for _, s := range m.sessions {
+	for id, s := range m.sessions {
+		if excludeID != "" && id == excludeID {
+			continue
+		}
 		sessions = append(sessions, s)
 	}
-	m.mu.Unlock()
+	return sessions
+}
 
+// silenceSessions is [SilenceAll]/[SilenceAllExcept]'s shared body.
+func (m *Manager) silenceSessions(ctx context.Context, sessions []*Session) []SessionSilenceOutcome {
 	results := make([]SessionSilenceOutcome, 0, len(sessions))
 	for _, s := range sessions {
 		s.mu.Lock()
@@ -47,6 +72,42 @@ func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
 		results = append(results, SessionSilenceOutcome{ID: s.id, Outcome: outcome})
 	}
 	return results
+}
+
+// ZeroGainExcept drives every session other than excludeID straight to
+// gain zero (ADR-053 decision 7's own first step): a direct engine
+// SetGain call on whatever handle is already loaded, bypassing both the
+// revision ledger [Session.dispatch] enforces and the configured/
+// effective-gain bookkeeping [Session.applyEffectiveGainLocked] composes
+// — no pipeline teardown, no fade, and no change to a session's own
+// desired gain.
+//
+// Each session's own engine call runs on its own goroutine, bounded by
+// [boundedEngineCallContext], so one wedged or failing session's call
+// never delays or fails another's — decision 7's "a failure in (a) for
+// one session must not prevent (b)". This method still waits for every
+// goroutine to finish (or time out) before returning: "must not wait on
+// anything" is decision 7's rule against an UNBOUNDED wait, the same
+// bound every other engine call in this package already carries, not a
+// rule against waiting at all — unlike [Manager.SilenceAllExcept], which
+// the alert this call precedes truly never waits on.
+func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.SessionID) {
+	var wg sync.WaitGroup
+	for _, s := range m.liveSessionsExcept(excludeID) {
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if !s.handleLoaded {
+				return
+			}
+			gainCtx, cancel := boundedEngineCallContext(ctx)
+			defer cancel()
+			_, _ = m.engine.SetGain(gainCtx, s.handle, mutedGain)
+		}(s)
+	}
+	wg.Wait()
 }
 
 // dropHoldMembershipEverywhere removes sessionID from every other live

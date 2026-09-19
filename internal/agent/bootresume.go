@@ -30,6 +30,10 @@ type resumeDecision struct {
 // rule to one persisted assignment a against the node's currently held Cue
 // catalog:
 //
+//   - weatherDelayActive true (ADR-053: "on boot the persisted state is
+//     loaded before anything can start audio" — before it can resume
+//     rendering, too): every assignment is discarded regardless of
+//     whether it would otherwise match, and the node comes up cleared.
 //   - hasCatalog false (no catalog has ever been deployed to this node):
 //     every assignment is discarded — "a node with no held catalog at all
 //     resumes nothing."
@@ -39,7 +43,11 @@ type resumeDecision struct {
 //   - a.Auth's Show, Generation, and CatalogRevision must ALL equal held's
 //     — any one of the three differing means the assignment was authorized
 //     under a Show, generation, or catalog this node no longer holds.
-func decideBootResume(a pipeline.Assignment, held heldcatalog.HeldCatalog, hasCatalog bool) resumeDecision {
+func decideBootResume(a pipeline.Assignment, held heldcatalog.HeldCatalog, hasCatalog bool, weatherDelayActive bool) resumeDecision {
+	if weatherDelayActive {
+		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
+			"A weather delay is active. %q's saved assignment was cleared and stays cleared until the show resumes.", a.SurfaceID)}
+	}
 	if !hasCatalog {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
 			"%q's saved assignment was cleared because this node has no cue catalog loaded. Deploy a catalog to it.", a.SurfaceID)}

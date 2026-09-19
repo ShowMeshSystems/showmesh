@@ -12,7 +12,7 @@ func TestDecideBootResumeNoHeldCatalogClearsEverything(t *testing.T) {
 		SurfaceID: "surface-1",
 		Auth:      &pipeline.AssignmentAuth{Show: "halloween-2026", Generation: 3, CatalogRevision: "rev-a"},
 	}
-	decision := decideBootResume(a, heldcatalog.HeldCatalog{}, false)
+	decision := decideBootResume(a, heldcatalog.HeldCatalog{}, false, false)
 	if decision.Authorized {
 		t.Fatalf("decideBootResume authorized an assignment when the node holds no catalog at all")
 	}
@@ -24,7 +24,7 @@ func TestDecideBootResumeNoHeldCatalogClearsEverything(t *testing.T) {
 func TestDecideBootResumeNoTupleIsNeverGrandfathered(t *testing.T) {
 	held := heldcatalog.HeldCatalog{Show: "halloween-2026", Generation: 3, Revision: "rev-a"}
 	a := pipeline.Assignment{SurfaceID: "surface-1", Auth: nil}
-	decision := decideBootResume(a, held, true)
+	decision := decideBootResume(a, held, true, false)
 	if decision.Authorized {
 		t.Fatalf("decideBootResume authorized an assignment persisted with no authorization tuple; build item 4 requires it be treated as unauthorized, never grandfathered")
 	}
@@ -39,7 +39,7 @@ func TestDecideBootResumeMismatchedShowDiscards(t *testing.T) {
 		SurfaceID: "surface-1",
 		Auth:      &pipeline.AssignmentAuth{Show: "christmas-2026", Generation: 3, CatalogRevision: "rev-a"},
 	}
-	decision := decideBootResume(a, held, true)
+	decision := decideBootResume(a, held, true, false)
 	if decision.Authorized {
 		t.Fatalf("decideBootResume authorized a cross-show assignment")
 	}
@@ -51,7 +51,7 @@ func TestDecideBootResumeMismatchedGenerationDiscards(t *testing.T) {
 		SurfaceID: "surface-1",
 		Auth:      &pipeline.AssignmentAuth{Show: "halloween-2026", Generation: 2, CatalogRevision: "rev-a"},
 	}
-	decision := decideBootResume(a, held, true)
+	decision := decideBootResume(a, held, true, false)
 	if decision.Authorized {
 		t.Fatalf("decideBootResume authorized an assignment from a stale generation")
 	}
@@ -63,7 +63,7 @@ func TestDecideBootResumeMismatchedCatalogRevisionDiscards(t *testing.T) {
 		SurfaceID: "surface-1",
 		Auth:      &pipeline.AssignmentAuth{Show: "halloween-2026", Generation: 3, CatalogRevision: "rev-old"},
 	}
-	decision := decideBootResume(a, held, true)
+	decision := decideBootResume(a, held, true, false)
 	if decision.Authorized {
 		t.Fatalf("decideBootResume authorized an assignment from a stale catalog revision")
 	}
@@ -79,7 +79,7 @@ func TestDecideBootResumeSameShowSameGenerationIsResumed(t *testing.T) {
 		SurfaceID: "surface-1",
 		Auth:      &pipeline.AssignmentAuth{Show: "halloween-2026", Generation: 3, CatalogRevision: "rev-a"},
 	}
-	decision := decideBootResume(a, held, true)
+	decision := decideBootResume(a, held, true, false)
 	if !decision.Authorized {
 		t.Fatalf("decideBootResume discarded a same-show, same-generation, same-catalog-revision assignment: %s", decision.Reason)
 	}

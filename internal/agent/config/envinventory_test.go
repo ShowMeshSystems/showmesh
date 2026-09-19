@@ -81,6 +81,10 @@ var agentConfigEnvVars = map[string]string{
 	"SHOWMESH_GST_DISCOVERER": "points at a gst-discoverer-1.0 binary outside PATH; " +
 		"internal/agent/audio/discoverer_resolve.go's own doc comment documents this the same way as " +
 		"SHOWMESH_GST_LAUNCH above, an operator-settable binary location, not test-only scaffolding",
+	"SHOWMESH_WEATHERDELAY_COORDINATOR_PUBLIC_KEY_PATH": "a file path this node reads once at startup " +
+		"(ADR-025's node-side key pinning), holding the coordinator's Ed25519 public key that verifies a " +
+		"signed weather delay start over HTTP (ADR-053 decision 9); empty (the default) means this node " +
+		"holds no such key and the route answers 503; Config.WeatherDelayCoordinatorPublicKeyPath",
 }
 
 // agentScaffoldingEnvVars is a distinct category from agentConfigEnvVars

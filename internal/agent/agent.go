@@ -278,11 +278,11 @@ func Run() int {
 	// one is left alone; an unbound one stays unbound.
 	fppConnectRegistrar.BootWalk()
 
+	// fppConnectHTTPDone is started further down (see its own launch site,
+	// after weatherDelay and audioMgr both exist): the listener now also
+	// serves ADR-053's signed weather delay start route, which needs
+	// weatherDelay's persisted state and the audio manager it drives.
 	fppConnectHTTPDone := make(chan struct{})
-	go func() {
-		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, logger)
-	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node
 	// currently understands it. Constructed once, outside newMQTTConn and
@@ -293,6 +293,15 @@ func Run() int {
 	// at the point of decision (ADR-036 decision 1), never as a resolved
 	// value copied at construction.
 	showMode := NewShowModeHolder(time.Now)
+
+	// weatherDelay is ADR-053's weather delay state and alert plan, loaded
+	// from disk HERE, before the boot resume below and before any audio
+	// session is restored further down: "on boot the persisted state is
+	// loaded before anything can start audio." Unlike showMode it is never
+	// held-and-stale: a node that last heard "active" stays delayed until
+	// it is explicitly told otherwise (see weatherdelay.go's own doc
+	// comment).
+	weatherDelay := NewWeatherDelayHolder(cfg.AssetDir, logger)
 
 	// The diagnostic surface id is handed in HERE, ahead of the boot resume
 	// below, because the resume builds that surface's frame writer and the
@@ -326,7 +335,7 @@ func Run() int {
 		logger.Warn("failed to load persisted render assignments at startup; starting with none", "error", err)
 	} else {
 		for _, a := range persisted {
-			if decision := decideBootResume(a, heldCatalog, hasCatalog); !decision.Authorized {
+			if decision := decideBootResume(a, heldCatalog, hasCatalog, weatherDelay.Current().Active); !decision.Authorized {
 				logger.Warn("discarding a persisted render assignment at startup: authorization tuple did not match this node's held Cue catalog", "surface_id", a.SurfaceID, "reason", decision.Reason)
 				reason := decision.Reason
 				if err := assignmentStore.Remove(a.SurfaceID); err != nil {
@@ -389,7 +398,7 @@ func Run() int {
 	// cueAudioTrigger's own construction, near the MultiSync listener
 	// goroutine, for why this is a two-step wiring rather than a single
 	// constructor call.
-	cueAudioTrigger.SetSources(catalogStore, audioMgr, cfg.AssetDir, timeline)
+	cueAudioTrigger.SetSources(catalogStore, audioMgr, cfg.AssetDir, timeline, weatherDelay)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
 	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
 	// rebuilder so a post-bind capability detection can tell "the engine
@@ -409,7 +418,13 @@ func Run() int {
 		return !ok
 	})
 
-	if err := audioMgr.RestoreAll(sigCtx); err != nil {
+	// ADR-053: "on boot the persisted state is loaded before anything can
+	// start audio." A restored session can reach StatePlaying directly
+	// (RestoreAll's own resume-to-playing path), which is exactly the show
+	// output a weather delay active at boot must not let start.
+	if weatherDelay.Current().Active {
+		logger.Warn("skipping persisted audio session restore at startup: a weather delay is active")
+	} else if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
 	}
 	audioWatchDone := make(chan struct{})
@@ -418,6 +433,24 @@ func Run() int {
 		ticker := time.NewTicker(audioSessionWatchInterval)
 		defer ticker.Stop()
 		audioMgr.RunWatcher(sigCtx, ticker.C)
+	}()
+
+	// weatherDelayHTTP is ADR-053 decision 9's dependency set for the one
+	// signed route on the existing FPP Connect listener: the same
+	// weatherdelay.start code path the dispatched operation runs
+	// (weatherdelayops.go), and the coordinator public key this node was
+	// given to verify a signed start with, if any. loadWeatherDelayPublicKey
+	// returning nil is a valid, degraded state (ADR-025 decision 7): the
+	// route answers 503 and does nothing, logged once here rather than on
+	// every request.
+	weatherDelayPublicKey := loadWeatherDelayPublicKey(cfg.WeatherDelayCoordinatorPublicKeyPath, logger)
+	weatherDelayHTTP := weatherDelayHTTPConfig{
+		ops:       &weatherDelayOperations{holder: weatherDelay, audioMgr: audioMgr, assetDir: cfg.AssetDir},
+		publicKey: weatherDelayPublicKey,
+	}
+	go func() {
+		defer close(fppConnectHTTPDone)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, weatherDelayHTTP, logger)
 	}()
 
 	// clockMgr is Track I seam I1's PTP media clock: unconfigured until a
@@ -459,7 +492,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioReportTrigger, audioBind, catalogStore, clockBind, fppConnect, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioReportTrigger, audioBind, catalogStore, clockBind, fppConnect, weatherDelay, time.Now, logger)
 
 	// connectAndInstallCapabilityRepublish is the single call site for
 	// both constructing this node's MQTT connection and wiring
@@ -471,9 +504,9 @@ func Run() int {
 	// a prior version of this wiring lived as bare statements here with
 	// no test able to observe either one.
 	connect := func() (Conn, error) {
-		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, weatherDelay, fppConnectStatus, logger)
 	}
-	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, logger)
+	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, fppConnectStatus, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1
