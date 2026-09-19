@@ -618,6 +618,10 @@ type Dependencies struct {
 	// enforcer; nil becomes an empty cache in which every reading is unknown.
 	WeatherDelayGateCache *WeatherDelayGateCache
 
+	// WeatherDelayNotifier delivers the optional webhook in order. The
+	// caller runs it; nil becomes one that is never run.
+	WeatherDelayNotifier *WeatherDelayNotifier
+
 	// FPPObservations is the playlist-entry observation store dependency — see
 	// [FPPObservationStore]. A nil field is replaced by
 	// [noFPPObservationStore], under which GET reports an empty list and
@@ -805,6 +809,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.WeatherDelayGateCache == nil {
 		d.WeatherDelayGateCache = NewWeatherDelayGateCache()
+	}
+	if d.WeatherDelayNotifier == nil {
+		d.WeatherDelayNotifier = NewWeatherDelayNotifier(d.WeatherDelayGateCache, nil)
 	}
 	if d.WeatherDelayNodeAddrs == nil {
 		d.WeatherDelayNodeAddrs = noWeatherDelayNodeAddrs{}
@@ -2082,6 +2089,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/weather-delay/start", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayStart))
 	mux.HandleFunc("POST /api/v1/weather-delay/cancel-night", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayCancelNight))
 	mux.HandleFunc("POST /api/v1/weather-delay/resume", h.writeGuard(&scopeShowWeatherDelayResume, h.handleWeatherDelayResume))
+	mux.HandleFunc("POST /api/v1/weather-delay/presigned-start", h.writeGuard(&scopeConfigWrite, h.handleWeatherDelayPresignedStart))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

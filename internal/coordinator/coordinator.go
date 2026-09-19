@@ -657,6 +657,7 @@ func Run() int {
 	// weatherDelayGateCache is shared by the API and the enforcer loop, so
 	// GET /api/v1/weather-delay sees the enforcer's gate readings.
 	weatherDelayGateCache := api.NewWeatherDelayGateCache()
+	weatherDelayNotifier := api.NewWeatherDelayNotifier(weatherDelayGateCache, logger)
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -944,6 +945,7 @@ func Run() int {
 		// WeatherDelayGateCache is shared with the enforcer loop started
 		// below, see weatherDelayGateCache's own doc comment above.
 		WeatherDelayGateCache: weatherDelayGateCache,
+		WeatherDelayNotifier:  weatherDelayNotifier,
 		// WeatherDelayNodeAddrs: a node's address for the direct start
 		// comes from its own retained hello, never from operator config.
 		WeatherDelayNodeAddrs: inv,
@@ -1321,6 +1323,10 @@ func Run() int {
 	weatherDelayEnforcer := api.NewWeatherDelayEnforcer(apiDeps, apiOpts)
 	spawnBackground(func() {
 		weatherDelayEnforcer.Run(ctx)
+	})
+	api.ResumeWeatherDelayCancelNightShutdown(ctx, apiDeps, apiOpts)
+	spawnBackground(func() {
+		weatherDelayNotifier.Run(ctx)
 	})
 
 	// cueActivationLoop.Run owns Track H seam H4's own activation trigger

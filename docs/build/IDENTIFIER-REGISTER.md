@@ -1406,7 +1406,8 @@ The store schema version, bumped by migrations in
 | v39 | shipped | ADR-051 decisions 1 and 4: backfills audio.settings' `multisyncFallbackWindowMs` and `multisyncStartLeadMs` keys into every stored revision written before they were required (`migrateV39AudioSettingsBackfillMultisyncFields`'s own doc comment, `migration_v39.go`), the same defect class v20/v34 already fix for earlier fields |
 | v40 | shipped | owner ask 2026-09-18: adds `night_cycle_outcomes`, one row per night session cycle recording how its show ended (`nightcycleoutcome.go`'s own doc comment), so a finished cycle can be reported instead of the operator UI's placeholder. A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36/schemaV38: no existing table is touched, and a cycle that ran before this migration simply has no row |
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
-| v42+ | unallocated | free |
+| v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
+| v43+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

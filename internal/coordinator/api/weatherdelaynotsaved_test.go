@@ -182,3 +182,46 @@ func TestWeatherDelayResumeClearsAnUnsavedStart(t *testing.T) {
 		t.Fatal("a retry after resume stored the old active state")
 	}
 }
+
+// TestWeatherDelayStartOnACancelledNightResendsTheCancel proves a start while
+// the night is cancelled sends the cancel again, never a delay, and says so.
+func TestWeatherDelayStartOnACancelledNightResendsTheCancel(t *testing.T) {
+	t.Cleanup(weatherDelayCancelShutdownBackground.Wait)
+	r := newResumeHarness(t)
+	r.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, r.now)})
+	auth := map[string]string{"Authorization": "Bearer " + r.token}
+	resp, body := doRawRequest(t, r.api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/cancel-night", `{"idempotencyKey":"cancel-1"}`, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel-night: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	cancelled, err := r.st.GetWeatherDelayState(context.Background())
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	r.pub.mu.Lock()
+	retainedBefore, kindsBefore := len(r.pub.retained), len(r.pub.kinds)
+	r.pub.mu.Unlock()
+
+	result := r.start()
+
+	if result.Kind != "cancelNight" || result.Message != weatherDelayAlreadyCancelledMessage || !result.Active {
+		t.Fatalf("start result = %+v, want the active cancel and the already-cancelled sentence", result)
+	}
+	if stored, _ := r.st.GetWeatherDelayState(context.Background()); stored != cancelled {
+		t.Fatalf("stored state = %+v, want unchanged %+v", stored, cancelled)
+	}
+	r.pub.mu.Lock()
+	retained, kinds := append([][]byte(nil), r.pub.retained[retainedBefore:]...), append([]string(nil), r.pub.kinds[kindsBefore:]...)
+	r.pub.mu.Unlock()
+	if len(retained) != 1 || !strings.Contains(string(retained[0]), `"kind":"cancelNight"`) {
+		t.Fatalf("retained publishes = %q, want one cancelNight state", retained)
+	}
+	if len(kinds) == 0 {
+		t.Fatal("no node command was sent again")
+	}
+	for _, k := range kinds {
+		if k != "cancelNight" {
+			t.Fatalf("node command kinds = %v, want only cancelNight", kinds)
+		}
+	}
+}

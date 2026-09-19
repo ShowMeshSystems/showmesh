@@ -96,6 +96,41 @@ func TestStartRequestValidateRejectsResumeLikeKind(t *testing.T) {
 	}
 }
 
+func TestStartRequestValidateAcceptsNotAfterWithinCap(t *testing.T) {
+	issued := time.Now()
+	r := StartRequest{Kind: KindDelay, IssuedAt: issued, Nonce: "n1", NotAfter: issued.Add(MaxPresignValidDays * 24 * time.Hour)}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for notAfter at the cap", err)
+	}
+}
+
+func TestStartRequestValidateRejectsNotAfterBeyondCap(t *testing.T) {
+	issued := time.Now()
+	r := StartRequest{Kind: KindDelay, IssuedAt: issued, Nonce: "n1", NotAfter: issued.Add(MaxPresignValidDays*24*time.Hour + time.Second)}
+	if err := r.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for notAfter beyond the 400 day cap")
+	}
+}
+
+func TestStartRequestValidateRejectsNotAfterNotAfterIssuedAt(t *testing.T) {
+	issued := time.Now()
+	r := StartRequest{Kind: KindDelay, IssuedAt: issued, Nonce: "n1", NotAfter: issued}
+	if err := r.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for notAfter equal to issuedAt")
+	}
+	r.NotAfter = issued.Add(-time.Minute)
+	if err := r.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for notAfter before issuedAt")
+	}
+}
+
+func TestStartRequestValidateWithNoNotAfterKeepsWorking(t *testing.T) {
+	r := StartRequest{Kind: KindDelay, IssuedAt: time.Now(), Nonce: "n1"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for a request minted with no notAfter", err)
+	}
+}
+
 func TestSignedStartRequestVerify(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {

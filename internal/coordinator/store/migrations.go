@@ -177,6 +177,9 @@ var migrations = []migration{
 	// v41 (ADR-053, weather delay): adds weather_delay_state. No existing
 	// table is touched.
 	{version: 41, sql: schemaV41},
+	// v42 (ADR-053, weather delay): adds weather_delay_state.started_by_name,
+	// an operator-recognizable name beside started_by.
+	{version: 42, fn: migrateV42AddWeatherDelayStateStartedByNameColumn},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

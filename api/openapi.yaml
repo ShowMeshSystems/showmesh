@@ -6251,11 +6251,21 @@ paths:
   /weather-delay/cancel-night:
     post:
       operationId: cancelNightForWeather
-      summary: Cancel the night for weather (ADR-053) - not yet available
+      summary: Cancel the night for weather (ADR-053)
       description: >-
         Behind `show:weatherdelay:invoke`, the same umbrella scope as
         `/weather-delay/start` (ADR-053 decision 1: both are one press,
-        both are API-first). Always answers `501` today.
+        both are API-first, and a delay can be changed to a cancel while
+        active). Same mechanism as start: the state is persisted first
+        (kind cancelNight), then the same concurrent stop fan-out and node
+        dispatch. An already-active delay is changed to a cancel in
+        place - a new revision, `startedAt` unchanged. An already-active
+        cancel is idempotent. Once cancelled, this route cannot turn it
+        back into a mere delay; only /weather-delay/resume clears it.
+        After the cancel alert finishes on the plan's own nodes (or a
+        ceiling passes), the coordinator runs the same graceful night
+        shutdown emergency stop's stop-power-down level does, in the
+        background.
       requestBody:
         required: true
         content:
@@ -6263,6 +6273,15 @@ paths:
             schema:
               $ref: "#/components/schemas/WeatherDelayActionRequest"
       responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherDelayActionResponse"
         "400":
           $ref: "#/components/responses/InvalidParameter"
         "401":
@@ -6271,15 +6290,47 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
-        "501":
-          description: Not implemented yet.
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /weather-delay/presigned-start:
+    post:
+      operationId: presignWeatherDelayStart
+      summary: Mint a pre-signed weather-delay start (ADR-053 decision 8)
+      description: >-
+        Behind `config:write`. Returns a signed start request an outside
+        system can hold and POST directly to a node's own inbound
+        listener when this coordinator is down, plus every node URL it
+        can be sent to today (advisory, not a promise: an installation's
+        plan nodes can change). validDays sets an explicit notAfter; a
+        node accepts the request until then and rejects it afterward
+        (at most 400 days from issuedAt). Replaying it can only start a
+        delay or a cancel night, never a resume.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WeatherDelayPresignedStartRequest"
+      responses:
+        "200":
+          description: OK
           headers:
             ShowMesh-API-Version:
               $ref: "#/components/headers/ShowMesh-API-Version"
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
+                $ref: "#/components/schemas/WeatherDelayPresignedStartResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /weather-delay/resume:
     post:
       operationId: resumeFromWeatherDelay
@@ -14591,11 +14642,23 @@ components:
         startedBy:
           type: string
           description: An operator principal id, or a configured trigger source name.
+        startedByName:
+          type: string
+          description: >-
+            An operator-recognizable name for startedBy: a principal's
+            login or token label, or a trigger source name. Absent for a
+            state written before this field existed.
         revision:
           type: integer
           description: >-
             Monotonic per change. Fits a JS safe integer - never derived
             from a timestamp.
+        lastNotifyError:
+          type: string
+          description: >-
+            The optional show.weatherdelay.notify webhook's own most
+            recent delivery failure, if any (ADR-053 decision 13). Absent
+            when the last delivery succeeded, or none was ever attempted.
         assets:
           type: array
           description: >-
@@ -14732,6 +14795,9 @@ components:
           format: date-time
         startedBy:
           type: string
+        startedByName:
+          type: string
+          description: An operator-recognizable name for startedBy.
         revision:
           type: integer
         targets:
@@ -14748,6 +14814,11 @@ components:
         notSavedMessage:
           type: string
           description: The operator sentence for notSaved. Present only when notSaved is true.
+        message:
+          type: string
+          description: >-
+            Start only. Present when the night was already cancelled: the
+            cancel was sent again and nothing was changed to a delay.
     WeatherDelayActionResponse:
       type: object
       description: The body of POST /weather-delay/start and /weather-delay/resume.
@@ -14758,6 +14829,68 @@ components:
           format: date-time
         result:
           $ref: "#/components/schemas/WeatherDelayActionResult"
+    WeatherDelayPresignedStartRequest:
+      type: object
+      description: The body of POST /weather-delay/presigned-start.
+      required: [kind, validDays]
+      properties:
+        kind:
+          type: string
+          enum: [delay, cancelNight]
+        validDays:
+          type: integer
+          minimum: 1
+          maximum: 400
+          description: How many days from issuedAt this presigned start stays acceptable to a node.
+    WeatherDelaySignedStartRequestBody:
+      type: object
+      description: >-
+        The pre-signed request itself (pkg/weatherdelay.StartRequest): what
+        a node verifies and, on success, acts on.
+      required: [kind, issuedAt, nonce]
+      properties:
+        kind:
+          type: string
+          enum: [delay, cancelNight]
+        issuedAt:
+          type: string
+          format: date-time
+        nonce:
+          type: string
+        notAfter:
+          type: string
+          format: date-time
+          description: >-
+            When this request stops being acceptable. Absent means the
+            node's own fixed 24 hour age rule applies instead.
+    WeatherDelaySignedStartRequest:
+      type: object
+      description: "pkg/weatherdelay.SignedStartRequest: the signed document a node verifies."
+      required: [request, signature]
+      properties:
+        request:
+          $ref: "#/components/schemas/WeatherDelaySignedStartRequestBody"
+        signature:
+          type: string
+          description: base64-encoded Ed25519 signature over the request's canonical bytes.
+    WeatherDelayPresignedStartResponse:
+      type: object
+      description: The body of POST /weather-delay/presigned-start.
+      required: [serverTime, request, nodeUrls]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        request:
+          $ref: "#/components/schemas/WeatherDelaySignedStartRequest"
+        nodeUrls:
+          type: array
+          items:
+            type: string
+          description: >-
+            Every plan node's own reported inbound listener address, as a
+            full URL to POST the signed request to. Advisory, not a
+            promise: an installation's plan nodes can change.
     ConfigWeatherDelayAlertPayload:
       type: object
       description: >-
@@ -14833,6 +14966,22 @@ components:
           type: integer
           minimum: 0
           maximum: 1440
+    ConfigWeatherDelayNotifyPayload:
+      type: object
+      description: >-
+        The optional webhook (ADR-053 decision 13). Empty webhookUrl means
+        none is configured. When set, the coordinator POSTs a small JSON
+        document on delay started, changed to cancel night, cancel night
+        started, resumed, or cleared: best effort, a 3 second timeout, no
+        redirects, and it never blocks or fails the operator's own
+        request. A failure only shows up as GET /weather-delay's own
+        lastNotifyError.
+      properties:
+        webhookUrl:
+          type: string
+          description: >-
+            An absolute http or https URL with no embedded username or
+            password, at most 2048 characters.
     ConfigWeatherDelayPayload:
       type: object
       description: >-
@@ -14851,6 +15000,8 @@ components:
             $ref: "#/components/schemas/ConfigWeatherDelayPowerGroupPayload"
         triggers:
           $ref: "#/components/schemas/ConfigWeatherDelayTriggersPayload"
+        notify:
+          $ref: "#/components/schemas/ConfigWeatherDelayNotifyPayload"
     WeatherDelayConfigResponse:
       type: object
       description: >-
@@ -19754,6 +19905,8 @@ components:
           type: string
           format: date-time
         startedBy:
+          type: string
+        startedByName:
           type: string
         revision:
           type: integer

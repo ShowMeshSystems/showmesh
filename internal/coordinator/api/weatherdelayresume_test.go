@@ -26,6 +26,7 @@ type recordingWeatherDelayPublisher struct {
 	retained  [][]byte
 	cmdTopics []string
 	actions   []string
+	kinds     []string
 }
 
 func (p *recordingWeatherDelayPublisher) Publish(_ context.Context, topic string, _ byte, _ bool, payload []byte) error {
@@ -41,12 +42,16 @@ func (p *recordingWeatherDelayPublisher) AwaitResponse(_ context.Context, req br
 	var env struct {
 		Payload struct {
 			Action string `json:"action"`
+			Params struct {
+				Kind string `json:"kind"`
+			} `json:"params"`
 		} `json:"payload"`
 	}
 	_ = json.Unmarshal(req.PublishPayload, &env)
 	p.mu.Lock()
 	p.cmdTopics = append(p.cmdTopics, req.PublishTopic)
 	p.actions = append(p.actions, env.Payload.Action)
+	p.kinds = append(p.kinds, env.Payload.Params.Kind)
 	p.mu.Unlock()
 	return broker.Message{}, broker.ErrResponseDeadlineExceeded
 }

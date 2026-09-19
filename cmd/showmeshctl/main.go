@@ -305,10 +305,16 @@ Commands:
   emergency-stop config revisions     list show.emergencystop revision history, newest first
   weather-delay start                 start a weather delay: nothing starts output until resumed
                                        (write, requires show:weatherdelay:invoke, no confirmation)
+  weather-delay cancel-night          cancel the night for weather: the show will not resume
+                                       (write, requires show:weatherdelay:invoke, no confirmation)
   weather-delay resume                resume from an active weather delay (write, requires
                                        show:weatherdelay:resume, a separate scope from start)
+  weather-delay clear                 clear a cancelled night; does not restart the show (write,
+                                       requires show:weatherdelay:resume)
   weather-delay status                report the current state and each plan node's own alert
                                        asset readiness
+  weather-delay presign               mint a pre-signed start an outside system can hold and send
+                                       to a node directly (write, requires config:write)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports
