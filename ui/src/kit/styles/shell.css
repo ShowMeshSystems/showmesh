@@ -377,6 +377,12 @@
   white-space: nowrap;
 }
 
+/* The banner already fills with the bad tone, so a not-dark chip inverts to stand out. */
+.sm-wdbanner .sm-status--bad {
+  background: var(--bad-fg);
+  color: var(--bad-bg);
+}
+
 .sm-wdbanner__group-reason {
   flex-basis: 100%;
   margin: 0;

@@ -396,7 +396,8 @@ export function Specimen() {
               elapsedLabel="Started 6 m 12 s ago"
               startedByLabel="Started by operator"
               groups={[
-                { id: 'stage', label: 'Stage lighting', confirmedLabel: 'Confirmed dark, since 4 m 50 s ago' },
+                { id: 'stage', label: 'Stage lighting', confirmedLabel: 'Confirmed dark for 4 m' },
+                { id: 'trees', label: 'Trees', unknownLabel: 'Dark not confirmed, could not refresh' },
                 {
                   id: 'projection',
                   label: 'Projection',

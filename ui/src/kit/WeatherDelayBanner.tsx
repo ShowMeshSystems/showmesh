@@ -14,8 +14,10 @@ export type WeatherDelayBannerAction = {
 export type WeatherDelayGroupView = {
   id: string
   label: string
-  /** Set when confirmedDark is true: e.g. "Confirmed dark, since 4 m 12 s ago". */
+  /** Set when confirmedDark is true: e.g. "Confirmed dark for 4 m". */
   confirmedLabel?: string
+  /** Set when the group's state cannot be trusted, e.g. after a failed read. Never rendered as dark. */
+  unknownLabel?: string
   /** Set when confirmedDark is false: the not-dark members, each with the API's own reason sentence verbatim. */
   notDarkMembers?: Array<{ label: string; reason: string }>
 }
@@ -61,7 +63,9 @@ export function WeatherDelayBanner({
           {groups.map((group) => (
             <div className="sm-wdbanner__group" key={group.id}>
               <span className="sm-wdbanner__group-label">{group.label}</span>
-              {group.confirmedLabel !== undefined ? (
+              {group.unknownLabel !== undefined ? (
+                <StatusPair tone="unknown" label={group.unknownLabel} />
+              ) : group.confirmedLabel !== undefined ? (
                 <StatusPair tone="good" label={group.confirmedLabel} />
               ) : (
                 <>
@@ -107,11 +111,8 @@ export function WeatherDelayBanner({
 }
 
 /**
- * The shell-level, non-dismissible banner shown on every screen while
- * players are held dark with no weather delay or cancel-night active
- * (ADR-053: a gate left closed, e.g. by a coordinator restart during a
- * delay). Never claims a delay is active; Resume is the same action that
- * opens the gate during an active delay.
+ * The shell-level banner shown on every screen while players are held dark with
+ * no delay active. It never claims a delay is active; Resume opens the gates.
  */
 export function WeatherDelayHeldBanner({
   messages,

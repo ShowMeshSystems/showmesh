@@ -60,15 +60,16 @@ const WEATHER_DELAY_MEMBER_KIND_LABEL: Record<'fpp' | 'resolume' | 'render', str
   render: 'render surface',
 }
 
-/** Builds this banner's own presentation shape from a power group's raw status, so the component itself stays a pure layout with no API knowledge. */
-function weatherDelayGroupView(group: WeatherDelayPowerGroupStatus, nowIso: string | null): WeatherDelayGroupView {
+/** Builds this banner's own presentation shape from a power group's raw status. A stale read never shows a group as confirmed dark. */
+function weatherDelayGroupView(group: WeatherDelayPowerGroupStatus, nowIso: string | null, stale: boolean): WeatherDelayGroupView {
   const label = group.label !== undefined && group.label !== '' ? group.label : group.id
+  if (group.confirmedDark && stale) return { id: group.id, label, unknownLabel: 'Dark not confirmed, could not refresh' }
   if (group.confirmedDark) {
     const sinceAge = group.since === undefined ? null : ageMs(group.since, nowIso)
     return {
       id: group.id,
       label,
-      confirmedLabel: sinceAge === null ? 'Confirmed dark' : `Confirmed dark, since ${formatDuration(sinceAge)} ago`,
+      confirmedLabel: sinceAge === null ? 'Confirmed dark' : `Confirmed dark for ${formatDuration(Math.max(0, sinceAge))}`,
     }
   }
   return {
@@ -84,10 +85,8 @@ function weatherDelayGroupView(group: WeatherDelayPowerGroupStatus, nowIso: stri
 }
 
 /**
- * ADR-053: the non-dismissible banner on every screen while a weather delay
- * or cancel-night is active, or while players are held dark with no delay
- * active. A failed read never hides an active banner: it says the state is
- * unknown. Elapsed time ticks off the server-corrected clock.
+ * ADR-053: the non-dismissible banner on every screen while a delay, a cancel-night
+ * or held players are reported. A failed read never hides it or shows a group as dark.
  */
 function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authenticated: boolean }) {
   const weatherDelay = useWeatherDelay()
@@ -172,7 +171,7 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
           ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
         }
       : undefined
-  const groups = (response.powerGroups ?? []).map((group) => weatherDelayGroupView(group, nowIso))
+  const groups = (response.powerGroups ?? []).map((group) => weatherDelayGroupView(group, nowIso, readFailure !== null))
 
   return (
     <WeatherDelayBanner
