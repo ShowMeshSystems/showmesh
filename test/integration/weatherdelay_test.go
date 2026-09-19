@@ -38,10 +38,8 @@ import (
 // unit-tested in isolation on its own branch. Nothing before this file
 // proved the pieces are wired together against real processes.
 //
-// Scenario 6 (cancel-night) is built only if POST
-// /api/v1/weather-delay/cancel-night is actually implemented on the
-// coordinator binary this run resolves; see TestWeatherDelayCancelNight's
-// own doc comment.
+// Scenario 6 exercises POST /api/v1/weather-delay/cancel-night and the
+// graceful night shutdown it schedules behind its own alert.
 
 // weatherDelayAlertSessionIDForTest mirrors internal/agent/weatherdelayops.go's
 // unexported weatherDelayAlertSessionID constant ("weatherdelay:alert").
@@ -1169,41 +1167,97 @@ func TestWeatherDelayHeldPlayer(t *testing.T) {
 
 // --- Scenario 6: cancel night ---
 
-// weatherDelayCancelNightAvailable reports whether POST
-// /api/v1/weather-delay/cancel-night is actually implemented on the
-// coordinator binary this run resolves, by calling it against a coordinator
-// with no delay active and checking whether the response is the fixed
-// "not available yet" refusal handleWeatherDelayNotImplemented returns
-// (internal/coordinator/api/weatherdelay.go) rather than a genuine
-// cancel-night outcome.
-func weatherDelayCancelNightAvailable(t *testing.T, coord *testCoordinator, token string) bool {
+// weatherDelayParseTime parses an RFC 3339 timestamp the API answered with.
+func weatherDelayParseTime(t *testing.T, value string) time.Time {
 	t.Helper()
-	status, body := postRawWithToken(t, coord, "/api/v1/weather-delay/cancel-night", token, map[string]string{"idempotencyKey": "wd-probe-" + uniqueSuffix()})
-	if status == http.StatusNotImplemented && strings.Contains(string(body), "is not available yet on this coordinator") {
-		return false
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatalf("parse timestamp %q: %v", value, err)
 	}
-	return true
+	return parsed
+}
+
+// weatherDelayLatestEventSeq reads GET /api/v1/events' own latestSeq, so a
+// later read can ask only for events appended after this moment.
+func weatherDelayLatestEventSeq(t *testing.T, coord *testCoordinator) uint64 {
+	t.Helper()
+	_, latest := weatherDelayEventsSince(t, coord, 0)
+	return latest
+}
+
+// weatherDelayEventsSince returns every event summary appended after since,
+// with the newest latestSeq the coordinator reports.
+func weatherDelayEventsSince(t *testing.T, coord *testCoordinator, since uint64) (summaries []string, latest uint64) {
+	t.Helper()
+	status, body := coord.getRaw(t, fmt.Sprintf("/api/v1/events?since=%d", since))
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/v1/events?since=%d: status = %d, want 200; body: %s", since, status, body)
+	}
+	var resp struct {
+		Events    []v1.Event `json:"events"`
+		LatestSeq uint64     `json:"latestSeq"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode GET /api/v1/events: %v; body: %s", err, body)
+	}
+	for _, e := range resp.Events {
+		summaries = append(summaries, e.Summary)
+	}
+	return summaries, resp.LatestSeq
+}
+
+// weatherDelayNightShutdownRan reports whether the graceful night shutdown
+// cancel-night runs after its alert has appended its own event. Both of its
+// outcomes count: this rig has no night session running, so the shutdown
+// reports that there was nothing to shut down.
+func weatherDelayNightShutdownRan(t *testing.T, coord *testCoordinator, since uint64) bool {
+	t.Helper()
+	summaries, _ := weatherDelayEventsSince(t, coord, since)
+	for _, s := range summaries {
+		if strings.Contains(s, "no show was running") || strings.Contains(s, "shutting down for the night") {
+			return true
+		}
+	}
+	return false
+}
+
+// alertPlaylistRevision returns the alert session's current playlist
+// revision, which the node stamps afresh every time it builds an alert. A
+// change means the node loaded a DIFFERENT alert, not that it kept playing
+// the one it had.
+func alertPlaylistRevision(t *testing.T, sub *audioReportSubscriber) uint64 {
+	t.Helper()
+	p, ok := sub.latestFor(weatherDelayAlertSessionIDForTest)
+	if !ok || !p.HasPlaylist {
+		t.Fatalf("no alert session playlist reported for %s", weatherDelayAlertSessionIDForTest)
+	}
+	return p.PlaylistRevision
 }
 
 // TestWeatherDelayCancelNight proves ADR-053 decisions 1 and 11's
-// cancel-night path: switching to the cancel alert without disturbing the
-// original start time, running graceful shutdown only after the alert
-// ends, refusing a night start with the cancelled sentence, and starting
-// nothing on a later clear. It is only exercised against a coordinator
-// binary that actually implements POST weather-delay/cancel-night; see
-// weatherDelayCancelNightAvailable. As of this file's own HEAD,
-// internal/coordinator/api/weatherdelay.go's handleWeatherDelayCancelNight
-// is still handleWeatherDelayNotImplemented's stub, so this test currently
-// skips with that route's own exact refusal text.
+// cancel-night path against the real coordinator: a delay changes to a
+// cancel in place with its start time kept, the node switches to the cancel
+// alert, a night start is refused with the cancelled sentence, a delay start
+// does not downgrade the cancellation, clearing it starts nothing, and the
+// graceful night shutdown runs only once the cancel alert has ended.
+//
+// The shutdown's wait is proved against a cancel pressed with no alert
+// already loaded on the node. A cancel that REPLACES an alert the node has
+// already loaded runs most of its own alert's items through without playing
+// them, so against that press the wait would be unobservable rather than
+// absent. That is a product defect, recorded in the pull request's
+// acceptance gaps, not a property this test asserts.
 func TestWeatherDelayCancelNight(t *testing.T) {
 	f := newWeatherDelayFixture(t, 0)
-	if !weatherDelayCancelNightAvailable(t, f.coord, f.token) {
-		t.Skip(`POST /api/v1/weather-delay/cancel-night is not available yet: the coordinator answers 501 "cancelling the night for weather is not available yet on this coordinator" (internal/coordinator/api/weatherdelay.go's handleWeatherDelayCancelNight is still a stub)`)
-	}
 
-	cancelAssetID := uploadWeatherDelayAlertAsset(t, f.coord, f.token, f.showID, "cancel-alert", f.nodeID, 0.3)
+	// A cancel alert of about twelve seconds. The shutdown watcher polls
+	// every two seconds, so a shorter alert would let the shutdown run
+	// before this test could observe that it had not yet.
+	cancelAssetID := uploadWeatherDelayAlertAsset(t, f.coord, f.token, f.showID, "cancel-alert", f.nodeID, 4)
 	putWeatherDelayConfig(t, f.coord, f.token, v1.ConfigWeatherDelayPayload{
-		Alert:       v1.ConfigWeatherDelayAlertPayload{DelayAssetID: f.assetID, CancelNightAssetID: cancelAssetID, RepeatCount: 10, NodeIDs: []string{f.nodeID}},
+		Alert: v1.ConfigWeatherDelayAlertPayload{
+			DelayAssetID: f.assetID, CancelNightAssetID: cancelAssetID, RepeatCount: 3, NodeIDs: []string{f.nodeID},
+		},
 		PowerGroups: []v1.ConfigWeatherDelayPowerGroupPayload{weatherDelayPowerGroupPayload(f.groupID, f.fppID)},
 		Triggers:    weatherDelayDefaultTriggers(),
 	})
@@ -1220,14 +1274,84 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 	audioSub := subscribeAudioReports(t, f.nodeID)
 	startResp := weatherDelayStartAction(t, f.coord, f.token)
 	waitForNodeAlertSession(t, audioSub, "playing")
+	delayAlertRevision := alertPlaylistRevision(t, audioSub)
 
 	cancelResp := weatherDelayAction(t, f.coord, f.token, "/api/v1/weather-delay/cancel-night")
-	if cancelResp.Result.StartedAt != startResp.Result.StartedAt {
-		t.Fatalf("cancel-night changed startedAt: was %q, now %q, want unchanged", startResp.Result.StartedAt, cancelResp.Result.StartedAt)
+	if cancelResp.Result.Kind != "cancelNight" {
+		t.Fatalf("cancel-night: Kind = %q, want %q", cancelResp.Result.Kind, "cancelNight")
 	}
+	// Compared as instants, not as strings: start answers from the record it
+	// just built, in this coordinator's local zone, and cancel-night answers
+	// from the same record read back out of the database, in UTC. Same
+	// moment, two renderings.
+	if !weatherDelayParseTime(t, cancelResp.Result.StartedAt).Equal(weatherDelayParseTime(t, startResp.Result.StartedAt)) {
+		t.Fatalf("cancel-night changed startedAt: was %q, now %q, want the same moment (ADR-053 decision 1 changes a delay in place)", startResp.Result.StartedAt, cancelResp.Result.StartedAt)
+	}
+	if cancelResp.Result.Revision <= startResp.Result.Revision {
+		t.Fatalf("cancel-night revision = %d, want greater than the delay's %d so nodes act on it", cancelResp.Result.Revision, startResp.Result.Revision)
+	}
+
+	// The node loads the cancel alert on the same session: a new playlist
+	// revision carrying cancelNight items, not the delay alert still there.
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		return ok && p.HasPlaylist && p.PlaylistRevision > delayAlertRevision && strings.HasPrefix(p.ItemID, "cancelNight-")
+	}, "the node to switch to the cancel-night alert rather than keep the delay alert loaded")
 
 	status, body := postRawWithToken(t, f.coord, "/api/v1/night/commands/start-night", f.token, map[string]string{"idempotencyKey": "wd-" + uniqueSuffix()})
 	if status != http.StatusConflict {
 		t.Fatalf("night start after cancel-night: status = %d, want 409; body: %s", status, body)
 	}
+	if !strings.Contains(string(body), "Tonight's show was cancelled for weather. Clear the cancellation to start a show.") {
+		t.Fatalf("night-start refusal after cancel-night missing the cancelled sentence: %s", body)
+	}
+
+	// A delay start while the night is cancelled re-affirms the cancel and
+	// never downgrades it.
+	again := weatherDelayStartAction(t, f.coord, f.token)
+	if again.Result.Kind != "cancelNight" {
+		t.Fatalf("a delay start while cancelled returned kind %q, want %q; ADR-053 decision 11 keeps the cancellation set", again.Result.Kind, "cancelNight")
+	}
+	if !strings.Contains(again.Result.Message, "The night is already cancelled") {
+		t.Fatalf("a delay start while cancelled returned message %q, want the already-cancelled sentence", again.Result.Message)
+	}
+	if st := weatherDelayState(t, f.coord); !st.Active || st.Kind != "cancelNight" {
+		t.Fatalf("stored state after a delay start while cancelled: active = %v, kind = %q, want active cancelNight", st.Active, st.Kind)
+	}
+
+	// Clearing the cancellation starts nothing: the player is never told to
+	// play and never reports playing again on its own.
+	startPlaylistBefore := f.stub.commandCount("Start Playlist")
+	weatherDelayResumeAction(t, f.coord, f.token)
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		return !weatherDelayState(t, f.coord).Active
+	}, "the coordinator to report nothing active once the cancellation is cleared")
+	time.Sleep(3 * time.Second)
+	if n := f.stub.commandCount("Start Playlist"); n != startPlaylistBefore {
+		t.Fatalf("the stand-in FPP player received %d Start Playlist command(s) after the cancellation was cleared, want %d; ADR-053 decision 11 says clearing starts nothing", n, startPlaylistBefore)
+	}
+	if got := f.stub.currentStatusName(); got != "idle" {
+		t.Fatalf("the stand-in FPP player reports %q after the cancellation was cleared, want idle; clearing starts nothing", got)
+	}
+
+	// The graceful night shutdown waits for the cancel alert. The clear above
+	// stopped the alert session, so this cancel's own alert plays in full.
+	sinceSeq := weatherDelayLatestEventSeq(t, f.coord)
+	weatherDelayAction(t, f.coord, f.token, "/api/v1/weather-delay/cancel-night")
+	waitForNodeAlertSession(t, audioSub, "playing")
+	if weatherDelayNightShutdownRan(t, f.coord, sinceSeq) {
+		t.Fatalf("the graceful night shutdown ran while the cancel alert was still playing; ADR-053 decision 11 runs it only after the alert ends")
+	}
+	if p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest); !ok || p.State != "playing" {
+		t.Fatalf("the cancel alert was no longer playing (report present: %v, state %q) when the shutdown was checked, so that check proved nothing", ok, p.State)
+	}
+	waitFor(t, 60*time.Second, 200*time.Millisecond, func() bool {
+		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		return ok && p.State != "playing"
+	}, "the cancel-night alert to finish its own repeat count")
+	waitFor(t, 60*time.Second, 500*time.Millisecond, func() bool {
+		return weatherDelayNightShutdownRan(t, f.coord, sinceSeq)
+	}, "the graceful night shutdown to run once the cancel alert has ended")
+
+	weatherDelayResumeAction(t, f.coord, f.token)
 }
