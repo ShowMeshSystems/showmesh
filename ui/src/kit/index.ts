@@ -26,4 +26,5 @@ export {
   ShellBody,
   type Connection,
 } from './Shell'
+export { Workbench } from './Workbench'
 export { TONE_GLYPH, type Tone } from './tone'

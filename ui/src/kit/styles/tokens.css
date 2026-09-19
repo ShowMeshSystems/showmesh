@@ -77,7 +77,7 @@
   --chrome-h: 46px;
   /* Content is fluid: it fills the column and caps at a generous max so an
      ultrawide keeps a sane measure. Set here only; no screen overrides it. */
-  --page-max: min(1600px, 100%);
+  --page-max: min(2240px, 100%);
 }
 
 [data-density='compact'] {

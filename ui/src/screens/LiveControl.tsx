@@ -58,6 +58,7 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  ConfirmDialog,
   DefinitionStrip,
   Drawer,
   Field,
@@ -72,6 +73,7 @@ import {
   Table,
   TableWrap,
   Textarea,
+  Workbench,
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
@@ -334,12 +336,21 @@ export function LiveControl() {
   const [startRepeat, setStartRepeat] = useState(false)
   const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
   const [emergencyOutcome, setEmergencyOutcome] = useState<EmergencyOutcomeState | null>(null)
   const [emergencyBusy, setEmergencyBusy] = useState<EmergencyLevel | false>(false)
   const [hardStopArm, setHardStopArm] = useState<{ armToken: string; expiresAt: string } | null>(null)
   const [hardStopArmBusy, setHardStopArmBusy] = useState(false)
   const [hardStopArmError, setHardStopArmError] = useState<string | null>(null)
   const [armTick, setArmTick] = useState(0)
+  const [resolumeBlackoutOutcome, setResolumeBlackoutOutcome] = useState<ResolumeActionResult | null>(null)
+  const [resolumeBlackoutError, setResolumeBlackoutError] = useState<string | null>(null)
+  const runResolumeBlackout = useCallback(() => {
+    setResolumeBlackoutError(null)
+    blackoutResolume()
+      .then(setResolumeBlackoutOutcome)
+      .catch((err: unknown) => setResolumeBlackoutError(describeApiError(err)))
+  }, [])
 
   const macros = useConfigList('show.macro', show)
   const actions = useConfigList('show.action', show)
@@ -458,9 +469,172 @@ export function LiveControl() {
     if (reportedPlaylistNow !== null) setStartPlaylistName((current) => (current === '' ? reportedPlaylistNow : current))
   }, [reportedPlaylistNow])
 
+  const outputsSection = (
+      <Section
+        id="lc-outputs"
+        title="What each output is doing"
+        aside={<span className="sm-small sm-muted">As each output last reported it</span>}
+      >
+        {runsAbsence !== null && (
+          <RuledStrip
+            absence={runsAbsence}
+            label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
+            fact={
+              runsAbsence === 'unavailable'
+                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
+                : 'Reading current-run state for program audio.'
+            }
+          />
+        )}
+        {rows.length === 0 ? (
+          <RuledStrip
+            absence="unobserved"
+            label="Unobserved"
+            fact="No output has reported what it is doing."
+            detail="No render or audio observation has reached this coordinator. That is not the same as nothing running."
+          />
+        ) : (
+          <>
+            <TableWrap label="Outputs, scrollable">
+              <Table minWidth={600}>
+                <thead>
+                  <tr>
+                    <th scope="col">Output</th>
+                    <th scope="col">Doing what</th>
+                    <th scope="col" className="sm-lc-output-when">Last confirmed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.key}>
+                      <td>
+                        <span className="sm-data">{row.name}</span>
+                        <br />
+                        <span className="sm-small sm-faint">{row.where}</span>
+                      </td>
+                      <td>
+                        {row.doing}
+                        {row.content !== null && (
+                          <>
+                            {' '}
+                            <span className="sm-data">{row.content}</span>
+                          </>
+                        )}
+                      </td>
+                      <td className="sm-lc-output-when">
+                        <StatusPair tone={row.tone} label={row.evidence} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+            <p className="sm-section__footnote">
+              {confirmed} of {rows.length} outputs confirm what they are doing.
+              {confirmed < rows.length && ` ${rows.length - confirmed} cannot be verified right now.`}
+            </p>
+          </>
+        )}
+        <div className="sm-lc-output-audio">
+          <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
+        </div>
+      </Section>
+  )
+  const emergencySection = (
+      <Section id="lc-emergency" title="Emergency stop">
+        <div className="sm-lc-emergency">
+          <ButtonRow>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? 'Stops every configured FPP instance and any configured stop actions, such as stopping audio or blacking out Resolume.' : emergencyGate.reason}
+              onClick={() => {
+                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
+                runEmergencyStop('stop', emergencyStop)
+              }}
+            >
+              Stop
+            </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? 'Stop, plus forces an active night session into its power-down sequence immediately.' : emergencyGate.reason}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
+                  )
+                )
+                  return
+                runEmergencyStop('stop-power-down', emergencyStopPowerDown)
+              }}
+            >
+              Stop and power down
+            </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!resolumeGate.allowed}
+              title={resolumeGate.allowed ? 'Blacks out Resolume immediately, without stopping FPP.' : resolumeGate.reason}
+              onClick={runResolumeBlackout}
+            >
+              Resolume blackout
+            </Button>
+              <Button
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArmBusy}
+                title={emergencyGate.allowed ? 'Hard stop does everything Stop and power down does, plus abandons an active night session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it.' : emergencyGate.reason}
+                onClick={armHardStop}
+              >
+                Arm hard stop
+              </Button>
+              <Button
+                variant="danger"
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
+                title={
+                  !emergencyGate.allowed
+                    ? emergencyGate.reason
+                    : hardStopArm === null
+                      ? 'Arm hard stop first.'
+                      : armExpired
+                        ? 'The arm token expired. Arm again, then fire promptly.'
+                        : undefined
+                }
+                onClick={fireHardStop}
+              >
+                Fire hard stop
+              </Button>
+          </ButtonRow>
+          {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
+          {hardStopArm !== null && armRemainingMs !== null && (
+            <Notice
+              tone="warn"
+              live="status"
+              headline={
+                armExpired
+                  ? 'The arm token expired. Arm again, then fire promptly.'
+                  : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
+              }
+            />
+          )}
+          {resolumeBlackoutOutcome !== null && <ResolumeOutcome result={resolumeBlackoutOutcome} />}
+          {resolumeBlackoutError !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={resolumeBlackoutError} />}
+
+          <EmergencyStopOutcome outcome={emergencyOutcome} />
+        </div>
+      </Section>
+  )
   return (
     <>
       <PageHeader />
+
+      <Workbench
+        sideLabel="Emergency stop and output status"
+        side={<>{emergencySection}{outputsSection}</>}
+        main={<>
 
       <Section
         id="lc-transport"
@@ -517,7 +691,7 @@ export function LiveControl() {
             <div className="sm-lc-transport__body">
               <div className="sm-lc-transport__playlist-row">
                 {selectablePlaylistNames.length > 0 ? (
-                  <Field label="Playlist" help="Imported FPP playlist definitions.">
+                  <Field label="Playlist">
                     {(field) => (
                       <Select {...field} value={startPlaylistName} onChange={(event) => setStartPlaylistName(event.target.value)}>
                         <option value="">Choose a playlist</option>
@@ -606,228 +780,66 @@ export function LiveControl() {
                   <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
                     <span aria-hidden="true">■ </span>Stop now
                   </Button>
+                  <ButtonRule />
+                  <Input
+                    aria-label="Volume, 0 to 100"
+                    className="sm-lc-volume-input"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={volume}
+                    placeholder={state.volume === null ? 'Vol' : String(state.volume)}
+                    title={state.volume === null ? 'This instance does not report its volume.' : 'Volume, 0 to 100'}
+                    onChange={(event) => setVolume(event.target.value)}
+                  />
+                  <Button
+                    size="gloved"
+                    disabled={!commandGate.allowed || volume.trim() === ''}
+                    title={commandGate.allowed ? undefined : commandGate.reason}
+                    onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
+                  >
+                    Set volume
+                  </Button>
                 </ButtonRow>
-              </div>
-              <div className="sm-lc-transport__volume-row">
-                <Field label="Volume" help={state.volume === null ? 'This instance does not report its volume.' : '0-100.'}>
-                  {(field) => (
-                    <Input
-                      {...field}
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={volume}
-                      placeholder={state.volume === null ? '' : String(state.volume)}
-                      onChange={(event) => setVolume(event.target.value)}
-                    />
-                  )}
-                </Field>
-                <Button
-                  disabled={!commandGate.allowed || volume.trim() === ''}
-                  title={commandGate.allowed ? undefined : commandGate.reason}
-                  onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
-                >
-                  Apply
-                </Button>
               </div>
               <Outcome outcome={outcome} />
             </div>
           </div>
         )}
-        <p className="sm-small sm-muted">
-          <strong>Stop now</strong> halts this player only; projection and audio hold their last state until their own
-          cues run.
-        </p>
       </Section>
 
-      <Section
-        id="lc-emergency"
-        title="Emergency stop"
-        detail="Stops every configured FPP instance, independent of which one is selected above, plus any stop actions your site configured for this level, such as stopping audio or blacking out Resolume. The Resolume blackout button below fires that same blackout, not a separate one."
-      >
-        <div className="sm-lc-emergency">
-          <ButtonRow>
-            <Button
-              variant="danger"
-              size="gloved"
-              disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-              onClick={() => {
-                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
-                runEmergencyStop('stop', emergencyStop)
-              }}
-            >
-              Stop
-            </Button>
-            <Button
-              variant="danger"
-              size="gloved"
-              disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
-                  )
-                )
-                  return
-                runEmergencyStop('stop-power-down', emergencyStopPowerDown)
-              }}
-            >
-              Stop and power down
-            </Button>
-          </ButtonRow>
-          <p className="sm-small sm-muted">
-            <strong>Stop</strong> halts every configured FPP instance, plus any stop actions your site configured for
-            this level, such as stopping audio or blacking out Resolume. <strong>Stop and power down</strong> does the
-            same, plus forces an active night session into the standard power-down sequence immediately rather than
-            waiting for it.
-          </p>
-
-          <div className="sm-lc-emergency__hardstop">
-            <ButtonRow>
-              <Button
-                size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArmBusy}
-                title={emergencyGate.allowed ? undefined : emergencyGate.reason}
-                onClick={armHardStop}
-              >
-                Arm hard stop
-              </Button>
-              <Button
-                variant="danger"
-                size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
-                title={
-                  !emergencyGate.allowed
-                    ? emergencyGate.reason
-                    : hardStopArm === null
-                      ? 'Arm hard stop first.'
-                      : armExpired
-                        ? 'The arm token expired. Arm again, then fire promptly.'
-                        : undefined
-                }
-                onClick={fireHardStop}
-              >
-                Fire hard stop
-              </Button>
-            </ButtonRow>
-            {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
-            {hardStopArm !== null && armRemainingMs !== null && (
-              <Notice
-                tone="warn"
-                live="status"
-                headline={
-                  armExpired
-                    ? 'The arm token expired. Arm again, then fire promptly.'
-                    : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
-                }
-              />
-            )}
-            <p className="sm-small sm-muted">
-              <strong>Hard stop</strong> does everything Stop and power down does, plus abandons an active night
-              session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it. No
-              confirmation dialog: arm, then fire.
-            </p>
-          </div>
-
-          <EmergencyStopOutcome outcome={emergencyOutcome} />
-        </div>
-      </Section>
-
-      <Section
-        id="lc-outputs"
-        title="What each output is doing"
-        aside={<span className="sm-small sm-muted">As each output last reported it</span>}
-      >
-        {runsAbsence !== null && (
-          <RuledStrip
-            absence={runsAbsence}
-            label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
-            fact={
-              runsAbsence === 'unavailable'
-                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
-                : 'Reading current-run state for program audio.'
-            }
-          />
-        )}
-        {rows.length === 0 ? (
-          <RuledStrip
-            absence="unobserved"
-            label="Unobserved"
-            fact="No output has reported what it is doing."
-            detail="No render or audio observation has reached this coordinator. That is not the same as nothing running."
-          />
-        ) : (
-          <>
-            <TableWrap label="Outputs, scrollable">
-              <Table minWidth={600}>
-                <thead>
-                  <tr>
-                    <th scope="col">Output</th>
-                    <th scope="col">Doing what</th>
-                    <th scope="col">Last confirmed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.key}>
-                      <td>
-                        <span className="sm-data">{row.name}</span>
-                        <br />
-                        <span className="sm-small sm-faint">{row.where}</span>
-                      </td>
-                      <td>
-                        {row.doing}
-                        {row.content !== null && (
-                          <>
-                            {' '}
-                            <span className="sm-data">{row.content}</span>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        <StatusPair tone={row.tone} label={row.evidence} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-            <p className="sm-section__footnote">
-              {confirmed} of {rows.length} outputs confirm what they are doing.
-              {confirmed < rows.length && ` ${rows.length - confirmed} cannot be verified right now.`}
-            </p>
-          </>
-        )}
-      </Section>
-
-      <ResolumeQuickStrip gate={resolumeGate} />
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
-        <p className="sm-small sm-muted">
-          Every command here answers 202. The UI reports that it was accepted, never that it is done; Show Night carries
-          what the session then reports.
-        </p>
         <LifecycleCommands
-          groups={nightLifecycleGroups(
-            nightGate,
-            night,
-            <label className="sm-choice sm-choice--gloved">
-              <input
+          groups={nightLifecycleGroups(nightGate, (command) =>
+            command === 'start-night' ? setStartNightConfirmOpen(true) : night(command),
+          )}
+        />
+        <ConfirmDialog
+          open={startNightConfirmOpen}
+          title="Start the night and its first cycle?"
+          detail={
+            <>
+              <p className="sm-body">This commits the armed definition and starts the show. It is accepted here, then the session reports what it does.</p>
+              <Choice
                 type="checkbox"
                 checked={skipEnterShowLead}
-                disabled={!nightGate.allowed}
                 onChange={(event) => setSkipEnterShowLead(event.target.checked)}
+                label="Skip the enter-show lead. An enter-show announcement cue still dispatches."
               />
-              <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
-            </label>,
-          )}
+            </>
+          }
+          confirmLabel="Start night"
+          onConfirm={() => {
+            setStartNightConfirmOpen(false)
+            night('start-night')
+          }}
+          onCancel={() => setStartNightConfirmOpen(false)}
         />
         <Outcome outcome={nightOutcome} />
       </Section>
 
-      <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
+      <Announcements show={show} />
 
       <RunList
         id="lc-macros"
@@ -836,11 +848,8 @@ export function LiveControl() {
         show={show}
         list={macros}
         gate={configGate}
-        detail="Each step confirms separately. A macro is accepted, then its steps report their own outcomes."
         onRun={(id) => submitMacroRun(id)}
       />
-
-      <Announcements show={show} />
 
       <RunList
         id="lc-actions"
@@ -849,7 +858,6 @@ export function LiveControl() {
         show={show}
         list={actions}
         gate={configGate}
-        detail="One integration command each. Macros are built from these; these are here for when you need just the one step."
         onRun={(id) => invokeAction(id)}
       />
 
@@ -857,6 +865,8 @@ export function LiveControl() {
         Brightness ceiling and site control are set on the Night Session and enforced automatically; there are no
         separate controls for them here. All lists above are scoped to the active show.
       </Callout>
+      </>}
+      />
     </>
   )
 }
@@ -1053,13 +1063,14 @@ function Announcements({ show }: { show: string | null }) {
               {cue.uploaded ? (
                 <Button
                   variant="primary"
+                  size="gloved"
                   disabled={fireState[cue.id]?.kind === 'firing'}
                   onClick={() => fireCue(cue.id)}
                 >
                   {fireState[cue.id]?.kind === 'firing' ? 'Firing…' : 'Fire'}
                 </Button>
               ) : (
-                <Button variant="primary" disabled title="Its audio asset has not been uploaded.">
+                <Button variant="primary" size="gloved" disabled title="Its audio asset has not been uploaded.">
                   Fire
                 </Button>
               )}
@@ -1363,33 +1374,24 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
     options.length === 0 ? 'No sessions known.' : `${options.length} known session${options.length === 1 ? '' : 's'}.`
 
   return (
-    <Section
-      id="lc-audio"
-      title="Audio sessions"
-      aside={
-        nodesState.kind === 'loaded' && nodesState.nodes.length > 0 ? (
-          <span className="sm-small sm-muted">{audioSummary}</span>
-        ) : undefined
-      }
-    >
-      {nodesState.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading this deployment's declared audio nodes." />
-      ) : nodesState.kind === 'failed' ? (
-        <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
-      ) : nodesState.nodes.length === 0 ? (
-        <RuledStrip
-          absence="empty"
-          label="No audio nodes"
-          fact="No node advertises an audio engine."
-          detail="Settings › Node routing is where an audio.node object is declared."
-        />
-      ) : (
-        <ButtonRow>
-          <Button variant="primary" onClick={() => setDrawerOpen(true)}>
-            Audio sessions…
-          </Button>
-        </ButtonRow>
-      )}
+    <>
+      <button
+        type="button"
+        className="sm-linkbutton"
+        disabled={nodesState.kind !== 'loaded' || nodesState.nodes.length === 0}
+        title={
+          nodesState.kind === 'loading'
+            ? "Reading this deployment's declared audio nodes."
+            : nodesState.kind === 'failed'
+              ? nodesState.reason
+              : nodesState.kind === 'loaded' && nodesState.nodes.length === 0
+                ? 'No node advertises an audio engine. Settings › Node routing is where an audio.node object is declared.'
+                : audioSummary
+        }
+        onClick={() => setDrawerOpen(true)}
+      >
+        Audio sessions →
+      </button>
 
       <Drawer
         open={drawerOpen}
@@ -1772,28 +1774,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
           <Outcome outcome={outcome} />
         </Section>
       </Drawer>
-    </Section>
-  )
-}
-
-function ResolumeQuickStrip({ gate }: { gate: Gate }) {
-  const [outcome, setOutcome] = useState<ResolumeActionResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const blackout = () => {
-    setError(null)
-    blackoutResolume().then(setOutcome).catch((err: unknown) => setError(describeApiError(err)))
-  }
-
-  return (
-    <Section id="lc-resolume" title="Resolume" aside={<Link to="/control/resolume">Open Resolume control →</Link>}>
-      <p className="sm-small sm-muted">The clip grid and layer controls have their own wide workspace. Blackout remains here for immediate recovery.</p>
-      <ButtonRow>
-        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={blackout}>Blackout</Button>
-      </ButtonRow>
-      {outcome !== null && <ResolumeOutcome result={outcome} />}
-      {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
-    </Section>
+    </>
   )
 }
 
@@ -1822,7 +1803,6 @@ function PageHeader() {
   return (
     <>
       <h1 className="sm-page__title">Live Control</h1>
-      <p className="sm-page__lede">Acting on the show that is running now.</p>
     </>
   )
 }
@@ -1836,7 +1816,6 @@ function RunList({
   show,
   list,
   gate,
-  detail,
   onRun,
 }: {
   id: string
@@ -1845,7 +1824,6 @@ function RunList({
   show: string | null
   list: { items: ConfigObjectSummary[] | null; error: string | null }
   gate: Gate
-  detail: string
   onRun: (id: string) => Promise<unknown>
 }) {
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
@@ -1862,7 +1840,6 @@ function RunList({
         )
       }
     >
-      <p className="sm-small sm-muted">{detail}</p>
       {show === null ? (
         <RuledStrip
           absence="empty"
@@ -1882,10 +1859,19 @@ function RunList({
           detail="Shows › Automation is where they are authored."
         />
       ) : (
-        <div className="sm-grid sm-grid--auto sm-control-grid">
+        <ul className="sm-plain-list">
           {list.items.map((item) => (
-            <div key={item.id}>
+            <li key={item.id} className="sm-annc">
+              <div>
+                <p>
+                  <span className="sm-data">{item.label !== '' ? item.label : item.id}</span>
+                </p>
+                <p className="sm-small sm-muted">
+                  <span className="sm-data">{item.id}</span> · rev {item.currentRevision}
+                </p>
+              </div>
               <Button
+                variant="primary"
                 size="gloved"
                 disabled={!gate.allowed}
                 title={gate.allowed ? undefined : gate.reason}
@@ -1903,14 +1889,11 @@ function RunList({
                     )
                 }}
               >
-                {item.label !== '' ? item.label : item.id}
+                Run
               </Button>
-              <p className="sm-small sm-muted">
-                <span className="sm-data">{item.id}</span> · rev {item.currentRevision}
-              </p>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
       <Outcome outcome={outcome} />
     </Section>

@@ -1,0 +1,41 @@
+/*
+ * Two-column control layout. The left column drives, the right column shows the
+ * state being driven. The grid lives inside .sm-main and never sets page width.
+ * At the shell breakpoint it becomes one column, main first, so nothing is lost.
+ */
+.sm-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  column-gap: 28px;
+  align-items: start;
+  margin-top: 32px;
+}
+
+/* The status column carries the wide tables, so it takes the wider track. */
+.sm-workbench--wide-side {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+}
+
+.sm-workbench__main,
+.sm-workbench__side {
+  min-width: 0;
+}
+
+/* The first block in each column shares one top edge, so drop its leading
+   margin and let the two columns align. */
+.sm-workbench__main > :first-child,
+.sm-workbench__side > :first-child {
+  margin-top: 0;
+}
+
+@media (max-width: 1100px) {
+  .sm-workbench,
+  .sm-workbench--wide-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Stacked, the side column follows the main column and needs its gap back. */
+  .sm-workbench__side > :first-child {
+    margin-top: 26px;
+  }
+}

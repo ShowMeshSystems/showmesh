@@ -817,6 +817,19 @@ a.sm-tile:hover {
   margin: 0;
 }
 
+/* Dense: one full-width row of equal buttons, no consequence lines. Wraps on
+   a narrow screen instead of overflowing. Used on Show Night only. */
+.sm-lifecycle-commands--dense {
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+}
+
+.sm-lifecycle-commands--dense > div {
+  flex: 1 1 150px;
+  grid-column: auto;
+}
+
 @media (max-width: 1100px) {
   .sm-lifecycle-commands {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -859,7 +872,7 @@ a.sm-tile:hover {
 /* One evidence readout: state word, then the fact. */
 .sm-readout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
   gap: 0 20px;
   align-items: start;
   padding: 14px 0;
@@ -877,7 +890,6 @@ a.sm-tile:hover {
   border: 0;
   border-radius: 0;
   background: transparent;
-  white-space: nowrap;
 }
 
 .sm-readout .sm-status--good { color: var(--good-fg); }
@@ -902,9 +914,17 @@ a.sm-tile:hover {
   border-left: 2px solid var(--border);
 }
 
+/* Check names are long mono identifiers with no spaces, so stack the verdict
+   above its reason rather than colliding them in a fixed name column. */
 .sm-readout__checks .sm-readout {
-  padding: var(--s-2) 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px 0;
+  padding: var(--s-1) 0;
   border-top: none;
+}
+
+.sm-readout__checks .sm-status {
+  overflow-wrap: anywhere;
 }
 
 .sm-readout__checks .sm-readout:last-child {

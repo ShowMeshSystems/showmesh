@@ -285,7 +285,7 @@ export function outputRows(model: Model, nowIso: string | null): OutputRow[] {
         doing:
           state === undefined || state.value === null
             ? 'Unknown'
-            : `${String(state.value)}${rate === null ? '' : ` at ${rate} fps`}`,
+            : `${String(state.value)}${rate === null ? '' : ` at ${Number(rate.toFixed(2))} fps`}`,
         content,
         tone: EVIDENCE_TONE[evidenceState],
         evidence:

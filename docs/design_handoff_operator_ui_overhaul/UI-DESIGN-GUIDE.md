@@ -147,9 +147,10 @@ wrap, never the offset.
 
 **One place controls width; no screen overrides it.** `.sm-shell-body` is
 `grid-template-columns: var(--rail-w) minmax(0, 1fr)` with the rail fixed at 212px, and `.sm-main`
-is `max-width: var(--page-max)`. Width is fluid: `--page-max` is `min(1600px, 100%)`, set once in
-`tokens.css`, so content fills the column and caps at a generous maximum on an ultrawide (owner
-ruling, 2026-09-18, superseding the flat 1200px). **A screen never sets its own width.** Every
+is `max-width: var(--page-max)` with `margin-inline: auto`, so once it stops growing it centers in
+its track rather than leaving all the slack on one side. Width is fluid: `--page-max` is
+`min(2240px, 100%)`, set once in `tokens.css`, so content fills the column and caps at a generous
+maximum on a wide monitor (owner ruling, 2026-09-18, superseding the flat 1200px). **A screen never sets its own width.** Every
 per-page `.sm-main` cap was deleted in the 2026-09-01 round-three pass, along with the stylesheet
 that used `!important` to fight them; the `.sm-main:has(...)` rules that remain in `blocks.css`
 adjust padding only. Access is included in the rule: it has no cap of its own. Prose blocks keep
@@ -613,9 +614,10 @@ waiting for the owner, and no working file collects them again.
     picking another row swaps the content without closing. Node detail renders the same way, in a
     wide drawer over Monitor Fleet, with deep links and every existing link target still working.
 14. **One place controls width.** `--page-max` in `ui/src/kit/styles/tokens.css` is the only width
-    control. It is fluid, `min(1600px, 100%)`: content fills the column and caps at a generous
-    maximum (owner ruling, 2026-09-18, superseding the flat 1200px cap). A screen may adjust its
-    padding; it may not set a width.
+    control. It is fluid, `min(2240px, 100%)`, and `.sm-main` uses `margin-inline: auto` so it
+    centers once it stops growing: content fills the column and caps at a generous maximum (owner
+    ruling, 2026-09-18, superseding the flat 1200px cap). A screen may adjust its padding; it may not
+    set a width.
 15. **Show Night and Live Control build their lifecycle commands from one shared spec builder**, in
     the mock's cell order. A command's option renders inside that command's own cell, under its
     consequence line, never beside the button.

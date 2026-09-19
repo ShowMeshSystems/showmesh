@@ -9,10 +9,21 @@
 html,
 body {
   margin: 0;
-  background: var(--bg);
   color: var(--text);
   font: var(--t-body);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Paint the ground on a fixed, viewport-sized layer behind everything. On a
+   very tall page, painting --bg on the html or body box leaves a faint
+   sub-pixel seam partway down where Chrome tiles the large solid fill; a fixed
+   layer is always viewport-sized, so there is no tall box to seam. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--bg);
 }
 
 a {

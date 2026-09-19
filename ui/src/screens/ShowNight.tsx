@@ -39,7 +39,9 @@ import {
   Button,
   ButtonRow,
   Choice,
+  ConfirmDialog,
   DefinitionStrip,
+  Drawer,
   Field,
   FieldGrid,
   Input,
@@ -53,6 +55,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  Workbench,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -139,6 +142,8 @@ export function ShowNight() {
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
+  const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
@@ -240,6 +245,102 @@ export function ShowNight() {
       ? Math.min(100, Math.max(0, (elapsedSeconds / totalSeconds) * 100))
       : null
 
+  const statusSection = (
+      <Section id="sn-evidence" title="Status" aside={<span className="sm-small sm-muted">Anything not observed says so</span>}>
+        {evidenceReadouts(session, nowIso).map((readout) => (
+          <div key={readout.key} className="sm-readout">
+            <StatusPair tone={readout.tone} label={readout.label} />
+            <div>
+              <p className="sm-readout__fact">
+                {readout.fact}
+                {readout.key === 'readiness' && readout.tone !== 'good' && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="sm-linkbutton"
+                      disabled={!gate.allowed}
+                      title={gate.allowed ? undefined : gate.reason}
+                      onClick={() => send('run-readiness')}
+                    >
+                      Run readiness again
+                    </button>
+                  </>
+                )}
+              </p>
+              {readout.key === 'readiness' &&
+                (session.readiness.checks.length === 0 ? (
+                  <p className="sm-small sm-faint">No individual checks were recorded with this result.</p>
+                ) : (
+                  <div className="sm-readout__checks">
+                    {readinessChecks(session.readiness.checks).map((check) => (
+                      <div key={check.key} className="sm-readout">
+                        <StatusPair tone={check.tone} label={check.label} />
+                        <p className="sm-readout__fact">{check.fact}</p>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              {readout.key === 'audio' && <p className="sm-small sm-muted">{pinnedCeilingFact(session.backgroundAudio)}</p>}
+            </div>
+          </div>
+        ))}
+      </Section>
+  )
+  const bgAudioAll = backgroundAudioSteps(session.backgroundAudio)
+  const bgAudioMax = 25
+  const bgAudioShown = bgAudioAll.slice(-bgAudioMax)
+  const bgAudioSection = (
+      <Section id="sn-bg-audio" title="Background Audio Record" aside={<span className="sm-small sm-muted">This cycle</span>}>
+        {bgAudioAll.length > 0 ? (
+          <>
+          <TableWrap label="Background audio steps this cycle, scrollable">
+            <Table minWidth={700}>
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">Sequence</th>
+                  <th scope="col">Cue</th>
+                  <th scope="col">Node</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bgAudioShown.map((step) => (
+                  <tr key={step.key}>
+                    <td className="sm-data">{step.when}</td>
+                    <td>{step.sequence}</td>
+                    <td>
+                      {step.cueName}
+                      <br />
+                      <span className="sm-small sm-faint">{step.detail}</span>
+                    </td>
+                    <td className="sm-data">{step.nodeId}</td>
+                    <td>{step.kind}</td>
+                    <td>
+                      <StatusPair tone={step.tone} label={step.state} />
+                      {step.resolved !== null && (
+                        <>
+                          <br />
+                          <span className="sm-small sm-faint">{step.resolved}</span>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+          {bgAudioAll.length > bgAudioMax && (
+            <p className="sm-section__footnote">Showing the most recent {bgAudioMax} of {bgAudioAll.length} events this cycle.</p>
+          )}
+          </>
+        ) : (
+          <RuledStrip absence="empty" label="None recorded" fact="No background audio steps are recorded for this cycle." />
+        )}
+      </Section>
+  )
   return (
     <>
       <div className="sm-page__head">
@@ -248,6 +349,7 @@ export function ShowNight() {
           <h1 className="sm-page__title">Cycle {session.cycle} of the night</h1>
         </div>
         <ButtonRow>
+          <Button onClick={() => setActivationOpen(true)}>Activate Definition</Button>
           {session.armedShowId !== '' ? (
             <Link className="sm-btn" to={`/shows/${encodeURIComponent(session.armedShowId)}/night-session`}>Edit definition</Link>
           ) : (
@@ -259,11 +361,6 @@ export function ShowNight() {
       <div role="group" aria-label="Night lifecycle" className="sm-rails">
         <Rail title="Tonight" steps={tonight} />
         <Rail title={`Cycle ${session.cycle}`} steps={cycleRail(session, nowIso)} />
-        <p className="sm-section__footnote">
-          The bottom row repeats: rest, then show, then rest again, for as many cycles as the night allows.{' '}
-          <strong>Request final show</strong> closes admission and sends the last cycle to end-of-night instead of back
-          to resting.
-        </p>
       </div>
 
       <div className="sm-nownext">
@@ -319,13 +416,10 @@ export function ShowNight() {
             Next transition
           </h3>
           {next.known ? (
-            <>
-              <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
-              <p className="sm-small sm-muted">until the sequence ends and the next transition begins.</p>
-              <p className="sm-small sm-faint sm-nownext__derivation">
-                Derived from observed playback, not a clock. If the position goes stale, the transition time becomes unknown.
-              </p>
-            </>
+            <p className="sm-nownext__title" title="Derived from observed playback, not a clock. If the position goes stale, the transition time becomes unknown.">
+              {formatPosition(next.remainingSeconds)}
+              <span className="sm-small sm-muted"> until the next transition</span>
+            </p>
           ) : (
             <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} detail="Derived from observed playback, not a clock." />
           )}
@@ -349,19 +443,36 @@ export function ShowNight() {
         }
       >
         <LifecycleCommands
-          groups={nightLifecycleGroups(
-            gate,
-            send,
-            <label className="sm-choice sm-choice--gloved">
-              <input
+          dense
+          groups={[
+            {
+              id: 'sn-lifecycle',
+              commands: nightLifecycleGroups(gate, (command) =>
+                command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
+              ).flatMap((group) => group.commands),
+            },
+          ]}
+        />
+        <ConfirmDialog
+          open={startNightConfirmOpen}
+          title="Start the night and its first cycle?"
+          detail={
+            <>
+              <p className="sm-body">This commits the armed definition and starts the show. It is accepted here, then the session reports what it does.</p>
+              <Choice
                 type="checkbox"
                 checked={skipEnterShowLead}
-                disabled={!gate.allowed}
-                onChange={(e) => setSkipEnterShowLead(e.target.checked)}
+                onChange={(event) => setSkipEnterShowLead(event.target.checked)}
+                label="Skip the enter-show lead. An enter-show announcement cue still dispatches."
               />
-              <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
-            </label>,
-          )}
+            </>
+          }
+          confirmLabel="Start night"
+          onConfirm={() => {
+            setStartNightConfirmOpen(false)
+            send('start-night')
+          }}
+          onCancel={() => setStartNightConfirmOpen(false)}
         />
         {outcome !== null && (
           <div className="sm-outcome">
@@ -397,6 +508,11 @@ export function ShowNight() {
           </div>
         )}
       </Section>
+      <Workbench
+        wide="side"
+        sideLabel="Run of show and background audio"
+        main={statusSection}
+        side={<>
 
       <Section
         id="sn-run"
@@ -463,92 +579,11 @@ export function ShowNight() {
         )}
       </Section>
 
-      <Section id="sn-evidence" title="Status" aside={<span className="sm-small sm-muted">Anything not observed says so</span>}>
-        {evidenceReadouts(session, nowIso).map((readout) => (
-          <div key={readout.key} className="sm-readout">
-            <StatusPair tone={readout.tone} label={readout.label} />
-            <div>
-              <p className="sm-readout__fact">
-                {readout.fact}
-                {readout.key === 'readiness' && readout.tone !== 'good' && (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      className="sm-linkbutton"
-                      disabled={!gate.allowed}
-                      title={gate.allowed ? undefined : gate.reason}
-                      onClick={() => send('run-readiness')}
-                    >
-                      Run readiness again
-                    </button>
-                  </>
-                )}
-              </p>
-              {readout.key === 'readiness' &&
-                (session.readiness.checks.length === 0 ? (
-                  <p className="sm-small sm-faint">No individual checks were recorded with this result.</p>
-                ) : (
-                  <div className="sm-readout__checks">
-                    {readinessChecks(session.readiness.checks).map((check) => (
-                      <div key={check.key} className="sm-readout">
-                        <StatusPair tone={check.tone} label={check.label} />
-                        <p className="sm-readout__fact">{check.fact}</p>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              {readout.key === 'audio' && (
-                <>
-                  <p className="sm-small sm-muted">{pinnedCeilingFact(session.backgroundAudio)}</p>
-                  {session.backgroundAudio.steps.length > 0 && (
-                    <TableWrap label="Background audio steps this cycle, scrollable">
-                      <Table minWidth={700}>
-                        <thead>
-                          <tr>
-                            <th scope="col">When</th>
-                            <th scope="col">Sequence</th>
-                            <th scope="col">Cue</th>
-                            <th scope="col">Node</th>
-                            <th scope="col">Kind</th>
-                            <th scope="col">State</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {backgroundAudioSteps(session.backgroundAudio).map((step) => (
-                            <tr key={step.key}>
-                              <td className="sm-data">{step.when}</td>
-                              <td>{step.sequence}</td>
-                              <td>
-                                {step.cueName}
-                                <br />
-                                <span className="sm-small sm-faint">{step.detail}</span>
-                              </td>
-                              <td className="sm-data">{step.nodeId}</td>
-                              <td>{step.kind}</td>
-                              <td>
-                                <StatusPair tone={step.tone} label={step.state} />
-                                {step.resolved !== null && (
-                                  <>
-                                    <br />
-                                    <span className="sm-small sm-faint">{step.resolved}</span>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </Table>
-                    </TableWrap>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        ))}
-      </Section>
+      {bgAudioSection}
+      </>}
+      />
 
-      <NightSessionActivation />
+      <NightSessionActivation open={activationOpen} onClose={() => setActivationOpen(false)} />
 
       {session.degraded && (
         <BlankingPlate
@@ -597,7 +632,7 @@ type ActiveLoadState =
  * it at a different one. Definition authoring lives directly below it so the
  * active pointer and the immutable object it names stay visibly distinct.
  */
-function NightSessionActivation() {
+function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () => void }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [attempt, setAttempt] = useState(0)
@@ -654,6 +689,7 @@ function NightSessionActivation() {
   }
 
   return (
+    <Drawer open={open} onClose={onClose} labelledBy="sn-active" width="content">
     <Section
       id="sn-active"
       title="Night session activation"
@@ -750,6 +786,7 @@ function NightSessionActivation() {
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={getNightSessionActiveConfigRevisions} reloadKey={attempt} />
     </Section>
+    </Drawer>
   )
 }
 

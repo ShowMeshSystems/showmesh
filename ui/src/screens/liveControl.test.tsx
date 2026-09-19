@@ -245,28 +245,24 @@ describe('Live Control', () => {
         ? () => Promise.reject(new Error('unavailable'))
         : () => Promise.resolve({ payload: { ltcFrameRate: opts.fps } } as never)
     renderScreen({ session: audioAllowedSession })
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
     return dialog
   }
 
-  it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
+  it('stacks the controls on the left and pins emergency stop and output evidence in the side column', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
+      'Night lifecycle',
+      'Announcements',
+      'Macros',
+      'Actions',
       'Emergency stop',
       'What each output is doing',
-      'Resolume',
-      'Night lifecycle',
-      'Audio sessions',
-      'Macros',
-      'Announcements',
-      'Actions',
     ])
-    expect(screen.getByRole('link', { name: /open resolume control/i })).toHaveAttribute('href', '/control/resolume')
   })
 
   it('dispatches blackout and reports its evidence outcome', async () => {
@@ -277,15 +273,11 @@ describe('Live Control', () => {
       principal: { id: 'p', name: 'op', role: 'operator', disabled: false }, session: null,
       credentialForm: 'session', scopes: ['resolume:action'], scopesState: 'current', bootstrapRequired: false,
     } as never })
-    fireEvent.click(screen.getByRole('button', { name: 'Blackout' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resolume blackout' }))
     expect(await screen.findByText('Confirmed')).toBeInTheDocument()
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
-  it('explains Stop now as a helper line under the transport, not a callout', () => {
-    renderScreen({})
-    expect(screen.getByText(/halts this player only/)).toBeInTheDocument()
-  })
 
   it('gates every emergency-stop control on show:emergencystop:invoke, disabled with the real reason, never hidden', () => {
     renderScreen({
@@ -556,26 +548,29 @@ describe('Live Control', () => {
     expect(pause).toHaveAttribute('title', expect.stringContaining('fpp:command'))
   })
 
-  it('reports a night command as accepted, never as done', () => {
-    renderScreen({})
-    expect(screen.getByText(/answers 202/)).toBeInTheDocument()
-    expect(screen.getByText(/never that it is done/)).toBeInTheDocument()
-  })
-
-  it('groups the lifecycle commands into Prepare, Start, End the night, with the late-start checkbox in Start night: the same element Show Night renders', () => {
+  it('groups the lifecycle commands into Prepare, Start, End the night', () => {
     renderScreen({})
     const region = screen.getByRole('region', { name: 'Night lifecycle' })
     expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
-    expect(within(region).getByLabelText(/Skip the enter-show lead/)).toBeInTheDocument()
   })
 
-  it('renders Prepare as Prepare site, Run readiness and Start as Start preshow, Start night: the group spec order, not blocks.css’s unscoped per-command order', () => {
-    renderScreen({})
+  it('opens a confirm dialog carrying the skip-lead option when Start night is pressed', () => {
+    renderScreen({
+      session: {
+        serverTime: '2026-08-28T21:07:00Z',
+        authenticated: true,
+        principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+        session: null,
+        credentialForm: 'session',
+        scopes: ['night:command'],
+        scopesState: 'current',
+        bootstrapRequired: false,
+      } as never,
+    })
     const region = screen.getByRole('region', { name: 'Night lifecycle' })
-    const prepareSection = within(region).getByRole('heading', { name: 'Prepare', level: 3 }).closest('section') as HTMLElement
-    expect(within(prepareSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prepare site', 'Run readiness'])
-    const startSection = within(region).getByRole('heading', { name: 'Start', level: 3 }).closest('section') as HTMLElement
-    expect(within(startSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Start preshow', 'Start night'])
+    fireEvent.click(within(region).getByRole('button', { name: 'Start night' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Skip the enter-show lead/)).toBeInTheDocument()
   })
 
   it('says an unconfirmed command was not confirmed', () => {
@@ -894,8 +889,7 @@ describe('Live Control', () => {
     stubs.pauseAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.pause' })))
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
@@ -1075,8 +1069,7 @@ describe('Live Control', () => {
       } as never,
     })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions/ }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
@@ -1085,16 +1078,16 @@ describe('Live Control', () => {
     expect(prepare).toHaveAttribute('title', expect.stringContaining('audio:command'))
   })
 
-  it('renders the empty state when no audio node is declared', async () => {
+  it('disables the audio sessions button when no audio node is declared', async () => {
     stubs.listConfigObjects = ((kind: string) => {
       if (kind === 'audio.node') return Promise.resolve({ objects: [] })
       return Promise.resolve({ objects: [] })
     }) as never
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    expect(within(region).getByText('No audio nodes')).toBeInTheDocument()
-    expect(within(region).getByText('No node advertises an audio engine.')).toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: /Audio sessions/ })
+    await waitFor(() => expect(button).toBeDisabled())
+    expect(button.getAttribute('title')).toContain('No node advertises an audio engine')
   })
 
   it('collapses the target, known sessions and transport into one drawer behind one button, with a one-line summary on the section itself', async () => {
@@ -1106,12 +1099,12 @@ describe('Live Control', () => {
       Promise.resolve({ observations: [observation('audio_session.state', 'started', 'current', 'audio_session', 'bg-holiday-01')] })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    expect(await within(region).findByText('1 known session.')).toBeInTheDocument()
-    expect(within(region).queryByText(/Loading media into a session/)).not.toBeInTheDocument()
-    expect(within(region).queryByLabelText('Session id')).not.toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: /Audio sessions/ })
+    await waitFor(() => expect(button.getAttribute('title')).toContain('1 known session.'))
+    expect(screen.queryByText(/Loading media into a session/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Session id')).not.toBeInTheDocument()
 
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(button)
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByLabelText('Node')).toBeInTheDocument()
     expect(within(dialog).getByLabelText('Known sessions')).toBeInTheDocument()
@@ -1121,8 +1114,8 @@ describe('Live Control', () => {
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
     expect(within(dialog).getByRole('button', { name: 'Prepare' })).toBeInTheDocument()
-    // The caption states a count only; it never grows an "open" clause, reachable or not.
-    expect(within(region).getByText('1 known session.')).toBeInTheDocument()
+    // The trigger's summary states a count only; it never grows an "open" clause, reachable or not.
+    expect(button.getAttribute('title')).toContain('1 known session.')
   })
 
   it('reports a known session as playing, and another as stale, before the operator has picked or typed any session id', async () => {
@@ -1139,8 +1132,7 @@ describe('Live Control', () => {
       })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions/ }))
     const dialog = await screen.findByRole('dialog')
 
     // No session id has been picked or typed yet.
@@ -1167,8 +1159,7 @@ describe('Live Control', () => {
       })
     renderScreen({ session: audioAllowedSession })
 
-    const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Audio sessions/ }))
     const dialog = await screen.findByRole('dialog')
 
     expect(await within(dialog).findByText('bg-holiday-01')).toBeInTheDocument()

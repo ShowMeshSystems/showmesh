@@ -160,10 +160,11 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
-      'Run of Show',
       'Status',
-      'Night session activation',
+      'Run of Show',
+      'Background Audio Record',
     ])
+    expect(screen.getByRole('button', { name: 'Activate Definition' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
@@ -385,19 +386,19 @@ describe('Show Night', () => {
     expect(buttons.map((b) => b.textContent)).toEqual(names)
   })
 
-  it('groups the lifecycle commands into Prepare, Start, End the night: the same one element Live Control renders', () => {
+  it('renders the lifecycle commands as one flat row in run order, with no group subheadings', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
+    expect(within(region).queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    const order = ['Prepare site', 'Run readiness', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
+    const buttons = within(region).getAllByRole('button').filter((b) => order.includes(b.textContent ?? ''))
+    expect(buttons.map((b) => b.textContent)).toEqual(order)
   })
 
-  it('renders Prepare as Prepare site, Run readiness and Start as Start preshow, Start night: the group spec order, not blocks.css’s unscoped per-command order', () => {
+  it('cuts the per-command consequence lines in the dense lifecycle row', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
-    const prepareSection = within(region).getByRole('heading', { name: 'Prepare', level: 3 }).closest('section') as HTMLElement
-    expect(within(prepareSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prepare site', 'Run readiness'])
-    const startSection = within(region).getByRole('heading', { name: 'Start', level: 3 }).closest('section') as HTMLElement
-    expect(within(startSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Start preshow', 'Start night'])
+    expect(within(region).queryByText(/Gets the site ready/)).not.toBeInTheDocument()
   })
 
   it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {
@@ -429,8 +430,10 @@ describe('Show Night', () => {
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByLabelText(/Skip the enter-show lead/))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(true)
   })
 
@@ -442,17 +445,17 @@ describe('Show Night', () => {
     }
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(false)
   })
 
-  it('never sends skipEnterShowLead for a command other than start-night, even with the box checked', () => {
+  it('never sends a skipEnterShowLead field for a command other than start-night', () => {
     const calls: unknown[][] = []
     stubs.dispatchNightCommand = (...args: unknown[]) => {
       calls.push(args)
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(calls[0]?.[3]).toBeUndefined()
   })
@@ -488,6 +491,7 @@ describe('Show Night', () => {
       Promise.reject(new ApiError('start-night is not valid while live.', 409, PROBLEM_TYPE.nightStateRejected))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
     expect(await screen.findByText('Refused')).toBeInTheDocument()
     expect(screen.getByText(/is not valid from the session's current state/)).toBeInTheDocument()
     expect(screen.queryByText('Withheld')).not.toBeInTheDocument()
@@ -849,6 +853,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
   })
@@ -864,6 +869,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText(/Active revision/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
@@ -873,6 +879,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => new Promise(() => {})
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
   })
@@ -881,6 +888,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
@@ -901,6 +909,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -925,6 +934,7 @@ describe('Show Night', () => {
         objects: [{ id: 'winter-ridge-backup', label: 'Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -940,6 +950,7 @@ describe('Show Night', () => {
       return Promise.resolve(activeConfigResponse('', { revision: 4 }))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the pointer')
     const clearButton = screen.getByRole('button', { name: 'Clear active definition' })
