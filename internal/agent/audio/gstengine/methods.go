@@ -467,6 +467,18 @@ func (e *Engine) Observe(ctx context.Context, handle agentaudio.EngineHandle) (a
 	return b.observe(e.cfg.now()), nil
 }
 
+// LiveHandles returns every handle this pipeline currently has a branch
+// for: the mixer's single output stream otherwise hides them all.
+func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]agentaudio.EngineHandle, 0, len(e.handles))
+	for h := range e.handles {
+		out = append(out, h)
+	}
+	return out, nil
+}
+
 // seekTo issues a flushing, accurate seek on the branch and re-anchors
 // its frozen position when the branch is not currently playing.
 // segmentStart, after, and the frozen position are mutated only once

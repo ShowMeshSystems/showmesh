@@ -576,4 +576,59 @@ func (m *Manager) watchTick(ctx context.Context) {
 		m.restoreDucked(ctx, id)
 		m.restoreInterrupted(ctx, id)
 	}
+
+	m.releaseOrphanEngineHandles(ctx, sessions)
+}
+
+// releaseOrphanEngineHandles releases a live engine handle no session owns
+// only once it has been seen unowned on two consecutive ticks, so a tick
+// landing in Promote's release-then-assign window never kills a starting cue.
+func (m *Manager) releaseOrphanEngineHandles(ctx context.Context, sessions []*Session) {
+	live, err := m.engine.LiveHandles(ctx)
+	if err != nil {
+		return
+	}
+
+	owned := make(map[EngineHandle]struct{}, len(sessions))
+	for _, s := range sessions {
+		s.mu.Lock()
+		if s.handleLoaded {
+			owned[s.handle] = struct{}{}
+		}
+		if s.stage != nil && s.stage.ready {
+			owned[s.stage.handle] = struct{}{}
+		}
+		s.mu.Unlock()
+	}
+
+	unowned := make(map[EngineHandle]struct{}, len(live))
+	for _, h := range live {
+		if _, ok := owned[h]; !ok {
+			unowned[h] = struct{}{}
+		}
+	}
+	seenLastTick := m.lastTickUnownedHandles
+	m.lastTickUnownedHandles = unowned
+
+	var release []EngineHandle
+	for h := range unowned {
+		if _, ok := seenLastTick[h]; ok {
+			release = append(release, h)
+		}
+	}
+	if len(release) == 0 {
+		return
+	}
+
+	for _, h := range release {
+		m.logf("audio: orphaned engine handle %q belongs to no session on two consecutive watcher ticks; stopping and releasing it", h)
+		stopCtx, stopCancel := boundedObserveContext(ctx)
+		_, _ = m.engine.Stop(stopCtx, h)
+		stopCancel()
+		relCtx, relCancel := boundedObserveContext(ctx)
+		if err := m.engine.Release(relCtx, h); err != nil {
+			m.logf("audio: releasing orphaned engine handle %q failed: %v", h, err)
+		}
+		relCancel()
+	}
 }

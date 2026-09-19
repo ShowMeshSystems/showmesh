@@ -143,4 +143,9 @@ type Engine interface {
 	// reason, never silently no-op it, and must never advertise a
 	// playback capability while it is false.
 	Available() (ok bool, reason string)
+
+	// LiveHandles reports every handle this Engine currently holds live,
+	// regardless of whether any session still references it — see
+	// [Manager]'s own watcher, which sweeps whatever this reports orphaned.
+	LiveHandles(ctx context.Context) ([]EngineHandle, error)
 }
