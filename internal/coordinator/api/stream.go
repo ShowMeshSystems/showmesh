@@ -262,6 +262,11 @@ type pendingFrame struct {
 	// reconstructing state from a transition history.
 	nightSession *v1.NightSessionChangedEvent
 
+	// weatherDelay is set only for a "weatherDelay.changed" pendingFrame
+	// (ADR-053): the weatherdelay:current singleton resource, full-frame
+	// only, same posture as nightSession immediately above.
+	weatherDelay *v1.WeatherDelayChangedEvent
+
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
 	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
 	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
@@ -329,6 +334,11 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "nightSession.changed", ev
+	case "weatherDelay.changed":
+		ev := *pf.weatherDelay
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "weatherDelay.changed", ev
 	case "fppPlaylistEntry.changed":
 		return "fppPlaylistEntry.changed", v1.FPPPlaylistEntryChangedEvent{
 			Seq: seq, ServerTime: pf.serverTime, Observation: *pf.fppPlaylistEntry,
@@ -664,6 +674,32 @@ func (h *Hub) render(ctx context.Context) {
 		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge, true)
 		if h.updateRendered(key, state) {
 			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
+		}
+	}
+
+	// weatherdelay:current carries the delay state, every power group's
+	// confirmedDark and the held players, so any of them changing renders a new frame.
+	// Silent until a delay has existed or a power group is configured.
+	if rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx); err != nil {
+		h.logger.Warn("stream hub: get weather delay state failed", "error", err)
+	} else {
+		groups := []v1.WeatherDelayPowerGroupStatus{}
+		hs := &handlers{deps: h.deps, clock: h.clock, logger: h.logger}
+		held := hs.weatherDelayHeldPlayers(ctx, now, rec.Active)
+		if payload, _, _, _, cerr := resolveWeatherDelayConfig(ctx, h.deps.Config); cerr != nil {
+			h.logger.Warn("stream hub: resolve show.weatherdelay config failed", "error", cerr)
+		} else {
+			groups = hs.weatherDelayPowerGroupStatuses(ctx, now, payload)
+		}
+		if rec.Active || rec.Revision > 0 || len(groups) > 0 || len(held) > 0 {
+			const key = "weatherdelay:current"
+			state := v1.WeatherDelayChangedEvent{Active: rec.Active, Revision: rec.Revision, PowerGroups: groups, HeldPlayers: held}
+			if rec.Active {
+				state.Kind, state.StartedAt, state.StartedBy = rec.Kind, formatTime(rec.StartedAt), rec.StartedBy
+			}
+			if h.updateRendered(key, state) {
+				pending = append(pending, pendingFrame{event: "weatherDelay.changed", serverTime: formatTime(now), weatherDelay: &state})
+			}
 		}
 	}
 

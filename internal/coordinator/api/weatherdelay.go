@@ -99,7 +99,8 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	resp := v1.WeatherDelayStateResponse{ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision, Assets: []v1.WeatherDelayNodeAssets{}}
+	resp := v1.WeatherDelayStateResponse{ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision, Assets: []v1.WeatherDelayNodeAssets{}, PowerGroups: []v1.WeatherDelayPowerGroupStatus{}}
+	resp.HeldPlayers = h.weatherDelayHeldPlayers(ctx, now, rec.Active)
 	if rec.Active {
 		resp.Kind = rec.Kind
 		resp.StartedAt = formatTime(rec.StartedAt)
@@ -111,8 +112,60 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		h.logWarn("weather delay: failed to resolve show.weatherdelay config for asset readiness; reporting no asset evidence", "error", err)
 	} else {
 		resp.Assets = h.weatherDelayAssetReadiness(ctx, payload)
+		resp.PowerGroups = h.weatherDelayPowerGroupStatuses(ctx, now, payload)
 	}
 	jsonWrite(w, resp)
+}
+
+// weatherDelayHeldPlayers lists the players whose last fresh gate reading
+// is closed while no delay is active. Empty while a delay is active.
+func (h *handlers) weatherDelayHeldPlayers(ctx context.Context, now time.Time, active bool) []v1.WeatherDelayHeldPlayer {
+	out := []v1.WeatherDelayHeldPlayer{}
+	if active {
+		return out
+	}
+	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
+	if err != nil {
+		h.logWarn("weather delay: failed to list configured FPP instances; reporting no held players", "error", err)
+		return out
+	}
+	for _, ep := range endpoints {
+		gate, ok := h.deps.WeatherDelayGateCache.getGate(ep.ID)
+		if !ok || !gate.supported || gate.unreadable || !gate.closed || now.Sub(gate.observedAt) > gate.freshWindow() {
+			continue
+		}
+		out = append(out, v1.WeatherDelayHeldPlayer{
+			InstanceID: ep.ID,
+			Message:    fmt.Sprintf("Player %s is being held dark and no weather delay is active. Press Resume to release it.", ep.ID),
+		})
+	}
+	return out
+}
+
+// weatherDelayPowerGroupStatuses computes every power group's darkness
+// fresh from the same evidence the enforcer uses; only "since" comes from
+// the enforcer's cache.
+func (h *handlers) weatherDelayPowerGroupStatuses(ctx context.Context, now time.Time, payload config.WeatherDelayPayload) []v1.WeatherDelayPowerGroupStatus {
+	if len(payload.PowerGroups) == 0 {
+		return []v1.WeatherDelayPowerGroupStatus{}
+	}
+	out := make([]v1.WeatherDelayPowerGroupStatus, 0, len(payload.PowerGroups))
+	for _, group := range payload.PowerGroups {
+		dark, members := h.weatherDelayGroupDarkness(ctx, now, group)
+		since := ""
+		if cached, ok := h.deps.WeatherDelayGateCache.groupDark(group.ID); ok && cached.dark && dark {
+			since = formatTime(cached.since)
+		} else if dark {
+			since = formatTime(now)
+		}
+		if members == nil {
+			members = []v1.WeatherDelayPowerGroupMember{}
+		}
+		out = append(out, v1.WeatherDelayPowerGroupStatus{
+			ID: group.ID, Label: group.Label, ConfirmedDark: dark, Since: since, Members: members,
+		})
+	}
+	return out
 }
 
 // weatherDelayAssetReadiness reports, per plan node, whether each alert
@@ -272,10 +325,10 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	}
 
 	var (
-		wg                                                          sync.WaitGroup
-		fppOutcomes, resolumeOutcomes, renderOutcomes, nodeOutcomes []v1.WeatherDelayTargetOutcome
+		wg                                                                        sync.WaitGroup
+		fppOutcomes, resolumeOutcomes, renderOutcomes, nodeOutcomes, gateOutcomes []v1.WeatherDelayTargetOutcome
 	)
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		outcomes, _ := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
@@ -293,6 +346,11 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		defer wg.Done()
 		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", weatherdelay.KindDelay, idempotencyKey, planNodeIDs, ac, clientAddr, true)
 	}()
+	// The gate close runs beside the node dispatch; the alert never waits on it.
+	go func() {
+		defer wg.Done()
+		gateOutcomes = h.weatherDelayCloseGatesOnAllInstances(ctx, now, rec.Revision)
+	}()
 
 	// Plan nodes never get audio.node.silence: it would race their own
 	// weatherdelay.start and could silence the alert.
@@ -305,12 +363,13 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 
 	wg.Wait()
 
-	targets := make([]v1.WeatherDelayTargetOutcome, 0, len(fppOutcomes)+len(resolumeOutcomes)+len(renderOutcomes)+len(nodeOutcomes)+len(silenceOutcomes))
+	targets := make([]v1.WeatherDelayTargetOutcome, 0, len(fppOutcomes)+len(resolumeOutcomes)+len(renderOutcomes)+len(nodeOutcomes)+len(silenceOutcomes)+len(gateOutcomes))
 	targets = append(targets, fppOutcomes...)
 	targets = append(targets, resolumeOutcomes...)
 	targets = append(targets, renderOutcomes...)
 	targets = append(targets, silenceOutcomes...)
 	targets = append(targets, nodeOutcomes...)
+	targets = append(targets, gateOutcomes...)
 
 	result := v1.WeatherDelayActionResult{
 		Kind: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey, Active: true,
@@ -383,20 +442,36 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	h.publishWeatherDelayState(ctx, "resume", rec, plan, now)
 
 	nodeIDs := h.weatherDelayResumeNodeIDs(ctx, now, payload.Alert.NodeIDs)
-	nodeOutcomes := h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, nodeIDs, ac, clientAddr, false)
+	var (
+		wg                         sync.WaitGroup
+		nodeOutcomes, gateOutcomes []v1.WeatherDelayTargetOutcome
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, nodeIDs, ac, clientAddr, false)
+	}()
+	go func() {
+		defer wg.Done()
+		gateOutcomes = h.weatherDelayOpenGatesOnAllInstances(ctx, now, rec.Revision)
+	}()
+	wg.Wait()
+	targets := make([]v1.WeatherDelayTargetOutcome, 0, len(nodeOutcomes)+len(gateOutcomes))
+	targets = append(targets, nodeOutcomes...)
+	targets = append(targets, gateOutcomes...)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
 		Action: identity.AuditActionShowWeatherDelayResume, Target: "resume", IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(nodeOutcomes), "revision": rec.Revision, "wasActive": current.Active, "nightSession": nightOutcome},
+		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(targets), "revision": rec.Revision, "wasActive": current.Active, "nightSession": nightOutcome},
 	})
 	h.appendWeatherDelayChangedEvent(ctx, now, "resumed")
 	h.notifyStreamHub()
 
 	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: v1.WeatherDelayActionResult{
 		Kind: "resume", IdempotencyKey: idempotencyKey, Active: false, Revision: rec.Revision,
-		Targets: nodeOutcomes,
+		Targets: targets,
 	}})
 }
 
