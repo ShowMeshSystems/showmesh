@@ -583,33 +583,33 @@ type Dependencies struct {
 	WeatherDelay WeatherDelayStore
 
 	// WeatherDelayPublisher is start/resume's own MQTT publish-and-await
-	// capability — see [WeatherDelayPublisher]. A nil field is replaced by
+	// capability, see [WeatherDelayPublisher]. A nil field is replaced by
 	// [noWeatherDelayPublisher], under which start/resume answer an
 	// internal error naming the missing wiring rather than silently
 	// reporting every node unreachable.
 	WeatherDelayPublisher WeatherDelayPublisher
 
 	// WeatherDelayNodeAddrs answers a plan node's own reported inbound
-	// listener address — see [WeatherDelayNodeAddrs]. A nil field is
+	// listener address, see [WeatherDelayNodeAddrs]. A nil field is
 	// replaced by [noWeatherDelayNodeAddrs], under which every node reads
 	// as having reported none, so start falls back to MQTT alone for
 	// every node rather than failing.
 	WeatherDelayNodeAddrs WeatherDelayNodeAddrs
 
-	// WeatherDelaySigner signs the direct-HTTP start path — see
+	// WeatherDelaySigner signs the direct-HTTP start path, see
 	// [WeatherDelaySigner]. A nil field is replaced by
 	// [noWeatherDelaySigner], under which the direct-HTTP path is skipped
 	// for every node (MQTT alone still runs) rather than panicking.
 	WeatherDelaySigner WeatherDelaySigner
 
 	// WeatherDelayAssetSync pushes the configured alert assets to the
-	// plan's nodes ahead of time — see [WeatherDelayAssetSync]. A nil
+	// plan's nodes ahead of time, see [WeatherDelayAssetSync]. A nil
 	// field is replaced by [noWeatherDelayAssetSync], a silent no-op:
 	// asset delivery is best-effort evidence, never a gate on start.
 	WeatherDelayAssetSync WeatherDelayAssetSync
 
 	// WeatherDelayEvents appends the change-stream event on every state
-	// change — see [WeatherDelayEventAppender]. nil (the default) is a
+	// change, see [WeatherDelayEventAppender]. nil (the default) is a
 	// silent no-op: this event is best-effort evidence, never a gate.
 	WeatherDelayEvents WeatherDelayEventAppender
 

@@ -534,7 +534,7 @@ type WeatherDelayStore interface {
 
 // WeatherDelayPublisher is the coordinator's MQTT publish-and-await
 // capability weather delay start/resume depend on, declared at the
-// consumer exactly as [AudioSessionPublisher] is — *broker.BrokerManager
+// consumer exactly as [AudioSessionPublisher] is: *broker.BrokerManager
 // already satisfies this with no adapter.
 type WeatherDelayPublisher interface {
 	Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error
@@ -564,8 +564,8 @@ type WeatherDelayAssetSync interface {
 	AssetPresence(ctx context.Context, nodeID, contentHash string) (bool, error)
 }
 
-// WeatherDelayEventAppender appends the weather delay change-stream event
-// (build task item 5). *store.Store already satisfies this with no
+// WeatherDelayEventAppender appends the weather delay change-stream event.
+// *store.Store already satisfies this with no
 // adapter.
 type WeatherDelayEventAppender interface {
 	AppendEvent(ctx context.Context, ev store.EventRecord) (int64, error)

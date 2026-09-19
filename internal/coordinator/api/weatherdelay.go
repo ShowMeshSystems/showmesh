@@ -24,10 +24,7 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// This file is ADR-053's start and resume: cancel-night stays "not
-// available yet" (handleWeatherDelayCancelNight below). See that ADR's
-// decisions 1, 2, 3, 6, 7, 8, 11 and 13, and this task's own CHANGE
-// section, for the reasoning behind the order and concurrency below.
+// ADR-053 weather delay start and resume. Cancel-night is not built yet.
 
 var (
 	scopeShowWeatherDelayInvoke = identity.ScopeShowWeatherDelayInvoke
@@ -44,12 +41,20 @@ const maxWeatherDelayActionRequestBodyBytes = 1024
 // never delays another's.
 const weatherDelayNodeCommandConfirmDeadline = 5 * time.Second
 
-// weatherDelayHTTPClientTimeout bounds the direct-HTTP start path's own
-// client call (ADR-053 decision 8's own ruling: "short timeout (3s), no
-// retries inside the request").
+// weatherDelayHTTPClientTimeout bounds the direct-HTTP start: short, no
+// retries inside the request.
 const weatherDelayHTTPClientTimeout = 3 * time.Second
 
-var weatherDelayHTTPClient = &http.Client{Timeout: weatherDelayHTTPClientTimeout}
+// weatherDelayHTTPClient never follows a redirect: the address came from a
+// node's own hello, and a redirect would send the signed start elsewhere.
+var weatherDelayHTTPClient = &http.Client{
+	Timeout:       weatherDelayHTTPClientTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// weatherDelayRetainedPublishTimeout bounds the retained state publish that
+// start makes before any stop, so a stalled broker cannot hold the stops.
+const weatherDelayRetainedPublishTimeout = 1 * time.Second
 
 const weatherDelayHandlerWriteDeadlineMargin = 15 * time.Second
 
@@ -70,7 +75,7 @@ func weatherDelayActiveProblem(detail string) v1.Problem {
 }
 
 // weatherDelayActive reads the current stored state and reports whether
-// it is active — the one check every hold-side gate (nightloop.go,
+// it is active, the one check every hold-side gate (nightloop.go,
 // cueactivationloop.go, cuefire.go, fppcommand_handler.go,
 // nightsessioncontrol.go, weatherdelayconfig.go) makes, read fresh from
 // the store at each decision (ADR-053 decision 2's own "survives a
@@ -110,11 +115,9 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 	jsonWrite(w, resp)
 }
 
-// weatherDelayAssetReadiness reports, per plan node, whether each
-// configured alert asset is present and hash-verified there (build task
-// item 4). A node with no reported inventory, or an asset id that does
-// not resolve, reads as not present rather than erroring the whole
-// response: this is best-effort evidence, not a gate.
+// weatherDelayAssetReadiness reports, per plan node, whether each alert
+// asset is present and hash-verified there. Anything unreadable reads as
+// not present rather than failing the whole response.
 func (h *handlers) weatherDelayAssetReadiness(ctx context.Context, payload config.WeatherDelayPayload) []v1.WeatherDelayNodeAssets {
 	if payload.Alert.DelayAssetID == "" && payload.Alert.CancelNightAssetID == "" {
 		return []v1.WeatherDelayNodeAssets{}
@@ -202,20 +205,9 @@ func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string
 	return idempotencyKey, nil
 }
 
-// handleWeatherDelayStart serves POST /api/v1/weather-delay/start.
-//
-// Order (ADR-053 decision 2, this task's own CHANGE 1a-1d):
-//  1. Persist the state as active (or, if already active, read it back
-//     unchanged — starting twice never resets startedAt) and publish it
-//     retained. This happens BEFORE any stop is sent.
-//  2. Everything else — the emergency-stop level 1 fan-out, a render
-//     surface clear, the weatherdelay.start node command over MQTT, and
-//     the same start as a signed direct HTTP request — runs CONCURRENTLY,
-//     none waiting on another.
-//
-// The response reports every target's own outcome; a failed target is
-// reported, never hidden, and never rolls the state back — the start
-// succeeds once the state is persisted.
+// handleWeatherDelayStart persists and publishes the active state before
+// any stop, then sends every stop and node start concurrently. A failed
+// target is reported and never rolls the state back.
 func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(weatherDelayHandlerWriteDeadline()))
@@ -261,14 +253,7 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		h.logWarn("weather delay start: failed to build the alert plan; publishing with an empty plan", "error", planErr)
 	}
 
-	msg, err := mqttproto.NewWeatherDelayMessage(true, weatherdelay.KindDelay, rec.StartedAt, rec.StartedBy, rec.Revision, plan, now)
-	if err != nil {
-		h.logWarn("weather delay start: refusing to publish an invalid state message", "error", err)
-	} else if payloadBytes, err := mqttproto.EncodeWeatherDelayMessage(msg); err != nil {
-		h.logWarn("weather delay start: failed to encode the state message", "error", err)
-	} else if err := h.deps.WeatherDelayPublisher.Publish(ctx, mqttproto.WeatherDelayTopic(), mqttproto.WeatherDelayDeliveryPolicy.QoS, mqttproto.WeatherDelayDeliveryPolicy.Retain, payloadBytes); err != nil {
-		h.logWarn("weather delay start: failed to publish the retained state", "error", err)
-	}
+	h.publishWeatherDelayState(ctx, "start", rec, plan, now)
 
 	planNodeIDs, err := h.weatherDelayPlanNodeIDs(ctx, payload.Alert.NodeIDs)
 	if err != nil {
@@ -277,19 +262,18 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	}
 
 	var (
-		wg                                         sync.WaitGroup
-		stopOutcomes, renderOutcomes, nodeOutcomes []v1.WeatherDelayTargetOutcome
+		wg                                                          sync.WaitGroup
+		fppOutcomes, resolumeOutcomes, renderOutcomes, nodeOutcomes []v1.WeatherDelayTargetOutcome
 	)
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		outcomes, _ := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
-		stopOutcomes = append(stopOutcomes, weatherDelayWireOutcomes(outcomes)...)
+		fppOutcomes = weatherDelayWireOutcomes(outcomes)
 	}()
 	go func() {
 		defer wg.Done()
-		outcomes := h.emergencyStopAllResolumeInstances(ctx, now)
-		stopOutcomes = append(stopOutcomes, weatherDelayWireOutcomes(outcomes)...)
+		resolumeOutcomes = weatherDelayWireOutcomes(h.emergencyStopAllResolumeInstances(ctx, now))
 	}()
 	go func() {
 		defer wg.Done()
@@ -300,10 +284,8 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", weatherdelay.KindDelay, idempotencyKey, planNodeIDs, ac, clientAddr, true)
 	}()
 
-	// audio.node.silence to every declared node OUTSIDE the plan — never
-	// the plan's own nodes, whose weatherdelay.start already mutes, alerts
-	// and stops locally (build task's own "do NOT send audio.node.silence
-	// to the plan's nodes" rule).
+	// Plan nodes never get audio.node.silence: it would race their own
+	// weatherdelay.start and could silence the alert.
 	var silenceOutcomes []v1.WeatherDelayTargetOutcome
 	wg.Add(1)
 	go func() {
@@ -313,8 +295,9 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 
 	wg.Wait()
 
-	targets := make([]v1.WeatherDelayTargetOutcome, 0, len(stopOutcomes)+len(renderOutcomes)+len(nodeOutcomes)+len(silenceOutcomes))
-	targets = append(targets, stopOutcomes...)
+	targets := make([]v1.WeatherDelayTargetOutcome, 0, len(fppOutcomes)+len(resolumeOutcomes)+len(renderOutcomes)+len(nodeOutcomes)+len(silenceOutcomes))
+	targets = append(targets, fppOutcomes...)
+	targets = append(targets, resolumeOutcomes...)
 	targets = append(targets, renderOutcomes...)
 	targets = append(targets, silenceOutcomes...)
 	targets = append(targets, nodeOutcomes...)
@@ -335,13 +318,10 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	}})
 }
 
-// handleWeatherDelayResume serves POST /api/v1/weather-delay/resume.
-//
-// Persists not active, publishes retained, sends weatherdelay.resume to
-// the nodes over MQTT only (ADR-053 decision 9: a node never accepts a
-// resume any other way). If a night session is active, this build clears
-// the state only — see this file's own doc comment at the bottom for why
-// re-entering the show's own transition is not attempted here.
+// handleWeatherDelayResume always takes full effect, even when the stored
+// state is already not active: a node can be delayed without this
+// coordinator knowing, and clears only on a newer revision or the resume
+// operation, which goes to every node over MQTT only.
 func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(weatherDelayHandlerWriteDeadline()))
@@ -361,14 +341,17 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	rec := store.WeatherDelayStateRecord{Active: false, Revision: current.Revision + 1}
+	// The night session is rewound while the delay still holds the night
+	// loop, so no tick can act on the stopped show in between.
+	nightOutcome := "untouched: no weather delay was active"
 	if current.Active {
-		if err := h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec); err != nil {
-			h.writeInternalError(w, now, "set weather delay state", err)
-			return
-		}
-	} else {
-		rec = current
+		nightOutcome = h.weatherDelayResumeNightSession(ctx, now)
+	}
+
+	rec := store.WeatherDelayStateRecord{Active: false, Revision: current.Revision + 1}
+	if err := h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec); err != nil {
+		h.writeInternalError(w, now, "set weather delay state", err)
+		return
 	}
 
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
@@ -380,30 +363,16 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	if planErr != nil {
 		h.logWarn("weather delay resume: failed to build the alert plan; publishing with an empty plan", "error", planErr)
 	}
+	h.publishWeatherDelayState(ctx, "resume", rec, plan, now)
 
-	msg, err := mqttproto.NewWeatherDelayMessage(false, "", time.Time{}, "", rec.Revision, plan, now)
-	if err != nil {
-		h.logWarn("weather delay resume: refusing to publish an invalid state message", "error", err)
-	} else if payloadBytes, err := mqttproto.EncodeWeatherDelayMessage(msg); err != nil {
-		h.logWarn("weather delay resume: failed to encode the state message", "error", err)
-	} else if err := h.deps.WeatherDelayPublisher.Publish(ctx, mqttproto.WeatherDelayTopic(), mqttproto.WeatherDelayDeliveryPolicy.QoS, mqttproto.WeatherDelayDeliveryPolicy.Retain, payloadBytes); err != nil {
-		h.logWarn("weather delay resume: failed to publish the retained state", "error", err)
-	}
-
-	planNodeIDs, err := h.weatherDelayPlanNodeIDs(ctx, payload.Alert.NodeIDs)
-	if err != nil {
-		h.logWarn("weather delay resume: failed to resolve plan node ids; no node command could be dispatched", "error", err)
-		planNodeIDs = nil
-	}
-	nodeOutcomes := h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, planNodeIDs, ac, clientAddr, false)
-
-	nightOutcome := h.weatherDelayResumeNightSession(ctx, now)
+	nodeIDs := h.weatherDelayResumeNodeIDs(ctx, now, payload.Alert.NodeIDs)
+	nodeOutcomes := h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, nodeIDs, ac, clientAddr, false)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
 		Action: identity.AuditActionShowWeatherDelayResume, Target: "resume", IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(nodeOutcomes), "revision": rec.Revision, "nightSession": nightOutcome},
+		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(nodeOutcomes), "revision": rec.Revision, "wasActive": current.Active, "nightSession": nightOutcome},
 	})
 	h.appendWeatherDelayChangedEvent(ctx, now, "resumed")
 	h.notifyStreamHub()
@@ -414,25 +383,127 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	}})
 }
 
-// weatherDelayResumeNightSession implements ADR-053 decision 11 as "clear
-// only": this build does not attempt to return an active night session to
-// its transition into the show. The night state machine's own commands
-// (nightsessioncontrol.go) are gated on the weather delay state elsewhere
-// in this package (see nightloop.go/nightsessioncontrol.go's own weather
-// delay checks) and simply resume advancing on their own once this state
-// clears; nothing here forces a session back into transition-to-show.
-// This is a stated Acceptance gap, not an oversight — see the owning PR's
-// Acceptance section.
-func (h *handlers) weatherDelayResumeNightSession(ctx context.Context, now time.Time) string {
-	cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+// publishWeatherDelayState publishes rec retained, bounded by
+// [weatherDelayRetainedPublishTimeout]; a failure is logged, never fatal.
+func (h *handlers) publishWeatherDelayState(ctx context.Context, op string, rec store.WeatherDelayStateRecord, plan mqttproto.WeatherDelayPlan, now time.Time) {
+	kind, startedAt, startedBy := "", time.Time{}, ""
+	if rec.Active {
+		kind, startedAt, startedBy = rec.Kind, rec.StartedAt, rec.StartedBy
+	}
+	msg, err := mqttproto.NewWeatherDelayMessage(rec.Active, kind, startedAt, startedBy, rec.Revision, plan, now)
 	if err != nil {
-		h.logWarn("weather delay resume: failed to read the current night session", "error", err)
-		return "unknown: " + err.Error()
+		h.logWarn("weather delay "+op+": refusing to publish an invalid state message", "error", err)
+		return
 	}
-	if !ok {
-		return "none"
+	payloadBytes, err := mqttproto.EncodeWeatherDelayMessage(msg)
+	if err != nil {
+		h.logWarn("weather delay "+op+": failed to encode the state message", "error", err)
+		return
 	}
-	return "state-cleared-only: session " + cur.ID + " continues from its own current state; the show playlist restart from the top is not implemented in this build"
+	pubCtx, cancel := context.WithTimeout(ctx, weatherDelayRetainedPublishTimeout)
+	defer cancel()
+	if err := h.deps.WeatherDelayPublisher.Publish(pubCtx, mqttproto.WeatherDelayTopic(), mqttproto.WeatherDelayDeliveryPolicy.QoS, mqttproto.WeatherDelayDeliveryPolicy.Retain, payloadBytes); err != nil {
+		h.logWarn("weather delay "+op+": failed to publish the retained state", "error", err)
+	}
+}
+
+// weatherDelayResumeNodeIDs is every node that could hold a delay: the
+// plan's nodes, every declared audio node, and every node in inventory.
+func (h *handlers) weatherDelayResumeNodeIDs(ctx context.Context, now time.Time, configured []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(ids ...string) {
+		for _, id := range ids {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	add(configured...)
+	if declared, err := h.declaredAudioNodeIDs(ctx); err != nil {
+		h.logWarn("weather delay resume: failed to list declared audio.node ids", "error", err)
+	} else {
+		add(declared...)
+	}
+	if views, err := h.deps.Nodes.Snapshot(ctx, now); err != nil {
+		h.logWarn("weather delay resume: failed to list inventory nodes", "error", err)
+	} else {
+		for _, v := range views {
+			add(v.NodeID)
+		}
+	}
+	return out
+}
+
+// weatherDelayInterruptedCycleReason is recorded when a delay stopped a
+// live show; resume starts that show again from the top as a new cycle.
+const weatherDelayInterruptedCycleReason = "A weather delay stopped the show before its last sequence played. The show starts again from the top when the delay ends."
+
+// weatherDelayResumeNightSession returns an active night session to where
+// it should be after a delay: a show that was live or about to start goes
+// back to the start of its transition into the show, as start-night enters
+// it; preshow and resting restart their resting playlist from the top.
+// Other states and degraded sessions are left alone.
+func (h *handlers) weatherDelayResumeNightSession(ctx context.Context, now time.Time) string {
+	var (
+		result       string
+		closeCycle   int64
+		closeCycleID string
+	)
+	err := h.deps.NightSessions.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		cur, ok, err := tx.GetCurrentNightSession(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			result = "none"
+			return nil
+		}
+		if cur.Degraded {
+			result = "untouched: session " + cur.ID + " is degraded"
+			return nil
+		}
+		next := cur
+		switch cur.State {
+		case nightStateLive, nightStateTransitionToShow:
+			payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, cur)
+			if err != nil {
+				return err
+			}
+			if cur.State == nightStateLive {
+				closeCycle, closeCycleID = cur.Cycle, cur.ID
+			}
+			boundaryE := now.Add(time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond)
+			lastTick := now
+			next.State = nightStateTransitionToShow
+			next.ArmedShowID = uuid.NewString()
+			next.ShowCommitted = false
+			next.Cycle = cur.Cycle + 1
+			next.ContentAnchorJSON = ""
+			next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick,
+				Reason: fmt.Sprintf("The show starts again from the top after a weather delay, expected at %s.", boundaryE.Format(time.RFC3339))})
+		case nightStatePreshow, nightStateRestingIntershow:
+			next.ContentAnchorJSON = ""
+			next.BoundaryJSON = ""
+		default:
+			result = "untouched: session " + cur.ID + " is " + cur.State
+			return nil
+		}
+		next.StateEnteredAt = now
+		result = "session " + cur.ID + " moved from " + cur.State + " to " + next.State
+		return tx.UpdateNightSession(ctx, next, now)
+	})
+	if err != nil {
+		h.logWarn("weather delay resume: failed to return the night session to its show transition", "error", err)
+		return "failed: " + err.Error()
+	}
+	if closeCycleID != "" {
+		if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, closeCycleID, closeCycle, now, store.NightCycleOutcomeInterrupted, weatherDelayInterruptedCycleReason); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+			h.logWarn("weather delay resume: failed to close the interrupted night cycle outcome", "sessionId", closeCycleID, "cycle", closeCycle, "error", err)
+		}
+	}
+	return result
 }
 
 // buildWeatherDelayPlan resolves show.weatherdelay's alert config into the
@@ -518,9 +589,9 @@ func (h *handlers) weatherDelaySilenceNonPlanNodes(ctx context.Context, now time
 
 // weatherDelayDispatchToNodes dispatches action ("weatherdelay.start" or
 // "weatherdelay.resume") to every id in nodeIDs, CONCURRENTLY, over MQTT
-// and — for start only, per ADR-053 decision 9 — the direct signed HTTP
+// and, for start only, per ADR-053 decision 9, the direct signed HTTP
 // path in parallel with it, never as a fallback. A node reached by either
-// path counts as reached (build task's own rule).
+// path counts as reached.
 func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Time, action, kind, idempotencyKey string, nodeIDs []string, ac authContext, clientAddr string, allowHTTP bool) []v1.WeatherDelayTargetOutcome {
 	if len(nodeIDs) == 0 {
 		return []v1.WeatherDelayTargetOutcome{}
@@ -624,9 +695,10 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 		return false, fmt.Sprintf("marshal cmd envelope: %v", err), nil
 	}
 
-	dispatched := now
-	dispatchedAtStr := formatTime(dispatched)
-	msg, err := h.deps.WeatherDelayPublisher.AwaitResponse(ctx, broker.ResponseRequest{
+	dispatchedAtStr := formatTime(now)
+	awaitCtx, cancel := context.WithTimeout(ctx, weatherDelayRetainedPublishTimeout+weatherDelayNodeCommandConfirmDeadline)
+	defer cancel()
+	msg, err := h.deps.WeatherDelayPublisher.AwaitResponse(awaitCtx, broker.ResponseRequest{
 		PublishTopic: cmdTopic, PublishPayload: rawEnv,
 		PublishQoS: mqttproto.CmdDeliveryPolicy.QoS, PublishRetain: mqttproto.CmdDeliveryPolicy.Retain,
 		ResponseTopic: resultTopic, ResponseQoS: mqttproto.ResultDeliveryPolicy.QoS,
@@ -639,7 +711,7 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 		if errors.Is(err, broker.ErrResponseFailedBeforePublish) {
 			return false, fmt.Sprintf("publish failed: %v", err), nil
 		}
-		// The command WAS published — see [broker.ResponseRequest]'s doc
+		// The command WAS published, see [broker.ResponseRequest]'s doc
 		// comment: AwaitResponse subscribes then publishes, so a deadline
 		// exceeded past this point still means the command reached the
 		// broker. That is enough to count this node as reached over MQTT:
@@ -661,7 +733,7 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 // weatherDelayHTTPNodeStart POSTs a signed start directly to addr's
 // showmesh/v1/weather-delay/start, in parallel with the MQTT path, never
 // as its fallback (ADR-053 decision 8). false on any failure to sign,
-// build, or send the request, or a non-2xx response — this path is
+// build, or send the request, or a non-2xx response, this path is
 // evidence, not a requirement; MQTT alone can still deliver the start.
 func (h *handlers) weatherDelayHTTPNodeStart(ctx context.Context, kind, addr string) bool {
 	req := weatherdelay.StartRequest{Kind: kind, IssuedAt: h.now(), Nonce: uuid.NewString()}
@@ -712,7 +784,7 @@ func weatherDelayWireOutcomes(in []v1.EmergencyStopInstanceOutcome) []v1.Weather
 }
 
 // appendWeatherDelayChangedEvent records [v1.EventKindWeatherDelayChanged]
-// in the durable events table (build task item 5's "change stream"), best
+// in the durable events table, best
 // effort: a failure to append is logged and never turns a successful
 // start/resume into an error.
 func (h *handlers) appendWeatherDelayChangedEvent(ctx context.Context, now time.Time, summary string) {

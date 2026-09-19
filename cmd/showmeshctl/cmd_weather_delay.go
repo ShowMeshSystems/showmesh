@@ -11,7 +11,7 @@ import (
 // start", "weather-delay resume", and "weather-delay status". No
 // confirmation prompt on start (ADR-053 decision 1: one press, no
 // confirmation step), mirroring emergency-stop's own "stop"/
-// "stop-power-down" — never emergency-stop hard-stop's arm/fire gate,
+// "stop-power-down", never emergency-stop hard-stop's arm/fire gate,
 // which this feature has no equivalent of.
 
 func cmdWeatherDelay(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -147,10 +147,10 @@ func cmdWeatherDelayAction(args []string, stdout, stderr io.Writer, clock func()
 
 func reportWeatherDelayActionResult(stdout io.Writer, result weatherDelayActionResult) int {
 	if result.Active {
-		_, _ = fmt.Fprintf(stdout, "weather delay: active (kind=%s, startedAt=%s, startedBy=%s, revision=%d)\n",
-			result.Kind, result.StartedAt, result.StartedBy, result.Revision)
+		_, _ = fmt.Fprintf(stdout, "weather delay: active (kind=%s, startedAt=%s, startedBy=%s)\n",
+			result.Kind, result.StartedAt, result.StartedBy)
 	} else {
-		_, _ = fmt.Fprintf(stdout, "weather delay: resumed (revision=%d)\n", result.Revision)
+		_, _ = fmt.Fprintln(stdout, "weather delay: resumed")
 	}
 	if len(result.Targets) == 0 {
 		_, _ = fmt.Fprintln(stdout, "  no targets were configured to dispatch to")
@@ -227,10 +227,10 @@ func cmdWeatherDelayStatus(args []string, stdout, stderr io.Writer, clock func()
 		return exitOK
 	}
 	if resp.Active {
-		_, _ = fmt.Fprintf(stdout, "weather delay: active (kind=%s, startedAt=%s, startedBy=%s, revision=%d)\n",
-			resp.Kind, resp.StartedAt, resp.StartedBy, resp.Revision)
+		_, _ = fmt.Fprintf(stdout, "weather delay: active (kind=%s, startedAt=%s, startedBy=%s)\n",
+			resp.Kind, resp.StartedAt, resp.StartedBy)
 	} else {
-		_, _ = fmt.Fprintf(stdout, "weather delay: not active (revision=%d)\n", resp.Revision)
+		_, _ = fmt.Fprintln(stdout, "weather delay: not active")
 	}
 	for _, na := range resp.Assets {
 		_, _ = fmt.Fprintf(stdout, "  node %s:\n", na.NodeID)

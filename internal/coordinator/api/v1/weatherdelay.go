@@ -7,7 +7,7 @@ const EventKindWeatherDelayChanged = "weatherDelay.changed"
 // WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
 // StartedAt and StartedBy are omitted while Active is false. Assets
 // reports, per plan node, whether each configured alert asset is present
-// and hash-verified there (build task item 4), so an operator can see on
+// and hash-verified there, so an operator can see on
 // a calm day that the alert is ready.
 type WeatherDelayStateResponse struct {
 	ServerTime string                   `json:"serverTime"`
@@ -45,7 +45,7 @@ type WeatherDelayActionRequest struct {
 // [EmergencyStopTargetKindNode], [EmergencyStopTargetKindResolume],
 // [EmergencyStopTargetKindRender], or "node-command" for the
 // weatherdelay.start/resume node command itself. DeliveredVia is set only
-// for "node-command": "mqtt", "http", "both", or "none" — ADR-053 decision
+// for "node-command": "mqtt", "http", "both", or "none", ADR-053 decision
 // 8's "a node reached by either path counts as reached."
 type WeatherDelayTargetOutcome struct {
 	InstanceID    string  `json:"instanceId"`
@@ -59,8 +59,7 @@ type WeatherDelayTargetOutcome struct {
 // WeatherDelayTargetKindNodeCommand is the weatherdelay.start/resume node
 // command's own target kind: distinct from [EmergencyStopTargetKindNode]
 // (audio.node.silence), since weather delay never sends that action to a
-// plan node (ADR-053 decision 7/8 — build task's own "do NOT send
-// audio.node.silence to the plan's nodes" rule).
+// plan node, where it would race the alert.
 const WeatherDelayTargetKindNodeCommand = "node-command"
 
 // WeatherDelayActionResult is the shared result shape start and resume

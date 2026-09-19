@@ -276,7 +276,7 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ADR-053 decision 3: the playlist start commands are refused while a
-	// weather delay is active — stop, blackout, power-off and emergency
+	// weather delay is active; stop, blackout, power-off and emergency
 	// stop are never refused or delayed by this state (decision 13), so
 	// only the two commands that START output are gated here.
 	if action == "startPlaylist" || action == "resumePlaylist" {

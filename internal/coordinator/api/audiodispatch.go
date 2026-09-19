@@ -443,6 +443,11 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 	if h.deps.Commands == nil {
 		return v1.AudioSessionCommandResult{}, nil, errors.New("no command store is configured")
 	}
+	if weatherDelayHeldAudioActions[in.Action] {
+		if p, err := h.weatherDelayHeldProblem(ctx, "A weather delay is active. Resume the show to start audio."); err != nil || p != nil {
+			return v1.AudioSessionCommandResult{}, p, err
+		}
+	}
 
 	paramsJSON, err := json.Marshal(in.Params)
 	if err != nil {

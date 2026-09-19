@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -108,12 +110,6 @@ func TestWeatherDelayStartPublishesNodeCommandWhileResolumeBlocked(t *testing.T)
 	deadline := time.After(2 * time.Second)
 	for {
 		if _, ok := pub.firstNodeCommandAt(); ok {
-			resolume.mu.Lock()
-			enteredResolume := !resolume.enteredAt.IsZero()
-			resolume.mu.Unlock()
-			if !enteredResolume {
-				t.Fatal("node command was dispatched before Resolume dispatch even started; test setup is racy")
-			}
 			break
 		}
 		select {
@@ -153,7 +149,7 @@ func TestWeatherDelayStopAndEmergencyStopNeverRefusedDuringWeatherDelay(t *testi
 	api := New(Dependencies{
 		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-		Identity: svc, Config: st, Commands: st, NightSessions: st,
+		Identity: svc, Config: st, Commands: st, NightSessions: st, WeatherDelay: st,
 		Macros: &fakeMacroRunner{},
 	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger()})
 
@@ -164,5 +160,51 @@ func TestWeatherDelayStopAndEmergencyStopNeverRefusedDuringWeatherDelay(t *testi
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("emergency stop while delayed: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestWeatherDelayStartReportsEveryStopTarget: the FPP and Resolume stops
+// run concurrently and each keeps its own result.
+func TestWeatherDelayStartReportsEveryStopTarget(t *testing.T) {
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	fppSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(fppSrv.Close)
+
+	api := New(Dependencies{
+		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		Identity: svc, Config: st, Commands: st, WeatherDelay: st,
+		FPP: &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: fppSrv.URL}}},
+		ResolumeActions: &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+			config.ShowActionResolumeBlackout: {Outcome: ResolumeOutcomeConfirmed, Dispatched: true},
+		}},
+		Resolume:              &fakeResolumeLister{views: []ResolumeInstanceView{{InstanceID: "resolume-01"}}},
+		WeatherDelayPublisher: &fakeWeatherDelayPublisher{},
+	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger(), FPPCommandConfirmDeadline: 50 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond})
+
+	auth := map[string]string{"Authorization": "Bearer " + mustIssueToken(t, svc, admin.ID)}
+	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/start", `{"idempotencyKey":"key-1"}`, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("start: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Result struct {
+			Targets []struct {
+				InstanceID string `json:"instanceId"`
+				TargetKind string `json:"targetKind"`
+			} `json:"targets"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	kinds := map[string]bool{}
+	for _, tg := range out.Result.Targets {
+		kinds[tg.TargetKind] = true
+	}
+	if !kinds["fpp"] || !kinds["resolume"] {
+		t.Fatalf("targets = %+v, want both the fpp and the resolume stop reported", out.Result.Targets)
 	}
 }

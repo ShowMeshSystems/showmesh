@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -201,12 +203,19 @@ func validateInboundListener(addr string) error {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		return fmt.Errorf("%w: host %q is empty or unspecified", ErrPayloadInvalidInboundListener, host)
 	}
-	port, err := net.LookupPort("tcp", portStr)
+	if net.ParseIP(host) == nil && !inboundListenerHostnamePattern.MatchString(host) {
+		return fmt.Errorf("%w: host %q is not an IP address or a hostname", ErrPayloadInvalidInboundListener, host)
+	}
+	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("%w: port %q is not in range [1, 65535]", ErrPayloadInvalidInboundListener, portStr)
 	}
 	return nil
 }
+
+// inboundListenerHostnamePattern admits DNS labels only, so the host can
+// never carry a path, userinfo, query or fragment into the URL built from it.
+var inboundListenerHostnamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`)
 
 // HealthPayload is the payload of the showmesh.node.health/v1 schema,
 // published retained on showmesh/nodes/<node-id>/observed/health: a

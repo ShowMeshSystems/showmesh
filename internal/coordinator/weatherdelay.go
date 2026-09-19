@@ -17,7 +17,7 @@ import (
 // on every change, and this loop republishes the CURRENT stored state on a
 // short interval so a node that connects, or misses one delivery, still
 // converges without an operator having to act again. It never gates, never
-// dispatches a stop, and never mutates the stored state — read-and-
+// dispatches a stop, and never mutates the stored state, read-and-
 // republish only, mirroring runShowMode's identical shape and its
 // identical "best effort, log and retry next tick" posture.
 
@@ -43,7 +43,7 @@ type weatherDelayAssetPusher interface {
 // every tick, plus once immediately (matching runShowMode's own "the
 // first pass runs immediately" reasoning). On every tick it also nudges
 // the configured alert assets toward every plan node through the
-// existing asset sync (build task item 4), independent of whether a
+// existing asset sync, independent of whether a
 // delay is active: the alert must be ready on a calm day, not only after
 // the operator has already pressed start.
 func runWeatherDelay(ctx context.Context, st *store.Store, pub weatherDelayPublisher, assets weatherDelayAssetPusher, now func() time.Time, logger *slog.Logger, interval time.Duration) {
@@ -64,9 +64,6 @@ func runWeatherDelay(ctx context.Context, st *store.Store, pub weatherDelayPubli
 		payload, payloadErr := weatherDelayConfigPayload(ctx, st)
 		if payloadErr != nil && logger != nil {
 			logger.Warn("weather delay: failed to resolve show.weatherdelay config; republishing with an empty plan", "error", payloadErr)
-		}
-		if assets != nil && payloadErr == nil {
-			pushWeatherDelayAssets(ctx, st, assets, payload, logger)
 		}
 		plan, err := weatherDelayPlanFromPayload(ctx, st, payload)
 		if err != nil && logger != nil {
@@ -90,12 +87,16 @@ func runWeatherDelay(ctx context.Context, st *store.Store, pub weatherDelayPubli
 			}
 			return
 		}
-		if err := pub.Publish(ctx, mqttproto.WeatherDelayTopic(), mqttproto.WeatherDelayDeliveryPolicy.QoS,
-			mqttproto.WeatherDelayDeliveryPolicy.Retain, encoded); err != nil {
-			if logger != nil {
-				logger.Warn("weather delay: failed to republish the retained state; nodes keep the state they already hold",
-					"error", err)
-			}
+		pubCtx, cancel := context.WithTimeout(ctx, interval)
+		err = pub.Publish(pubCtx, mqttproto.WeatherDelayTopic(), mqttproto.WeatherDelayDeliveryPolicy.QoS,
+			mqttproto.WeatherDelayDeliveryPolicy.Retain, encoded)
+		cancel()
+		if err != nil && logger != nil {
+			logger.Warn("weather delay: failed to republish the retained state; nodes keep the state they already hold",
+				"error", err)
+		}
+		if assets != nil && payloadErr == nil {
+			pushWeatherDelayAssets(ctx, st, assets, payload, logger)
 		}
 	}
 

@@ -1242,6 +1242,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/audio/sessions/{sessionId}/pause:
@@ -7252,6 +7254,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.playlist:

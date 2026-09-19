@@ -8242,6 +8242,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -12372,6 +12373,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

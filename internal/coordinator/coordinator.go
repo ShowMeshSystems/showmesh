@@ -876,7 +876,7 @@ func Run() int {
 		// to hold (noResolumeActionDispatcher, noResolumeLister,
 		// noResolumeRecoveryProvider) were a startup-only snapshot of
 		// exactly one condition: cfg.ResolumeURL != "".
-		ResolumeActions:    resolumeMgr,
+		ResolumeActions:    api.WeatherDelayGatedResolumeActions(resolumeMgr, st),
 		ResolumeReferences: resolumeReferences,
 		Resolume:           resolumeMgr,
 		ResolumeRecovery:   resolumeMgr,
@@ -929,7 +929,7 @@ func Run() int {
 		// no-op default.
 		NightSessions: st,
 		// WeatherDelay is ADR-053's own dependency: *store.Store already
-		// satisfies api.WeatherDelayStore with no adapter — wiring it in
+		// satisfies api.WeatherDelayStore with no adapter, wiring it in
 		// is what makes GET/POST /api/v1/weather-delay/* read and write
 		// real state instead of api.noWeatherDelayStore's no-op default.
 		WeatherDelay: st,
@@ -937,11 +937,8 @@ func Run() int {
 		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
 		// adapter, matching AudioPublisher's identical wiring above.
 		WeatherDelayPublisher: bm,
-		// WeatherDelayNodeAddrs: inv already satisfies
-		// api.WeatherDelayNodeAddrs (InboundListener) with no adapter —
-		// this is ADR-053 decision 8's own answer to "how does the
-		// coordinator know a node's address" (owner ruling: the node's
-		// own retained hello, not operator-entered configuration).
+		// WeatherDelayNodeAddrs: a node's address for the direct start
+		// comes from its own retained hello, never from operator config.
 		WeatherDelayNodeAddrs: inv,
 		// WeatherDelaySigner: signingMgr already satisfies
 		// api.WeatherDelaySigner (Sign) with no adapter, the SAME key

@@ -6,8 +6,8 @@ import (
 )
 
 // This file is the weather delay alert's own, narrow use of this
-// package's existing fetch dispatch (ADR-053 decision 7's alert asset,
-// build task item 4). It deliberately does NOT go through
+// package's existing fetch dispatch (ADR-053 decision 7's alert asset).
+// It deliberately does NOT go through
 // [ExpectedAssetsForNode]/[BuildManifest]: those compute what a node
 // should hold for the ACTIVE SHOW, and an alert asset must reach a node
 // whether or not any show is active ("a calm day", the operator checking
@@ -17,7 +17,7 @@ import (
 
 // EnsureAssetOnNode resolves assetID to its current stored metadata and,
 // if nodeID does not already hold it in flight, dispatches asset.fetch to
-// it exactly as an ordinary manifest-driven sync would — same in-flight
+// it exactly as an ordinary manifest-driven sync would, same in-flight
 // budget, same dedupe key. A caller normally calls this once per plan
 // node per configured alert asset id; repeated calls (an operator pressing
 // "sync now", or this package's own caller re-checking readiness) are
@@ -27,6 +27,9 @@ func (s *Service) EnsureAssetOnNode(ctx context.Context, assetID, nodeID string)
 	rec, err := s.st.GetAsset(ctx, assetID)
 	if err != nil {
 		return fmt.Errorf("assetsync: ensure asset %q on node %q: %w", assetID, nodeID, err)
+	}
+	if present, err := s.AssetPresence(ctx, nodeID, rec.ContentHash); err == nil && present {
+		return nil
 	}
 	s.maybeDispatch(ctx, nodeID, ExpectedAsset{
 		AssetID: rec.ID, SequenceID: rec.SequenceID, MediaType: rec.MediaType,

@@ -107,7 +107,7 @@ func (h *handlers) resolveFPPEndpoint(ctx context.Context, instanceID string) (e
 func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// ADR-053 decision 3: while a weather delay is active, the night loop
 	// advances nothing and dispatches nothing, and this is never treated
-	// as a degraded or failed session — it is a normal hold, checked fresh
+	// as a degraded or failed session: it is a normal hold, checked fresh
 	// from the store on every tick.
 	if active, err := h.weatherDelayActive(ctx); err != nil {
 		h.logWarn("night loop: failed to read weather delay state; holding this tick as a precaution", "error", err)
