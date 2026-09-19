@@ -225,6 +225,19 @@ const (
 	// [ScopeRenderCommand], [ScopeAudioCommand], and [ScopeNightCommand]
 	// each already carry for their own dispatch surface.
 	ScopeCueActivate Scope = "cue:activate"
+
+	// ScopeShowWeatherDelayInvoke gates starting a weather delay or
+	// cancelling the night (ADR-053 decision 1), on
+	// [ScopeShowEmergencyStopInvoke]'s own umbrella-authority precedent.
+	ScopeShowWeatherDelayInvoke Scope = "show:weatherdelay:invoke"
+
+	// ScopeShowWeatherDelayResume gates resuming from a weather delay
+	// (ADR-053 decision 8: "Resume is accepted only by the authenticated
+	// coordinator API"). Deliberately its OWN scope, never folded into
+	// [ScopeShowWeatherDelayInvoke]: a principal trusted to start a delay
+	// (a low-stakes, degrade-safely act) is not automatically trusted to
+	// relight a display in a storm.
+	ScopeShowWeatherDelayResume Scope = "show:weatherdelay:resume"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -236,7 +249,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and
@@ -533,3 +546,15 @@ type AuditEntry struct {
 	OutcomeState  string
 	OutcomeReason string
 }
+
+// The four ADR-053 weather-delay audit action strings: minted here, not
+// alongside a handler, because the config kind, the store, and the API all
+// need to agree on them and none of those packages is the obvious sole
+// owner. Spelled to match the URL path/JSON vocabulary exactly, on
+// auditActionEmergencyStop's own precedent (internal/coordinator/api).
+const (
+	AuditActionShowWeatherDelayStart       = "show.weatherdelay.start"
+	AuditActionShowWeatherDelayCancelNight = "show.weatherdelay.cancel_night"
+	AuditActionShowWeatherDelayResume      = "show.weatherdelay.resume"
+	AuditActionShowWeatherDelayEnforce     = "show.weatherdelay.enforce"
+)

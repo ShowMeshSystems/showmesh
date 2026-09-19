@@ -63,6 +63,19 @@ var exemptWritePaths = map[string]string{
 		"unconditionally (requireScope), the installed FPP plugin principal, not a general operator read " +
 		"scope. Neither needs a CLI verb of its own in this PR; growing one is future work, not a gap this " +
 		"exemption hides.",
+	"/weather-delay/start": "ADR-053's vocabulary-only branch: the route, scope, and request shape " +
+		"exist, but always answers 501 - there is no real behavior yet for a CLI verb to invoke. This " +
+		"task's own scope explicitly excludes adding showmeshctl commands; a CLI verb is the later " +
+		"branch's job, alongside the real dispatch this route will gain.",
+	"/weather-delay/cancel-night": "Same reasoning as /weather-delay/start: always answers 501 today, " +
+		"no showmeshctl commands added by ADR-053's vocabulary-only branch.",
+	"/weather-delay/resume": "Same reasoning as /weather-delay/start: always answers 501 today, no " +
+		"showmeshctl commands added by ADR-053's vocabulary-only branch.",
+	"/config/show.weatherdelay": "PUT: ADR-053's vocabulary-only branch adds the config kind (alert, " +
+		"power groups, triggers) so a later branch's behavior has something to configure, but this " +
+		"task's own scope explicitly excludes adding showmeshctl commands - a dedicated cmd_weather_delay_" +
+		"config.go, on cmd_emergency_stop_config.go's own precedent, is that later branch's job. GET is " +
+		"unaffected (this map is write-paths only).",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees

@@ -523,6 +523,15 @@ type NightSessionStore interface {
 	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
 }
 
+// WeatherDelayStore is ADR-053's own store dependency: the single
+// persisted weather_delay_state row (store/weatherdelay.go). *store.Store
+// already satisfies this with no adapter needed, matching
+// [NightSessionStore]'s identical pattern.
+type WeatherDelayStore interface {
+	GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error)
+	SetWeatherDelayState(ctx context.Context, rec store.WeatherDelayStateRecord) error
+}
+
 // FPPObservationStore is the playlist-entry observation contract's store dependency: the latest accepted
 // playlist-entry observation per FPP instance
 // (store/fppobservations.go). *store.Store already satisfies this with no

@@ -22,7 +22,13 @@ import (
 //
 // Every entry needs a stated reason, exactly like
 // cmd/showmeshctl/writeparity_test.go's exemptWritePaths.
-var unwiredDependencyExemptions = map[string]string{}
+var unwiredDependencyExemptions = map[string]string{
+	"WeatherDelay": "ADR-053's vocabulary-only branch adds pkg/weatherdelay, the store table, and the " +
+		"API surface (GET works against the nil-safe default's correct \"not active\" answer; the write " +
+		"path — resume, once it exists — would refuse). This task's own package list excludes " +
+		"internal/coordinator/coordinator.go; wiring store.Store as the real WeatherDelayStore is the " +
+		"later branch's job, alongside the behavior that actually writes the state.",
+}
 
 // dependencyRefusalVarPattern matches this package's naming convention for
 // a sentinel "dependency not wired in" error: a package-level

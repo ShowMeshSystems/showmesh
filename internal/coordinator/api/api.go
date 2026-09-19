@@ -576,6 +576,15 @@ type Dependencies struct {
 	// API failing" posture.
 	NightSessions NightSessionStore
 
+	// WeatherDelay is ADR-053's own store dependency — see
+	// [WeatherDelayStore]. A nil field is replaced by [noWeatherDelayStore],
+	// under which GET still reports the correct "not active" default (a
+	// real, valid answer, not degraded) and Set refuses with an internal
+	// error, matching this struct's standing "an unwired dependency is not
+	// this API failing" posture. Not yet wired in
+	// internal/coordinator/coordinator.go — a later branch's job.
+	WeatherDelay WeatherDelayStore
+
 	// FPPObservations is the playlist-entry observation store dependency — see
 	// [FPPObservationStore]. A nil field is replaced by
 	// [noFPPObservationStore], under which GET reports an empty list and
@@ -752,6 +761,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.NightSessions == nil {
 		d.NightSessions = noNightSessionStore{}
 	}
+	if d.WeatherDelay == nil {
+		d.WeatherDelay = noWeatherDelayStore{}
+	}
 	if d.FPPObservations == nil {
 		d.FPPObservations = noFPPObservationStore{}
 	}
@@ -849,6 +861,21 @@ func (noNightSessionStore) GetNightSessionByIdempotencyKey(context.Context, stri
 
 func (noNightSessionStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
 	return fmt.Errorf("api: night session store not wired in")
+}
+
+// noWeatherDelayStore is [Dependencies.WeatherDelay]'s nil-safe default:
+// Get reports the zero record (not active), which store.GetWeatherDelayState
+// already reports for a real, never-written row — so an unwired dependency
+// and a genuinely empty one read identically, both correctly. Set refuses,
+// matching every other unwired write-capable dependency in this file.
+type noWeatherDelayStore struct{}
+
+func (noWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherDelayStateRecord, error) {
+	return store.WeatherDelayStateRecord{}, nil
+}
+
+func (noWeatherDelayStore) SetWeatherDelayState(context.Context, store.WeatherDelayStateRecord) error {
+	return fmt.Errorf("api: weather delay store not wired in")
 }
 
 func (noNightSessionStore) InsertNightCueOutboxRow(context.Context, store.NightCueOutboxRecord, time.Time) error {
@@ -1958,6 +1985,21 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/emergency-stop/stop-power-down", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopPowerDown))
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
+
+	// ADR-053 weather delay: the live state (working now), the
+	// show.weatherdelay configuration kind (working now, on
+	// show.emergencystop's own shape), and the three trigger routes
+	// (start/cancel-night/resume, currently always 501 — see
+	// weatherdelay.go's own doc comment). Resume holds its own scope,
+	// separate from start/cancel-night's shared invoke scope (ADR-053
+	// decision 8).
+	mux.HandleFunc("GET /api/v1/weather-delay", h.readGuard(identity.ScopeObservationRead, h.handleGetWeatherDelayState))
+	mux.HandleFunc("GET /api/v1/config/show.weatherdelay", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.weatherdelay", h.writeGuard(&scopeConfigWrite, h.handlePutWeatherDelayConfig))
+	mux.HandleFunc("GET /api/v1/config/show.weatherdelay/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfigRevisions))
+	mux.HandleFunc("POST /api/v1/weather-delay/start", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayStart))
+	mux.HandleFunc("POST /api/v1/weather-delay/cancel-night", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayCancelNight))
+	mux.HandleFunc("POST /api/v1/weather-delay/resume", h.writeGuard(&scopeShowWeatherDelayResume, h.handleWeatherDelayResume))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an
