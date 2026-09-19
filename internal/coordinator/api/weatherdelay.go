@@ -207,7 +207,7 @@ func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string
 
 // handleWeatherDelayStart persists and publishes the active state before
 // any stop, then sends every stop and node start concurrently. A failed
-// target is reported and never rolls the state back.
+// target or a failed write is reported and never rolls the state back.
 func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(weatherDelayHandlerWriteDeadline()))
@@ -231,16 +231,21 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// A failed write never stops the stops: the keeper holds the active
+	// state in this process and the republish loop retries the write.
 	rec := current
+	var saveErr error
 	if !current.Active {
 		rec = store.WeatherDelayStateRecord{
 			Active: true, Kind: weatherdelay.KindDelay, StartedAt: now, StartedBy: issuerID,
 			Revision: current.Revision + 1,
 		}
-		if err := h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec); err != nil {
-			h.writeInternalError(w, now, "set weather delay state", err)
-			return
-		}
+		saveErr = h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec)
+	} else if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
+		saveErr = keeper.SaveUnsaved(ctx)
+	}
+	if saveErr != nil {
+		h.logWarn("weather delay start: failed to store the active state; holding it in this process and stopping everything anyway", "error", saveErr)
 	}
 
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
@@ -302,20 +307,27 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	targets = append(targets, silenceOutcomes...)
 	targets = append(targets, nodeOutcomes...)
 
+	result := v1.WeatherDelayActionResult{
+		Kind: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey, Active: true,
+		StartedAt: formatTime(rec.StartedAt), StartedBy: rec.StartedBy, Revision: rec.Revision,
+		Targets: targets,
+	}
+	auditParams := map[string]any{"targets": len(targets), "revision": rec.Revision}
+	if saveErr != nil {
+		result.NotSaved, result.NotSavedMessage = true, weatherDelayNotSavedMessage
+		auditParams["notSaved"], auditParams["notSavedMessage"] = true, weatherDelayNotSavedMessage
+	}
+
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
 		Action: identity.AuditActionShowWeatherDelayStart, Target: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(targets), "revision": rec.Revision},
+		Kind: identity.AuditOutcome, Params: auditParams,
 	})
 	h.appendWeatherDelayChangedEvent(ctx, now, "started")
 	h.notifyStreamHub()
 
-	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: v1.WeatherDelayActionResult{
-		Kind: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey, Active: true,
-		StartedAt: formatTime(rec.StartedAt), StartedBy: rec.StartedBy, Revision: rec.Revision,
-		Targets: targets,
-	}})
+	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: result})
 }
 
 // handleWeatherDelayResume always takes full effect, even when the stored

@@ -792,6 +792,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.WeatherDelay == nil {
 		d.WeatherDelay = noWeatherDelayStore{}
 	}
+	if _, ok := d.WeatherDelay.(*WeatherDelayStateKeeper); !ok {
+		d.WeatherDelay = NewWeatherDelayStateKeeper(d.WeatherDelay)
+	}
 	if d.WeatherDelayPublisher == nil {
 		d.WeatherDelayPublisher = noWeatherDelayPublisher{}
 	}

@@ -65,13 +65,15 @@ type weatherDelayTargetOutcome struct {
 }
 
 type weatherDelayActionResult struct {
-	Kind           string                      `json:"kind"`
-	IdempotencyKey string                      `json:"idempotencyKey"`
-	Active         bool                        `json:"active"`
-	StartedAt      string                      `json:"startedAt"`
-	StartedBy      string                      `json:"startedBy"`
-	Revision       int64                       `json:"revision"`
-	Targets        []weatherDelayTargetOutcome `json:"targets"`
+	Kind            string                      `json:"kind"`
+	IdempotencyKey  string                      `json:"idempotencyKey"`
+	Active          bool                        `json:"active"`
+	StartedAt       string                      `json:"startedAt"`
+	StartedBy       string                      `json:"startedBy"`
+	Revision        int64                       `json:"revision"`
+	Targets         []weatherDelayTargetOutcome `json:"targets"`
+	NotSaved        bool                        `json:"notSaved"`
+	NotSavedMessage string                      `json:"notSavedMessage"`
 }
 
 type weatherDelayActionResponse struct {
@@ -151,6 +153,9 @@ func reportWeatherDelayActionResult(stdout io.Writer, result weatherDelayActionR
 			result.Kind, result.StartedAt, result.StartedBy)
 	} else {
 		_, _ = fmt.Fprintln(stdout, "weather delay: resumed")
+	}
+	if result.NotSaved {
+		_, _ = fmt.Fprintln(stdout, "  "+result.NotSavedMessage)
 	}
 	if len(result.Targets) == 0 {
 		_, _ = fmt.Fprintln(stdout, "  no targets were configured to dispatch to")

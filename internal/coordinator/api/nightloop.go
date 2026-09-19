@@ -105,15 +105,10 @@ func (h *handlers) resolveFPPEndpoint(ctx context.Context, instanceID string) (e
 }
 
 func (h *handlers) nightTick(ctx context.Context, now time.Time) {
-	// ADR-053 decision 3: while a weather delay is active, the night loop
-	// advances nothing and dispatches nothing, and this is never treated
-	// as a degraded or failed session: it is a normal hold, checked fresh
-	// from the store on every tick.
-	if active, err := h.weatherDelayActive(ctx); err != nil {
-		h.logWarn("night loop: failed to read weather delay state; holding this tick as a precaution", "error", err)
-		return
-	} else if active {
-		return
+	delayed, err := h.weatherDelayActive(ctx)
+	if err != nil {
+		h.logWarn("night loop: failed to read weather delay state; holding output-starting transitions this tick as a precaution", "error", err)
+		delayed = true
 	}
 
 	rec, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
@@ -130,6 +125,10 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// they work. Parking here without ever issuing the stop would take
 	// away the one thing a degraded session must still be able to do.
 	if rec.Degraded && rec.State != nightStateFadingOut {
+		return
+	}
+	if delayed {
+		h.nightTickDuringWeatherDelay(ctx, now, rec)
 		return
 	}
 	switch rec.State {
@@ -215,6 +214,48 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// action here. end-of-night-resting's repeating resting playlist was
 	// already started on the tick that entered it; its only exit is
 	// fade-out-night.
+}
+
+// nightTickDuringWeatherDelay advances only what reduces or removes
+// output. Anything that starts or restores output waits for resume, and a
+// shutdown that was waiting for the show to finish takes effect now.
+func (h *handlers) nightTickDuringWeatherDelay(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if rec.ShutdownIntent != "" && rec.State != nightStateFadingOut && rec.State != nightStateStopped {
+		h.nightForceShutdownDuringWeatherDelay(ctx, now, rec)
+		return
+	}
+	switch rec.State {
+	case nightStateFadingOut:
+		h.nightAdvanceFadingOut(ctx, now, rec)
+		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
+	case nightStateStopped:
+		h.nightAdvancePowerOff(ctx, now, rec)
+		h.nightRetryEndSessionClear(ctx, now, rec)
+	case nightStateRestingIntershow, nightStateTransitionToShow:
+		if h.nightBackgroundAudioFadeDownDue(ctx, now, rec) {
+			h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
+		}
+	case nightStatePreshow, nightStateEndOfNightResting:
+		// The bed only ever starts here, so it waits for resume.
+	default:
+		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
+	}
+}
+
+// nightForceShutdownDuringWeatherDelay moves a session whose shutdown was
+// deferred behind the show straight to fading out: the delay already
+// stopped that show, so there is nothing left to wait for.
+func (h *handlers) nightForceShutdownDuringWeatherDelay(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if rec.State == nightStateLive {
+		if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeStopped,
+			"The operator stopped the show before it finished."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+			h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
+		}
+	}
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		next, _ := applyNightShutdownEffect(now, cur, cur.ShutdownIntent, nightShutdownForced)
+		return next
+	})
 }
 
 // nightBackgroundAudioFadeDownDispatchMargin absorbs one night-loop tick's

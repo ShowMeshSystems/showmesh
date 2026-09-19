@@ -14679,6 +14679,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WeatherDelayTargetOutcome"
+        notSaved:
+          type: boolean
+          description: >-
+            Start only. True when the active state could not be stored: every
+            target was still dispatched and this coordinator process holds
+            the delay, but it will not survive a coordinator restart. Absent
+            when the state was stored.
+        notSavedMessage:
+          type: string
+          description: The operator sentence for notSaved. Present only when notSaved is true.
     WeatherDelayActionResponse:
       type: object
       description: The body of POST /weather-delay/start and /weather-delay/resume.

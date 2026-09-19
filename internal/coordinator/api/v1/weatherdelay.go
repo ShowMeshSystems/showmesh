@@ -72,6 +72,10 @@ type WeatherDelayActionResult struct {
 	StartedBy      string                      `json:"startedBy,omitempty"`
 	Revision       int64                       `json:"revision"`
 	Targets        []WeatherDelayTargetOutcome `json:"targets"`
+	// NotSaved is true when start could not store the active state; this
+	// coordinator process still holds it. NotSavedMessage says so.
+	NotSaved        bool   `json:"notSaved,omitempty"`
+	NotSavedMessage string `json:"notSavedMessage,omitempty"`
 }
 
 // WeatherDelayActionResponse is the body of POST .../weather-delay/start

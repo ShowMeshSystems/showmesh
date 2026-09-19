@@ -87,6 +87,11 @@ func (r *resumeHarness) fppCommands() ([]string, [][]string) {
 
 func newResumeHarness(t *testing.T) *resumeHarness {
 	t.Helper()
+	return newResumeHarnessWith(t, func(st *store.Store) WeatherDelayStore { return st })
+}
+
+func newResumeHarnessWith(t *testing.T, weatherDelay func(*store.Store) WeatherDelayStore) *resumeHarness {
+	t.Helper()
 	r := &resumeHarness{t: t, now: time.Date(2026, 10, 31, 20, 30, 0, 0, time.UTC), obs: &mutableObservationLister{}}
 	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body struct {
@@ -144,7 +149,7 @@ func newResumeHarness(t *testing.T) *resumeHarness {
 	deps := Dependencies{
 		Nodes:        &fakeNodeLister{views: []inventory.NodeView{{NodeID: "render-01"}}},
 		Observations: r.obs, Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-		Identity: svc, Config: st, Commands: st, NightSessions: st, WeatherDelay: st,
+		Identity: svc, Config: st, Commands: st, NightSessions: st, WeatherDelay: weatherDelay(st),
 		FPP:                   &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: cmdSrv.URL}}},
 		WeatherDelayPublisher: r.pub, WeatherDelayNodeAddrs: r.addrs,
 	}.withDefaults()

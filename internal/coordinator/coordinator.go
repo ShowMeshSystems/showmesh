@@ -651,6 +651,9 @@ func Run() int {
 	// Everything from here to api.New is the adapter layer
 	// (internal/coordinator/apiwiring.go) that makes the store and config
 	// satisfy those interfaces.
+	// weatherDelayState is shared by the API, the Resolume gate and the
+	// republish loop, so a start whose write failed is held by all three.
+	weatherDelayState := api.NewWeatherDelayStateKeeper(st)
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -876,7 +879,7 @@ func Run() int {
 		// to hold (noResolumeActionDispatcher, noResolumeLister,
 		// noResolumeRecoveryProvider) were a startup-only snapshot of
 		// exactly one condition: cfg.ResolumeURL != "".
-		ResolumeActions:    api.WeatherDelayGatedResolumeActions(resolumeMgr, st),
+		ResolumeActions:    api.WeatherDelayGatedResolumeActions(resolumeMgr, weatherDelayState),
 		ResolumeReferences: resolumeReferences,
 		Resolume:           resolumeMgr,
 		ResolumeRecovery:   resolumeMgr,
@@ -928,11 +931,9 @@ func Run() int {
 		// always report "no session" against api.noNightSessionStore's
 		// no-op default.
 		NightSessions: st,
-		// WeatherDelay is ADR-053's own dependency: *store.Store already
-		// satisfies api.WeatherDelayStore with no adapter, wiring it in
-		// is what makes GET/POST /api/v1/weather-delay/* read and write
-		// real state instead of api.noWeatherDelayStore's no-op default.
-		WeatherDelay: st,
+		// WeatherDelay reads and writes the stored state through the
+		// keeper above instead of api.noWeatherDelayStore's no-op default.
+		WeatherDelay: weatherDelayState,
 		// WeatherDelayPublisher: the SAME bm already satisfies
 		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
 		// adapter, matching AudioPublisher's identical wiring above.
@@ -1383,7 +1384,7 @@ func Run() int {
 	// state on a short interval, the same "keep the retained message
 	// fresh" role runShowMode plays for show.mode one state over.
 	spawnBackground(func() {
-		runWeatherDelay(ctx, st, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
+		runWeatherDelay(ctx, st, weatherDelayState, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
 	})
 
 	serveErrCh := make(chan error, 1)

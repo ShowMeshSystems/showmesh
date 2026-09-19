@@ -33,20 +33,27 @@ type weatherDelayPublisher interface {
 	Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error
 }
 
+// weatherDelayState is the in-process view of the stored state: it
+// answers an active state whose write failed and retries that write.
+type weatherDelayState interface {
+	GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error)
+	SaveUnsaved(ctx context.Context) error
+}
+
 // weatherDelayAssetPusher pushes one alert asset to one node ahead of
 // time. *assetsync.Service already satisfies this with no adapter.
 type weatherDelayAssetPusher interface {
 	EnsureAssetOnNode(ctx context.Context, assetID, nodeID string) error
 }
 
-// runWeatherDelay republishes the current stored weather delay state on
-// every tick, plus once immediately (matching runShowMode's own "the
+// runWeatherDelay retries any unsaved active state, then republishes the
+// current weather delay state on every tick, plus once immediately (matching runShowMode's own "the
 // first pass runs immediately" reasoning). On every tick it also nudges
 // the configured alert assets toward every plan node through the
 // existing asset sync, independent of whether a
 // delay is active: the alert must be ready on a calm day, not only after
 // the operator has already pressed start.
-func runWeatherDelay(ctx context.Context, st *store.Store, pub weatherDelayPublisher, assets weatherDelayAssetPusher, now func() time.Time, logger *slog.Logger, interval time.Duration) {
+func runWeatherDelay(ctx context.Context, st *store.Store, state weatherDelayState, pub weatherDelayPublisher, assets weatherDelayAssetPusher, now func() time.Time, logger *slog.Logger, interval time.Duration) {
 	if pub == nil {
 		return
 	}
@@ -54,7 +61,10 @@ func runWeatherDelay(ctx context.Context, st *store.Store, pub weatherDelayPubli
 	defer ticker.Stop()
 
 	pass := func() {
-		rec, err := st.GetWeatherDelayState(ctx)
+		if err := state.SaveUnsaved(ctx); err != nil && logger != nil {
+			logger.Warn("weather delay: failed to store the active state again; this process still holds it", "error", err)
+		}
+		rec, err := state.GetWeatherDelayState(ctx)
 		if err != nil {
 			if logger != nil {
 				logger.Warn("weather delay: failed to read the stored state; nothing republished this tick", "error", err)

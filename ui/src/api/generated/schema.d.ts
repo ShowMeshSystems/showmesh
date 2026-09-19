@@ -5123,6 +5123,10 @@ export interface components {
             startedBy?: string;
             revision: number;
             targets: components["schemas"]["WeatherDelayTargetOutcome"][];
+            /** @description Start only. True when the active state could not be stored: every target was still dispatched and this coordinator process holds the delay, but it will not survive a coordinator restart. Absent when the state was stored. */
+            notSaved?: boolean;
+            /** @description The operator sentence for notSaved. Present only when notSaved is true. */
+            notSavedMessage?: string;
         };
         /** @description The body of POST /weather-delay/start and /weather-delay/resume. */
         WeatherDelayActionResponse: {

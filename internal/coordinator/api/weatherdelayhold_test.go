@@ -120,25 +120,3 @@ func TestWeatherDelayHoldsAcrossFreshHandlersOverSameStore(t *testing.T) {
 		t.Fatal("a fresh *handlers over the same store did not see the active delay")
 	}
 }
-
-func TestNightTickIsNoOpDuringWeatherDelay(t *testing.T) {
-	_, st, _, _ := newWeatherDelayTestAPI(t)
-	setWeatherDelayActive(t, st)
-
-	h := &handlers{deps: Dependencies{
-		WeatherDelay: st, NightSessions: panicOnCallNightSessionStore{t: t},
-	}.withDefaults(), clock: time.Now, logger: testLogger()}
-	h.nightTick(context.Background(), h.now())
-}
-
-// panicOnCallNightSessionStore fails the test if any method is called: a
-// weather-delay-held tick must never reach the night session store at all.
-type panicOnCallNightSessionStore struct {
-	NightSessionStore
-	t *testing.T
-}
-
-func (p panicOnCallNightSessionStore) GetCurrentNightSession(context.Context) (store.NightSessionRecord, bool, error) {
-	p.t.Fatal("nightTick reached the night session store while a weather delay is active")
-	return store.NightSessionRecord{}, false, nil
-}

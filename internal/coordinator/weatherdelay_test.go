@@ -2,10 +2,12 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
@@ -38,7 +40,7 @@ func TestRunWeatherDelayPublishesTheStoredStateOnTheFirstPass(t *testing.T) {
 	pub := &fakeWeatherDelayPublisher{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go runWeatherDelay(ctx, st, pub, nil, fixedNow(), discardLogger(), time.Hour)
+	go runWeatherDelay(ctx, st, api.NewWeatherDelayStateKeeper(st), pub, nil, fixedNow(), discardLogger(), time.Hour)
 
 	waitFor(t, func() bool { return pub.publishCount() > 0 })
 }
@@ -76,7 +78,7 @@ func TestRunWeatherDelayRepublishesActiveStateAtItsOwnRevision(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go runWeatherDelay(ctx, st, pub, nil, fixedNow(), discardLogger(), time.Hour)
+	go runWeatherDelay(ctx, st, api.NewWeatherDelayStateKeeper(st), pub, nil, fixedNow(), discardLogger(), time.Hour)
 
 	waitFor(t, func() bool {
 		mu.Lock()
@@ -94,4 +96,45 @@ type publishFunc func(ctx context.Context, topic string, qos byte, retain bool, 
 
 func (f publishFunc) Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error {
 	return f(ctx, topic, qos, retain, payload)
+}
+
+type failOnceWeatherDelayStore struct {
+	*store.Store
+	mu     sync.Mutex
+	failed bool
+}
+
+func (f *failOnceWeatherDelayStore) SetWeatherDelayState(ctx context.Context, rec store.WeatherDelayStateRecord) error {
+	f.mu.Lock()
+	first := !f.failed
+	f.failed = true
+	f.mu.Unlock()
+	if first {
+		return errors.New("disk I/O error")
+	}
+	return f.Store.SetWeatherDelayState(ctx, rec)
+}
+
+func TestRunWeatherDelayStoresAnUnsavedStart(t *testing.T) {
+	st, err := store.Open(context.Background(), t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	keeper := api.NewWeatherDelayStateKeeper(&failOnceWeatherDelayStore{Store: st})
+	if err := keeper.SetWeatherDelayState(context.Background(), store.WeatherDelayStateRecord{
+		Active: true, Kind: "delay", StartedAt: time.Now().UTC(), StartedBy: "op-1", Revision: 1,
+	}); err == nil {
+		t.Fatal("the first write was meant to fail")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runWeatherDelay(ctx, st, keeper, &fakeWeatherDelayPublisher{}, nil, fixedNow(), discardLogger(), time.Hour)
+
+	waitFor(t, func() bool {
+		rec, err := st.GetWeatherDelayState(context.Background())
+		return err == nil && rec.Active && rec.Revision == 1
+	})
 }
