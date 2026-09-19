@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestWeatherDelayHolderNeverGoesStaleWithoutAnExplicitClear(t *testing.T) {
 	}
 	// No further call at all: an hour, a day, a week of silence would
 	// change nothing here, because nothing here reads elapsed time at
-	// all — Current has no freshness window to expire.
+	// all, Current has no freshness window to expire.
 	if !holder.Current().Active {
 		t.Fatal("holder went stale with no explicit clear")
 	}
@@ -292,5 +293,34 @@ func TestDecideBootResumeDiscardsRegardlessOfMatchWhileWeatherDelayIsActive(t *t
 	}
 	if decision.Reason == "" {
 		t.Fatal("expected a stated reason for the discard")
+	}
+}
+
+// TestOutputStartingOperationsRefuseWhileWeatherDelayIsActive proves the
+// coordinator's own audio session and render surface commands cannot
+// start output on a delayed node, and work again once it resumes.
+func TestOutputStartingOperationsRefuseWhileWeatherDelayIsActive(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManager(t, dir, clock)
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	if err := holder.SetActiveLocal("delay", clock.now(), "test"); err != nil {
+		t.Fatalf("SetActiveLocal: %v", err)
+	}
+	ops := newOperationRegistry(testNodeID, dir, "", &renderOperations{}, mgr, nil, nil, nil, nil, holder, discardLogger())
+
+	for _, action := range []string{"audio.session.start", "audio.session.resume", "render.surface.apply"} {
+		_, err := ops[action](context.Background(), map[string]any{}, clock.now)
+		if err == nil || !strings.HasPrefix(err.Error(), "A weather delay is active.") {
+			t.Fatalf("%s while delayed: err = %v, want a weather delay refusal", action, err)
+		}
+	}
+
+	if err := holder.ClearLocal(); err != nil {
+		t.Fatalf("ClearLocal: %v", err)
+	}
+	_, err := ops["audio.session.start"](context.Background(), map[string]any{}, clock.now)
+	if err != nil && strings.HasPrefix(err.Error(), "A weather delay is active.") {
+		t.Fatalf("audio.session.start after resume still refused: %v", err)
 	}
 }

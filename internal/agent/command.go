@@ -286,6 +286,13 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	for action, op := range weatherDelayNodeOperations(weatherDelay, audioMgr, assetDir) {
 		ops[action] = op
 	}
+	if weatherDelay != nil {
+		for action, reason := range weatherDelayRefusedOperations {
+			if op, ok := ops[action]; ok {
+				ops[action] = refuseWhileWeatherDelayActive(weatherDelay, reason, op)
+			}
+		}
+	}
 	return ops
 }
 

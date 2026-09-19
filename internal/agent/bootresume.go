@@ -31,7 +31,7 @@ type resumeDecision struct {
 // catalog:
 //
 //   - weatherDelayActive true (ADR-053: "on boot the persisted state is
-//     loaded before anything can start audio" — before it can resume
+//     loaded before anything can start audio", and before it can resume
 //     rendering, too): every assignment is discarded regardless of
 //     whether it would otherwise match, and the node comes up cleared.
 //   - hasCatalog false (no catalog has ever been deployed to this node):

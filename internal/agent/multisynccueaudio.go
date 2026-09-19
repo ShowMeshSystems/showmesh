@@ -178,7 +178,7 @@ func (c *multiSyncCueAudioTrigger) sources() (*heldcatalog.FileStore, *audio.Man
 }
 
 // weatherDelayActive reports whether this node currently holds an active
-// weather delay, read fresh at the point of decision — see
+// weather delay, read fresh at the point of decision, see
 // [WeatherDelayHolder.Current]'s own doc comment.
 func (c *multiSyncCueAudioTrigger) weatherDelayActive() bool {
 	c.mu.Lock()

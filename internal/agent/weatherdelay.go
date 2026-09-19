@@ -118,10 +118,16 @@ type WeatherDelayHolder struct {
 	mu    sync.Mutex
 	store *weatherDelayStore
 	rec   weatherDelayRecord
+
+	// alertStartMu serializes alert starts from every delivery path, and
+	// alertMu guards alertKind, the kind of the alert most recently started.
+	alertStartMu sync.Mutex
+	alertMu      sync.Mutex
+	alertKind    string
 }
 
 // NewWeatherDelayHolder constructs a holder and loads whatever this node
-// last persisted, BEFORE anything that could start audio runs — see
+// last persisted, BEFORE anything that could start audio runs, see
 // agent.go's own boot ordering. A load failure is logged by the caller and
 // treated as not active, the same posture heldcatalog's own load failure
 // takes toward its own state (a corrupt file is exactly as untrustworthy
@@ -156,7 +162,7 @@ func (h *WeatherDelayHolder) Current() WeatherDelayState {
 
 // persistLocked writes the current record to disk, best effort: a failed
 // write is logged by the caller (every caller here already holds a
-// logger) but never blocks the in-memory state from taking effect — the
+// logger) but never blocks the in-memory state from taking effect, the
 // in-memory holder is the value every consumer actually reads at its
 // point of decision, and disk is only how it survives a restart.
 func (h *WeatherDelayHolder) persistLocked() error {
@@ -190,7 +196,7 @@ func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage, l
 	}
 }
 
-// SetActiveLocal marks the delay active from a node-local trigger — the
+// SetActiveLocal marks the delay active from a node-local trigger, the
 // "weatherdelay.start" operation or the signed HTTP start (ADR-053
 // decision 8's other two parallel paths, neither of which carries a
 // coordinator revision). Already active: only Kind is updated (decision 1:

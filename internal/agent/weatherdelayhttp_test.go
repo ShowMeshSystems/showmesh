@@ -2,9 +2,11 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -263,5 +265,63 @@ func TestWeatherDelayHTTPNoResumeRouteAndGetOnStartIs404Or405(t *testing.T) {
 	_ = getResp.Body.Close()
 	if getResp.StatusCode != http.StatusNotFound && getResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET %s status = %d, want 404 or 405", weatherDelayStartPath, getResp.StatusCode)
+	}
+}
+
+// ctxHonoringEngine fails Start once its context is done, as the real
+// engine does.
+type ctxHonoringEngine struct{ activationAvailableEngine }
+
+func (e ctxHonoringEngine) Start(ctx context.Context, handle audio.EngineHandle, position time.Duration) (audio.EngineObservation, error) {
+	if err := ctx.Err(); err != nil {
+		return audio.EngineObservation{}, err
+	}
+	return e.activationAvailableEngine.Start(ctx, handle, position)
+}
+
+// TestWeatherDelayHTTPAlertSurvivesTheCallerHangingUp proves a signed
+// start whose client disconnects still plays the alert.
+func TestWeatherDelayHTTPAlertSurvivesTheCallerHangingUp(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	engine := ctxHonoringEngine{activationAvailableEngine{audio.NewFakeEngine(clock.now)}}
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, fixedAudioDecoder{}, clock.now, nil)
+	mgr.SetSettings(audio.Settings{DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500})
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan(weatherdelay.KindDelay, "alert-asset", hash, "alert.wav", 3)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	handler := newFPPConnectHandler(fakeFPPConnectView{enabled: true}, "node-1", newTestFPPConnectHeldStore(t), weatherDelayHTTPConfig{ops: ops, publicKey: pub}, time.Now, discardLogger())
+
+	req := weatherdelay.StartRequest{Kind: weatherdelay.KindDelay, IssuedAt: time.Now().UTC(), Nonce: "n1"}
+	payload, err := req.CanonicalBytes()
+	if err != nil {
+		t.Fatalf("CanonicalBytes: %v", err)
+	}
+	body, err := json.Marshal(weatherdelay.SignedStartRequest{Request: req, Signature: ed25519.Sign(priv, payload)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, weatherDelayStartPath, bytes.NewReader(body)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	var got struct {
+		AlertPlaying bool   `json:"alertPlaying"`
+		AlertReason  string `json:"alertReason"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response %q: %v", w.Body.String(), err)
+	}
+	if !got.AlertPlaying {
+		t.Fatalf("alert did not play after the caller hung up: %s", got.AlertReason)
 	}
 }

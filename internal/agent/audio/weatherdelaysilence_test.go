@@ -174,3 +174,37 @@ func TestSilenceAllExceptLeavesTheExcludedSessionPlaying(t *testing.T) {
 		t.Fatalf("excluded session state = %q, want Playing (SilenceAllExcept must not touch it)", excludedState)
 	}
 }
+
+// TestZeroGainExceptDoesNotWaitOnAHeldSessionLock proves a session whose
+// lock is held by another call (a commanded Stop wedged in the engine)
+// cannot hold up ZeroGainExcept, and so cannot hold up the alert.
+func TestZeroGainExceptDoesNotWaitOnAHeldSessionLock(t *testing.T) {
+	old := engineCallTimeout
+	engineCallTimeout = 200 * time.Millisecond
+	defer func() { engineCallTimeout = old }()
+
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	const busy = pkgaudio.SessionID("busy")
+	const excluded = pkgaudio.SessionID("excluded")
+	busyRef := writeTestAsset(t, m.assetDir, "busy.wav", "busy-asset", []byte("busy"))
+	startPlaying(t, m, ctx, busy, busyRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	busySession, _ := m.get(busy)
+	busySession.mu.Lock()
+	defer busySession.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		m.ZeroGainExcept(ctx, excluded)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ZeroGainExcept did not return while another call held a session's lock")
+	}
+}

@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -14,8 +14,8 @@ import (
 )
 
 // This file is ADR-053 decision 7's node-side alert sequence: "weatherdelay.
-// start", node-scoped like audionodesilenceops.go's "audio.node.silence" —
-// no sessionId, no revision, idempotent, never refused for state reasons —
+// start", node-scoped like audionodesilenceops.go's "audio.node.silence",
+// no sessionId, no revision, idempotent, never refused for state reasons,
 // and "weatherdelay.resume", which ends it. Both run the SAME code this
 // file exposes as doStart/doResume, whether dispatched as an agent
 // operation (command.go) or over the signed HTTP route
@@ -45,19 +45,6 @@ type weatherDelayOperations struct {
 	holder   *WeatherDelayHolder
 	audioMgr *audio.Manager
 	assetDir string
-
-	// alertMu guards alertKind: which kind's alert (if any) this node
-	// most recently started into weatherDelayAlertSessionID. pkg/audio's
-	// own session identity comparison (TargetMediaIdentity) is keyed to a
-	// single, non-playlist media reference; the alert is a playlist, so
-	// this node-agent-level record is what lets a second
-	// "weatherdelay.start" for the SAME kind recognize the alert is
-	// already in progress rather than restarting it, matching
-	// cueactivationops.go's own announcementCueID precedent for the
-	// identical "pkg/audio carries no identity a playlist call can read
-	// back" gap.
-	alertMu   sync.Mutex
-	alertKind string
 }
 
 // weatherDelayNodeOperations builds the two allowlist entries against
@@ -77,7 +64,7 @@ func weatherDelayNodeOperations(holder *WeatherDelayHolder, mgr *audio.Manager, 
 }
 
 // start is the OperationFunc for "weatherdelay.start": params.kind is
-// "delay" or "cancelNight". Never refused for a state reason — an
+// "delay" or "cancelNight". Never refused for a state reason, an
 // already-active delay, a plan with no configured alert, or a missing
 // local asset are all valid outcomes, reported in Value, not errors.
 func (o *weatherDelayOperations) start(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
@@ -113,20 +100,9 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 	}, nil
 }
 
-// doStart is weatherdelay.start's whole effect, shared verbatim with the
-// signed HTTP route: it sets the holder active (persisted) BEFORE
-// touching audio, so a crash between the two still leaves the node
-// delayed, then runs ADR-053 decision 7's own three steps in order.
-// (a) runs and completes (or times out per session, never unbounded)
-// before (b) starts — see [audio.Manager.ZeroGainExcept]'s own doc
-// comment for why that is still "does not wait on anything" in decision
-// 7's sense. (b) is synchronous, because its outcome is this call's own
-// evidence. (c) is dispatched afterward, detached from ctx (a caller's
-// request context, most notably the HTTP route's, is cancelled the
-// moment that caller returns, and (c) must keep running after this
-// function does) and never waited on, so a session whose stop is slow or
-// wedged can never delay this call's return or the alert it already
-// started.
+// doStart sets the holder active, mutes every other session within a
+// bound, starts the alert, then stops every other session in the
+// background, detached from ctx and never waited on.
 func (o *weatherDelayOperations) doStart(ctx context.Context, kind string, executedAt time.Time) (alertPlaying bool, alertReason string) {
 	if err := o.holder.SetActiveLocal(kind, executedAt, "node-local"); err != nil {
 		// Best effort: the in-memory holder is already active regardless
@@ -156,24 +132,26 @@ func (o *weatherDelayOperations) doStart(ctx context.Context, kind string, execu
 // while the alert is in progress does not restart or stack it).
 func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (played bool, reason string) {
 	if o.audioMgr == nil {
-		return false, "no audio engine is configured on this node"
+		return false, "This node has no audio engine. Configure one to play the weather alert."
 	}
 
 	plan := o.holder.Current().Plan
 	ref := weatherDelayAlertAssetForKind(plan, kind)
 	if ref == nil {
-		return false, fmt.Sprintf("no alert asset is configured for %q", kind)
+		return false, fmt.Sprintf("No alert sound is set for %s. Set one to play an alert.", kind)
 	}
 	if ref.Filename == "" {
-		return false, fmt.Sprintf("the alert asset for %q has no local filename", kind)
+		return false, fmt.Sprintf("The alert sound for %s has no file name. Set the alert sound again.", kind)
 	}
 
 	path := filepath.Join(o.assetDir, ref.Filename)
 	info, err := os.Stat(path)
 	if err != nil {
-		return false, fmt.Sprintf("the alert asset %q is not present on this node", ref.Filename)
+		return false, fmt.Sprintf("The alert sound %s is not on this node. Send it to this node to play it.", ref.Filename)
 	}
 
+	o.holder.alertStartMu.Lock()
+	defer o.holder.alertStartMu.Unlock()
 	if o.alertAlreadyPlaying(ctx, kind) {
 		return true, ""
 	}
@@ -207,33 +185,33 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 	applyInv, applyRev := step("apply")
 	applyOutcome := o.audioMgr.Apply(ctx, weatherDelayAlertSessionID, applyInv, applyRev, applyReq)
 	if audioOutcomeFailed(applyOutcome) {
-		return false, fmt.Sprintf("the alert could not be set up (%s): %s", applyOutcome.Outcome, applyOutcome.Reason)
+		return false, fmt.Sprintf("The alert could not be set up. Check this node's audio: %s", applyOutcome.Reason)
 	}
 
 	prepInv, prepRev := step("prepare")
 	prepOutcome := o.audioMgr.Prepare(ctx, weatherDelayAlertSessionID, prepInv, prepRev)
 	if audioOutcomeFailed(prepOutcome) {
-		return false, fmt.Sprintf("the alert was not ready (%s): %s", prepOutcome.Outcome, prepOutcome.Reason)
+		return false, fmt.Sprintf("The alert could not be loaded. Check this node's audio: %s", prepOutcome.Reason)
 	}
 
 	startInv, startRev := step("start")
 	startOutcome := o.audioMgr.Start(ctx, weatherDelayAlertSessionID, startInv, startRev)
 	if audioOutcomeFailed(startOutcome) {
-		return false, fmt.Sprintf("the alert did not start (%s): %s", startOutcome.Outcome, startOutcome.Reason)
+		return false, fmt.Sprintf("The alert did not start. Check this node's audio: %s", startOutcome.Reason)
 	}
 
-	o.alertMu.Lock()
-	o.alertKind = kind
-	o.alertMu.Unlock()
+	o.holder.alertMu.Lock()
+	o.holder.alertKind = kind
+	o.holder.alertMu.Unlock()
 	return true, ""
 }
 
 // alertAlreadyPlaying reports whether kind's alert is already the one
 // loaded into weatherDelayAlertSessionID and still Playing.
 func (o *weatherDelayOperations) alertAlreadyPlaying(ctx context.Context, kind string) bool {
-	o.alertMu.Lock()
-	current := o.alertKind
-	o.alertMu.Unlock()
+	o.holder.alertMu.Lock()
+	current := o.holder.alertKind
+	o.holder.alertMu.Unlock()
 	if current != kind {
 		return false
 	}
@@ -269,13 +247,32 @@ func (o *weatherDelayOperations) resume(ctx context.Context, params map[string]a
 // runs before clearing the holder, so a fault stopping it never leaves
 // the holder cleared while the alert is still audible.
 func (o *weatherDelayOperations) doResume(ctx context.Context) {
-	o.alertMu.Lock()
-	o.alertKind = ""
-	o.alertMu.Unlock()
+	o.holder.alertMu.Lock()
+	o.holder.alertKind = ""
+	o.holder.alertMu.Unlock()
 
 	if o.audioMgr != nil {
 		invocation := pkgaudio.InvocationID(fmt.Sprintf("weatherdelay:resume:%d", time.Now().UnixNano()))
 		o.audioMgr.Stop(ctx, weatherDelayAlertSessionID, invocation, pkgaudio.Revision(time.Now().UnixNano()))
 	}
 	_ = o.holder.ClearLocal()
+}
+
+// weatherDelayRefusedOperations are the coordinator commands that can
+// start output, each with the reason it is refused while a delay is active.
+var weatherDelayRefusedOperations = map[string]string{
+	string(pkgaudio.OperationSessionStart):  "A weather delay is active. Resume the show to start audio.",
+	string(pkgaudio.OperationSessionResume): "A weather delay is active. Resume the show to start audio.",
+	"render.surface.apply":                  "A weather delay is active. Resume the show to send output to a surface.",
+}
+
+// refuseWhileWeatherDelayActive wraps op so it is refused, without
+// running, whenever holder reports an active delay.
+func refuseWhileWeatherDelayActive(holder *WeatherDelayHolder, reason string, op OperationFunc) OperationFunc {
+	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+		if holder.Current().Active {
+			return OperationResult{}, errors.New(reason)
+		}
+		return op(ctx, params, now)
+	}
 }

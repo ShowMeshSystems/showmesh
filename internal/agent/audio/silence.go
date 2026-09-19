@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"sync"
+	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -33,7 +34,7 @@ func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
-// excludeID — ADR-053 decision 7's own stop step, run after the alert
+// excludeID, ADR-053 decision 7's own stop step, run after the alert
 // session (excludeID) has already been started, and never confused with
 // it: a weather delay alert must keep playing while every other session
 // this node holds is silenced the identical way SilenceAll would silence
@@ -74,23 +75,9 @@ func (m *Manager) silenceSessions(ctx context.Context, sessions []*Session) []Se
 	return results
 }
 
-// ZeroGainExcept drives every session other than excludeID straight to
-// gain zero (ADR-053 decision 7's own first step): a direct engine
-// SetGain call on whatever handle is already loaded, bypassing both the
-// revision ledger [Session.dispatch] enforces and the configured/
-// effective-gain bookkeeping [Session.applyEffectiveGainLocked] composes
-// — no pipeline teardown, no fade, and no change to a session's own
-// desired gain.
-//
-// Each session's own engine call runs on its own goroutine, bounded by
-// [boundedEngineCallContext], so one wedged or failing session's call
-// never delays or fails another's — decision 7's "a failure in (a) for
-// one session must not prevent (b)". This method still waits for every
-// goroutine to finish (or time out) before returning: "must not wait on
-// anything" is decision 7's rule against an UNBOUNDED wait, the same
-// bound every other engine call in this package already carries, not a
-// rule against waiting at all — unlike [Manager.SilenceAllExcept], which
-// the alert this call precedes truly never waits on.
+// ZeroGainExcept sets every session other than excludeID to gain zero on
+// its loaded engine handle, with no fade and no change to desired gain.
+// It returns within engineCallTimeout even when a session's lock is held.
 func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.SessionID) {
 	var wg sync.WaitGroup
 	for _, s := range m.liveSessionsExcept(excludeID) {
@@ -107,7 +94,17 @@ func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.Session
 			_, _ = m.engine.SetGain(gainCtx, s.handle, mutedGain)
 		}(s)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	bound := time.NewTimer(engineCallTimeout)
+	defer bound.Stop()
+	select {
+	case <-done:
+	case <-bound.C:
+	}
 }
 
 // dropHoldMembershipEverywhere removes sessionID from every other live

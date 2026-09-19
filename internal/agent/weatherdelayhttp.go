@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -87,7 +88,7 @@ func loadWeatherDelayPublicKey(path string, logger *slog.Logger) ed25519.PublicK
 // handleWeatherDelayStart is POST /showmesh/v1/weather-delay/start: verify
 // the signed request, then run the identical code
 // "weatherdelay.start" runs as a dispatched operation
-// (weatherDelayOperations.doStart) — ADR-053 decision 8's parallel
+// (weatherDelayOperations.doStart), ADR-053 decision 8's parallel
 // delivery paths reach one implementation, never two independently
 // written ones.
 func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +134,8 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 		return
 	}
 
-	alertPlaying, alertReason := s.weatherDelay.ops.doStart(r.Context(), signed.Request.Kind, now())
+	// Detached so a caller that hangs up cannot cancel the alert mid-start.
+	alertPlaying, alertReason := s.weatherDelay.ops.doStart(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
 
 	fppConnectWriteJSON(w, http.StatusOK, map[string]any{
 		"kind":         signed.Request.Kind,

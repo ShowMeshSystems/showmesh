@@ -621,7 +621,7 @@ func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHe
 	// ADR-053 decision 9 supersedes ADR-044 decision 3 for exactly one
 	// route: the signed weather delay start, matched and served here,
 	// AHEAD of fppConnectRequireEnabled, so it works regardless of this
-	// node's fppconnect.settings.enabled — a weather delay must not
+	// node's fppconnect.settings.enabled: a weather delay must not
 	// depend on an unrelated FPP Connect setting. Every other request,
 	// including any other method on this exact path, falls through to
 	// the ordinary enabled-gated routing unchanged.

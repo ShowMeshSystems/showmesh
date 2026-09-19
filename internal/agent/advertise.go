@@ -58,15 +58,23 @@ func platformString() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
-// isWildcardHost reports whether host is empty or a wildcard bind address
-// ("0.0.0.0" or "::"), the cases [resolveInboundListener] must never
-// publish verbatim: none of them name an address the coordinator, on a
-// different host, could actually reach.
+// isWildcardHost reports whether host is empty or a wildcard bind address.
 func isWildcardHost(host string) bool {
-	return host == "" || host == "0.0.0.0" || host == "::"
+	ip := net.ParseIP(host)
+	return host == "" || (ip != nil && ip.IsUnspecified())
 }
 
-// outboundAddress returns the local IPv4 address this node's routing table
+// isLocalOnlyHost reports whether host is a loopback or link-local address,
+// which the coordinator on another host cannot dial.
+func isLocalOnlyHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast())
+}
+
+// outboundAddress returns the local address this node's routing table
 // would use to reach host, via a UDP "connect" (RFC-standard idiom: no
 // packet is ever sent, only a route looked up and a local address bound).
 // This is [resolveInboundListener]'s fallback source: this package's MQTT
@@ -74,21 +82,21 @@ func isWildcardHost(host string) bool {
 // local address, so the address this node would use to reach the SAME host
 // (the broker) stands in for it.
 func outboundAddress(host string) (string, error) {
-	conn, err := net.Dial("udp4", net.JoinHostPort(host, "9"))
+	conn, err := net.Dial("udp", net.JoinHostPort(host, "9"))
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = conn.Close() }()
 	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || addr.IP.IsUnspecified() || addr.IP.IsLoopback() {
-		return "", fmt.Errorf("no usable non-loopback local address for %q", host)
+	if !ok || addr.IP.IsUnspecified() || isLocalOnlyHost(addr.IP.String()) {
+		return "", fmt.Errorf("no usable local address toward %q", host)
 	}
 	return addr.IP.String(), nil
 }
 
 // resolveInboundListener computes [mqttproto.HelloPayload.InboundListener]:
 // empty when the FPP Connect listener is not bound (status reports not
-// listening — see runFPPConnectHTTPListener's own bind-failure path), the
+// listening, see runFPPConnectHTTPListener's own bind-failure path), the
 // listener's own configured host when it is bound to one specific,
 // non-wildcard address, otherwise the local address this node uses to
 // reach its MQTT broker (never a wildcard or loopback address, which the
@@ -105,6 +113,9 @@ func resolveInboundListener(cfg config.Config, status *fppConnectHTTPStatus, log
 	host, port, err := net.SplitHostPort(cfg.FPPConnectListenAddr)
 	if err != nil {
 		logger.Warn("failed to parse the fppconnect listen address while building this node's inbound listener address", "listen_addr", cfg.FPPConnectListenAddr, "error", err)
+		return ""
+	}
+	if isLocalOnlyHost(host) {
 		return ""
 	}
 	if !isWildcardHost(host) {

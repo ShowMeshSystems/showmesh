@@ -24,7 +24,7 @@ type weatherDelayCall struct {
 }
 
 // weatherDelayRecordingEngine wraps [activationAvailableEngine] and
-// records every SetGain/Start/Stop call, in order, across every session —
+// records every SetGain/Start/Stop call, in order, across every session,
 // the evidence TestWeatherDelayStartOrdering needs to prove ADR-053
 // decision 7's own ordering requirement.
 type weatherDelayRecordingEngine struct {
@@ -69,7 +69,7 @@ func (e *weatherDelayRecordingEngine) snapshot() []weatherDelayCall {
 const weatherDelayTestItemDuration = 2 * time.Second
 
 // weatherDelayDurationDecoder reports every path as a valid, decodable
-// asset with a known duration — cueactivationaudio_test.go's
+// asset with a known duration, cueactivationaudio_test.go's
 // fixedAudioDecoder reports no duration at all, which is fine for that
 // package's tests (none drive natural completion) but not for this
 // file's repeat-count test.
@@ -269,7 +269,7 @@ func TestWeatherDelayAlertPlaysExactlyRepeatCountTimesThenEnds(t *testing.T) {
 	// Ticks are sent continuously, on their own goroutine, so this test
 	// never assumes a send on the unbuffered ticks channel means
 	// watchTick has already finished running by the time it returns
-	// (rendezvous only guarantees the receive has started) — the
+	// (rendezvous only guarantees the receive has started), the
 	// foreground loop below polls Snapshot instead of counting ticks.
 	tickerDone := make(chan struct{})
 	go func() {
@@ -433,4 +433,72 @@ func writeTestWAV(t *testing.T, dir, filename, assetID string) pkgaudio.MediaRef
 	t.Helper()
 	hash := writeAssetFixture(t, dir, filename, []byte("pretend this is wav audio content: "+filename))
 	return pkgaudio.MediaRef{AssetID: assetID, ContentHash: hash, RuntimeFilename: filename}
+}
+
+// TestWeatherDelayStartOverTwoPathsDoesNotRestartTheAlert proves a start
+// arriving over MQTT and again over HTTP, each with its own operations
+// value as agent.go wires them, plays the alert once.
+func TestWeatherDelayStartOverTwoPathsDoesNotRestartTheAlert(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 10)
+
+	mqttPath := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	httpPath := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	if played, reason := mqttPath.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("first start did not play: %s", reason)
+	}
+	if played, reason := httpPath.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("second start reported not playing: %s", reason)
+	}
+
+	startCount := 0
+	for _, c := range engine.snapshot() {
+		if c.kind == "start" {
+			startCount++
+		}
+	}
+	if startCount != 1 {
+		t.Fatalf("engine Start calls = %d, want 1", startCount)
+	}
+}
+
+// TestWeatherDelayConcurrentStartsPlayTheAlertOnce proves starts that
+// arrive at the same moment over parallel paths play the alert once.
+func TestWeatherDelayConcurrentStartsPlayTheAlertOnce(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 10)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			ops.doStart(context.Background(), "delay", clock.now())
+		}()
+	}
+	close(gate)
+	wg.Wait()
+
+	startCount := 0
+	for _, c := range engine.snapshot() {
+		if c.kind == "start" {
+			startCount++
+		}
+	}
+	if startCount != 1 {
+		t.Fatalf("engine Start calls = %d, want 1", startCount)
+	}
 }
