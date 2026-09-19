@@ -298,6 +298,14 @@ type SchemaEmergencyStopArmRequest = components['schemas']['EmergencyStopArmRequ
 type SchemaEmergencyStopArmResponse = components['schemas']['EmergencyStopArmResponse']
 type SchemaEmergencyStopFireRequest = components['schemas']['EmergencyStopFireRequest']
 
+// ADR-053: weather delay (GET/POST /weather-delay* and its own
+// show.weatherdelay config kind, api/openapi.yaml's five routes).
+type SchemaWeatherDelayStateResponse = components['schemas']['WeatherDelayStateResponse']
+type SchemaWeatherDelayActionRequest = components['schemas']['WeatherDelayActionRequest']
+type SchemaWeatherDelayActionResponse = components['schemas']['WeatherDelayActionResponse']
+type SchemaWeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
+type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
+
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
  * via `Pick<T, Exclude<keyof T, K>>`, and `keyof` on a union type yields
@@ -3507,6 +3515,115 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/weather-delay` (ADR-053). Requires `observation:read`. */
+  async getWeatherDelayState(): Promise<SchemaWeatherDelayStateResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaWeatherDelayStateResponse>('/weather-delay', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/weather-delay/start` (ADR-053 decision 1). Mints its own
+   * idempotency key. No confirmation step: the operator's one press is the
+   * whole gesture.
+   */
+  async startWeatherDelay(): Promise<SchemaWeatherDelayActionResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaWeatherDelayActionRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaWeatherDelayActionResponse>(
+        '/weather-delay/start',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/weather-delay/cancel-night` (ADR-053 decision 1), the same
+   * umbrella scope and one-press gesture as [startWeatherDelay]. Answers
+   * `501` on a coordinator that has not shipped it yet; the caller reports
+   * that refusal rather than this method masking it.
+   */
+  async cancelNightForWeather(): Promise<SchemaWeatherDelayActionResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaWeatherDelayActionRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaWeatherDelayActionResponse>(
+        '/weather-delay/cancel-night',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/weather-delay/resume` (ADR-053 decision 8), behind its
+   * own `show:weatherdelay:resume` scope, separate from the umbrella
+   * `show:weatherdelay:invoke` the three methods above share.
+   */
+  async resumeFromWeatherDelay(): Promise<SchemaWeatherDelayActionResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaWeatherDelayActionRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaWeatherDelayActionResponse>(
+        '/weather-delay/resume',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.weatherdelay` (ADR-053 decision 13). Never 404s: a well-defined default answers with revision 0, source "default". */
+  async getWeatherDelayConfig(): Promise<SchemaWeatherDelayConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaWeatherDelayConfigResponse>('/config/show.weatherdelay', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.weatherdelay`. A full replacement, unlike
+   * `show.emergencystop`: every field is optional with a working default,
+   * so an empty `{}` payload is valid. Refused while a delay is active
+   * (ADR-053 decision 13); the caller reports that refusal.
+   */
+  async putWeatherDelayConfig(payload: SchemaConfigWeatherDelayPayload): Promise<SchemaWeatherDelayConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaWeatherDelayConfigResponse>('/config/show.weatherdelay', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.weatherdelay/revisions`: revision history, newest first, metadata only. */
+  async getWeatherDelayConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/show.weatherdelay/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /**
    * `DELETE /api/v1/nodes/{nodeId}/declaration`. The server itself
    * requires `{"confirm":true}` in the body (BUILD-PLAN Step 7 seam B
@@ -3927,6 +4044,11 @@ export class ApiStore {
           activeShow: payload.activeShow,
           runs: payload.runs,
         })
+        return
+      }
+      case 'weatherDelay.changed': {
+        if (gen !== this.generation) return
+        this.setModel({ ...this.model, weatherDelayFrames: this.model.weatherDelayFrames + 1 })
         return
       }
       default:

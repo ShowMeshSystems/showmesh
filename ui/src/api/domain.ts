@@ -455,6 +455,22 @@ export type EmergencyStopFollowUpResult = components['schemas']['EmergencyStopFo
 export type EmergencyStopNightSessionOutcome = components['schemas']['EmergencyStopNightSessionOutcome']
 export type EmergencyStopArmResponse = components['schemas']['EmergencyStopArmResponse']
 
+// ADR-053: weather delay. WeatherDelayStateResponse is the coordinator's
+// own persisted delay/cancel-night state (GET /weather-delay);
+// WeatherDelayActionResult is the shared start/cancel-night/resume result
+// shape, aliased for the identical reason as EmergencyStopResult above.
+export type WeatherDelayStateResponse = components['schemas']['WeatherDelayStateResponse']
+export type WeatherDelayNodeAssets = components['schemas']['WeatherDelayNodeAssets']
+export type WeatherDelayAssetStatus = components['schemas']['WeatherDelayAssetStatus']
+export type WeatherDelayActionResult = components['schemas']['WeatherDelayActionResult']
+export type WeatherDelayTargetOutcome = components['schemas']['WeatherDelayTargetOutcome']
+export type WeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
+export type ConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
+export type ConfigWeatherDelayAlertPayload = components['schemas']['ConfigWeatherDelayAlertPayload']
+export type ConfigWeatherDelayHeartbeatPayload = components['schemas']['ConfigWeatherDelayHeartbeatPayload']
+export type ConfigWeatherDelayPowerGroupPayload = components['schemas']['ConfigWeatherDelayPowerGroupPayload']
+export type ConfigWeatherDelayTriggersPayload = components['schemas']['ConfigWeatherDelayTriggersPayload']
+
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
 // verdicts, aliased for the identical reason as every type above
 // (ADR-015). Neither is part of `Model`: plain on-demand side calls,
@@ -694,6 +710,8 @@ export interface Model {
    * record of data permanently lost.
    */
   sessionFetchFailed: boolean
+  /** Count of first-class `weatherDelay.changed` stream frames received; a change tells the weather delay reader to refetch. */
+  weatherDelayFrames: number
 }
 
 export function initialModel(): Model {
@@ -721,5 +739,6 @@ export function initialModel(): Model {
     session: null,
     sessionReceivedAt: null,
     sessionFetchFailed: false,
+    weatherDelayFrames: 0,
   }
 }
