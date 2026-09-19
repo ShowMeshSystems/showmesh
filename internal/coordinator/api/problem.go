@@ -102,6 +102,10 @@ const (
 	// to that file's owner — see this task's report.
 	ProblemTypeInternalError = problemBaseURI + "internal-error"
 
+	// ProblemTypeNotImplemented is a 501: the route checked scope and body,
+	// but its behavior has not shipped yet.
+	ProblemTypeNotImplemented = problemBaseURI + "not-implemented"
+
 	// ProblemTypeFPPStartPlaylistEvidenceNotCurrent is startPlaylist's own
 	// ifBusy "refuse" guard (docs/bench/fpp-command-vocabulary.md section
 	// 5) refusing because the evidence it would need to decide "is
@@ -268,6 +272,15 @@ func invalidParameterProblem(detail string) v1.Problem {
 		Type:   ProblemTypeInvalidParameter,
 		Title:  "Invalid parameter",
 		Status: http.StatusBadRequest,
+		Detail: detail,
+	}
+}
+
+func notImplementedProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeNotImplemented,
+		Title:  "Not implemented",
+		Status: http.StatusNotImplemented,
 		Detail: detail,
 	}
 }

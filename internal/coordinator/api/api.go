@@ -576,6 +576,10 @@ type Dependencies struct {
 	// API failing" posture.
 	NightSessions NightSessionStore
 
+	// WeatherDelay is the weather delay state store. A nil field reads as
+	// not active and refuses writes.
+	WeatherDelay WeatherDelayStore
+
 	// FPPObservations is the playlist-entry observation store dependency — see
 	// [FPPObservationStore]. A nil field is replaced by
 	// [noFPPObservationStore], under which GET reports an empty list and
@@ -752,6 +756,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.NightSessions == nil {
 		d.NightSessions = noNightSessionStore{}
 	}
+	if d.WeatherDelay == nil {
+		d.WeatherDelay = noWeatherDelayStore{}
+	}
 	if d.FPPObservations == nil {
 		d.FPPObservations = noFPPObservationStore{}
 	}
@@ -849,6 +856,18 @@ func (noNightSessionStore) GetNightSessionByIdempotencyKey(context.Context, stri
 
 func (noNightSessionStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
 	return fmt.Errorf("api: night session store not wired in")
+}
+
+// noWeatherDelayStore is [Dependencies.WeatherDelay]'s default: Get reports
+// not active and Set refuses.
+type noWeatherDelayStore struct{}
+
+func (noWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherDelayStateRecord, error) {
+	return store.WeatherDelayStateRecord{}, nil
+}
+
+func (noWeatherDelayStore) SetWeatherDelayState(context.Context, store.WeatherDelayStateRecord) error {
+	return fmt.Errorf("api: weather delay store not wired in")
 }
 
 func (noNightSessionStore) InsertNightCueOutboxRow(context.Context, store.NightCueOutboxRecord, time.Time) error {
@@ -1958,6 +1977,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/emergency-stop/stop-power-down", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopPowerDown))
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
+
+	// Weather delay (ADR-053). Resume has its own scope, separate from the
+	// invoke scope start and cancel-night share.
+	mux.HandleFunc("GET /api/v1/weather-delay", h.readGuard(identity.ScopeObservationRead, h.handleGetWeatherDelayState))
+	mux.HandleFunc("GET /api/v1/config/show.weatherdelay", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.weatherdelay", h.writeGuard(&scopeConfigWrite, h.handlePutWeatherDelayConfig))
+	mux.HandleFunc("GET /api/v1/config/show.weatherdelay/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfigRevisions))
+	mux.HandleFunc("POST /api/v1/weather-delay/start", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayStart))
+	mux.HandleFunc("POST /api/v1/weather-delay/cancel-night", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayCancelNight))
+	mux.HandleFunc("POST /api/v1/weather-delay/resume", h.writeGuard(&scopeShowWeatherDelayResume, h.handleWeatherDelayResume))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

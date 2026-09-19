@@ -22,7 +22,10 @@ import (
 //
 // Every entry needs a stated reason, exactly like
 // cmd/showmeshctl/writeparity_test.go's exemptWritePaths.
-var unwiredDependencyExemptions = map[string]string{}
+var unwiredDependencyExemptions = map[string]string{
+	"WeatherDelay": "Nothing writes the state yet, so the default reads as not active, which is " +
+		"correct. It is wired with the behavior that writes the state.",
+}
 
 // dependencyRefusalVarPattern matches this package's naming convention for
 // a sentinel "dependency not wired in" error: a package-level

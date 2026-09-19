@@ -174,6 +174,9 @@ var migrations = []migration{
 	// schemaV36/schemaV38: no existing table is touched, and a cycle that
 	// ran before this migration simply has no row.
 	{version: 40, sql: schemaV40},
+	// v41 (ADR-053, weather delay): adds weather_delay_state. No existing
+	// table is touched.
+	{version: 41, sql: schemaV41},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

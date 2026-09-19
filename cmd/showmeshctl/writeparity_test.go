@@ -63,6 +63,10 @@ var exemptWritePaths = map[string]string{
 		"unconditionally (requireScope), the installed FPP plugin principal, not a general operator read " +
 		"scope. Neither needs a CLI verb of its own in this PR; growing one is future work, not a gap this " +
 		"exemption hides.",
+	"/weather-delay/start":        "Always answers 501; the CLI verb ships with the behavior.",
+	"/weather-delay/cancel-night": "Always answers 501; the CLI verb ships with the behavior.",
+	"/weather-delay/resume":       "Always answers 501; the CLI verb ships with the behavior.",
+	"/config/show.weatherdelay":   "The CLI verb ships with the weather delay behavior that reads this configuration.",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees

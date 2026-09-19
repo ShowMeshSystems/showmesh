@@ -225,6 +225,14 @@ const (
 	// [ScopeRenderCommand], [ScopeAudioCommand], and [ScopeNightCommand]
 	// each already carry for their own dispatch surface.
 	ScopeCueActivate Scope = "cue:activate"
+
+	// ScopeShowWeatherDelayInvoke gates starting a weather delay or
+	// cancelling the night (ADR-053 decision 1).
+	ScopeShowWeatherDelayInvoke Scope = "show:weatherdelay:invoke"
+
+	// ScopeShowWeatherDelayResume gates resuming. It is separate from
+	// [ScopeShowWeatherDelayInvoke] because a resume relights the display.
+	ScopeShowWeatherDelayResume Scope = "show:weatherdelay:resume"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -236,7 +244,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and
@@ -533,3 +541,12 @@ type AuditEntry struct {
 	OutcomeState  string
 	OutcomeReason string
 }
+
+// The weather delay audit actions (ADR-053), kept here so every package
+// that records one uses the same string.
+const (
+	AuditActionShowWeatherDelayStart       = "show.weatherdelay.start"
+	AuditActionShowWeatherDelayCancelNight = "show.weatherdelay.cancel_night"
+	AuditActionShowWeatherDelayResume      = "show.weatherdelay.resume"
+	AuditActionShowWeatherDelayEnforce     = "show.weatherdelay.enforce"
+)
