@@ -9,50 +9,52 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// After a cancel-night alert starts, the coordinator runs the same
-// graceful night shutdown emergency stop's stop-power-down level does
-// (nightEmergencyPowerDown, forced power-down-presentation), but only
-// once the cancel alert has finished on the plan's own nodes. The level-1
-// style immediate stop is never re-run here: cancel-night's own dispatch
-// (weatherDelayStartOrChange's shared fan-out) already did that.
+// After a cancel night starts, the coordinator runs emergency stop's
+// graceful night power-down, but only once the cancel alert has ended on
+// every reachable plan node. The immediate stop already ran in the start.
 
-// weatherDelayCancelAlertSessionID mirrors internal/agent's own
-// weatherDelayAlertSessionID literal; this package must never import
-// internal/agent (see audionode.go's identical precedent for a node-side
-// literal copied here rather than imported).
+// weatherDelayCancelAlertSessionID mirrors internal/agent's
+// weatherDelayAlertSessionID; this package never imports internal/agent.
 const weatherDelayCancelAlertSessionID = "weatherdelay:alert"
 
 // weatherDelayCancelShutdownCeiling is the longest the shutdown waits for
-// the cancel alert to finish before running the night shutdown anyway.
-// This coordinator does not track a decoded asset duration (only a node
-// does, after downloading and decoding the file), so the duration is
-// always "unknown" from here and the fixed ceiling always applies.
+// the alert. The coordinator never knows an asset's decoded duration, so
+// the fixed ceiling for an unknown duration always applies.
 var weatherDelayCancelShutdownCeiling = 15 * time.Minute
 
-// weatherDelayCancelShutdownPollInterval paces the wait for the alert to
-// end. A var so a test can drive it down; production never overrides it.
+// weatherDelayCancelShutdownPollInterval paces the wait. A var so a test
+// can drive it down; production never overrides it.
 var weatherDelayCancelShutdownPollInterval = 2 * time.Second
 
-// weatherDelayCancelShutdownPrincipalID attributes the post-alert
-// shutdown's own night-session commands to a stable, clearly-labeled
-// identity, mirroring weatherDelayEnforceSystemPrincipalID one file over.
+// weatherDelayCancelShutdownPrincipalID attributes the shutdown's own
+// night-session commands, like weatherDelayEnforceSystemPrincipalID.
 const weatherDelayCancelShutdownPrincipalID = "system:weather-delay-cancel-night"
 
-// weatherDelayCancelShutdownBackground counts a shutdown watcher still
-// running, so a test can wait for it to finish rather than sleeping.
+// weatherDelayCancelShutdownBackground counts running shutdown watchers,
+// so a test can wait for them rather than sleeping.
 var weatherDelayCancelShutdownBackground sync.WaitGroup
 
-// weatherDelayCancelNightAfterDispatch is cancel-night's own afterDispatch
-// hook (weatherDelayStartOrChange): it runs in the background, detached
-// from the triggering request, so the operator's own response is never
-// held up by however long the alert takes to finish.
+// weatherDelayCancelNightAfterDispatch is cancel-night's afterDispatch
+// hook: the watcher runs detached so the response never waits on it.
 func (h *handlers) weatherDelayCancelNightAfterDispatch(rec store.WeatherDelayStateRecord, planNodeIDs []string) {
+	h.weatherDelayStartCancelNightShutdown(rec, planNodeIDs)
+}
+
+// weatherDelayStartCancelNightShutdown starts at most one watcher per
+// state number, so a repeated cancel press never runs a second shutdown.
+func (h *handlers) weatherDelayStartCancelNightShutdown(rec store.WeatherDelayStateRecord, planNodeIDs []string) {
+	cache := h.deps.WeatherDelayGateCache
+	if !cache.claimCancelShutdown(rec.Revision) {
+		return
+	}
 	weatherDelayCancelShutdownBackground.Add(1)
 	go func() {
 		defer weatherDelayCancelShutdownBackground.Done()
+		defer cache.releaseCancelShutdown(rec.Revision)
 		defer func() {
 			if r := recover(); r != nil {
 				h.logWarn("weather delay cancel night: shutdown watcher panicked; recovered", "panic", fmt.Sprintf("%v", r))
@@ -62,12 +64,47 @@ func (h *handlers) weatherDelayCancelNightAfterDispatch(rec store.WeatherDelaySt
 	}()
 }
 
+// ResumeWeatherDelayCancelNightShutdown restarts the shutdown watcher at
+// coordinator startup when a cancelled night is stored, so a restart
+// during the alert never loses the shutdown. A repeat run is a no-op.
+func ResumeWeatherDelayCancelNightShutdown(ctx context.Context, deps Dependencies, opts Options) {
+	deps = deps.withDefaults()
+	opts = opts.withDefaults()
+	h := &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger}
+	rec, err := deps.WeatherDelay.GetWeatherDelayState(ctx)
+	if err != nil {
+		h.logWarn("weather delay cancel night: failed to read the state at startup; the night shutdown was not resumed", "error", err)
+		return
+	}
+	if !rec.Active || rec.Kind != weatherdelay.KindCancelNight {
+		return
+	}
+	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, deps.Config)
+	if err != nil {
+		h.logWarn("weather delay cancel night: failed to resolve show.weatherdelay config at startup; waiting on no node", "error", err)
+	}
+	planNodeIDs, err := h.weatherDelayPlanNodeIDs(ctx, payload.Alert.NodeIDs)
+	if err != nil {
+		h.logWarn("weather delay cancel night: failed to resolve plan node ids at startup; waiting on no node", "error", err)
+		planNodeIDs = nil
+	}
+	h.weatherDelayStartCancelNightShutdown(rec, planNodeIDs)
+}
+
 // weatherDelayRunCancelNightShutdown waits for the cancel alert to end (or
 // the ceiling) and then runs the graceful night shutdown, unless this
-// cancel has already been superseded (resumed, or changed again) by the
-// time the wait ends.
+// cancel was cleared or replaced by the time the wait ends.
 func (h *handlers) weatherDelayRunCancelNightShutdown(ctx context.Context, rec store.WeatherDelayStateRecord, planNodeIDs []string) {
-	ended, waited := h.weatherDelayWaitForCancelAlertToEnd(ctx, planNodeIDs)
+	alertConfigured := true
+	if payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config); err != nil {
+		h.logWarn("weather delay cancel night: failed to resolve show.weatherdelay config; waiting for an alert anyway", "error", err)
+	} else {
+		alertConfigured = payload.Alert.CancelNightAssetID != ""
+	}
+	ended, waited := true, time.Duration(0)
+	if alertConfigured {
+		ended, waited = h.weatherDelayWaitForCancelAlertToEnd(ctx, planNodeIDs)
+	}
 
 	if cur, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx); err != nil {
 		h.logWarn("weather delay cancel night: failed to re-check the state before the night shutdown; running it anyway", "error", err)
@@ -85,28 +122,29 @@ func (h *handlers) weatherDelayRunCancelNightShutdown(ctx context.Context, rec s
 		Timestamp: now, PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
 		Action: identity.AuditActionShowWeatherDelayCancelNight, Target: "shutdown", Kind: identity.AuditOutcome,
 		Params: map[string]any{
-			"alertEnded": ended, "waitedSeconds": waited.Seconds(),
+			"alertConfigured": alertConfigured, "alertEnded": ended, "waitedSeconds": waited.Seconds(),
 			"nightSessionPresent": outcome.Present, "nightSessionOutcome": outcome.Outcome, "nightSessionError": outcome.Error,
 		},
 	})
-	h.appendWeatherDelayChangedEvent(ctx, now, fmt.Sprintf(
-		"cancel night shutdown: alert ended=%v after %s; night session present=%v", ended, waited.Round(time.Second), outcome.Present))
+	summary := "cancel night: no show was running, so there was nothing to shut down"
+	if outcome.Present {
+		summary = "cancel night: the show is shutting down for the night"
+	}
+	h.appendWeatherDelayChangedEvent(ctx, now, summary)
 }
 
 // weatherDelayWaitForCancelAlertToEnd polls until the cancel alert has
-// ended on every reachable plan node or the ceiling passes. This wait is
-// timed on the real wall clock, not [handlers.now]: it paces a real
-// background poll against a real alert playing on real hardware, never a
-// business timestamp a test's own fake clock stands in for (contrast the
-// audit and event timestamps in
-// [handlers.weatherDelayRunCancelNightShutdown], which do use [handlers.now]).
+// ended on every reachable plan node or the ceiling passes. It paces a real
+// poll, so it uses the wall clock; evidence is fenced at h.now().
 func (h *handlers) weatherDelayWaitForCancelAlertToEnd(ctx context.Context, nodeIDs []string) (ended bool, waited time.Duration) {
 	start := time.Now()
 	deadline := start.Add(weatherDelayCancelShutdownCeiling)
 	ticker := time.NewTicker(weatherDelayCancelShutdownPollInterval)
 	defer ticker.Stop()
+	fence := h.now()
+	seenPlaying := map[string]bool{}
 	for {
-		if h.weatherDelayCancelAlertEnded(h.now(), nodeIDs) {
+		if h.weatherDelayCancelAlertEnded(h.now(), fence, nodeIDs, seenPlaying) {
 			return true, time.Since(start)
 		}
 		if !time.Now().Before(deadline) {
@@ -120,19 +158,37 @@ func (h *handlers) weatherDelayWaitForCancelAlertToEnd(ctx context.Context, node
 	}
 }
 
-// weatherDelayCancelAlertEnded reports whether the cancel alert has ended
-// on every reachable plan node. A node with no audio observation at all is
-// unreachable and never blocks the wait; one whose alert session reports
-// anything but playing has ended it.
-func (h *handlers) weatherDelayCancelAlertEnded(now time.Time, nodeIDs []string) bool {
+// weatherDelayCancelAlertEnded reports whether the alert has ended on every
+// reachable node. Only a report received after fence counts, so a node that
+// has not reported the new alert yet is still waited on.
+func (h *handlers) weatherDelayCancelAlertEnded(now, fence time.Time, nodeIDs []string, seenPlaying map[string]bool) bool {
+	allEnded := true
 	for _, nodeID := range nodeIDs {
-		if len(h.deps.Audio.NodeAudioObservations(nodeID)) == 0 {
+		if !h.weatherDelayNodeAudioReachable(now, nodeID) {
 			continue
 		}
-		state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, time.Time{}, nodeID, weatherDelayCancelAlertSessionID)
-		if ok && state == string(pkgaudio.StatePlaying) {
-			return false
+		state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, fence, nodeID, weatherDelayCancelAlertSessionID)
+		switch {
+		case ok && state == string(pkgaudio.StatePlaying):
+			seenPlaying[nodeID] = true
+			allEnded = false
+		case ok:
+		case seenPlaying[nodeID]:
+			// The node stopped reporting the alert session after playing it.
+		default:
+			allEnded = false
 		}
 	}
-	return true
+	return allEnded
+}
+
+// weatherDelayNodeAudioReachable reports whether nodeID has any current
+// audio observation; a node with none cannot report the alert ending.
+func (h *handlers) weatherDelayNodeAudioReachable(now time.Time, nodeID string) bool {
+	for _, o := range h.deps.Audio.NodeAudioObservations(nodeID) {
+		if o.StateAt(now) == observation.StateCurrent {
+			return true
+		}
+	}
+	return false
 }

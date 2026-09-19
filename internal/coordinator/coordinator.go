@@ -1322,6 +1322,7 @@ func Run() int {
 	spawnBackground(func() {
 		weatherDelayEnforcer.Run(ctx)
 	})
+	api.ResumeWeatherDelayCancelNightShutdown(ctx, apiDeps, apiOpts)
 
 	// cueActivationLoop.Run owns Track H seam H4's own activation trigger
 	// (cueactivationloop.go): it resolves and dispatches a cue.activate (or

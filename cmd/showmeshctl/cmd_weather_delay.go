@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -344,10 +345,8 @@ type weatherDelayPresignedStartResponse struct {
 	NodeURLs   []string                `json:"nodeUrls"`
 }
 
-// cmdWeatherDelayPresign mints a pre-signed start (ADR-053 decision 8):
-// an outside system holds the printed document and can POST it directly
-// to a node's own listener while this coordinator is down. Replaying it
-// can only start a delay or a cancel night; it can never resume one.
+// cmdWeatherDelayPresign mints a pre-signed start an outside system can
+// POST to a node while the coordinator is down. It can never resume.
 func cmdWeatherDelayPresign(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	const cmdLabel = "showmeshctl weather-delay presign"
 	fs, g := newFlagSet(cmdLabel, stderr)
@@ -392,7 +391,12 @@ func cmdWeatherDelayPresign(args []string, stdout, stderr io.Writer, clock func(
 	}
 	_, _ = fmt.Fprintf(stdout, "weather delay presigned start: kind=%s issuedAt=%s notAfter=%s\n",
 		resp.Request.Request.Kind, resp.Request.Request.IssuedAt, resp.Request.Request.NotAfter)
+	doc, err := json.Marshal(resp.Request)
+	if err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
 	_, _ = fmt.Fprintln(stdout, "  hold this document and POST it, unmodified, to any of the URLs below when this coordinator is down:")
+	_, _ = fmt.Fprintln(stdout, "  "+string(doc))
 	if len(resp.NodeURLs) == 0 {
 		_, _ = fmt.Fprintln(stdout, "  (no node URL is known right now; use -o json and this coordinator's own node inventory instead)")
 	}

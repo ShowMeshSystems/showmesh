@@ -105,10 +105,8 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 		http.Error(w, "request is too far in the future", http.StatusForbidden)
 		return
 	}
-	// A minted notAfter replaces the fixed age limit outright: signed.Verify
-	// already refused one more than 400 days past issuedAt. No notAfter at
-	// all keeps the fixed 24 hour rule so a request minted before notAfter
-	// existed keeps working unchanged.
+	// A notAfter replaces the 24 hour rule; Verify already refused one more
+	// than 400 days past issuedAt. Without one the 24 hour rule applies.
 	if !signed.Request.NotAfter.IsZero() {
 		if nowVal.After(signed.Request.NotAfter) {
 			http.Error(w, "request has expired", http.StatusForbidden)

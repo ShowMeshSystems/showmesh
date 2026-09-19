@@ -273,24 +273,9 @@ func (h *handlers) handleWeatherDelayCancelNight(w http.ResponseWriter, r *http.
 	h.weatherDelayStartOrChange(w, r, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, h.weatherDelayCancelNightAfterDispatch)
 }
 
-// weatherDelayStartOrChange persists and publishes the active state before
-// any stop, then sends every stop and node start concurrently. A failed
-// target or a failed write is reported and never rolls the state back.
-// It backs both start (desiredKind delay) and cancel-night (desiredKind
-// cancelNight): the same mechanism, the same concurrent fan-out.
-//
-// Three cases beyond "already this kind" (idempotent, unchanged):
-//   - not active: a fresh active state at desiredKind.
-//   - active as delay, desiredKind cancelNight: changed in place, same
-//     StartedAt, a new revision (ADR-053 decision 1).
-//   - active as cancelNight, desiredKind delay: a cancelled night stays
-//     set until an operator clears it (this build's own decision 3); the
-//     start route can never downgrade it back to a mere delay, so this is
-//     idempotent too, at the cancelNight kind already held.
-//
-// afterDispatch, when non-nil, runs once the response has been prepared,
-// with the final state and the plan node ids the dispatch used; only
-// cancel-night supplies one, to start its own post-alert night shutdown.
+// weatherDelayStartOrChange persists the active state before any stop, then
+// sends every stop and node start concurrently. A delay changes to a cancel
+// in place; a cancel is never downgraded. afterDispatch runs after the reply.
 func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Request, desiredKind, auditAction string, afterDispatch func(rec store.WeatherDelayStateRecord, planNodeIDs []string)) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(weatherDelayHandlerWriteDeadline()))
@@ -480,9 +465,7 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	}
 
 	// The night session is rewound while the delay still holds the night
-	// loop, so no tick can act on the stopped show in between. A cancelled
-	// night never touches it at all: clearing a cancel restarts nothing
-	// (decision 3), only an operator's own start does that.
+	// loop. Clearing a cancelled night never touches the night session.
 	nightOutcome := "untouched: no weather delay was active"
 	switch {
 	case current.Active && current.Kind == weatherdelay.KindCancelNight:

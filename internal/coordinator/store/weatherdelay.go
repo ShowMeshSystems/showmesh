@@ -14,10 +14,8 @@ import (
 const weatherDelayStateRowID = "default"
 
 // WeatherDelayStateRecord mirrors pkg/weatherdelay.State. StartedAt is zero
-// and Kind, StartedBy and StartedByName are empty while Active is false.
-// StartedByName is an operator-recognizable name for StartedBy (a
-// principal's login or token label, or a trigger source name); it may be
-// empty even while Active for a row written before it existed.
+// and the other fields empty while Active is false. StartedByName may be
+// empty even while Active, for a row written before it existed.
 type WeatherDelayStateRecord struct {
 	Active        bool
 	Kind          string
@@ -136,16 +134,8 @@ CREATE TABLE IF NOT EXISTS weather_delay_state (
 `
 
 // migrateV42AddWeatherDelayStateStartedByNameColumn adds
-// weather_delay_state.started_by_name: an operator-recognizable name
-// beside the principal id already in started_by. A row written before
-// this migration reads back with an empty name, never an error.
-//
-// A Go function rather than a bare ALTER TABLE, for the reason
-// migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn's own doc
-// comment records: some tests rewind PRAGMA user_version and reopen the
-// store to force every later migration to run again, and a bare ALTER
-// TABLE ... ADD COLUMN fails outright on that second pass with "duplicate
-// column name" once the column exists.
+// weather_delay_state.started_by_name, skipping it when the column exists
+// so a rerun never fails with "duplicate column name".
 func migrateV42AddWeatherDelayStateStartedByNameColumn(ctx context.Context, tx *sql.Tx) error {
 	var hasColumn int
 	if err := tx.QueryRowContext(ctx,

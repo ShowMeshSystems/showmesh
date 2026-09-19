@@ -31,7 +31,7 @@ func TestCmdWeatherDelayStatusPrintsHeldPlayers(t *testing.T) {
 func TestCmdWeatherDelayStatusPrintsStartedByNameAndNotifyError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"serverTime":"2026-10-31T20:30:00Z","active":true,"kind":"cancelNight","startedAt":"2026-10-31T20:00:00Z","startedBy":"principal-1","startedByName":"Eric","revision":3,"assets":[],"powerGroups":[],"heldPlayers":[],"lastNotifyError":"webhook answered with status 500"}`)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-10-31T20:30:00Z","active":true,"kind":"cancelNight","startedAt":"2026-10-31T20:00:00Z","startedBy":"principal-1","startedByName":"Night Operator","revision":3,"assets":[],"powerGroups":[],"heldPlayers":[],"lastNotifyError":"webhook answered with status 500"}`)
 	}))
 	defer srv.Close()
 
@@ -41,8 +41,8 @@ func TestCmdWeatherDelayStatusPrintsStartedByNameAndNotifyError(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "startedBy=Eric") {
-		t.Fatalf("stdout = %q, want startedBy=Eric (the name, not the raw principal id)", out)
+	if !strings.Contains(out, "startedBy=Night Operator") {
+		t.Fatalf("stdout = %q, want startedBy=Night Operator (the name, not the raw principal id)", out)
 	}
 	if !strings.Contains(out, "webhook answered with status 500") {
 		t.Fatalf("stdout = %q, want the last webhook delivery failure", out)
@@ -54,7 +54,7 @@ func TestCmdWeatherDelayCancelNightAndClear(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"serverTime":"2026-10-31T20:30:00Z","result":{"kind":"cancelNight","idempotencyKey":"k","active":true,"startedAt":"2026-10-31T20:00:00Z","startedBy":"p1","startedByName":"Eric","revision":2,"targets":[]}}`)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-10-31T20:30:00Z","result":{"kind":"cancelNight","idempotencyKey":"k","active":true,"startedAt":"2026-10-31T20:00:00Z","startedBy":"p1","startedByName":"Night Operator","revision":2,"targets":[]}}`)
 	}))
 	defer srv.Close()
 
@@ -63,8 +63,8 @@ func TestCmdWeatherDelayCancelNightAndClear(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("cancel-night exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "startedBy=Eric") {
-		t.Fatalf("cancel-night stdout = %q, want startedBy=Eric", stdout.String())
+	if !strings.Contains(stdout.String(), "startedBy=Night Operator") {
+		t.Fatalf("cancel-night stdout = %q, want startedBy=Night Operator", stdout.String())
 	}
 
 	stdout.Reset()
@@ -104,5 +104,8 @@ func TestCmdWeatherDelayPresign(t *testing.T) {
 	}
 	if !strings.Contains(out, "http://10.0.0.5:9090/showmesh/v1/weather-delay/start") {
 		t.Fatalf("stdout = %q, want the node url", out)
+	}
+	if !strings.Contains(out, `{"request":{"kind":"delay","issuedAt":"2026-10-31T20:30:00Z","nonce":"n1","notAfter":"2027-01-01T00:00:00Z"},"signature":"c2ln"}`) {
+		t.Fatalf("stdout = %q, want the signed document to hold", out)
 	}
 }

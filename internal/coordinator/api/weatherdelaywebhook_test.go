@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,5 +192,21 @@ func TestWeatherDelayWebhookNeverFollowsARedirect(t *testing.T) {
 	}
 	if len(rec.events()) != 0 {
 		t.Fatal("the webhook followed a redirect to the target server")
+	}
+}
+
+// TestWeatherDelayWebhookErrorNeverEchoesTheURL proves lastNotifyError, which
+// any observation reader sees, never repeats a token held in the webhook URL.
+func TestWeatherDelayWebhookErrorNeverEchoesTheURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	closedURL := srv.URL + "/api/webhook/secret-token-123"
+	srv.Close()
+
+	reason := (&handlers{}).weatherDelayPostNotify(closedURL, weatherDelayNotifyPayload{Event: "delay_started", Kind: "delay", Active: true})
+	if reason == "" {
+		t.Fatal("weatherDelayPostNotify() = no error, want a failure against a closed server")
+	}
+	if strings.Contains(reason, "secret-token-123") {
+		t.Fatalf("reason = %q, want no part of the webhook URL path", reason)
 	}
 }

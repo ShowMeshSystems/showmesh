@@ -194,10 +194,8 @@ const (
 	weatherDelayUnchanged weatherDelayTransition = iota
 	weatherDelayStarted
 	weatherDelayCleared
-	// weatherDelayKindChanged is an active delay changed into a cancel (or,
-	// in principle, the reverse) in place: the alert to play changes but
-	// StartedAt does not (ADR-053 decision 1's "a delay can be changed to
-	// a cancel while it is active").
+	// weatherDelayKindChanged is an active delay changed to a cancel in
+	// place: the alert changes, StartedAt does not.
 	weatherDelayKindChanged
 )
 

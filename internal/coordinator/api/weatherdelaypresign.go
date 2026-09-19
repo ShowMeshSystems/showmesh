@@ -14,10 +14,8 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// weatherDelayNodeStartPath mirrors the node's own
-// /showmesh/v1/weather-delay/start route (internal/agent/weatherdelayhttp.go),
-// matching [handlers.weatherDelayHTTPNodeStart]'s identical literal one
-// file over: this package must never import internal/agent.
+// weatherDelayNodeStartPath mirrors the node's start route in
+// internal/agent/weatherdelayhttp.go; this package never imports internal/agent.
 const weatherDelayNodeStartPath = "/showmesh/v1/weather-delay/start"
 
 // Pre-signed start (ADR-053 decision 8): an outside system holds this
@@ -70,9 +68,11 @@ func (h *handlers) handleWeatherDelayPresignedStart(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// UTC, so a daylight saving change can never push notAfter past the node's cap.
+	issuedAt := now.UTC()
 	req := weatherdelay.StartRequest{
-		Kind: kind, IssuedAt: now, Nonce: uuid.NewString(),
-		NotAfter: now.AddDate(0, 0, validDays),
+		Kind: kind, IssuedAt: issuedAt, Nonce: uuid.NewString(),
+		NotAfter: issuedAt.AddDate(0, 0, validDays),
 	}
 	signed, err := weatherdelay.Sign(req, h.deps.WeatherDelaySigner)
 	if err != nil {
@@ -93,10 +93,8 @@ func (h *handlers) handleWeatherDelayPresignedStart(w http.ResponseWriter, r *ht
 	jsonWrite(w, v1.WeatherDelayPresignedStartResponse{ServerTime: formatTime(now), Request: signed, NodeURLs: nodeURLs})
 }
 
-// weatherDelayPresignNodeURLs lists every plan node's own reported inbound
-// listener address, as a full start URL. Missing or unreachable nodes are
-// left out; the list is advisory, never a promise (see
-// [v1.WeatherDelayPresignedStartResponse]'s own doc comment).
+// weatherDelayPresignNodeURLs lists each plan node's reported inbound
+// listener as a start URL. A node with no listener is left out.
 func (h *handlers) weatherDelayPresignNodeURLs(ctx context.Context) []string {
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
 	if err != nil {

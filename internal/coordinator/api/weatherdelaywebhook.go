@@ -4,18 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
 
-// The optional show.weatherdelay.notify webhook (ADR-053 decision 13): a
-// small JSON document on delay started, changed to cancel night, cancel
-// night started, resumed or cleared. Best effort by construction: it never
-// blocks or fails the operator's own request, and a failure only shows up
-// as GET /weather-delay's own lastNotifyError.
+// The optional show.weatherdelay.notify webhook. Best effort: it never
+// blocks or fails the operator's request; a failure shows only as
+// lastNotifyError on GET /api/v1/weather-delay.
 
 // weatherDelayWebhookTimeout bounds the whole webhook POST.
 const weatherDelayWebhookTimeout = 3 * time.Second
@@ -49,9 +49,8 @@ type weatherDelayNotifyPayload struct {
 }
 
 // weatherDelayNotify fires the configured webhook, if any, in the
-// background: it never blocks or fails the caller's own request. event is
-// one of "delay_started", "changed_to_cancel_night", "cancel_night_started",
-// "resumed" or "cleared".
+// background. event is delay_started, changed_to_cancel_night,
+// cancel_night_started, resumed or cleared.
 func (h *handlers) weatherDelayNotify(ctx context.Context, event, kind string, active bool, startedAt time.Time, startedBy string, changedAt time.Time) {
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
 	if err != nil {
@@ -72,6 +71,11 @@ func (h *handlers) weatherDelayNotify(ctx context.Context, event, kind string, a
 	weatherDelayNotifyBackground.Add(1)
 	go func() {
 		defer weatherDelayNotifyBackground.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				h.logWarn("weather delay notify: webhook delivery panicked; recovered", "panic", fmt.Sprintf("%v", r))
+			}
+		}()
 		reason := h.weatherDelayPostNotify(webhookURL, body)
 		h.deps.WeatherDelayGateCache.setNotifyError(reason)
 		if reason != "" {
@@ -97,12 +101,17 @@ func (h *handlers) weatherDelayPostNotify(webhookURL string, body weatherDelayNo
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := weatherDelayWebhookClient.Do(req)
 	if err != nil {
-		return fmt.Sprintf("request failed: %v", err)
+		// url.Error carries the full URL, which can hold a token; report only the cause.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return fmt.Sprintf("The weather notification could not be sent: %v. Check the webhook address.", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, weatherDelayWebhookMaxBodyBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Sprintf("webhook answered with status %d", resp.StatusCode)
+		return fmt.Sprintf("The webhook answered with status %d. Check the webhook address.", resp.StatusCode)
 	}
 	return ""
 }

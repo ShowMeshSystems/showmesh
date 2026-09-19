@@ -324,6 +324,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 			h.writeInternalError(w, now, "check weather delay state", err)
 			return
 		} else if wdRec.Active && wdRec.Kind == weatherdelay.KindCancelNight {
+			h.appendWeatherDelayChangedEvent(ctx, now, "cancel night: a night start was refused because tonight's show was cancelled for weather; clear the cancellation to start a show")
 			writeProblem(w, h.logger, now, weatherDelayActiveProblem("Tonight's show was cancelled for weather. Clear the cancellation to start a show."))
 			return
 		} else if wdRec.Active {

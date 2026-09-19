@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -286,5 +287,32 @@ func TestWeatherDelayResumeRequiresItsOwnScope(t *testing.T) {
 	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/resume", `{"idempotencyKey":"key-1"}`, auth))
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("resume as viewer: status = %d, want 403; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestWeatherDelayCancelledNightStartRefusalIsReported proves a night start
+// refused by a cancelled night, such as FPP's scheduled start the next
+// evening, is recorded in the event history and not only returned.
+func TestWeatherDelayCancelledNightStartRefusalIsReported(t *testing.T) {
+	t.Cleanup(weatherDelayCancelShutdownBackground.Wait)
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(Dependencies{
+		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		Identity: svc, Config: st, WeatherDelay: st, WeatherDelayEvents: st,
+	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + mustIssueToken(t, svc, admin.ID)}
+	doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/cancel-night", `{"idempotencyKey":"key-1"}`, auth))
+	weatherDelayCancelShutdownBackground.Wait()
+	before := countEventsByCategory(t, st, v1.EventKindWeatherDelayChanged)
+
+	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/night/commands/start-night", `{}`, auth))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("start-night while cancelled: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if after := countEventsByCategory(t, st, v1.EventKindWeatherDelayChanged); after != before+1 {
+		t.Fatalf("weather delay events = %d after a refused night start, want %d", after, before+1)
 	}
 }

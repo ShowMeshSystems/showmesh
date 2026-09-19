@@ -16,13 +16,39 @@ type WeatherDelayGateCache struct {
 	heartbeats      map[string]time.Time
 	gateWrites      map[string]*sync.Mutex
 	lastNotifyError string
+	cancelShutdowns map[int64]bool
 }
 
-// setNotifyError records the webhook's own most recent delivery failure
-// (empty clears it), reported by GET /api/v1/weather-delay as
-// lastNotifyError. It is this process's own count, not a durable one: a
-// restart clears it, matching every other best-effort evidence this cache
-// already holds.
+// claimCancelShutdown reports whether the caller may start the cancel
+// night shutdown watcher for revision; false while one already runs.
+func (c *WeatherDelayGateCache) claimCancelShutdown(revision int64) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelShutdowns[revision] {
+		return false
+	}
+	if c.cancelShutdowns == nil {
+		c.cancelShutdowns = map[int64]bool{}
+	}
+	c.cancelShutdowns[revision] = true
+	return true
+}
+
+// releaseCancelShutdown ends a claim taken by claimCancelShutdown.
+func (c *WeatherDelayGateCache) releaseCancelShutdown(revision int64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.cancelShutdowns, revision)
+	c.mu.Unlock()
+}
+
+// setNotifyError records the webhook's latest delivery failure, or clears it
+// with "". It is held in memory only, so a restart clears it.
 func (c *WeatherDelayGateCache) setNotifyError(reason string) {
 	if c == nil {
 		return

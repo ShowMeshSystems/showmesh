@@ -104,12 +104,9 @@ func DecodeState(data []byte) (State, error) {
 // presigned-start endpoint refuses to mint one that would.
 const MaxPresignValidDays = 400
 
-// StartRequest is the pre-signed start (ADR-053 decision 8). No field or
-// Kind value expresses a resume. Replay is not tracked here because
-// replaying a start can only cause darkness. NotAfter is optional: the
-// zero value means the node applies its own fixed-age rule instead of an
-// explicit expiry, so a request minted before NotAfter existed keeps
-// working unchanged.
+// StartRequest is the pre-signed start. Nothing in it expresses a resume,
+// and replay is harmless. A zero NotAfter means the node's 24 hour rule
+// applies instead of an explicit expiry.
 type StartRequest struct {
 	Kind     string    `json:"kind"`
 	IssuedAt time.Time `json:"issuedAt"`

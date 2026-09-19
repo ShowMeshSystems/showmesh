@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -418,6 +419,14 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 			t.Fatalf("engine Start calls = %d after 5s, want 2 (the cancel alert must replace the delay alert)", startCount)
 		}
 		time.Sleep(time.Millisecond)
+	}
+
+	live, err := engine.LiveHandles(context.Background())
+	if err != nil {
+		t.Fatalf("LiveHandles: %v", err)
+	}
+	if len(live) != 1 || !strings.HasSuffix(string(live[0]), "cancelNight-0") {
+		t.Fatalf("live engine handles = %v, want only the cancel alert (the delay alert released)", live)
 	}
 }
 

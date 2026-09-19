@@ -199,11 +199,8 @@ type WeatherDelayPresignedStartRequest struct {
 	ValidDays int    `json:"validDays"`
 }
 
-// WeatherDelayPresignedStartResponse is that route's response: the signed
-// request document to hold, and every node URL it can be POSTed to today.
-// The node list is a convenience, not a promise: an installation's plan
-// nodes can change, so an outside system should treat it as advisory and
-// fall back to broadcasting to every node address it otherwise knows.
+// WeatherDelayPresignedStartResponse is the signed document to hold and the
+// node URLs it can be POSTed to today. Plan nodes change, so the list is advisory.
 type WeatherDelayPresignedStartResponse struct {
 	ServerTime string                          `json:"serverTime"`
 	Request    weatherdelay.SignedStartRequest `json:"request"`
