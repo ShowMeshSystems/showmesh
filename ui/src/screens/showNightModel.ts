@@ -1,4 +1,4 @@
-import type { Model, NightBackgroundAudio, NightCue, NightReadiness, NightReadinessCheck, NightSessionState } from '../api'
+import type { Model, NightBackgroundAudio, NightCue, NightCycleOutcome, NightReadiness, NightReadinessCheck, NightSessionState } from '../api'
 import type { Tone } from '../kit'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 import { findSignal, transportState } from './liveControlModel'
@@ -15,7 +15,22 @@ export type RailStep = {
   key: string
   label: string
   detail: string
-  status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired'
+  status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired' | 'error' | 'stopped'
+}
+
+/** The word each finished-cycle outcome states before its reason, verbatim from the API otherwise. */
+const CYCLE_OUTCOME_LABEL: Record<NightCycleOutcome['outcome'], string> = {
+  completed: 'Complete',
+  stopped: 'Stopped',
+  interrupted: 'Error',
+  unknown: 'Not confirmed',
+}
+
+const CYCLE_OUTCOME_STATUS: Record<NightCycleOutcome['outcome'], RailStep['status']> = {
+  completed: 'done',
+  stopped: 'stopped',
+  interrupted: 'error',
+  unknown: 'unknown',
 }
 
 export function cycleRail(session: NightSessionState, nowIso: string | null): RailStep[] {
@@ -48,9 +63,10 @@ export function cycleRail(session: NightSessionState, nowIso: string | null): Ra
 }
 
 /**
- * The whole-night timeline the mock draws. `NightSessionState` reports only
- * the cycle the session is in, so cycles before it are placeholders: the
- * step exists because the cycle happened, but nothing about it is reported.
+ * The whole-night timeline the mock draws. Each cycle before the current one
+ * is rendered from `session.finishedCycles`, verbatim; a cycle that ran
+ * before that field existed has no record and reads as not recorded, never
+ * as invented design.
  */
 export function nightRail(session: NightSessionState): RailStep[] {
   const cycleActive = CYCLE_STEPS.some((step) => step.state === session.state)
@@ -64,12 +80,23 @@ export function nightRail(session: NightSessionState): RailStep[] {
   const cycleSteps: RailStep[] = []
   for (let cycle = 1; cycle <= Math.max(3, session.cycle); cycle += 1) {
     if (cycle < session.cycle) {
-      cycleSteps.push({
-        key: `cycle-${cycle}`,
-        label: `Cycle ${cycle}`,
-        detail: 'not reported',
-        status: 'notWired',
-      })
+      const finished = session.finishedCycles?.find((entry) => entry.cycle === cycle)
+      if (finished === undefined) {
+        cycleSteps.push({
+          key: `cycle-${cycle}`,
+          label: `Cycle ${cycle}`,
+          detail: 'Not recorded',
+          status: 'unknown',
+        })
+      } else {
+        const label = CYCLE_OUTCOME_LABEL[finished.outcome]
+        cycleSteps.push({
+          key: `cycle-${cycle}`,
+          label: `Cycle ${cycle}`,
+          detail: finished.reason !== undefined && finished.reason !== '' ? `${label}: ${finished.reason}` : label,
+          status: CYCLE_OUTCOME_STATUS[finished.outcome],
+        })
+      }
     } else if (cycle === session.cycle && session.cycle > 0) {
       cycleSteps.push({
         key: `cycle-${cycle}`,
