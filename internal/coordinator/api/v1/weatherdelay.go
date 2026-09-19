@@ -133,6 +133,8 @@ type WeatherDelayActionResult struct {
 	// coordinator process still holds it. NotSavedMessage says so.
 	NotSaved        bool   `json:"notSaved,omitempty"`
 	NotSavedMessage string `json:"notSavedMessage,omitempty"`
+	// Message is set when a start found the night already cancelled.
+	Message string `json:"message,omitempty"`
 }
 
 // WeatherDelayActionResponse is the body of POST .../weather-delay/start

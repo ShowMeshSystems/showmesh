@@ -5182,6 +5182,8 @@ export interface components {
             notSaved?: boolean;
             /** @description The operator sentence for notSaved. Present only when notSaved is true. */
             notSavedMessage?: string;
+            /** @description Start only. Present when the night was already cancelled: the cancel was sent again and nothing was changed to a delay. */
+            message?: string;
         };
         /** @description The body of POST /weather-delay/start and /weather-delay/resume. */
         WeatherDelayActionResponse: {

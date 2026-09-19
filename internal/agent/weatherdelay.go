@@ -218,6 +218,8 @@ func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage) w
 		h.rec.StartedBy = msg.StartedBy
 		h.rec.HeldRevision = msg.Revision
 		transition = weatherDelayStarted
+	case msg.Active && h.rec.Active && msg.Kind == weatherdelay.KindDelay && h.rec.Kind == weatherdelay.KindCancelNight && msg.Revision <= h.rec.HeldRevision:
+		h.log().Warn("ignoring a delay state message that is not newer than the cancelled night", "revision", msg.Revision, "held_revision", h.rec.HeldRevision)
 	case msg.Active && h.rec.Active && msg.Kind != h.rec.Kind:
 		// Changed in place: StartedAt stays the delay's original start: the
 		// active window never ended. HeldRevision advances so an older
@@ -243,6 +245,13 @@ func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage) w
 // HTTP start, recording the newest revision seen as the held one. Already
 // active: only Kind changes. Persisted before it returns.
 func (h *WeatherDelayHolder) SetActiveLocal(kind string, startedAt time.Time, startedBy string) error {
+	_, err := h.setActiveLocal(kind, startedAt, startedBy)
+	return err
+}
+
+// setActiveLocal is SetActiveLocal returning the kind now held: a delay
+// start never downgrades a cancelled night.
+func (h *WeatherDelayHolder) setActiveLocal(kind string, startedAt time.Time, startedBy string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.rec.Active {
@@ -251,8 +260,10 @@ func (h *WeatherDelayHolder) SetActiveLocal(kind string, startedAt time.Time, st
 		h.rec.StartedBy = startedBy
 		h.rec.HeldRevision = h.rec.Revision
 	}
-	h.rec.Kind = kind
-	return h.persistLocked()
+	if h.rec.Kind != weatherdelay.KindCancelNight || kind != weatherdelay.KindDelay {
+		h.rec.Kind = kind
+	}
+	return h.rec.Kind, h.persistLocked()
 }
 
 // ClearLocal marks the delay not active from weatherdelay.resume, whatever

@@ -74,27 +74,43 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 	}
 
 	executedAt := now()
-	alertPlaying, alertReason, unsilenced := o.doStart(ctx, kind, executedAt)
+	heldKind, alertPlaying, alertReason, unsilenced := o.startHeld(ctx, kind, executedAt)
 	observedAt := now()
 
+	value := map[string]any{
+		"kind":         heldKind,
+		"alertPlaying": alertPlaying,
+		"alertReason":  alertReason,
+		"unsilenced":   unsilenced,
+	}
+	if heldKind != kind {
+		value["message"] = weatherDelayAlreadyCancelledMessage
+	}
 	return OperationResult{
-		Confirmed: true,
-		Signal:    "node.weatherdelay.start",
-		Value: map[string]any{
-			"kind":         kind,
-			"alertPlaying": alertPlaying,
-			"alertReason":  alertReason,
-			"unsilenced":   unsilenced,
-		},
+		Confirmed:  true,
+		Signal:     "node.weatherdelay.start",
+		Value:      value,
 		ExecutedAt: executedAt,
 		ObservedAt: observedAt,
 	}, nil
 }
 
+// weatherDelayAlreadyCancelledMessage is reported when a delay start finds
+// the night already cancelled; the cancel alert keeps playing.
+const weatherDelayAlreadyCancelledMessage = "The night is already cancelled, so the cancel alert keeps playing. Resume the show to clear it."
+
 // doStart marks the holder active and runs the start sequence.
 func (o *weatherDelayOperations) doStart(ctx context.Context, kind string, executedAt time.Time) (alertPlaying bool, alertReason string, unsilenced []string) {
-	_ = o.holder.SetActiveLocal(kind, executedAt, "node-local")
-	return o.runStartSequence(ctx, kind)
+	_, alertPlaying, alertReason, unsilenced = o.startHeld(ctx, kind, executedAt)
+	return alertPlaying, alertReason, unsilenced
+}
+
+// startHeld is doStart that also returns the kind the node now holds, which
+// stays cancelNight when a delay start arrives on a cancelled night.
+func (o *weatherDelayOperations) startHeld(ctx context.Context, kind string, executedAt time.Time) (heldKind string, alertPlaying bool, alertReason string, unsilenced []string) {
+	heldKind, _ = o.holder.setActiveLocal(kind, executedAt, "node-local")
+	alertPlaying, alertReason, unsilenced = o.runStartSequence(ctx, heldKind)
+	return heldKind, alertPlaying, alertReason, unsilenced
 }
 
 // runStartSequence mutes every other session within weatherDelayMuteBound,
@@ -138,23 +154,27 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 		return false, "This node has no audio engine. Configure one to play the weather alert."
 	}
 
+	o.holder.alertStartMu.Lock()
+	defer o.holder.alertStartMu.Unlock()
+
 	plan := o.holder.Current().Plan
 	ref := weatherDelayAlertAssetForKind(plan, kind)
 	if ref == nil {
+		o.stopOtherKindAlertLocked(ctx, kind)
 		return false, fmt.Sprintf("No alert sound is set for %s. Set one to play an alert.", kind)
 	}
 	if ref.Filename == "" {
+		o.stopOtherKindAlertLocked(ctx, kind)
 		return false, fmt.Sprintf("The alert sound for %s has no file name. Set the alert sound again.", kind)
 	}
 
 	path := filepath.Join(o.assetDir, ref.Filename)
 	info, err := os.Stat(path)
 	if err != nil {
+		o.stopOtherKindAlertLocked(ctx, kind)
 		return false, fmt.Sprintf("The alert sound %s is not on this node. Send it to this node to play it.", ref.Filename)
 	}
 
-	o.holder.alertStartMu.Lock()
-	defer o.holder.alertStartMu.Unlock()
 	if !o.holder.Current().Active {
 		return false, "The weather delay ended before the alert started. Start it again to play the alert."
 	}
@@ -209,6 +229,20 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 	o.holder.alertKind = kind
 	o.holder.alertMu.Unlock()
 	return true, ""
+}
+
+// stopOtherKindAlertLocked stops an alert left from another kind, since a
+// wrong alert is worse than none. The caller holds alertStartMu.
+func (o *weatherDelayOperations) stopOtherKindAlertLocked(ctx context.Context, kind string) {
+	o.holder.alertMu.Lock()
+	other := o.holder.alertKind != kind
+	if other {
+		o.holder.alertKind = ""
+	}
+	o.holder.alertMu.Unlock()
+	if other {
+		o.audioMgr.SilenceSession(ctx, weatherDelayAlertSessionID)
+	}
 }
 
 // alertAlreadyPlaying reports whether kind's alert is loaded and playing.

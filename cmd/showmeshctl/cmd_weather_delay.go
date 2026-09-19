@@ -98,6 +98,7 @@ type weatherDelayActionResult struct {
 	Targets         []weatherDelayTargetOutcome `json:"targets"`
 	NotSaved        bool                        `json:"notSaved"`
 	NotSavedMessage string                      `json:"notSavedMessage"`
+	Message         string                      `json:"message"`
 }
 
 type weatherDelayActionResponse struct {
@@ -204,6 +205,9 @@ func reportWeatherDelayActionResult(stdout io.Writer, result weatherDelayActionR
 	}
 	if result.NotSaved {
 		_, _ = fmt.Fprintln(stdout, "  "+result.NotSavedMessage)
+	}
+	if result.Message != "" {
+		_, _ = fmt.Fprintln(stdout, "  "+result.Message)
 	}
 	if len(result.Targets) == 0 {
 		_, _ = fmt.Fprintln(stdout, "  no targets were configured to dispatch to")

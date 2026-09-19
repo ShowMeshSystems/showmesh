@@ -263,6 +263,10 @@ func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string
 	return idempotencyKey, nil
 }
 
+// weatherDelayAlreadyCancelledMessage answers a start while the night is
+// cancelled; the cancel is sent again instead of a delay.
+const weatherDelayAlreadyCancelledMessage = "The night is already cancelled, so the cancel was sent again. Resume the show to clear it."
+
 // handleWeatherDelayStart serves POST /api/v1/weather-delay/start.
 func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
 	h.weatherDelayStartOrChange(w, r, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, nil)
@@ -312,7 +316,7 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	// state in this process and the republish loop retries the write.
 	rec := current
 	var saveErr error
-	var event string
+	var event, message string
 	switch {
 	case !current.Active:
 		rec = store.WeatherDelayStateRecord{
@@ -341,6 +345,7 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 		if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
 			saveErr = keeper.SaveUnsaved(ctx)
 		}
+		message = weatherDelayAlreadyCancelledMessage
 	}
 	if saveErr != nil {
 		h.logWarn("weather delay start: failed to store the active state; holding it in this process and stopping everything anyway", "error", saveErr)
@@ -414,7 +419,7 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	result := v1.WeatherDelayActionResult{
 		Kind: rec.Kind, IdempotencyKey: idempotencyKey, Active: true,
 		StartedAt: formatTime(rec.StartedAt), StartedBy: rec.StartedBy, StartedByName: rec.StartedByName, Revision: rec.Revision,
-		Targets: targets,
+		Targets: targets, Message: message,
 	}
 	auditParams := map[string]any{"targets": len(targets), "revision": rec.Revision, "kind": rec.Kind}
 	if saveErr != nil {

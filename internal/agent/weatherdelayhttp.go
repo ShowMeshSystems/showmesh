@@ -118,12 +118,16 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 	}
 
 	// Detached so a caller that hangs up cannot cancel the alert mid-start.
-	alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.doStart(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
+	heldKind, alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.startHeld(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
 
-	fppConnectWriteJSON(w, http.StatusOK, map[string]any{
-		"kind":         signed.Request.Kind,
+	resp := map[string]any{
+		"kind":         heldKind,
 		"alertPlaying": alertPlaying,
 		"alertReason":  alertReason,
 		"unsilenced":   unsilenced,
-	})
+	}
+	if heldKind != signed.Request.Kind {
+		resp["message"] = weatherDelayAlreadyCancelledMessage
+	}
+	fppConnectWriteJSON(w, http.StatusOK, resp)
 }
