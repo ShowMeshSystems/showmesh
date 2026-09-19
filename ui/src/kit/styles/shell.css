@@ -501,9 +501,12 @@
 .sm-main {
   min-width: 0;
   padding: 22px 28px 80px;
+  /* A definite width fills the rail's track: auto inline margins on a grid
+     item otherwise shrink it to its content, so each page took a different
+     width. The cap then frames it and the auto margins center it only once
+     the track is wider than --page-max. */
+  width: 100%;
   max-width: var(--page-max);
-  /* Centered in its track once it stops growing, so a wide monitor frames it
-     rather than leaving all the slack on one side. */
   margin-inline: auto;
 }
 
