@@ -75,7 +75,7 @@ func TestHandleMessagePrepareOnOneSessionDoesNotDelayPauseResultForAnother(t *te
 	dir := t.TempDir()
 	engine := audio.NewFakeEngine(clock.now)
 	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, fakeAssetDecoder{}, clock.now, nil)
-	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, mgr, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, mgr, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 
 	assetA := writeTestAudioAsset(t, dir, "a.wav", "asset-a", []byte("aaaaaaaa"))
 	assetB := writeTestAudioAsset(t, dir, "b.wav", "asset-b", []byte("bbbbbbbb"))

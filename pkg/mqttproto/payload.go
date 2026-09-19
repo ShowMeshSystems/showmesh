@@ -96,6 +96,10 @@ type HelloPayload struct {
 	// however, bound the set's size and each ID's length; see
 	// [maxCapabilityCount].
 	Capabilities capability.Set `json:"capabilities"`
+
+	// InboundListener is the "host:port" this node's inbound HTTP listener
+	// can be reached at from the coordinator, or empty when it runs none.
+	InboundListener string `json:"inboundListener,omitempty"`
 }
 
 // maxCapabilityCount and maxCapabilityIDLength bound a hello payload's

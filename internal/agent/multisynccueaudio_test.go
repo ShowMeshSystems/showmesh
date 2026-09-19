@@ -176,7 +176,7 @@ func TestMultiSyncCueAudioArmedStartsAtArrivalPlusLead(t *testing.T) {
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	before := media.reads()
 	done := make(chan struct{})
@@ -265,7 +265,7 @@ func TestMultiSyncCueAudioColdCuePreparesOnOpenStartsOnStartAndReportsLate(t *te
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	// OPEN: nothing was armed, so this must apply and prepare on the cue
 	// session directly. handleOpen's own cold prepare runs on its own
@@ -343,7 +343,7 @@ func TestMultiSyncCueAudioMediaPacketsIgnored(t *testing.T) {
 	newTriggerTestCatalog(t, catalogStore, "cue-media", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
-	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
+	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}), nil)
 
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
 		Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeMedia,
@@ -369,7 +369,7 @@ func TestMultiSyncCueAudioUnknownFilenameIgnored(t *testing.T) {
 	newTriggerTestCatalog(t, catalogStore, "cue-known", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
-	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
+	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}), nil)
 
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
 		Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
@@ -411,7 +411,7 @@ func TestMultiSyncCueAudioStopStopsAfterGrace(t *testing.T) {
 	// unknown-step fallback.
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
 	timeline.SetStepTime(10 * time.Millisecond)
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
 		Action: multisync.SyncActionStop, FileType: multisync.SyncFileTypeSequence,
@@ -478,7 +478,7 @@ func TestMultiSyncCueAudioUnlockedClockStartsOnArrivalWithReason(t *testing.T) {
 
 	logger, buf := capturingLogger()
 	trigger := newMultiSyncCueAudioTrigger(logger, clk.now, nil)
-	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}))
+	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}), nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -553,7 +553,7 @@ func TestMultiSyncCueAudioLeadSmallerThanOutputLatencyStillStarts(t *testing.T) 
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	before := media.reads()
 	done := make(chan struct{})
@@ -644,7 +644,7 @@ func TestMultiSyncCueAudioStartArrivalStampedBeforeSlowOpenPrepare(t *testing.T)
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	before := media.reads()
 	// OPEN returns as soon as it registers the in-flight prepare: the cold
@@ -748,7 +748,7 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	// Block the schedule check's own read (call 2; call 1 is arrival)
 	// until the clock has already advanced past T0, so the refusal is
@@ -849,7 +849,7 @@ func TestMultiSyncCueAudioStartSignalsAudioReportTrigger(t *testing.T) {
 	audioReportTrigger := make(chan struct{}, 1)
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, audioReportTrigger)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	before := media.reads()
 	done := make(chan struct{})
@@ -925,7 +925,7 @@ func TestMultiSyncCueAudioStartCutsPlayingBackgroundBed(t *testing.T) {
 
 	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
 	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
-	trigger.SetSources(catalogStore, mgr, dir, timeline)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
 
 	before := media.reads()
 	done := make(chan struct{})

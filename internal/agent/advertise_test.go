@@ -63,7 +63,7 @@ func TestPublishHelloTopicRetainQoSAndPayload(t *testing.T) {
 	// caller resolved. Advertising a capability the agent does not have is
 	// exactly what this must never do, regardless of where that guarantee
 	// now lives.
-	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt, capability.Set{}); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt, capability.Set{}, ""); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestScheduleCapabilityDetectionSkipsWhenOverrideConfigured(t *testing.T) {
 		Capabilities: capability.Set{{ID: "matrix.render", Version: 1}},
 	}
 
-	scheduleCapabilityDetection(context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	scheduleCapabilityDetection(context.Background(), pub, cfg, "boot-1", time.Now(), nil, discardLogger())
 
 	if calls := pub.snapshot(); len(calls) != 0 {
 		t.Errorf("len(calls) = %d, want 0: an override configuration has nothing to detect and nothing to republish", len(calls))
@@ -239,7 +239,7 @@ func TestScheduleCapabilityDetectionStoresAndRepublishes(t *testing.T) {
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
-	scheduleCapabilityDetection(context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	scheduleCapabilityDetection(context.Background(), pub, cfg, "boot-1", time.Now(), nil, discardLogger())
 	waitForCapabilityGateIdle(t, 2*time.Second)
 
 	cached, have := detectedCapabilityCache.snapshot()
@@ -328,7 +328,7 @@ func TestPublishAdvertisementPublishesHelloThenOnline(t *testing.T) {
 	// this test's assertions.
 	cfg := agentconfig.Config{NodeID: "media-03", Capabilities: capability.Set{{ID: "matrix.render", Version: 1}}}
 
-	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), nil, discardLogger())
 
 	calls := pub.snapshot()
 	if len(calls) != 2 {
@@ -364,7 +364,7 @@ func TestPublishAdvertisementACLRejectionLogsDistinctlyAndStillAttemptsOnline(t 
 	// background scheduleCapabilityDetection call would otherwise be a
 	// nondeterministic third publish racing this test's exact-2 assertion.
 	cfg := agentconfig.Config{NodeID: "media-03", Capabilities: capability.Set{{ID: "matrix.render", Version: 1}}}
-	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), logger)
+	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), nil, logger)
 
 	calls := pub.snapshot()
 	if len(calls) != 2 {
@@ -416,7 +416,7 @@ func TestPublishAdvertisementReturnsPromptlyWhenCapabilityDetectionHangs(t *test
 	cfg := agentconfig.Config{NodeID: "media-03"} // no override: detection applies
 
 	start := time.Now()
-	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), nil, discardLogger())
 	elapsed := time.Since(start)
 
 	// A generous margin under capabilityDetectionTimeout: publishAdvertisement
@@ -465,5 +465,40 @@ func TestPublishAdvertisementReturnsPromptlyWhenCapabilityDetectionHangs(t *test
 	cached, have := detectedCapabilityCache.snapshot()
 	if !have || len(cached) != 0 {
 		t.Errorf("detectedCapabilityCache after the wedged probe's timeout = (%v, %v), want (empty, true): the timeout resolves to a completed detection pass that found nothing, not to detection never having run", cached, have)
+	}
+}
+
+// TestResolveInboundListenerNeverPublishesLoopback proves a listener bound
+// to a loopback address, or a broker reached over loopback, yields no
+// inbound listener rather than an address the coordinator cannot reach.
+func TestResolveInboundListenerNeverPublishesLoopback(t *testing.T) {
+	status := newFPPConnectHTTPStatus()
+	status.set(true, "")
+	cases := []struct{ listen, broker string }{
+		{"127.0.0.1:32320", "tcp://127.0.0.1:1883"},
+		{"[::1]:32320", "tcp://127.0.0.1:1883"},
+		{"localhost:32320", "tcp://127.0.0.1:1883"},
+		{"0.0.0.0:32320", "tcp://127.0.0.1:1883"},
+		{"[::]:32320", "tcp://[::1]:1883"},
+	}
+	for _, c := range cases {
+		cfg := agentconfig.Config{FPPConnectListenAddr: c.listen, MQTTBroker: c.broker}
+		if got := resolveInboundListener(cfg, status, discardLogger()); got != "" {
+			t.Errorf("listen %q broker %q: InboundListener = %q, want empty", c.listen, c.broker, got)
+		}
+	}
+}
+
+// TestResolveInboundListenerEmptyWhenNotListening proves a node whose
+// listener is not bound reports no inbound listener.
+func TestResolveInboundListenerEmptyWhenNotListening(t *testing.T) {
+	cfg := agentconfig.Config{FPPConnectListenAddr: "192.0.2.10:32320", MQTTBroker: "tcp://192.0.2.1:1883"}
+	if got := resolveInboundListener(cfg, newFPPConnectHTTPStatus(), discardLogger()); got != "" {
+		t.Fatalf("InboundListener = %q, want empty", got)
+	}
+	status := newFPPConnectHTTPStatus()
+	status.set(true, "")
+	if got := resolveInboundListener(cfg, status, discardLogger()); got != "192.0.2.10:32320" {
+		t.Fatalf("InboundListener = %q, want the configured address", got)
 	}
 }

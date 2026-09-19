@@ -102,10 +102,18 @@ func newTestFPPConnectHeldStore(t *testing.T) *fppConnectHeldStore {
 // defaults to a fresh, empty store (newTestFPPConnectHeldStore) when nil.
 func startFPPConnectTestServer(t *testing.T, view fppConnectView, nodeID string, held *fppConnectHeldStore) *httptest.Server {
 	t.Helper()
+	return startFPPConnectTestServerWithWeatherDelay(t, view, nodeID, held, weatherDelayHTTPConfig{})
+}
+
+// startFPPConnectTestServerWithWeatherDelay is startFPPConnectTestServer
+// with an explicit weatherDelayHTTPConfig, for ADR-053's own route tests
+// (weatherdelayhttp_test.go).
+func startFPPConnectTestServerWithWeatherDelay(t *testing.T, view fppConnectView, nodeID string, held *fppConnectHeldStore, weatherDelay weatherDelayHTTPConfig) *httptest.Server {
+	t.Helper()
 	if held == nil {
 		held = newTestFPPConnectHeldStore(t)
 	}
-	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID, held, time.Now, discardLogger()))
+	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID, held, weatherDelay, time.Now, discardLogger()))
 	srv.Config.ConnContext = fppConnectConnContext
 	srv.Config.DisableGeneralOptionsHandler = true
 	srv.Start()
@@ -534,7 +542,7 @@ func TestRunFPPConnectHTTPListenerBindFailure(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
 	held := newTestFPPConnectHeldStore(t)
 
-	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", held, status, discardLogger())
+	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", held, status, weatherDelayHTTPConfig{}, discardLogger())
 
 	listening, reason, observedAt := status.get()
 	if listening {

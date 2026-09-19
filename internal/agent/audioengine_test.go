@@ -890,7 +890,7 @@ func TestInstallAudioCapabilityRepublishRepublishesOnRebuild(t *testing.T) {
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
-	installAudioCapabilityRepublish(rebuilder, context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	installAudioCapabilityRepublish(rebuilder, context.Background(), pub, cfg, "boot-1", time.Now(), nil, discardLogger())
 
 	// SetAvailabilityChangeCallback's own immediate catch-up call runs
 	// one detection now, before any rebuild: audioEngineAvailable() is
@@ -966,7 +966,7 @@ func TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite(t *testing.T) 
 	connect := func() (Conn, error) { return fake, nil }
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
-	conn, err := connectAndInstallCapabilityRepublish(connect, rebuilder, context.Background(), cfg, "boot-1", time.Now(), discardLogger())
+	conn, err := connectAndInstallCapabilityRepublish(connect, rebuilder, context.Background(), cfg, "boot-1", time.Now(), nil, discardLogger())
 	if err != nil {
 		t.Fatalf("connectAndInstallCapabilityRepublish: %v", err)
 	}

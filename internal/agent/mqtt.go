@@ -217,7 +217,7 @@ func buildWillMessage(nodeID string) (*paho.WillMessage, error) {
 // *paho.Client exists after every reconnect, so both the SUBSCRIBE and the
 // publish-received callback binding have to happen again each time, not
 // once at startup.
-func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, showMode *ShowModeHolder, logger *slog.Logger) (*mqttConn, error) {
+func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, showMode *ShowModeHolder, weatherDelay *weatherDelayOperations, fppConnectStatus *fppConnectHTTPStatus, logger *slog.Logger) (*mqttConn, error) {
 	serverURL, err := url.Parse(cfg.MQTTBroker)
 	if err != nil {
 		// config.Config.Validate should already have caught this; guard
@@ -249,7 +249,7 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 		WillMessage:      will,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			logger.Info("mqtt broker connection up", "broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID)
-			go publishAdvertisement(ctx, &mqttConn{cm: cm}, cfg, bootID, startedAt, logger)
+			go publishAdvertisement(ctx, &mqttConn{cm: cm}, cfg, bootID, startedAt, fppConnectStatus, logger)
 
 			registerCommandHandling(ctx, cm, cfg.NodeID, cmdHandler, logger)
 
@@ -260,6 +260,12 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 			// which behaves as show.
 			if showMode != nil {
 				registerShowMode(ctx, cm, showMode, time.Now, logger)
+			}
+
+			// Never nil in production; a nil here keeps whatever state this
+			// node already persisted.
+			if weatherDelay != nil {
+				registerWeatherDelay(ctx, cm, weatherDelay, logger)
 			}
 
 			select {
