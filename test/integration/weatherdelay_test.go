@@ -65,6 +65,7 @@ type weatherDelayFPPStub struct {
 	statusName   string
 	gateClosed   bool
 	gateRevision int64
+	gateReads    int
 	commands     []string
 }
 
@@ -141,6 +142,7 @@ func (s *weatherDelayFPPStub) handleGateWrite(w http.ResponseWriter, r *http.Req
 
 func (s *weatherDelayFPPStub) handleGateRead(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.gateReads++
 	closed, rev := s.gateClosed, s.gateRevision
 	s.mu.Unlock()
 	s.writeGateResponse(w, closed, rev)
@@ -190,6 +192,16 @@ func (s *weatherDelayFPPStub) gateState() (closed bool, revision int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.gateClosed, s.gateRevision
+}
+
+// gateReadCount is how many times the coordinator has READ the gate. A
+// "never wrote" assertion needs it: without a read the coordinator had no
+// occasion to write either, so silence over a window with no read proves
+// nothing.
+func (s *weatherDelayFPPStub) gateReadCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gateReads
 }
 
 func (s *weatherDelayFPPStub) commandCount(name string) int {
@@ -577,6 +589,26 @@ type weatherDelayFixture struct {
 	assetID    string
 }
 
+// configureLongWeatherDelayAlert re-points show.weatherdelay at a freshly
+// uploaded alert asset durationSeconds long, repeated repeatCount times, and
+// waits for it to reach the node. Scenarios that must observe an alert still
+// PLAYING some seconds after they started it need one: the fixture's own
+// 0.3s asset repeated ten times runs for about three seconds, which a
+// "still playing" or "stopped early" assertion can outlive by accident.
+func configureLongWeatherDelayAlert(t *testing.T, f *weatherDelayFixture, sequence string, durationSeconds float64, repeatCount int) string {
+	t.Helper()
+	assetID := uploadWeatherDelayAlertAsset(t, f.coord, f.token, f.showID, sequence, f.nodeID, durationSeconds)
+	putWeatherDelayConfig(t, f.coord, f.token, v1.ConfigWeatherDelayPayload{
+		Alert:       v1.ConfigWeatherDelayAlertPayload{DelayAssetID: assetID, RepeatCount: repeatCount, NodeIDs: []string{f.nodeID}},
+		PowerGroups: []v1.ConfigWeatherDelayPowerGroupPayload{weatherDelayPowerGroupPayload(f.groupID, f.fppID)},
+		Triggers:    weatherDelayDefaultTriggers(),
+	})
+	waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
+		return weatherDelayAssetPresent(t, f.coord, f.nodeID, assetID)
+	}, "the longer delay alert asset to sync to the node once show.weatherdelay names it")
+	return assetID
+}
+
 // weatherDelayAssetPresent reports whether GET /api/v1/weather-delay's own
 // asset readiness (h.weatherDelayAssetReadiness) shows assetID present and
 // hash-verified on nodeID.
@@ -741,8 +773,16 @@ func TestWeatherDelayOnePress(t *testing.T) {
 	waitFor(t, 10*time.Second, 200*time.Millisecond, func() bool {
 		return dark.count() > 0
 	}, "the power group's dark heartbeat to be published")
-	if dark.any(func(o weatherDelayDarkObservation) bool { return o.retained }) {
-		t.Fatalf("the power group dark heartbeat was delivered retained; ADR-053 decision 10 requires it live, never retained (a stale message must not linger)")
+
+	// A subscription opened BEFORE a publish always sees RETAIN cleared,
+	// whatever the publisher asked for, so only a subscriber opened after a
+	// heartbeat has already been published can tell live from retained.
+	fresh := subscribeWeatherDelayDark(t, f.groupID)
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		return fresh.count() > 0
+	}, "the fresh dark-heartbeat subscriber to see a heartbeat at all, so its retained/live verdict rests on an observation")
+	if fresh.any(func(o weatherDelayDarkObservation) bool { return o.retained }) {
+		t.Fatalf("the power group dark heartbeat was delivered retained to a subscriber that joined after it was published; ADR-053 decision 10 requires it live, never retained (a stale message must not linger)")
 	}
 }
 
@@ -859,6 +899,11 @@ func TestWeatherDelayBrokerDown(t *testing.T) {
 	f := newWeatherDelayFixture(t, 0)
 	audioSub := subscribeAudioReports(t, f.nodeID)
 
+	// An alert long enough to still be playing after the broker comes back,
+	// so the report below is evidence about what the node did while the
+	// broker was DOWN and not about a start replayed once it returned.
+	longAssetID := configureLongWeatherDelayAlert(t, f, "delay-alert-long", 2, 50)
+
 	// The node's own copy of the alert plan (which asset to play) only ever
 	// arrives on the retained state topic; neither the MQTT command nor the
 	// signed direct-HTTP start below carries it. Confirm the broker has
@@ -868,7 +913,7 @@ func TestWeatherDelayBrokerDown(t *testing.T) {
 	// race against the coordinator's 5s republish loop.
 	stateSub := subscribeWeatherDelayState(t)
 	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
-		return stateSub.hasDelayAsset(f.assetID)
+		return stateSub.hasDelayAsset(longAssetID)
 	}, "the retained weather delay state to carry the configured delay asset before the broker goes down")
 
 	stopBroker(t)
@@ -899,6 +944,7 @@ func TestWeatherDelayBrokerDown(t *testing.T) {
 		return closed
 	}, "the stand-in FPP plugin's weather gate to close while the broker is down")
 
+	brokerBackAt := time.Now()
 	startBroker(t)
 	waitForBrokerReady(t, 20*time.Second)
 
@@ -907,6 +953,23 @@ func TestWeatherDelayBrokerDown(t *testing.T) {
 	// reasoning) is what can observe anything published after it returns.
 	audioSub = subscribeAudioReports(t, f.nodeID)
 	waitForNodeAlertSession(t, audioSub, "playing")
+
+	// The alert playlist's revision is the UnixNano the node stamped when it
+	// built the alert (internal/agent/weatherdelayops.go's startAlert), so it
+	// dates the node's own decision to play. A node that answered the signed
+	// HTTP start 200 and did nothing, and only started once MQTT redelivered
+	// the state, stamps a revision AFTER the broker came back.
+	p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+	if !ok {
+		t.Fatalf("no alert session report for %s after the broker returned", weatherDelayAlertSessionIDForTest)
+	}
+	if !p.HasPlaylist {
+		t.Fatalf("the alert session reports no playlist, so nothing dates when the node started it")
+	}
+	startedAt := time.Unix(0, int64(p.PlaylistRevision))
+	if !startedAt.Before(brokerBackAt) {
+		t.Fatalf("the node started the alert at %s, after the broker came back at %s; ADR-053 decision 8 requires the signed direct-HTTP start to have reached it while the broker was down, not a redelivered MQTT message afterwards", startedAt, brokerBackAt)
+	}
 
 	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
 		resp := weatherDelayState(t, f.coord)
@@ -939,14 +1002,13 @@ func TestWeatherDelayRepeatAndResume(t *testing.T) {
 		return !resp.Active
 	}, "the coordinator to report the delay no longer active after the first resume")
 
-	// Start again with a long repeat count so this resume clearly stops it
-	// mid-flight rather than racing its own natural completion.
-	longRepeat := v1.ConfigWeatherDelayPayload{
-		Alert:       v1.ConfigWeatherDelayAlertPayload{DelayAssetID: f.assetID, RepeatCount: 10, NodeIDs: []string{f.nodeID}},
-		PowerGroups: []v1.ConfigWeatherDelayPowerGroupPayload{weatherDelayPowerGroupPayload(f.groupID, f.fppID)},
-		Triggers:    weatherDelayDefaultTriggers(),
-	}
-	putWeatherDelayConfig(t, f.coord, f.token, longRepeat)
+	// Start again with an alert that runs for about a hundred seconds, so
+	// this resume demonstrably stops it mid-flight. Ten repeats of the
+	// fixture's own 0.3s asset run for three seconds, which the steps
+	// between the start and the resume below can outlast, leaving the alert
+	// to finish on its own and the "resume stopped it" assertion true for
+	// the wrong reason.
+	configureLongWeatherDelayAlert(t, f, "delay-alert-long", 2, 50)
 
 	_, beforeRevision := f.stub.gateState()
 	weatherDelayStartAction(t, f.coord, f.token)
@@ -958,6 +1020,9 @@ func TestWeatherDelayRepeatAndResume(t *testing.T) {
 	waitForNodeAlertSession(t, audioSub, "playing")
 
 	_, closeRevision := f.stub.gateState()
+	if p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest); !ok || p.State != "playing" {
+		t.Fatalf("the alert was not playing at the moment resume was sent (report present: %v, state %q), so a later stop would prove nothing", ok, p.State)
+	}
 	weatherDelayResumeAction(t, f.coord, f.token)
 
 	waitFor(t, 10*time.Second, 200*time.Millisecond, func() bool {
@@ -978,12 +1043,35 @@ func TestWeatherDelayRepeatAndResume(t *testing.T) {
 
 // --- Scenario 5: restart ---
 
+// nodeWeatherDelayStateActive reads the record the node agent persists under
+// its asset directory (internal/agent/weatherdelay.go's
+// weatherDelayStateSubdir/weatherDelayStateFile) and reports whether it says
+// a delay is active. Read while the agent is stopped, it is the node's own
+// evidence, independent of anything the broker would redeliver.
+func nodeWeatherDelayStateActive(t *testing.T, assetDir string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(assetDir, "weather-delay-state", "state.json"))
+	if err != nil {
+		t.Fatalf("read the node's persisted weather delay state: %v", err)
+	}
+	var rec struct {
+		Active bool `json:"active"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("decode the node's persisted weather delay state: %v; body: %s", err, raw)
+	}
+	return rec.Active
+}
+
 // TestWeatherDelayRestart proves ADR-053 decision 2 (the state survives a
-// coordinator restart) and decision 9 (a node started without the
-// coordinator stays delayed): killing and restarting both the coordinator
-// process (over the same database) and the node agent process (over the
-// same asset/state directory) leaves both delayed, with enforcement
-// resuming and nothing started.
+// coordinator restart): killing and restarting both the coordinator process
+// (over the same database) and the node agent process (over the same
+// asset/state directory) leaves both delayed, with enforcement resuming and
+// nothing started. It also confirms the node wrote the delay to its own
+// disk while it was stopped. It does NOT prove decision 9's other half, that
+// a node reads that file back and stays delayed with no coordinator: the
+// coordinator is up here and its retained state would redeliver the delay
+// on its own. internal/agent/weatherdelay_test.go covers the read-back.
 func TestWeatherDelayRestart(t *testing.T) {
 	f := newWeatherDelayFixture(t, 0)
 	audioSub := subscribeAudioReports(t, f.nodeID)
@@ -997,6 +1085,10 @@ func TestWeatherDelayRestart(t *testing.T) {
 
 	f.coord.shutdown()
 	f.agent.sigkill(t)
+
+	if !nodeWeatherDelayStateActive(t, f.assetDir) {
+		t.Fatalf("the node's own persisted weather delay state does not say active while the agent is stopped; ADR-053 decision 2 requires a node to come back delayed from its own disk")
+	}
 
 	f.coord = restartWeatherDelayCoordinator(t, f.dataDir, f.httpAddr, f.clientID, f.fppID, f.token, f.stub)
 	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
@@ -1032,6 +1124,7 @@ func TestWeatherDelayHeldPlayer(t *testing.T) {
 
 	f.stub.setGateClosed(true)
 	_, revisionBefore := f.stub.gateState()
+	readsBefore := f.stub.gateReadCount()
 
 	waitFor(t, 40*time.Second, 500*time.Millisecond, func() bool {
 		resp := weatherDelayState(t, f.coord)
@@ -1046,11 +1139,15 @@ func TestWeatherDelayHeldPlayer(t *testing.T) {
 		return false
 	}, "the player to be listed under heldPlayers while its gate reads closed and no delay is active")
 
-	// The idle-gate READ runs periodically (weatherDelayIdleGateReadInterval,
-	// 30s); give it a couple of chances and confirm it never WRITES: the
-	// revision the stub itself set must be unchanged, since a write always
-	// advances it (see weatherGateRequest's own comment: max(stored+1, revision)).
-	time.Sleep(3 * time.Second)
+	// The idle-gate READ runs on its own 30s interval
+	// (weatherDelayIdleGateReadInterval), so a short fixed sleep can end with
+	// no read having happened at all and prove nothing. Wait for a read that
+	// lands after the close above, then confirm that read did not WRITE: a
+	// write always advances the revision (see weatherGateRequest's own
+	// comment: max(stored+1, revision)).
+	waitFor(t, 60*time.Second, 500*time.Millisecond, func() bool {
+		return f.stub.gateReadCount() > readsBefore
+	}, "the coordinator's idle gate read to reach the stand-in player again after its gate was closed")
 	_, revisionAfter := f.stub.gateState()
 	if revisionAfter != revisionBefore {
 		t.Fatalf("the coordinator wrote to an already-closed gate while no delay is active and none was requested (revision %d -> %d); ADR-053 decision 10 forbids the coordinator ever opening a gate on its own, and a write of any kind here is not idle reading", revisionBefore, revisionAfter)
