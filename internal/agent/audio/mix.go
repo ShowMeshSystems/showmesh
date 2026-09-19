@@ -494,14 +494,48 @@ func (s *Session) unmuteLocked(ctx context.Context) pkgaudio.OutcomeResult {
 	return s.applyEffectiveGainLocked(ctx)
 }
 
-// duckLowerPriority runs after a session with role duckerRole and mix
-// policy Duck reaches Playing: it ducks every OTHER currently Playing
-// session whose role priority is strictly lower, skipping a session
-// already ducked by someone else. It is called with no session lock
-// held — each target's own mu is acquired and released in turn, one
-// session at a time, so this can never hold two sessions' locks
-// simultaneously (the deadlock a duck and a counter-duck racing each
-// other would otherwise risk).
+// waitDuckFade blocks for fadeMs — owner ruling 2026-09-18: an
+// announcement with mix policy Duck must not present its own first
+// sample until the bed it ducks has had the full configured fade to get
+// out of the way. This is a REAL wait, deliberately independent of
+// [Manager.now]: unlike [startSchedule.waitUntilT0], which measures
+// against an injected media clock a caller can legitimately want to
+// control, there is no meaningful "fake" duck fade duration to inject —
+// the whole point is that this many real milliseconds pass before the
+// engine call. [Manager.duckFadeWait], when set, is this method's own
+// test seam instead (see its doc comment); nil, always true in
+// production, uses a real, context-cancelable timer. Caller holds the
+// starting session's own lock: this touches no other session, so unlike
+// duckLowerPriority it carries no deadlock risk from holding that lock
+// across it.
+func (m *Manager) waitDuckFade(ctx context.Context, fadeMs int) error {
+	d := time.Duration(fadeMs) * time.Millisecond
+	if m.duckFadeWait != nil {
+		return m.duckFadeWait(ctx, d)
+	}
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// duckLowerPriority runs BEFORE a session with role duckerRole and mix
+// policy Duck actually starts (owner ruling 2026-09-18: the bed must
+// already be on its way down before the announcement is audible, not the
+// reverse) — see [Manager.start] and [Manager.promote]'s own duck-then-
+// start ordering. It ducks every OTHER currently Playing session whose
+// role priority is strictly lower, skipping a session already ducked by
+// someone else. It is called with no session lock held — each target's
+// own mu is acquired and released in turn, one session at a time, so
+// this can never hold two sessions' locks simultaneously (the deadlock a
+// duck and a counter-duck racing each other would otherwise risk).
 func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.SessionID, duckerRole pkgaudio.SourceRole) {
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()
