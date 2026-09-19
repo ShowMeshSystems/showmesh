@@ -505,10 +505,11 @@ repository's own assertion and is not verified from here.
 
 ### 2.1 The composition
 
-RES-018 §1, restated so implementers do not have to re-derive it:
+RES-018 §1, restated so implementers do not have to re-derive it, now with
+the weather gate term section 2.5 adds:
 
 ```text
-effective output = round(ceiling * transition_gain / 100)
+effective output = weather gate closed ? 0 : round(ceiling * transition_gain / 100)
 ```
 
 `ceiling` is 0–100 and is written by FPP's own schedule and operator command
@@ -518,6 +519,9 @@ Action. It is already implemented in the plugin.
 `transition_gain` is 0–100 and is the coordinator's alone. It is **not**
 reachable from any FPP Action, MQTT setter, or relative brighten/dim command.
 Adding any second writer to it defeats the seam.
+
+The weather gate is a third, independent term: open or closed, written only
+by ADR-053's weather delay state. See section 2.5.
 
 ### 2.2 The coordinator-facing write
 
@@ -627,6 +631,80 @@ What remains is evidence, not code. RES-018 §8's decisive mid-fade case has not
 been observed against a real FPP host, so nothing here reports that the
 composition behaves correctly on hardware. The readiness check warns for exactly
 that reason and stays until that observation exists.
+
+### 2.5 The weather gate
+
+**Status: coordinator BUILT, plugin not built from here.** The coordinator
+serves its half and dispatches against the address below. The plugin's half
+is that repository's own assertion and is not verified from here.
+
+Coordinator anchor: `WeatherDelayEnforcer`. Its own client is
+`internal/coordinator/fppcommand`'s `SetWeatherGate`/`ReadWeatherGate`.
+
+[ADR-053](../decisions/ADR-053-weather-delay.md) decision 5: the plugin's
+brightness engine gains a third term beside the ceiling and the transition
+gain, a gate that is either open or closed, written only by the weather delay
+state. Closed forces every channel to zero, including channels outside the
+configured apply and exclude ranges. The gate's own write ignores both,
+unlike a transition-gain fade, which respects them. See section 2.1's updated
+composition line.
+
+The route, same address shape as section 2.2's and reached the same way, for
+both the write and the read:
+
+```text
+POST /api/plugin-apis/showmesh/brightness/weather-gate
+GET  /api/plugin-apis/showmesh/brightness/weather-gate
+```
+
+Write body: `{"closed": bool, "revision": integer}`, revision non-negative.
+**A coordinator write always applies.** Unlike section 2.2's requestId, this
+route accepts no idempotency key and refuses nothing: the stored revision
+becomes `max(stored + 1, given)`, so a write from a coordinator whose own
+revision counter is behind the plugin's still lands, and one from a
+coordinator that has moved ahead sets the plugin to match it. The read takes
+no body.
+
+Both routes answer with the plugin's own full brightness state document,
+carrying three fields this contract adds to it:
+
+- `weatherGateClosed` (bool)
+- `weatherGateRevision` (integer)
+- `effectiveOutputPercent` (0–100), the composition in section 2.1: 0
+  whenever the gate is closed, `round(ceiling * transition_gain / 100)`
+  otherwise.
+
+A peer's own reported gate state is adopted only under this rule: a
+peer-reported **closed** gate is adopted at a strictly greater revision than
+the plugin's own stored one; a peer-reported **open** gate is never adopted
+from a peer at all, only from a coordinator write. A delay may reach a player
+by more than one path (ADR-053 decision 8); a stale, replayed, or
+out-of-order closed report must never darken a player after a resume, and an
+open report from a source that is not the coordinator's own write must never
+end a delay a player is still supposed to be holding.
+
+Only a resume opens a gate. The coordinator's enforcement loop closes gates
+while a delay is active and never opens one. A gate can be closed by a start
+the coordinator never saw, so a gate that reads closed while no delay is
+active is reported in `heldPlayers` on `GET /api/v1/weather-delay` and stays
+closed until `POST /api/v1/weather-delay/resume`, which opens every player's
+gate each time it is called.
+
+Persistence: the gate is written to both of the plugin's own record
+generations on every gate change, so the two agree. If a crash leaves them
+disagreeing, a readable primary wins. If both records are unreadable, the gate **restarts open**, the same posture every
+other unconfigured or freshly-initialized brightness value takes, and the
+coordinator's own enforcement loop, running unconditionally, closes it again
+within one tick of finding the stored weather-delay state active. This is
+why the loop exists rather than a one-time close on start: persistence on
+the FPP host is not guaranteed, and the loop is what makes that gap survive
+a corrupted or missing record without an operator noticing a lit player.
+
+An FPP host whose plugin predates this section answers `404` to both routes.
+The coordinator reports that instance as unable to be held dark by ShowMesh;
+it is never counted as either open or closed.
+
+Related: [ADR-053](../decisions/ADR-053-weather-delay.md).
 
 ## 3. Playlist definition publication
 

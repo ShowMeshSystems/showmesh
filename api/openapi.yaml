@@ -2413,6 +2413,7 @@ paths:
           | `resolume.changed` | `ResolumeChangedEvent` | every connection |
           | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
           | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+          | `weatherDelay.changed` | `WeatherDelayChangedEvent` | every connection |
           | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
           | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
@@ -14604,6 +14605,63 @@ components:
             ready. Empty when no alert asset is configured.
           items:
             $ref: "#/components/schemas/WeatherDelayNodeAssets"
+        powerGroups:
+          type: array
+          description: >-
+            Every configured power group's own dark confirmation
+            (ADR-053 decision 10). Empty when no power group is
+            configured; nothing else about this response changes.
+          items:
+            $ref: "#/components/schemas/WeatherDelayPowerGroupStatus"
+        heldPlayers:
+          type: array
+          description: >-
+            Players whose gate reads closed while no delay is active. The
+            coordinator never opens a gate on its own; only POST
+            /weather-delay/resume does. Empty while a delay is active.
+          items:
+            $ref: "#/components/schemas/WeatherDelayHeldPlayer"
+    WeatherDelayHeldPlayer:
+      type: object
+      required: [instanceId, message]
+      properties:
+        instanceId:
+          type: string
+        message:
+          type: string
+          description: An operator sentence naming the player and the Resume action.
+    WeatherDelayPowerGroupStatus:
+      type: object
+      required: [id, confirmedDark, members]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        confirmedDark:
+          type: boolean
+        since:
+          type: string
+          format: date-time
+          description: When confirmedDark became true. Absent while confirmedDark is false.
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayPowerGroupMember"
+    WeatherDelayPowerGroupMember:
+      type: object
+      required: [kind, id, dark]
+      properties:
+        kind:
+          type: string
+          enum: [fpp, resolume, render]
+        id:
+          type: string
+        dark:
+          type: boolean
+        reason:
+          type: string
+          description: An operator sentence. Set whenever dark is false.
     WeatherDelayNodeAssets:
       type: object
       required: [nodeId]
@@ -14636,17 +14694,18 @@ components:
       description: >-
         One target's own start/resume dispatch outcome. targetKind is fpp,
         node, resolume, or render (the same four kinds emergency stop
-        reports), or node-command for the weatherdelay.start/resume node
+        reports), node-command for the weatherdelay.start/resume node
         command itself, whose deliveredVia is one of mqtt, http, both, or
         none (ADR-053 decision 8: a node reached by either path counts as
-        reached).
+        reached), or weather-gate for the gate close (on start) or open
+        (on resume) sent to one configured FPP instance.
       required: [instanceId, targetKind, outcome, outcomeReason]
       properties:
         instanceId:
           type: string
         targetKind:
           type: string
-          enum: [fpp, node, resolume, render, node-command]
+          enum: [fpp, node, resolume, render, node-command, weather-gate]
         outcome:
           type: string
         outcomeReason:
@@ -19668,6 +19727,44 @@ components:
           format: date-time
         session:
           $ref: "#/components/schemas/NightSessionState"
+    WeatherDelayChangedEvent:
+      type: object
+      description: >-
+        The payload of a "weatherDelay.changed" SSE event (ADR-053): one
+        kind for both the delay's own state change (start, resume, cancel)
+        a power group's own confirmedDark flip, and a change in
+        heldPlayers, mirroring
+        NightSessionChangedEvent's own "full state, not delta" posture.
+        The fields are the same ones GET /weather-delay reports, minus
+        assets, which this stream does not carry.
+      required: [seq, serverTime, active, revision, powerGroups, heldPlayers]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+        kind:
+          type: string
+          enum: [delay, cancelNight]
+        startedAt:
+          type: string
+          format: date-time
+        startedBy:
+          type: string
+        revision:
+          type: integer
+        powerGroups:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayPowerGroupStatus"
+        heldPlayers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayHeldPlayer"
     NightInterlockOverride:
       type: object
       description: >-

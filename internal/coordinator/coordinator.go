@@ -654,6 +654,9 @@ func Run() int {
 	// weatherDelayState is shared by the API, the Resolume gate and the
 	// republish loop, so a start whose write failed is held by all three.
 	weatherDelayState := api.NewWeatherDelayStateKeeper(st)
+	// weatherDelayGateCache is shared by the API and the enforcer loop, so
+	// GET /api/v1/weather-delay sees the enforcer's gate readings.
+	weatherDelayGateCache := api.NewWeatherDelayGateCache()
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -938,6 +941,9 @@ func Run() int {
 		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
 		// adapter, matching AudioPublisher's identical wiring above.
 		WeatherDelayPublisher: bm,
+		// WeatherDelayGateCache is shared with the enforcer loop started
+		// below, see weatherDelayGateCache's own doc comment above.
+		WeatherDelayGateCache: weatherDelayGateCache,
 		// WeatherDelayNodeAddrs: a node's address for the direct start
 		// comes from its own retained hello, never from operator config.
 		WeatherDelayNodeAddrs: inv,
@@ -1308,6 +1314,13 @@ func Run() int {
 	nightLoop := api.NewNightLoop(apiDeps, apiOpts)
 	spawnBackground(func() {
 		nightLoop.Run(ctx)
+	})
+
+	// weatherDelayEnforcer always runs: no configuration value may exempt a
+	// player from it while a delay is active.
+	weatherDelayEnforcer := api.NewWeatherDelayEnforcer(apiDeps, apiOpts)
+	spawnBackground(func() {
+		weatherDelayEnforcer.Run(ctx)
 	})
 
 	// cueActivationLoop.Run owns Track H seam H4's own activation trigger

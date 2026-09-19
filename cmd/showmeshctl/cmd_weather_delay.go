@@ -94,13 +94,35 @@ type weatherDelayNodeAssets struct {
 }
 
 type weatherDelayStateResponse struct {
-	ServerTime time.Time                `json:"serverTime"`
-	Active     bool                     `json:"active"`
-	Kind       string                   `json:"kind"`
-	StartedAt  string                   `json:"startedAt"`
-	StartedBy  string                   `json:"startedBy"`
-	Revision   int64                    `json:"revision"`
-	Assets     []weatherDelayNodeAssets `json:"assets"`
+	ServerTime  time.Time                      `json:"serverTime"`
+	Active      bool                           `json:"active"`
+	Kind        string                         `json:"kind"`
+	StartedAt   string                         `json:"startedAt"`
+	StartedBy   string                         `json:"startedBy"`
+	Revision    int64                          `json:"revision"`
+	Assets      []weatherDelayNodeAssets       `json:"assets"`
+	PowerGroups []weatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []weatherDelayHeldPlayer       `json:"heldPlayers"`
+}
+
+type weatherDelayHeldPlayer struct {
+	InstanceID string `json:"instanceId"`
+	Message    string `json:"message"`
+}
+
+type weatherDelayPowerGroupMember struct {
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Dark   bool   `json:"dark"`
+	Reason string `json:"reason"`
+}
+
+type weatherDelayPowerGroupStatus struct {
+	ID            string                         `json:"id"`
+	Label         string                         `json:"label"`
+	ConfirmedDark bool                           `json:"confirmedDark"`
+	Since         string                         `json:"since"`
+	Members       []weatherDelayPowerGroupMember `json:"members"`
 }
 
 func cmdWeatherDelayAction(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, apiPath string) int {
@@ -241,6 +263,27 @@ func cmdWeatherDelayStatus(args []string, stdout, stderr io.Writer, clock func()
 		_, _ = fmt.Fprintf(stdout, "  node %s:\n", na.NodeID)
 		printWeatherDelayAssetStatus(stdout, "delay alert", na.DelayAsset)
 		printWeatherDelayAssetStatus(stdout, "cancel-night alert", na.CancelAsset)
+	}
+	for _, g := range resp.PowerGroups {
+		dark := "not confirmed dark"
+		if g.ConfirmedDark {
+			dark = "confirmed dark since " + g.Since
+		}
+		label := g.Label
+		if label == "" {
+			label = g.ID
+		}
+		_, _ = fmt.Fprintf(stdout, "  power group %s (%s): %s\n", g.ID, label, dark)
+		for _, m := range g.Members {
+			state := "dark"
+			if !m.Dark {
+				state = "not dark: " + m.Reason
+			}
+			_, _ = fmt.Fprintf(stdout, "    %s %s: %s\n", m.Kind, m.ID, state)
+		}
+	}
+	for _, p := range resp.HeldPlayers {
+		_, _ = fmt.Fprintln(stdout, "  "+p.Message)
 	}
 	return exitOK
 }

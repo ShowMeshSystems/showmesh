@@ -613,6 +613,11 @@ type Dependencies struct {
 	// silent no-op: this event is best-effort evidence, never a gate.
 	WeatherDelayEvents WeatherDelayEventAppender
 
+	// WeatherDelayGateCache holds the enforcer's last gate readings and power
+	// group verdicts for GET /api/v1/weather-delay. Share one instance with the
+	// enforcer; nil becomes an empty cache in which every reading is unknown.
+	WeatherDelayGateCache *WeatherDelayGateCache
+
 	// FPPObservations is the playlist-entry observation store dependency — see
 	// [FPPObservationStore]. A nil field is replaced by
 	// [noFPPObservationStore], under which GET reports an empty list and
@@ -797,6 +802,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.WeatherDelayPublisher == nil {
 		d.WeatherDelayPublisher = noWeatherDelayPublisher{}
+	}
+	if d.WeatherDelayGateCache == nil {
+		d.WeatherDelayGateCache = NewWeatherDelayGateCache()
 	}
 	if d.WeatherDelayNodeAddrs == nil {
 		d.WeatherDelayNodeAddrs = noWeatherDelayNodeAddrs{}

@@ -789,6 +789,7 @@ export interface paths {
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+         *       | `weatherDelay.changed` | `WeatherDelayChangedEvent` | every connection |
          *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
          *       | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
@@ -5087,6 +5088,34 @@ export interface components {
             revision: number;
             /** @description Per plan node, whether each configured alert asset is present and hash-verified there (ADR-053 decision 7's own alert asset), so an operator can see on a calm day that the alert is ready. Empty when no alert asset is configured. */
             assets?: components["schemas"]["WeatherDelayNodeAssets"][];
+            /** @description Every configured power group's own dark confirmation (ADR-053 decision 10). Empty when no power group is configured; nothing else about this response changes. */
+            powerGroups?: components["schemas"]["WeatherDelayPowerGroupStatus"][];
+            /** @description Players whose gate reads closed while no delay is active. The coordinator never opens a gate on its own; only POST /weather-delay/resume does. Empty while a delay is active. */
+            heldPlayers?: components["schemas"]["WeatherDelayHeldPlayer"][];
+        };
+        WeatherDelayHeldPlayer: {
+            instanceId: string;
+            /** @description An operator sentence naming the player and the Resume action. */
+            message: string;
+        };
+        WeatherDelayPowerGroupStatus: {
+            id: string;
+            label?: string;
+            confirmedDark: boolean;
+            /**
+             * Format: date-time
+             * @description When confirmedDark became true. Absent while confirmedDark is false.
+             */
+            since?: string;
+            members: components["schemas"]["WeatherDelayPowerGroupMember"][];
+        };
+        WeatherDelayPowerGroupMember: {
+            /** @enum {string} */
+            kind: "fpp" | "resolume" | "render";
+            id: string;
+            dark: boolean;
+            /** @description An operator sentence. Set whenever dark is false. */
+            reason?: string;
         };
         WeatherDelayNodeAssets: {
             nodeId: string;
@@ -5102,11 +5131,11 @@ export interface components {
         WeatherDelayActionRequest: {
             idempotencyKey: string;
         };
-        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), or node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached). */
+        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached), or weather-gate for the gate close (on start) or open (on resume) sent to one configured FPP instance. */
         WeatherDelayTargetOutcome: {
             instanceId: string;
             /** @enum {string} */
-            targetKind: "fpp" | "node" | "resolume" | "render" | "node-command";
+            targetKind: "fpp" | "node" | "resolume" | "render" | "node-command" | "weather-gate";
             outcome: string;
             outcomeReason: string;
             /** @enum {string} */
@@ -6875,6 +6904,22 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
+        };
+        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) a power group's own confirmedDark flip, and a change in heldPlayers, mirroring NightSessionChangedEvent's own "full state, not delta" posture. The fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
+        WeatherDelayChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            active: boolean;
+            /** @enum {string} */
+            kind?: "delay" | "cancelNight";
+            /** Format: date-time */
+            startedAt?: string;
+            startedBy?: string;
+            revision: number;
+            powerGroups: components["schemas"]["WeatherDelayPowerGroupStatus"][];
+            heldPlayers: components["schemas"]["WeatherDelayHeldPlayer"][];
         };
         /** @description One entry of NightCommandRequest.interlockOverrides (RESTING-MODE.md §10.1, Track F seam F6): a request to override a named "block" interlock rule currently withholding the command's own phase. Honored only when that rule declares `overridePolicy: authorized-operator`, the caller separately holds `night:override`, and the rule is actually withholding the phase being entered (server-side; not expressible here). Every accepted override is audited with the rule, phase, reason, and a bounded (this-invocation-only) scope. */
         NightInterlockOverride: {

@@ -1,8 +1,25 @@
 package v1
 
 // EventKindWeatherDelayChanged is the change-stream event kind for a
-// weather delay state change. Reserved; nothing publishes it yet.
+// weather delay state change, both the recorded event (see
+// appendWeatherDelayChangedEvent) and the stream frame (see
+// [WeatherDelayChangedEvent]).
 const EventKindWeatherDelayChanged = "weatherDelay.changed"
+
+// WeatherDelayChangedEvent is the "weatherDelay.changed" stream frame for a
+// state change or a power group flip. It is full state, not a delta; a
+// reconnecting client re-reads GET /api/v1/weather-delay.
+type WeatherDelayChangedEvent struct {
+	Seq         uint64                         `json:"seq"`
+	ServerTime  string                         `json:"serverTime"`
+	Active      bool                           `json:"active"`
+	Kind        string                         `json:"kind,omitempty"`
+	StartedAt   string                         `json:"startedAt,omitempty"`
+	StartedBy   string                         `json:"startedBy,omitempty"`
+	Revision    int64                          `json:"revision"`
+	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+}
 
 // WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
 // StartedAt and StartedBy are omitted while Active is false. Assets
@@ -10,13 +27,43 @@ const EventKindWeatherDelayChanged = "weatherDelay.changed"
 // and hash-verified there, so an operator can see on
 // a calm day that the alert is ready.
 type WeatherDelayStateResponse struct {
-	ServerTime string                   `json:"serverTime"`
-	Active     bool                     `json:"active"`
-	Kind       string                   `json:"kind,omitempty"`
-	StartedAt  string                   `json:"startedAt,omitempty"`
-	StartedBy  string                   `json:"startedBy,omitempty"`
-	Revision   int64                    `json:"revision"`
-	Assets     []WeatherDelayNodeAssets `json:"assets"`
+	ServerTime  string                         `json:"serverTime"`
+	Active      bool                           `json:"active"`
+	Kind        string                         `json:"kind,omitempty"`
+	StartedAt   string                         `json:"startedAt,omitempty"`
+	StartedBy   string                         `json:"startedBy,omitempty"`
+	Revision    int64                          `json:"revision"`
+	Assets      []WeatherDelayNodeAssets       `json:"assets"`
+	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+}
+
+// WeatherDelayHeldPlayer is a player whose gate reads closed while no delay
+// is active. Only a resume opens it; Message is the operator sentence.
+type WeatherDelayHeldPlayer struct {
+	InstanceID string `json:"instanceId"`
+	Message    string `json:"message"`
+}
+
+// WeatherDelayPowerGroupStatus is one configured power group's own dark
+// confirmation (ADR-053 decision 10). Since is empty while ConfirmedDark
+// is false.
+type WeatherDelayPowerGroupStatus struct {
+	ID            string                         `json:"id"`
+	Label         string                         `json:"label"`
+	ConfirmedDark bool                           `json:"confirmedDark"`
+	Since         string                         `json:"since,omitempty"`
+	Members       []WeatherDelayPowerGroupMember `json:"members"`
+}
+
+// WeatherDelayPowerGroupMember is one device tracked by a power group.
+// Kind is "fpp", "resolume" or "render". Reason is an operator sentence,
+// set whenever Dark is false.
+type WeatherDelayPowerGroupMember struct {
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Dark   bool   `json:"dark"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // WeatherDelayNodeAssets is one plan node's own alert asset readiness.
@@ -61,6 +108,10 @@ type WeatherDelayTargetOutcome struct {
 // (audio.node.silence), since weather delay never sends that action to a
 // plan node, where it would race the alert.
 const WeatherDelayTargetKindNodeCommand = "node-command"
+
+// WeatherDelayTargetKindGate is the weather gate close/open dispatch's own
+// target kind, one entry per configured FPP instance.
+const WeatherDelayTargetKindGate = "weather-gate"
 
 // WeatherDelayActionResult is the shared result shape start and resume
 // both answer with.
