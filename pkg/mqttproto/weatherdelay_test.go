@@ -69,7 +69,12 @@ func TestWeatherDelayDarkTopicRejectsInvalidGroupID(t *testing.T) {
 func TestNewWeatherDelayMessageRoundTripsActive(t *testing.T) {
 	now := time.Date(2026, 9, 19, 21, 0, 0, 0, time.UTC)
 	started := now.Add(-time.Minute)
-	m, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, started, "op-1", 3, now)
+	plan := WeatherDelayPlan{
+		Delay:       &WeatherDelayAlertAssetRef{AssetID: "asset-delay", ContentHash: "sha256:abc", Filename: "delay.wav"},
+		CancelNight: &WeatherDelayAlertAssetRef{AssetID: "asset-cancel", ContentHash: "sha256:def", Filename: "cancel.wav"},
+		RepeatCount: 10, NodeIDs: []string{"node-a"},
+	}
+	m, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, started, "op-1", 3, plan, now)
 	if err != nil {
 		t.Fatalf("NewWeatherDelayMessage: %v", err)
 	}
@@ -87,11 +92,20 @@ func TestNewWeatherDelayMessageRoundTripsActive(t *testing.T) {
 	if !back.StartedAt.Equal(started) {
 		t.Fatalf("startedAt = %v, want %v", back.StartedAt, started)
 	}
+	if back.Plan.Delay == nil || *back.Plan.Delay != *plan.Delay {
+		t.Fatalf("Plan.Delay = %+v, want %+v", back.Plan.Delay, plan.Delay)
+	}
+	if back.Plan.CancelNight == nil || *back.Plan.CancelNight != *plan.CancelNight {
+		t.Fatalf("Plan.CancelNight = %+v, want %+v", back.Plan.CancelNight, plan.CancelNight)
+	}
+	if back.Plan.RepeatCount != 10 || len(back.Plan.NodeIDs) != 1 || back.Plan.NodeIDs[0] != "node-a" {
+		t.Fatalf("Plan = %+v", back.Plan)
+	}
 }
 
 func TestNewWeatherDelayMessageRoundTripsNotActive(t *testing.T) {
 	now := time.Date(2026, 9, 19, 21, 0, 0, 0, time.UTC)
-	m, err := NewWeatherDelayMessage(false, "", time.Time{}, "", 0, now)
+	m, err := NewWeatherDelayMessage(false, "", time.Time{}, "", 0, WeatherDelayPlan{}, now)
 	if err != nil {
 		t.Fatalf("NewWeatherDelayMessage: %v", err)
 	}
@@ -106,18 +120,55 @@ func TestNewWeatherDelayMessageRoundTripsNotActive(t *testing.T) {
 	if back.Active || back.Kind != "" || back.StartedBy != "" {
 		t.Fatalf("round trip produced %+v, want a fully cleared state", back)
 	}
+	if back.Plan.Delay != nil || back.Plan.CancelNight != nil || back.Plan.RepeatCount != 0 {
+		t.Fatalf("Plan = %+v, want the absent zero plan", back.Plan)
+	}
 }
 
 func TestNewWeatherDelayMessageRejectsActiveMissingFields(t *testing.T) {
 	now := time.Date(2026, 9, 19, 21, 0, 0, 0, time.UTC)
-	if _, err := NewWeatherDelayMessage(true, "resume", now, "op-1", 1, now); err == nil {
+	if _, err := NewWeatherDelayMessage(true, "resume", now, "op-1", 1, WeatherDelayPlan{}, now); err == nil {
 		t.Fatal("accepted a kind outside the closed vocabulary")
 	}
-	if _, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, time.Time{}, "op-1", 1, now); err == nil {
+	if _, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, time.Time{}, "op-1", 1, WeatherDelayPlan{}, now); err == nil {
 		t.Fatal("accepted a zero startedAt while active")
 	}
-	if _, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, now, "", 1, now); err == nil {
+	if _, err := NewWeatherDelayMessage(true, WeatherDelayKindDelay, now, "", 1, WeatherDelayPlan{}, now); err == nil {
 		t.Fatal("accepted an empty startedBy while active")
+	}
+}
+
+func TestWeatherDelayPlanValidateAcceptsAbsentPlanAndEntries(t *testing.T) {
+	if err := (WeatherDelayPlan{}).Validate(); err != nil {
+		t.Fatalf("Validate() on the zero plan = %v, want nil", err)
+	}
+	if err := (WeatherDelayPlan{RepeatCount: 10}).Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestWeatherDelayPlanValidateRejectsRepeatCountOutOfRange(t *testing.T) {
+	for _, n := range []int{-1, 51} {
+		if err := (WeatherDelayPlan{RepeatCount: n}).Validate(); err == nil {
+			t.Fatalf("Validate() with repeatCount %d = nil, want error", n)
+		}
+	}
+}
+
+func TestWeatherDelayPlanValidateRejectsIncompleteAssetRef(t *testing.T) {
+	cases := []WeatherDelayAlertAssetRef{
+		{ContentHash: "h", Filename: "f"},
+		{AssetID: "a", Filename: "f"},
+		{AssetID: "a", ContentHash: "h"},
+	}
+	for _, ref := range cases {
+		ref := ref
+		if err := (WeatherDelayPlan{Delay: &ref}).Validate(); err == nil {
+			t.Fatalf("Validate() with incomplete delay ref %+v = nil, want error", ref)
+		}
+		if err := (WeatherDelayPlan{CancelNight: &ref}).Validate(); err == nil {
+			t.Fatalf("Validate() with incomplete cancelNight ref %+v = nil, want error", ref)
+		}
 	}
 }
 

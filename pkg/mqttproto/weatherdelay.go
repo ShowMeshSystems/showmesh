@@ -102,6 +102,92 @@ func validateWeatherDelayGroupID(groupID string) error {
 	return nil
 }
 
+// WeatherDelayAlertAssetRef names one alert asset a node opens: the
+// coordinator's asset id, its content hash (so a node can confirm it holds
+// the right bytes without a separate fetch round trip), and the runtime
+// filename to open. All three are required whenever a ref is present — an
+// asset a node cannot verify or cannot open is not a usable reference.
+type WeatherDelayAlertAssetRef struct {
+	AssetID     string `json:"assetId"`
+	ContentHash string `json:"contentHash"`
+	Filename    string `json:"filename"`
+}
+
+// ErrInvalidWeatherDelayAlertAssetRef is wrapped by every error
+// [WeatherDelayAlertAssetRef.Validate] returns.
+var ErrInvalidWeatherDelayAlertAssetRef = errors.New("mqttproto: invalid weather delay alert asset ref")
+
+// Validate reports whether r's three fields are all present.
+func (r WeatherDelayAlertAssetRef) Validate() error {
+	switch {
+	case r.AssetID == "":
+		return fmt.Errorf("%w: assetId is empty", ErrInvalidWeatherDelayAlertAssetRef)
+	case r.ContentHash == "":
+		return fmt.Errorf("%w: contentHash is empty", ErrInvalidWeatherDelayAlertAssetRef)
+	case r.Filename == "":
+		return fmt.Errorf("%w: filename is empty", ErrInvalidWeatherDelayAlertAssetRef)
+	}
+	return nil
+}
+
+// weatherDelayPlanMinRepeatCount and weatherDelayPlanMaxRepeatCount mirror
+// internal/coordinator/config's own weatherDelayMinRepeatCount/
+// weatherDelayMaxRepeatCount (ADR-053 decision 7): this package cannot
+// import that one (agent/plugin-facing, config is coordinator-only), so
+// the bound is duplicated as a literal here, the same
+// [WeatherDelayKindDelay]/[WeatherDelayKindCancelNight] duplication this
+// file's own doc comment already explains.
+const (
+	weatherDelayPlanMinRepeatCount = 1
+	weatherDelayPlanMaxRepeatCount = 50
+)
+
+// WeatherDelayPlan is what a node needs to play the configured alert
+// without a further round trip once it receives a bare signed start
+// (ADR-053 decision 9): which asset for each kind, how many times, and
+// which nodes. Present on every [WeatherDelayMessage], even one reporting
+// "not active" — a node that later receives a signed start already knows
+// what to play. Delay/CancelNight are nil when that kind's alert asset is
+// not configured (ADR-053 decision 13: every part is independently
+// optional); RepeatCount 0 means nothing has ever configured a value (the
+// coordinator's own resolved default is 10, never republished as this
+// zero value once show.weatherdelay has actually been written).
+type WeatherDelayPlan struct {
+	Delay       *WeatherDelayAlertAssetRef `json:"delay,omitempty"`
+	CancelNight *WeatherDelayAlertAssetRef `json:"cancelNight,omitempty"`
+	RepeatCount int                        `json:"repeatCount"`
+	NodeIDs     []string                   `json:"nodeIds,omitempty"`
+}
+
+// ErrInvalidWeatherDelayPlan is wrapped by every error
+// [WeatherDelayPlan.Validate] returns.
+var ErrInvalidWeatherDelayPlan = errors.New("mqttproto: invalid weather delay plan")
+
+// Validate reports whether p is well-formed: an absent plan (the zero
+// value) and absent Delay/CancelNight entries are both valid — this is
+// deliberately permissive, not "required once a plan exists", because a
+// coordinator that has never configured show.weatherdelay still publishes
+// this message with its own zero Plan. A present Delay/CancelNight ref
+// must itself be complete ([WeatherDelayAlertAssetRef.Validate]), and a
+// non-zero RepeatCount must fall in [1, 50] (ADR-053 decision 7) — only a
+// RepeatCount that was actually SET to something out of range is refused.
+func (p WeatherDelayPlan) Validate() error {
+	if p.Delay != nil {
+		if err := p.Delay.Validate(); err != nil {
+			return fmt.Errorf("%w: delay: %v", ErrInvalidWeatherDelayPlan, err)
+		}
+	}
+	if p.CancelNight != nil {
+		if err := p.CancelNight.Validate(); err != nil {
+			return fmt.Errorf("%w: cancelNight: %v", ErrInvalidWeatherDelayPlan, err)
+		}
+	}
+	if p.RepeatCount != 0 && (p.RepeatCount < weatherDelayPlanMinRepeatCount || p.RepeatCount > weatherDelayPlanMaxRepeatCount) {
+		return fmt.Errorf("%w: repeatCount %d must be between %d and %d", ErrInvalidWeatherDelayPlan, p.RepeatCount, weatherDelayPlanMinRepeatCount, weatherDelayPlanMaxRepeatCount)
+	}
+	return nil
+}
+
 // WeatherDelayMessage is the payload of the showmesh.weatherdelay/v1
 // schema: the wire projection of [weatherdelay.State], carried directly
 // rather than importing that type, mirroring [ShowModeMessage]'s own
@@ -118,6 +204,10 @@ type WeatherDelayMessage struct {
 	// value came from, mirroring [ShowModeMessage.Revision]'s own
 	// informational, non-gating role.
 	Revision int64 `json:"revision"`
+
+	// Plan is the alert plan a node needs to play without a further round
+	// trip once it receives a bare signed start. See [WeatherDelayPlan].
+	Plan WeatherDelayPlan `json:"plan"`
 
 	// PublishedAt is the coordinator's clock at build time, mirroring
 	// [ShowModeMessage.PublishedAt]'s identical "not freshness evidence on
@@ -145,6 +235,9 @@ func (m WeatherDelayMessage) Validate() error {
 	case m.Revision < 0:
 		return fmt.Errorf("%w: revision %d is negative", ErrInvalidWeatherDelayMessage, m.Revision)
 	}
+	if err := m.Plan.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidWeatherDelayMessage, err)
+	}
 	if m.Active {
 		if !weatherDelayKinds[m.Kind] {
 			return fmt.Errorf("%w: kind %q must be one of %q or %q", ErrInvalidWeatherDelayMessage, m.Kind, WeatherDelayKindDelay, WeatherDelayKindCancelNight)
@@ -164,12 +257,14 @@ func (m WeatherDelayMessage) Validate() error {
 }
 
 // NewWeatherDelayMessage builds a validated [WeatherDelayMessage] with a
-// fresh message id and now stamped in UTC.
-func NewWeatherDelayMessage(active bool, kind string, startedAt time.Time, startedBy string, revision int64, now time.Time) (WeatherDelayMessage, error) {
+// fresh message id and now stamped in UTC. plan is carried through
+// verbatim — see [WeatherDelayPlan]'s own doc comment for why it is
+// present even when active is false.
+func NewWeatherDelayMessage(active bool, kind string, startedAt time.Time, startedBy string, revision int64, plan WeatherDelayPlan, now time.Time) (WeatherDelayMessage, error) {
 	m := WeatherDelayMessage{
 		Schema: SchemaWeatherDelayV1, MessageID: uuid.NewString(),
 		Active: active, Kind: kind, StartedAt: startedAt, StartedBy: startedBy,
-		Revision: revision, PublishedAt: now.UTC(),
+		Revision: revision, Plan: plan, PublishedAt: now.UTC(),
 	}
 	if !startedAt.IsZero() {
 		m.StartedAt = startedAt.UTC()
