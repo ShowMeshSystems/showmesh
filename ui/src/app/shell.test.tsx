@@ -889,6 +889,62 @@ describe('app shell', () => {
       view.rerender(shellTree({ ...base, weatherDelayFrames: 1 }))
       await screen.findByText('Weather delay')
     })
+
+    it('shows a confirmed-dark group and a not-dark group with its member reasons, verbatim', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        ...ACTIVE_DELAY,
+        powerGroups: [
+          { id: 'stage', label: 'Stage lighting', confirmedDark: true, since: '2026-09-01T00:01:50Z', members: [] },
+          {
+            id: 'projection',
+            label: 'Projection',
+            confirmedDark: false,
+            members: [{ kind: 'resolume', id: 'proj-01', dark: false, reason: 'A layer is still producing output.' }],
+          },
+        ],
+      })
+
+      renderShell({ session: authenticatedSession(), serverTime: '2026-09-01T00:06:00Z', serverTimeReceivedAt: Date.now() })
+      await screen.findByText('Weather delay')
+      expect(screen.getByText('Stage lighting')).toBeInTheDocument()
+      expect(screen.getByText(/Confirmed dark, since/)).toBeInTheDocument()
+      expect(screen.getByText('Projection')).toBeInTheDocument()
+      expect(screen.getByText('Not dark')).toBeInTheDocument()
+      expect(screen.getByText('A layer is still producing output.')).toBeInTheDocument()
+    })
+
+    it('renders no power-group section when none are configured', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({ ...ACTIVE_DELAY, powerGroups: [] })
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Weather delay')
+      expect(screen.queryByText('Not dark')).not.toBeInTheDocument()
+    })
+
+    it('shows a distinct held-players banner, with the resume button, when no delay is active', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:06:00Z',
+        active: false,
+        revision: 6,
+        heldPlayers: [{ instanceId: 'fpp-01', message: 'FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.' }],
+      })
+      resumeFromWeatherDelayMock.mockResolvedValue({ kind: 'resume', idempotencyKey: 'k1', active: false, revision: 7, targets: [] })
+
+      renderShell({ session: authenticatedSession({ scopes: ['show:weatherdelay:resume'] }) })
+      await screen.findByText('Players held dark')
+      expect(screen.getByText(/FPP fpp-01 is held dark from an earlier weather delay/)).toBeInTheDocument()
+      expect(screen.queryByText('Weather delay')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /^resume$/i }))
+      await waitFor(() => expect(resumeFromWeatherDelayMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('renders no banner when heldPlayers is empty and no delay is active', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({ serverTime: '2026-09-01T00:06:00Z', active: false, revision: 6, heldPlayers: [] })
+      renderShell({ session: authenticatedSession() })
+      await waitFor(() => expect(getWeatherDelayStateMock).toHaveBeenCalled())
+      expect(screen.queryByText('Players held dark')).not.toBeInTheDocument()
+      expect(screen.queryByText('Weather delay')).not.toBeInTheDocument()
+    })
   })
 })
 

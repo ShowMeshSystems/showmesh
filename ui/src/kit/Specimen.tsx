@@ -12,6 +12,7 @@ import {
   ChromeProgress,
   ClockSkewStrip,
   WeatherDelayBanner,
+  WeatherDelayHeldBanner,
   ConfirmDialog,
   ConnectionPill,
   DefinitionStrip,
@@ -389,6 +390,25 @@ export function Specimen() {
               unknown
               kindLabel="Weather delay state unknown"
               elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
+            />
+            <WeatherDelayBanner
+              kindLabel="Weather delay"
+              elapsedLabel="Started 6 m 12 s ago"
+              startedByLabel="Started by operator"
+              groups={[
+                { id: 'stage', label: 'Stage lighting', confirmedLabel: 'Confirmed dark, since 4 m 50 s ago' },
+                {
+                  id: 'projection',
+                  label: 'Projection',
+                  notDarkMembers: [{ label: 'Resolume proj-01', reason: 'A layer is still producing output.' }],
+                },
+              ]}
+              resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
+              cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <WeatherDelayHeldBanner
+              messages={['FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.']}
+              resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
             />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
