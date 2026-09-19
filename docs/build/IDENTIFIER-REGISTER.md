@@ -117,6 +117,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
+| `show.weatherdelay` | `default` singleton | reserved | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
@@ -309,6 +310,8 @@ bundles of these (ADR-024).
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 | `fpp:fallback` | shipped | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
 | `show:emergencystop:invoke` | shipped | Lane 17a SM-129: the four emergency-stop trigger routes (stop, stop-power-down, hard-stop arm/fire) |
+| `show:weatherdelay:invoke` | reserved | ADR-053 weather delay: start a weather delay, start a cancel night, change a delay into a cancel night |
+| `show:weatherdelay:resume` | reserved | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
@@ -553,6 +556,8 @@ after shipping a breaking change to stored history.
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
 | `audio.node.silence` | shipped | SM-494: the installation-wide emergency stop's node-scoped, unconditional per-node audio silence, no sessionId, no revision |
+| `weatherdelay.start` | reserved | ADR-053 weather delay: node-scoped. Mutes every other session at the mixer, starts the alert with its repeat count, then stops the other sessions, and sets the node's own delay state |
+| `weatherdelay.resume` | reserved | ADR-053 weather delay: node-scoped. Ends the alert and clears the node's own delay state. Never accepted on the node's inbound HTTP listener |
 | `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
@@ -629,6 +634,10 @@ register entry comes from the code and never from a plan.
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
 | `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
+| `show.weatherdelay.start` | reserved | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
+| `show.weatherdelay.cancel_night` | reserved | ADR-053 weather delay: a cancel night started, or a delay changed into one |
+| `show.weatherdelay.resume` | reserved | ADR-053 weather delay: a delay resumed or a cancel night cleared |
+| `show.weatherdelay.enforce` | reserved | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 
@@ -1286,6 +1295,8 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
 | `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
+| `showmesh/events/weather_delay` (retained) | reserved | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
+| `showmesh/events/weather_delay/dark/<group-id>` | reserved | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1391,6 +1402,7 @@ The store schema version, bumped by migrations in
 | v38 | shipped | PCM show audio (owner ruling 2026-09-18): adds `audio_renditions`, one row per original audio asset content hash recording its 48kHz/16-bit/stereo WAV rendition status (rendering/ready/failed) and, once ready, the rendition's own content hash, size, duration, and format string (`audio_renditions.go`'s own doc comment). A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no existing table is touched, and an audio asset with no row yet simply has no rendition, which the expected-set computation treats as "keep naming the original" rather than an error |
 | v39 | shipped | ADR-051 decisions 1 and 4: backfills audio.settings' `multisyncFallbackWindowMs` and `multisyncStartLeadMs` keys into every stored revision written before they were required (`migrateV39AudioSettingsBackfillMultisyncFields`'s own doc comment, `migration_v39.go`), the same defect class v20/v34 already fix for earlier fields |
 | v40 | shipped | owner ask 2026-09-18: adds `night_cycle_outcomes`, one row per night session cycle recording how its show ended (`nightcycleoutcome.go`'s own doc comment), so a finished cycle can be reported instead of the operator UI's placeholder. A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36/schemaV38: no existing table is touched, and a cycle that ran before this migration simply has no row |
+| v41 | reserved | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v41+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
@@ -1550,6 +1562,7 @@ anything failing loudly.
 | `resolumeRecovery.changed` | shipped | Track D seam D-3a |
 | `nightSession.changed` | reserved | Track F seam F2 |
 | `fppPlaylistEntry.changed` | shipped | SM-150, Track H: latest accepted FPP playlist-entry observation |
+| `weatherDelay.changed` | reserved | ADR-053 weather delay: one kind for every change of the delay state and of any power group's confirmed-dark report |
 
 **Track F mints one kind, not one per lifecycle transition.** ADR-020 makes
 the stream non-resumable, so a client that misses frames re-fetches the
@@ -1598,6 +1611,15 @@ acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
 alignment-run` subcommand. Recorded on the `/api/v1/fallback-programs`
 precedent below; `api/openapi.yaml` remains the register for the paths
 themselves.
+
+**ADR-053 weather delay owns every path under `/api/v1/weather-delay`**, the
+`/api/v1/config/show.weatherdelay` pair, and the `showmeshctl weather-delay`
+subcommand, on the `/api/v1/fallback-programs` precedent. It also owns one
+path on the node agent's inbound listener and one on the FPP plugin,
+`/showmesh/v1/weather-delay/start`, which
+[ADR-053](../decisions/ADR-053-weather-delay.md) decision 9 adds as the single
+exception to the paragraph above about that listener. That path accepts a
+signed start and nothing else, and stays out of `api/openapi.yaml`.
 
 **Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
 `/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on
