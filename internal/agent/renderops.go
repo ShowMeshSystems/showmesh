@@ -263,6 +263,10 @@ type renderOperations struct {
 	// out to a real gst-launch-1.0 — pipeline/probe_test.go already covers
 	// the probe mechanism itself exhaustively against fakes and reality.
 	probeStarter pipeline.ProcessStarter
+
+	// weatherDelay, when set, holds every frame writer's timeline at
+	// stopped during a delay, so MultiSync cannot drive content.
+	weatherDelay *WeatherDelayHolder
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
@@ -276,6 +280,30 @@ func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentSto
 		logger:              logger,
 		writers:             make(map[string]*frameWriterHandle),
 	}
+}
+
+// frameTimeline is the timeline a frame writer reads.
+func (o *renderOperations) frameTimeline() pipeline.TimelineSource {
+	if o.weatherDelay == nil {
+		return o.timeline
+	}
+	return weatherDelayGatedTimeline{timeline: o.timeline, holder: o.weatherDelay}
+}
+
+// weatherDelayGatedTimeline reports the timeline as stopped while a weather
+// delay is active, whatever MultiSync says.
+type weatherDelayGatedTimeline struct {
+	timeline pipeline.TimelineSource
+	holder   *WeatherDelayHolder
+}
+
+func (g weatherDelayGatedTimeline) Snapshot() multisync.Snapshot {
+	snap := g.timeline.Snapshot()
+	if g.holder.Current().Active {
+		snap.State = multisync.StateStopped
+		snap.PositionMS = 0
+	}
+	return snap
 }
 
 // idleOutputFor resolves which idle output a surface's writer is built
@@ -801,7 +829,7 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 	var fw *pipeline.FrameWriter
 	var err error
 	if f != nil {
-		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.fseqFilename, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
+		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.frameTimeline(), a.fseqFilename, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
 	} else {
 		fw, err = pipeline.NewIdleFrameWriter(o.sup, surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, idleOutput, o.logger)
 	}

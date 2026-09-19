@@ -8,14 +8,12 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// This file covers ZeroGainExcept and SilenceAllExcept: ADR-053 decision
-// 7's own steps (a) and (c), the node-scoped weather delay alert's
-// counterparts to gainCall/SilenceAll that leave one named session alone.
+// Covers ZeroGainExcept and SilenceAllExcept, which leave the weather delay
+// alert session alone.
 
 // TestZeroGainExceptDrivesEveryOtherSessionToZeroAndLeavesTheExcludedOne
-// proves ZeroGainExcept sets every other session's gain to zero directly
-// (no fade, no state change reported through Snapshot's gain field) while
-// leaving the excluded session's own gain untouched.
+// proves every other session's engine gain goes straight to zero and the
+// excluded session's is untouched.
 func TestZeroGainExceptDrivesEveryOtherSessionToZeroAndLeavesTheExcludedOne(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
@@ -39,7 +37,9 @@ func TestZeroGainExceptDrivesEveryOtherSessionToZeroAndLeavesTheExcludedOne(t *t
 		t.Fatalf("gain set excluded: %+v", r)
 	}
 
-	m.ZeroGainExcept(ctx, excluded)
+	if unmuted := m.ZeroGainExcept(ctx, excluded, time.Second); len(unmuted) != 0 {
+		t.Fatalf("unmuted = %v, want none", unmuted)
+	}
 
 	otherHandle, ok := m.get(other)
 	if !ok {
@@ -66,10 +66,8 @@ func TestZeroGainExceptDrivesEveryOtherSessionToZeroAndLeavesTheExcludedOne(t *t
 	}
 }
 
-// wedgingEngine wraps [FakeEngine] and blocks forever on SetGain for one
-// named handle, proving ZeroGainExcept's own per-session bound (not an
-// unbounded wait) still lets the call return and still reaches every
-// other session.
+// wedgingEngine blocks on SetGain for one named handle until its context
+// ends.
 type wedgingEngine struct {
 	*FakeEngine
 	wedge EngineHandle
@@ -83,10 +81,9 @@ func (e *wedgingEngine) SetGain(ctx context.Context, handle EngineHandle, gain p
 	return e.FakeEngine.SetGain(ctx, handle, gain)
 }
 
-// TestZeroGainExceptDoesNotHangOnAWedgedSession proves a session whose
-// own SetGain call never returns cannot make ZeroGainExcept itself hang:
-// engineCallTimeout still bounds that one call, and every other session
-// is still reached.
+// TestZeroGainExceptDoesNotHangOnAWedgedSession proves a wedged SetGain
+// holds the call no longer than its bound, is reported as unmuted, and does
+// not stop every other session being muted.
 func TestZeroGainExceptDoesNotHangOnAWedgedSession(t *testing.T) {
 	old := engineCallTimeout
 	engineCallTimeout = 200 * time.Millisecond
@@ -115,16 +112,14 @@ func TestZeroGainExceptDoesNotHangOnAWedgedSession(t *testing.T) {
 	engine.wedge = wedgedSession.handle
 	wedgedSession.mu.Unlock()
 
-	done := make(chan struct{})
-	go func() {
-		m.ZeroGainExcept(ctx, excluded)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("ZeroGainExcept did not return within 5s of a wedged session's SetGain")
+	const bound = 50 * time.Millisecond
+	began := time.Now()
+	unmuted := m.ZeroGainExcept(ctx, excluded, bound)
+	if elapsed := time.Since(began); elapsed > bound+100*time.Millisecond {
+		t.Fatalf("ZeroGainExcept took %v, want no more than about %v", elapsed, bound)
+	}
+	if len(unmuted) != 1 || unmuted[0] != wedged {
+		t.Fatalf("unmuted = %v, want exactly %q", unmuted, wedged)
 	}
 
 	healthySession, _ := m.get(healthy)
@@ -196,15 +191,44 @@ func TestZeroGainExceptDoesNotWaitOnAHeldSessionLock(t *testing.T) {
 	busySession.mu.Lock()
 	defer busySession.mu.Unlock()
 
-	done := make(chan struct{})
-	go func() {
-		m.ZeroGainExcept(ctx, excluded)
-		close(done)
-	}()
+	unmuted := m.ZeroGainExcept(ctx, excluded, 50*time.Millisecond)
+	if len(unmuted) != 1 || unmuted[0] != busy {
+		t.Fatalf("unmuted = %v, want exactly %q", unmuted, busy)
+	}
+}
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("ZeroGainExcept did not return while another call held a session's lock")
+// TestZeroGainExceptMutesAStagedNextItemHandle proves a staged next item
+// cannot become audible at its boundary after the mute step.
+func TestZeroGainExceptMutesAStagedNextItemHandle(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	const other = pkgaudio.SessionID("other")
+	ref := writeTestAsset(t, m.assetDir, "other.wav", "other-asset", []byte("other"))
+	nextRef := writeTestAsset(t, m.assetDir, "next.wav", "next-asset", []byte("next"))
+	startPlaying(t, m, ctx, other, ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	const stagedHandle = EngineHandle("other/stage/1")
+	if _, err := m.engine.Load(ctx, stagedHandle, nextRef, 2*time.Second); err != nil {
+		t.Fatalf("load staged handle: %v", err)
+	}
+	if _, err := m.engine.SetGain(ctx, stagedHandle, pkgaudio.Gain(0.8)); err != nil {
+		t.Fatalf("set staged gain: %v", err)
+	}
+	s, _ := m.get(other)
+	s.mu.Lock()
+	s.stage = &itemStage{index: 1, handle: stagedHandle, ready: true}
+	s.mu.Unlock()
+
+	if unmuted := m.ZeroGainExcept(ctx, "excluded", time.Second); len(unmuted) != 0 {
+		t.Fatalf("unmuted = %v, want none", unmuted)
+	}
+	obs, err := m.engine.Observe(ctx, stagedHandle)
+	if err != nil {
+		t.Fatalf("observe staged: %v", err)
+	}
+	if obs.Gain != pkgaudio.Gain(0) {
+		t.Fatalf("staged handle gain = %v, want 0", obs.Gain)
 	}
 }

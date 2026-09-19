@@ -70,10 +70,8 @@ func postStart(t *testing.T, url string, body []byte) *http.Response {
 }
 
 // TestWeatherDelayHTTPValidSignedStartWorksWithNoOtherDependency proves a
-// valid signed start succeeds and runs the same effect as the dispatched
-// operation, entirely independent of MQTT (this test never constructs a
-// broker connection at all) and independent of fppconnect.settings.enabled
-// (the fixture below is built with enabled=false).
+// valid signed start runs the dispatched operation's effect with no broker
+// and with fppconnect.settings.enabled false.
 func TestWeatherDelayHTTPValidSignedStartWorksWithNoOtherDependency(t *testing.T) {
 	f := newWeatherDelayHTTPTestFixture(t, false)
 

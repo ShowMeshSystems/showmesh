@@ -307,6 +307,7 @@ func Run() int {
 	// below, because the resume builds that surface's frame writer and the
 	// idle-output override has to be in place before it does.
 	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, cfg.DiagnosticSurface.SurfaceID, logger)
+	renderOps.weatherDelay = weatherDelay
 
 	// catalogStore is this node's held Cue catalog (TRACK-H-H3-SPEC.md
 	// section 4) — constructed here, outside newMQTTConn, for the same
@@ -418,15 +419,7 @@ func Run() int {
 		return !ok
 	})
 
-	// ADR-053: "on boot the persisted state is loaded before anything can
-	// start audio." A restored session can reach StatePlaying directly
-	// (RestoreAll's own resume-to-playing path), which is exactly the show
-	// output a weather delay active at boot must not let start.
-	if weatherDelay.Current().Active {
-		logger.Warn("skipping persisted audio session restore at startup: a weather delay is active")
-	} else if err := audioMgr.RestoreAll(sigCtx); err != nil {
-		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
-	}
+	restoreAudioSessionsAtBoot(sigCtx, audioMgr, weatherDelay.Current().Active, logger)
 	audioWatchDone := make(chan struct{})
 	go func() {
 		defer close(audioWatchDone)
@@ -444,8 +437,9 @@ func Run() int {
 	// route answers 503 and does nothing, logged once here rather than on
 	// every request.
 	weatherDelayPublicKey := loadWeatherDelayPublicKey(cfg.WeatherDelayCoordinatorPublicKeyPath, logger)
+	weatherDelayOps := &weatherDelayOperations{holder: weatherDelay, audioMgr: audioMgr, assetDir: cfg.AssetDir}
 	weatherDelayHTTP := weatherDelayHTTPConfig{
-		ops:       &weatherDelayOperations{holder: weatherDelay, audioMgr: audioMgr, assetDir: cfg.AssetDir},
+		ops:       weatherDelayOps,
 		publicKey: weatherDelayPublicKey,
 	}
 	go func() {
@@ -504,7 +498,7 @@ func Run() int {
 	// a prior version of this wiring lived as bare statements here with
 	// no test able to observe either one.
 	connect := func() (Conn, error) {
-		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, weatherDelay, fppConnectStatus, logger)
+		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, weatherDelayOps, fppConnectStatus, logger)
 	}
 	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, fppConnectStatus, logger)
 	if err != nil {

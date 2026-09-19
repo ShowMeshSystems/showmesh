@@ -34,13 +34,19 @@ func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
-// excludeID, ADR-053 decision 7's own stop step, run after the alert
-// session (excludeID) has already been started, and never confused with
-// it: a weather delay alert must keep playing while every other session
-// this node holds is silenced the identical way SilenceAll would silence
-// it too.
+// excludeID, so a weather delay alert keeps playing.
 func (m *Manager) SilenceAllExcept(ctx context.Context, excludeID pkgaudio.SessionID) []SessionSilenceOutcome {
 	return m.silenceSessions(ctx, m.liveSessionsExcept(excludeID))
+}
+
+// SilenceSession stops one session the way [Manager.SilenceAll] does,
+// whatever its state and revision, and reports false when it does not exist.
+func (m *Manager) SilenceSession(ctx context.Context, id pkgaudio.SessionID) (SessionSilenceOutcome, bool) {
+	s, ok := m.get(id)
+	if !ok {
+		return SessionSilenceOutcome{}, false
+	}
+	return m.silenceSessions(ctx, []*Session{s})[0], true
 }
 
 // liveSessionsExcept snapshots this Manager's live sessions, omitting
@@ -75,23 +81,23 @@ func (m *Manager) silenceSessions(ctx context.Context, sessions []*Session) []Se
 	return results
 }
 
-// ZeroGainExcept sets every session other than excludeID to gain zero on
-// its loaded engine handle, with no fade and no change to desired gain.
-// It returns within engineCallTimeout even when a session's lock is held.
-func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.SessionID) {
+// ZeroGainExcept sets every session other than excludeID to gain zero on its
+// loaded and staged engine handles, all sessions at once, and returns within
+// bound with the ids of the sessions it could not mute by then.
+func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.SessionID, bound time.Duration) []pkgaudio.SessionID {
+	sessions := m.liveSessionsExcept(excludeID)
+	var mu sync.Mutex
+	muted := make(map[pkgaudio.SessionID]bool, len(sessions))
 	var wg sync.WaitGroup
-	for _, s := range m.liveSessionsExcept(excludeID) {
+	for _, s := range sessions {
 		wg.Add(1)
 		go func(s *Session) {
 			defer wg.Done()
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if !s.handleLoaded {
-				return
+			if m.zeroGainSession(ctx, s) {
+				mu.Lock()
+				muted[s.id] = true
+				mu.Unlock()
 			}
-			gainCtx, cancel := boundedEngineCallContext(ctx)
-			defer cancel()
-			_, _ = m.engine.SetGain(gainCtx, s.handle, mutedGain)
 		}(s)
 	}
 	done := make(chan struct{})
@@ -99,12 +105,45 @@ func (m *Manager) ZeroGainExcept(ctx context.Context, excludeID pkgaudio.Session
 		wg.Wait()
 		close(done)
 	}()
-	bound := time.NewTimer(engineCallTimeout)
-	defer bound.Stop()
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
 	select {
 	case <-done:
-	case <-bound.C:
+	case <-timer.C:
 	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var unmuted []pkgaudio.SessionID
+	for _, s := range sessions {
+		if !muted[s.id] {
+			unmuted = append(unmuted, s.id)
+		}
+	}
+	return unmuted
+}
+
+// zeroGainSession mutes s's loaded and staged handles, reporting whether
+// every engine call it made succeeded.
+func (m *Manager) zeroGainSession(ctx context.Context, s *Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	handles := make([]EngineHandle, 0, 2)
+	if s.handleLoaded {
+		handles = append(handles, s.handle)
+	}
+	if s.stage != nil && s.stage.ready {
+		handles = append(handles, s.stage.handle)
+	}
+	ok := true
+	for _, h := range handles {
+		gainCtx, cancel := boundedEngineCallContext(ctx)
+		if _, err := m.engine.SetGain(gainCtx, h, mutedGain); err != nil {
+			ok = false
+		}
+		cancel()
+	}
+	return ok
 }
 
 // dropHoldMembershipEverywhere removes sessionID from every other live

@@ -217,7 +217,7 @@ func buildWillMessage(nodeID string) (*paho.WillMessage, error) {
 // *paho.Client exists after every reconnect, so both the SUBSCRIBE and the
 // publish-received callback binding have to happen again each time, not
 // once at startup.
-func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, showMode *ShowModeHolder, weatherDelay *WeatherDelayHolder, fppConnectStatus *fppConnectHTTPStatus, logger *slog.Logger) (*mqttConn, error) {
+func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, showMode *ShowModeHolder, weatherDelay *weatherDelayOperations, fppConnectStatus *fppConnectHTTPStatus, logger *slog.Logger) (*mqttConn, error) {
 	serverURL, err := url.Parse(cfg.MQTTBroker)
 	if err != nil {
 		// config.Config.Validate should already have caught this; guard
@@ -262,13 +262,8 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 				registerShowMode(ctx, cm, showMode, time.Now, logger)
 			}
 
-			// ADR-053's own retained state subscription, re-registered on
-			// every connect for registerCommandHandling's own reason.
-			// weatherDelay is constructed unconditionally in agent.go (it
-			// has no nil-disables convention: every node always tracks
-			// this), so it is never nil in production; a test may still
-			// pass nil, since this node then simply never learns the
-			// coordinator's state and keeps whatever it already persisted.
+			// Never nil in production; a nil here keeps whatever state this
+			// node already persisted.
 			if weatherDelay != nil {
 				registerWeatherDelay(ctx, cm, weatherDelay, logger)
 			}

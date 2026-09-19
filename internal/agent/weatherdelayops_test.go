@@ -11,10 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// This file covers ADR-053 decision 7's node-side alert sequence
-// (weatherdelayops.go) against a real *audio.Manager, matching this
-// package's established "prove behavior against real collaborators, not
-// mocks of them" convention (cueactivationaudio_test.go).
+// Covers the node's alert sequence against a real *audio.Manager.
 
 // weatherDelayCall is one recorded engine call: its kind ("gain", "start",
 // "stop") in the order it actually reached the engine.
@@ -23,10 +20,8 @@ type weatherDelayCall struct {
 	handle audio.EngineHandle
 }
 
-// weatherDelayRecordingEngine wraps [activationAvailableEngine] and
-// records every SetGain/Start/Stop call, in order, across every session,
-// the evidence TestWeatherDelayStartOrdering needs to prove ADR-053
-// decision 7's own ordering requirement.
+// weatherDelayRecordingEngine records every SetGain/Start/Stop call, in
+// order, across every session.
 type weatherDelayRecordingEngine struct {
 	activationAvailableEngine
 	mu    sync.Mutex
@@ -62,17 +57,12 @@ func (e *weatherDelayRecordingEngine) snapshot() []weatherDelayCall {
 	return out
 }
 
-// weatherDelayTestItemDuration is the fixed decoded duration
-// weatherDelayDurationDecoder reports for every asset, so a test can
-// drive natural playlist-item completion by advancing the fake clock
-// past it.
+// weatherDelayTestItemDuration is the decoded duration of every asset, so a
+// test can complete an item by advancing the fake clock past it.
 const weatherDelayTestItemDuration = 2 * time.Second
 
-// weatherDelayDurationDecoder reports every path as a valid, decodable
-// asset with a known duration, cueactivationaudio_test.go's
-// fixedAudioDecoder reports no duration at all, which is fine for that
-// package's tests (none drive natural completion) but not for this
-// file's repeat-count test.
+// weatherDelayDurationDecoder reports every path as a decodable asset with
+// a known duration, which the repeat-count test needs.
 type weatherDelayDurationDecoder struct{}
 
 func (weatherDelayDurationDecoder) Decode(_ context.Context, _ string) audio.DecodeResult {
@@ -127,10 +117,8 @@ func weatherDelayTestPlan(kind, assetID, contentHash, filename string, repeatCou
 	return plan
 }
 
-// TestWeatherDelayStartOrdering proves ADR-053 decision 7's own ordering
-// requirement: every other session's gain reaches zero before the
-// alert's Start, and the alert's Start reaches the engine before any
-// other session's Stop.
+// TestWeatherDelayStartOrdering proves other sessions are muted before the
+// alert starts, and the alert starts before any other session stops.
 func TestWeatherDelayStartOrdering(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
@@ -150,7 +138,7 @@ func TestWeatherDelayStartOrdering(t *testing.T) {
 	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 3)
 
 	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
-	played, reason := ops.doStart(context.Background(), "delay", clock.now())
+	played, reason, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if !played {
 		t.Fatalf("alert did not play: %s", reason)
 	}
@@ -225,7 +213,7 @@ func TestWeatherDelayStartsAlertEvenWhenAnotherSessionsStopBlocksForever(t *test
 	var played bool
 	var reason string
 	go func() {
-		played, reason = ops.doStart(context.Background(), "delay", clock.now())
+		played, reason, _ = ops.doStart(context.Background(), "delay", clock.now())
 		close(done)
 	}()
 
@@ -252,7 +240,7 @@ func TestWeatherDelayAlertPlaysExactlyRepeatCountTimesThenEnds(t *testing.T) {
 	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 3)
 
 	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
-	played, reason := ops.doStart(context.Background(), "delay", clock.now())
+	played, reason, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if !played {
 		t.Fatalf("alert did not play: %s", reason)
 	}
@@ -266,11 +254,9 @@ func TestWeatherDelayAlertPlaysExactlyRepeatCountTimesThenEnds(t *testing.T) {
 		mgr.RunWatcher(ctx, ticks)
 	}()
 
-	// Ticks are sent continuously, on their own goroutine, so this test
-	// never assumes a send on the unbuffered ticks channel means
-	// watchTick has already finished running by the time it returns
-	// (rendezvous only guarantees the receive has started), the
-	// foreground loop below polls Snapshot instead of counting ticks.
+	// A tick send only proves the receive started, not that watchTick
+	// finished, so ticks run on their own goroutine and the loop below
+	// polls Snapshot instead of counting them.
 	tickerDone := make(chan struct{})
 	go func() {
 		defer close(tickerDone)
@@ -329,7 +315,7 @@ func TestWeatherDelayResumeStopsAlertMidPlay(t *testing.T) {
 	if err := holder.SetActiveLocal("delay", clock.now(), "test"); err != nil {
 		t.Fatalf("SetActiveLocal: %v", err)
 	}
-	played, reason := ops.doStart(context.Background(), "delay", clock.now())
+	played, reason, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if !played {
 		t.Fatalf("alert did not play: %s", reason)
 	}
@@ -360,11 +346,11 @@ func TestWeatherDelaySecondStartDoesNotStackTheAlert(t *testing.T) {
 	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 10)
 
 	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
-	played1, reason1 := ops.doStart(context.Background(), "delay", clock.now())
+	played1, reason1, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if !played1 {
 		t.Fatalf("first start did not play: %s", reason1)
 	}
-	played2, reason2 := ops.doStart(context.Background(), "delay", clock.now())
+	played2, reason2, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if !played2 {
 		t.Fatalf("second start reported not playing: %s", reason2)
 	}
@@ -381,10 +367,9 @@ func TestWeatherDelaySecondStartDoesNotStackTheAlert(t *testing.T) {
 	}
 }
 
-// TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences proves
-// a plan with no asset for the requested kind is a valid configuration:
-// (a) and (c) still run, and the node reports no alert played, not an
-// error.
+// TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences proves a
+// plan with no alert still mutes and stops other sessions, and reports why
+// no alert played rather than failing.
 func TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
@@ -399,7 +384,7 @@ func TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences(t *testing
 	// No plan asset configured at all (zero value plan).
 
 	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
-	played, reason := ops.doStart(context.Background(), "delay", clock.now())
+	played, reason, _ := ops.doStart(context.Background(), "delay", clock.now())
 	if played {
 		t.Fatalf("alert reported playing with no configured asset: reason=%q", reason)
 	}
@@ -449,10 +434,10 @@ func TestWeatherDelayStartOverTwoPathsDoesNotRestartTheAlert(t *testing.T) {
 
 	mqttPath := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
 	httpPath := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
-	if played, reason := mqttPath.doStart(context.Background(), "delay", clock.now()); !played {
+	if played, reason, _ := mqttPath.doStart(context.Background(), "delay", clock.now()); !played {
 		t.Fatalf("first start did not play: %s", reason)
 	}
-	if played, reason := httpPath.doStart(context.Background(), "delay", clock.now()); !played {
+	if played, reason, _ := httpPath.doStart(context.Background(), "delay", clock.now()); !played {
 		t.Fatalf("second start reported not playing: %s", reason)
 	}
 
@@ -486,7 +471,7 @@ func TestWeatherDelayConcurrentStartsPlayTheAlertOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-gate
-			ops.doStart(context.Background(), "delay", clock.now())
+			_, _, _ = ops.doStart(context.Background(), "delay", clock.now())
 		}()
 	}
 	close(gate)

@@ -44,6 +44,39 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 	return nil
 }
 
+// StopPersisted rewrites every persisted session that match accepts and that
+// would resume playing or paused as Stopped, so no later RestoreAll plays it.
+func (m *Manager) StopPersisted(match func(pkgaudio.SessionID) bool) error {
+	ids, err := m.store.List()
+	if err != nil {
+		return fmt.Errorf("audio: list persisted sessions: %w", err)
+	}
+	var errs []error
+	for _, id := range ids {
+		if !match(id) {
+			continue
+		}
+		rec, ok, err := m.store.Load(id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		switch rec.SessionState {
+		case pkgaudio.StatePlaying, pkgaudio.StatePreparing, pkgaudio.StatePaused:
+		default:
+			continue
+		}
+		rec.SessionState = pkgaudio.StateStopped
+		if err := m.store.Save(id, rec); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // restoreOne rebuilds one session from its persisted record and, for a
 // session that was Playing or mid-advance (Preparing) at last persist,
 // re-loads and re-starts its current item — never the item that had

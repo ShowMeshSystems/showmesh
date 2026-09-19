@@ -15,51 +15,30 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// This file is ADR-053 decision 9's one superseding route on the agent's
-// existing inbound listener (fppconnecthttp.go): a signed weather delay
-// start, verified with the coordinator public key this node holds
-// (ADR-025's node-side key pinning). ADR-044's reasoning stands for every
-// other capability on this listener; this route is the sole exception,
-// and it runs ahead of the fppconnect.settings.enabled gate, see
-// newFPPConnectHandler's own doc comment.
+// The signed weather delay start on the agent's inbound listener. It is the
+// only route here that runs ahead of the fppconnect.settings.enabled gate,
+// and no resume route exists.
 
-// weatherDelayStartPath is the one route this decision adds. No resume
-// route exists and no other new route is added.
 const weatherDelayStartPath = "/showmesh/v1/weather-delay/start"
 
-// weatherDelayHTTPMaxBodyBytes is the 4 KiB cap ADR-053 decision 9 sets
-// on the signed start request body.
 const weatherDelayHTTPMaxBodyBytes = 4 * 1024
 
-// weatherDelayHTTPMaxAge and weatherDelayHTTPMaxFuture bound how stale or
-// how far ahead of this node's own clock a signed request's IssuedAt may
-// be: older than a day, or more than five minutes ahead, is refused.
-// Replay of an otherwise-fresh, valid start is accepted on purpose
-// (ADR-053 decision 8): replaying a start can only cause darkness.
+// A signed start older than a day or more than five minutes ahead of this
+// node's clock is refused. Replaying a fresh start is accepted on purpose.
 const (
 	weatherDelayHTTPMaxAge    = 24 * time.Hour
 	weatherDelayHTTPMaxFuture = 5 * time.Minute
 )
 
-// weatherDelayHTTPConfig is this route's own dependencies, threaded
-// through runFPPConnectHTTPListener -> newFPPConnectProductionServer ->
-// newFPPConnectHandler -> fppConnectServer, alongside its other fixed,
-// per-node values. PublicKey nil means this node holds no coordinator
-// signing key: the route answers 503 and does nothing, a valid, degraded
-// state (ADR-025 decision 7's "enrollment while the coordinator is
-// unreachable is a defined state, not an error," applied here to a node
-// that was never given a key to pin at all).
+// weatherDelayHTTPConfig is the signed route's dependencies. A nil publicKey
+// means this node holds no coordinator key, and the route answers 503.
 type weatherDelayHTTPConfig struct {
 	ops       *weatherDelayOperations
 	publicKey ed25519.PublicKey
 }
 
-// loadWeatherDelayPublicKey reads and decodes the coordinator's Ed25519
-// public key from path (base64 standard encoding, matching
-// internal/coordinator/signingkey's own logging convention for this key),
-// or returns nil when path is empty or the key cannot be read or decoded.
-// A missing or unreadable key is never fatal: this node simply holds no
-// key, and the route it verifies answers 503 (ADR-025 decision 7).
+// loadWeatherDelayPublicKey reads the coordinator's base64 Ed25519 public key
+// from path, or returns nil when path is empty or the key is unusable.
 func loadWeatherDelayPublicKey(path string, logger *slog.Logger) ed25519.PublicKey {
 	if path == "" {
 		return nil
@@ -86,11 +65,7 @@ func loadWeatherDelayPublicKey(path string, logger *slog.Logger) ed25519.PublicK
 }
 
 // handleWeatherDelayStart is POST /showmesh/v1/weather-delay/start: verify
-// the signed request, then run the identical code
-// "weatherdelay.start" runs as a dispatched operation
-// (weatherDelayOperations.doStart), ADR-053 decision 8's parallel
-// delivery paths reach one implementation, never two independently
-// written ones.
+// the signed request, then run the same start as weatherdelay.start.
 func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
 	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
@@ -135,11 +110,12 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 	}
 
 	// Detached so a caller that hangs up cannot cancel the alert mid-start.
-	alertPlaying, alertReason := s.weatherDelay.ops.doStart(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
+	alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.doStart(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
 
 	fppConnectWriteJSON(w, http.StatusOK, map[string]any{
 		"kind":         signed.Request.Kind,
 		"alertPlaying": alertPlaying,
 		"alertReason":  alertReason,
+		"unsilenced":   unsilenced,
 	})
 }

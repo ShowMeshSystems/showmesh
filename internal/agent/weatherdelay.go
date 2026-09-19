@@ -17,39 +17,27 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// This file is the node's half of ADR-053: it holds the weather delay
-// state and alert plan, persisted so both survive an agent restart and a
-// broker outage (decision 2), and it never goes stale. A node that last
-// heard "active" stays delayed until it is explicitly told otherwise,
-// either by the retained state topic reporting not active or by
-// "weatherdelay.resume" running locally; silence from the broker is never
-// read as a reason to clear it (ADR-053 decision 8's own "stays delayed
-// until the coordinator returns"). This is the one deliberate difference
-// from ShowModeHolder (showmode.go), which this file otherwise mirrors.
+// The node's weather delay state and alert plan, persisted so both survive a
+// restart and a broker outage. Silence never clears an active delay: only a
+// newer not-active state message or weatherdelay.resume does.
 
-// weatherDelayStateSubdir is where the persisted state file lives, rooted
-// at the agent's asset directory, matching heldcatalog.FileStore's and
-// pipeline.AssignmentStore's identical convention.
 const weatherDelayStateSubdir = "weather-delay-state"
 
-// weatherDelayStateFile is the single file the persisted record lives in.
 const weatherDelayStateFile = "state.json"
 
-// weatherDelayRecord is the persisted shape: the state fields plus the
-// alert plan, so a node that restarts (or that later receives only a
-// signed HTTP start, with no MQTT reachable) already knows both whether
-// it is delayed and what to play.
+// weatherDelayRecord is the persisted shape. Revision is the newest state
+// message revision seen; HeldRevision is the revision held when the delay
+// last became active, and only a not-active message newer than it clears.
 type weatherDelayRecord struct {
-	Active    bool                       `json:"active"`
-	Kind      string                     `json:"kind,omitempty"`
-	StartedAt time.Time                  `json:"startedAt,omitzero"`
-	StartedBy string                     `json:"startedBy,omitempty"`
-	Revision  int64                      `json:"revision"`
-	Plan      mqttproto.WeatherDelayPlan `json:"plan"`
+	Active       bool                       `json:"active"`
+	Kind         string                     `json:"kind,omitempty"`
+	StartedAt    time.Time                  `json:"startedAt,omitzero"`
+	StartedBy    string                     `json:"startedBy,omitempty"`
+	Revision     int64                      `json:"revision"`
+	HeldRevision int64                      `json:"heldRevision"`
+	Plan         mqttproto.WeatherDelayPlan `json:"plan"`
 }
 
-// weatherDelayStore persists a [weatherDelayRecord] to one JSON file,
-// atomically (temp file + rename), matching heldcatalog.FileStore.Save.
 type weatherDelayStore struct {
 	dir string
 }
@@ -62,6 +50,8 @@ func (s *weatherDelayStore) path() string {
 	return filepath.Join(s.dir, weatherDelayStateFile)
 }
 
+// save replaces the state file atomically and durably: a crash leaves either
+// the old record or the new one on disk, never a partial one.
 func (s *weatherDelayStore) save(rec weatherDelayRecord) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("weatherdelay: create state directory: %w", err)
@@ -70,22 +60,45 @@ func (s *weatherDelayStore) save(rec weatherDelayRecord) error {
 	if err != nil {
 		return fmt.Errorf("weatherdelay: encode state: %w", err)
 	}
-	target := s.path()
-	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(s.dir, weatherDelayStateFile+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("weatherdelay: create temp state: %w", err)
+	}
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("weatherdelay: write state: %w", err)
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("weatherdelay: sync state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("weatherdelay: close state: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path()); err != nil {
 		return fmt.Errorf("weatherdelay: commit state: %w", err)
+	}
+	committed = true
+	dir, err := os.Open(s.dir)
+	if err != nil {
+		return fmt.Errorf("weatherdelay: open state directory: %w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("weatherdelay: sync state directory: %w", err)
 	}
 	return nil
 }
 
-// load returns the persisted record, or the zero record when none has
-// ever been saved (a fresh node). A corrupt file is reported as an error,
-// never silently treated as "not active": the caller (NewWeatherDelayHolder)
-// must not let a disk read failure masquerade as an honest "no delay"
-// state, matching heldcatalog.FileStore.Load's identical rule.
+// load returns the persisted record, false when none was ever saved, or an
+// error when the file cannot be read or decoded.
 func (s *weatherDelayStore) load() (weatherDelayRecord, bool, error) {
 	data, err := os.ReadFile(s.path())
 	if err != nil {
@@ -102,7 +115,7 @@ func (s *weatherDelayStore) load() (weatherDelayRecord, bool, error) {
 }
 
 // WeatherDelayState is one answer about the weather delay, at the moment
-// it was asked, mirroring ShowModeState's shape.
+// it was asked.
 type WeatherDelayState struct {
 	Active    bool
 	Kind      string
@@ -111,30 +124,27 @@ type WeatherDelayState struct {
 	Plan      mqttproto.WeatherDelayPlan
 }
 
-// WeatherDelayHolder holds this node's current view of the
-// installation-wide weather delay state and alert plan, persisted so both
-// survive a restart and a broker outage. Safe for concurrent use.
+// WeatherDelayHolder holds this node's view of the weather delay state and
+// alert plan. Safe for concurrent use.
 type WeatherDelayHolder struct {
-	mu    sync.Mutex
-	store *weatherDelayStore
-	rec   weatherDelayRecord
+	mu     sync.Mutex
+	store  *weatherDelayStore
+	rec    weatherDelayRecord
+	logger *slog.Logger
 
-	// alertStartMu serializes alert starts from every delivery path, and
-	// alertMu guards alertKind, the kind of the alert most recently started.
+	// alertStartMu serializes alert starts and stops from every delivery
+	// path; alertMu guards alertKind, the kind of the alert last started.
 	alertStartMu sync.Mutex
 	alertMu      sync.Mutex
 	alertKind    string
 }
 
-// NewWeatherDelayHolder constructs a holder and loads whatever this node
-// last persisted, BEFORE anything that could start audio runs, see
-// agent.go's own boot ordering. A load failure is logged by the caller and
-// treated as not active, the same posture heldcatalog's own load failure
-// takes toward its own state (a corrupt file is exactly as untrustworthy
-// as no file, never silently kept as though it read clean).
+// NewWeatherDelayHolder loads what this node last persisted and must run
+// before anything can start audio. A file that cannot be read or decoded is
+// logged and treated as not active.
 func NewWeatherDelayHolder(assetDir string, logger *slog.Logger) *WeatherDelayHolder {
 	store := newWeatherDelayStore(assetDir)
-	h := &WeatherDelayHolder{store: store}
+	h := &WeatherDelayHolder{store: store, logger: logger}
 	rec, ok, err := store.load()
 	if err != nil {
 		logger.Warn("failed to load persisted weather delay state at startup; treating this node as not delayed", "error", err)
@@ -160,84 +170,99 @@ func (h *WeatherDelayHolder) Current() WeatherDelayState {
 	}
 }
 
-// persistLocked writes the current record to disk, best effort: a failed
-// write is logged by the caller (every caller here already holds a
-// logger) but never blocks the in-memory state from taking effect, the
-// in-memory holder is the value every consumer actually reads at its
-// point of decision, and disk is only how it survives a restart.
+// persistLocked writes the record and logs a failure at error level. The
+// in-memory state has already taken effect either way.
 func (h *WeatherDelayHolder) persistLocked() error {
-	return h.store.save(h.rec)
-}
-
-// SetFromMessage applies a [mqttproto.WeatherDelayMessage] received on the
-// retained state topic: the coordinator's own state, one of ADR-053
-// decision 8's parallel delivery paths. An active message sets active
-// regardless of whatever this node already held (a later message, whether
-// it changes kind or not, still applies); an inactive message clears it.
-// The plan is stored from EVERY message, active or not, per
-// [mqttproto.WeatherDelayPlan]'s own doc comment: "sent on every state
-// message so a node that later gets only a signed start already knows
-// what to play."
-func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage, logger *slog.Logger) {
-	h.mu.Lock()
-	previouslyActive := h.rec.Active
-	h.rec = weatherDelayRecord{
-		Active: msg.Active, Kind: msg.Kind, StartedAt: msg.StartedAt, StartedBy: msg.StartedBy,
-		Revision: msg.Revision, Plan: msg.Plan,
-	}
-	err := h.persistLocked()
-	h.mu.Unlock()
-
+	err := h.store.save(h.rec)
 	if err != nil {
-		logger.Warn("failed to persist weather delay state received from the coordinator", "error", err)
+		h.log().Error("failed to persist weather delay state; a restart before the next successful write would lose it", "active", h.rec.Active, "error", err)
 	}
-	if msg.Active != previouslyActive {
-		logger.Warn("weather delay state changed", "active", msg.Active, "kind", msg.Kind, "source", "coordinator state topic")
-	}
+	return err
 }
 
-// SetActiveLocal marks the delay active from a node-local trigger, the
-// "weatherdelay.start" operation or the signed HTTP start (ADR-053
-// decision 8's other two parallel paths, neither of which carries a
-// coordinator revision). Already active: only Kind is updated (decision 1:
-// "a delay can be changed to a cancel while it is active"), StartedAt and
-// StartedBy are left as the original activation's. Not yet active: both
-// are set fresh. Either way the change is persisted before this call
-// returns, so a crash immediately after still resumes delayed.
+func (h *WeatherDelayHolder) log() *slog.Logger {
+	if h.logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return h.logger
+}
+
+// weatherDelayTransition is what a state message did to the holder.
+type weatherDelayTransition int
+
+const (
+	weatherDelayUnchanged weatherDelayTransition = iota
+	weatherDelayStarted
+	weatherDelayCleared
+)
+
+// SetFromMessage applies a retained state message. Active starts a delay only
+// when none is active; not active clears only when its revision is newer than
+// the one held when the delay became active. The plan is kept from every message.
+func (h *WeatherDelayHolder) SetFromMessage(msg mqttproto.WeatherDelayMessage) weatherDelayTransition {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rec.Plan = msg.Plan
+	if msg.Revision > h.rec.Revision {
+		h.rec.Revision = msg.Revision
+	}
+	transition := weatherDelayUnchanged
+	switch {
+	case msg.Active && !h.rec.Active:
+		h.rec.Active = true
+		h.rec.Kind = msg.Kind
+		h.rec.StartedAt = msg.StartedAt
+		h.rec.StartedBy = msg.StartedBy
+		h.rec.HeldRevision = msg.Revision
+		transition = weatherDelayStarted
+	case !msg.Active && h.rec.Active && msg.Revision > h.rec.HeldRevision:
+		h.clearLocked()
+		transition = weatherDelayCleared
+	case !msg.Active && h.rec.Active:
+		h.log().Warn("ignoring a weather delay state message older than the active delay", "revision", msg.Revision, "held_revision", h.rec.HeldRevision)
+	}
+	_ = h.persistLocked()
+	if transition != weatherDelayUnchanged {
+		h.log().Warn("weather delay state changed", "active", h.rec.Active, "kind", msg.Kind, "source", "coordinator state topic")
+	}
+	return transition
+}
+
+// SetActiveLocal marks the delay active from weatherdelay.start or the signed
+// HTTP start, recording the newest revision seen as the held one. Already
+// active: only Kind changes. Persisted before it returns.
 func (h *WeatherDelayHolder) SetActiveLocal(kind string, startedAt time.Time, startedBy string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.rec.Active {
-		h.rec.Kind = kind
-	} else {
+	if !h.rec.Active {
 		h.rec.Active = true
-		h.rec.Kind = kind
 		h.rec.StartedAt = startedAt
 		h.rec.StartedBy = startedBy
+		h.rec.HeldRevision = h.rec.Revision
 	}
+	h.rec.Kind = kind
 	return h.persistLocked()
 }
 
-// ClearLocal marks the delay not active from a node-local
-// "weatherdelay.resume". The alert plan is kept: a resumed-then-restarted
-// delay may need it again, and nothing about a resume implies the plan
-// itself is no longer valid.
+// ClearLocal marks the delay not active from weatherdelay.resume, whatever
+// revision is held. The alert plan is kept.
 func (h *WeatherDelayHolder) ClearLocal() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.clearLocked()
+	return h.persistLocked()
+}
+
+func (h *WeatherDelayHolder) clearLocked() {
 	h.rec.Active = false
 	h.rec.Kind = ""
 	h.rec.StartedAt = time.Time{}
 	h.rec.StartedBy = ""
-	return h.persistLocked()
 }
 
-// registerWeatherDelay binds holder to receive the retained weather delay
-// state topic and subscribes to it, both fresh on every call (every
-// OnConnectionUp), matching registerShowMode's identical reconnect
-// reasoning: autopaho hands back a brand new underlying client with no
-// memory of a prior SUBSCRIBE or callback registration.
-func registerWeatherDelay(ctx context.Context, cm *autopaho.ConnectionManager, holder *WeatherDelayHolder, logger *slog.Logger) {
+// registerWeatherDelay subscribes ops to the retained state topic, fresh on
+// every connect, since autopaho's new client remembers no prior subscription.
+func registerWeatherDelay(ctx context.Context, cm *autopaho.ConnectionManager, ops *weatherDelayOperations, logger *slog.Logger) {
 	topic := mqttproto.WeatherDelayTopic()
 
 	cm.AddOnPublishReceived(func(pr autopaho.PublishReceived) (bool, error) {
@@ -246,16 +271,12 @@ func registerWeatherDelay(ctx context.Context, cm *autopaho.ConnectionManager, h
 		}
 		msg, err := mqttproto.DecodeWeatherDelayMessage(pr.Packet.Payload)
 		if err != nil {
-			// A malformed message is not a reason to change the delay
-			// state: this node keeps whatever it already held, the same
-			// posture ShowModeHolder's own malformed-message handling
-			// takes, and the one this state's own "silence never clears
-			// it" rule requires even more strongly here.
 			logger.Warn("ignoring a malformed weather delay message; keeping the state already held",
 				"topic", topic, "error", err)
 			return true, nil
 		}
-		holder.SetFromMessage(msg, logger)
+		transition := ops.holder.SetFromMessage(msg)
+		go ops.react(context.WithoutCancel(ctx), transition, msg.Kind)
 		return true, nil
 	})
 
@@ -282,13 +303,11 @@ func registerWeatherDelay(ctx context.Context, cm *autopaho.ConnectionManager, h
 	}()
 }
 
-// weatherDelayActiveReason is the operator-readable reason cue activation
-// (cueactivationops.go) reports while a weather delay is active.
+// weatherDelayActiveReason is what cue activation reports during a delay.
 const weatherDelayActiveReason = "A weather delay is active. Resume the show to activate Cues."
 
-// weatherDelayAlertAssetForKind selects plan's asset reference for kind,
-// or nil when none is configured. kind is assumed already validated
-// against [weatherdelay.ValidKind].
+// weatherDelayAlertAssetForKind selects plan's alert asset for kind, or nil
+// when none is configured.
 func weatherDelayAlertAssetForKind(plan mqttproto.WeatherDelayPlan, kind string) *mqttproto.WeatherDelayAlertAssetRef {
 	switch kind {
 	case weatherdelay.KindDelay:

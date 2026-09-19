@@ -14,10 +14,8 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
-// This file covers ADR-053's node-side holder, and the three surfaces
-// item 2 of the task names: cue activation, MultiSync's own OPEN/START
-// gate, and boot resume, plus the holder's own persistence-across-restart
-// guarantee ("never goes stale").
+// Covers the node's weather delay holder and the three places it refuses a
+// start: cue activation, MultiSync OPEN/START and boot resume.
 
 // TestWeatherDelayHolderNeverGoesStaleWithoutAnExplicitClear proves the
 // one deliberate difference from ShowModeHolder: silence is never read
@@ -123,10 +121,8 @@ func TestActivateRefusesWhileWeatherDelayIsActive(t *testing.T) {
 	}
 }
 
-// TestActivateWorksAgainAfterWeatherDelayResumes proves the "after resume
-// all three work again" acceptance line for cue activation: the identical
-// activation that was refused while active succeeds once the holder is
-// cleared.
+// TestActivateWorksAgainAfterWeatherDelayResumes proves the activation refused
+// during a delay succeeds once the holder is cleared.
 func TestActivateWorksAgainAfterWeatherDelayResumes(t *testing.T) {
 	dir := t.TempDir()
 	store := heldcatalog.NewFileStore(dir)
@@ -196,10 +192,8 @@ func TestMultiSyncStartDoesNothingWhileWeatherDelayIsActive(t *testing.T) {
 	}
 }
 
-// TestMultiSyncStartWorksAgainAfterWeatherDelayResumes proves the
-// after-resume half: the identical START now starts the Cue's audio,
-// mirroring TestMultiSyncCueAudioColdCuePreparesOnOpenStartsOnStartAndReportsLate's
-// own OPEN-then-START, scriptable-clock pattern.
+// TestMultiSyncStartWorksAgainAfterWeatherDelayResumes proves the same START
+// starts the Cue's audio once the delay is cleared.
 func TestMultiSyncStartWorksAgainAfterWeatherDelayResumes(t *testing.T) {
 	dir := t.TempDir()
 	clk := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
@@ -277,9 +271,7 @@ func TestMultiSyncStartWorksAgainAfterWeatherDelayResumes(t *testing.T) {
 // --- boot resume --------------------------------------------------------
 
 // TestDecideBootResumeDiscardsRegardlessOfMatchWhileWeatherDelayIsActive
-// proves item 2's boot resume surface: an assignment that would
-// otherwise match perfectly is still discarded while weatherDelayActive
-// is true.
+// proves a matching assignment is still discarded during a delay.
 func TestDecideBootResumeDiscardsRegardlessOfMatchWhileWeatherDelayIsActive(t *testing.T) {
 	held := heldcatalog.HeldCatalog{Show: "halloween-2026", Generation: 3, Revision: "rev-a"}
 	a := pipeline.Assignment{
