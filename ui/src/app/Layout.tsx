@@ -15,7 +15,9 @@ import {
   RuledStrip,
   ShellBody,
   WeatherDelayBanner,
+  WeatherDelayHeldBanner,
   type Connection,
+  type WeatherDelayGroupView,
 } from '../kit'
 import {
   ApiError,
@@ -33,6 +35,7 @@ import {
   type NightSessionState,
   type ShowActiveConfigResponse,
   type ShowModeConfigResponse,
+  type WeatherDelayPowerGroupStatus,
 } from '../api'
 import { ageMs, CLOCK_SKEW_WARNING_THRESHOLD_MS, effectiveServerTimeIso, formatDuration } from '../domain/time'
 import { describeApiError, describeSignInState, evaluateScope, type SignInState } from '../domain/session'
@@ -50,10 +53,40 @@ const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
   cancelNight: 'Night cancelled for weather',
 }
 
+/** The three power-group member kinds' own operator-facing labels (ADR-053 decision 10), matching Live Control's own weather-delay target-kind labels. */
+const WEATHER_DELAY_MEMBER_KIND_LABEL: Record<'fpp' | 'resolume' | 'render', string> = {
+  fpp: 'FPP',
+  resolume: 'Resolume',
+  render: 'render surface',
+}
+
+/** Builds this banner's own presentation shape from a power group's raw status. A stale read never shows a group as confirmed dark. */
+function weatherDelayGroupView(group: WeatherDelayPowerGroupStatus, nowIso: string | null, stale: boolean): WeatherDelayGroupView {
+  const label = group.label !== undefined && group.label !== '' ? group.label : group.id
+  if (group.confirmedDark && stale) return { id: group.id, label, unknownLabel: 'Dark not confirmed, could not refresh' }
+  if (group.confirmedDark) {
+    const sinceAge = group.since === undefined ? null : ageMs(group.since, nowIso)
+    return {
+      id: group.id,
+      label,
+      confirmedLabel: sinceAge === null ? 'Confirmed dark' : `Confirmed dark for ${formatDuration(Math.max(0, sinceAge))}`,
+    }
+  }
+  return {
+    id: group.id,
+    label,
+    notDarkMembers: group.members
+      .filter((member) => !member.dark)
+      .map((member) => ({
+        label: `${WEATHER_DELAY_MEMBER_KIND_LABEL[member.kind]} ${member.id}`,
+        reason: member.reason ?? 'Not reported dark.',
+      })),
+  }
+}
+
 /**
- * ADR-053: the non-dismissible banner on every screen while a weather delay
- * or cancel-night is active. A failed read never hides it: it says the state
- * is unknown. Elapsed time ticks off the server-corrected clock.
+ * ADR-053: the non-dismissible banner on every screen while a delay, a cancel-night
+ * or held players are reported. A failed read never hides it or shows a group as dark.
  */
 function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authenticated: boolean }) {
   const weatherDelay = useWeatherDelay()
@@ -69,8 +102,10 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
   }, [shown])
   void tick
 
+  const heldPlayers = shown?.active === false ? (shown.heldPlayers ?? []) : []
+
   if (!authenticated) return null
-  if (readFailure !== null && (shown === null || !shown.active)) {
+  if (readFailure !== null && (shown === null || (!shown.active && heldPlayers.length === 0))) {
     return (
       <WeatherDelayBanner
         unknown
@@ -80,7 +115,27 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
       />
     )
   }
-  if (shown === null || !shown.active) return null
+  if (shown === null || !shown.active) {
+    if (heldPlayers.length === 0) return null
+    const resumeErrorMessage = weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'resume' ? weatherDelay.outcome.message : undefined
+    const heldErrors = [
+      resumeErrorMessage,
+      readFailure === null ? undefined : `Could not refresh this banner, so it may be out of date. ${readFailure}`,
+    ].filter((message): message is string => message !== undefined)
+    return (
+      <WeatherDelayHeldBanner
+        messages={heldPlayers.map((player) => player.message)}
+        resume={{
+          label: 'Resume',
+          onClick: weatherDelay.resume,
+          disabled: !resumeGate.allowed || weatherDelay.busy !== false,
+          busy: weatherDelay.busy === 'resume',
+          ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
+        }}
+        {...(heldErrors.length === 0 ? {} : { error: heldErrors.join(' ') })}
+      />
+    )
+  }
   const response = shown
   const kind = response.kind ?? 'delay'
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
@@ -116,6 +171,7 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
           ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
         }
       : undefined
+  const groups = (response.powerGroups ?? []).map((group) => weatherDelayGroupView(group, nowIso, readFailure !== null))
 
   return (
     <WeatherDelayBanner
@@ -123,6 +179,7 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
       elapsedLabel={elapsedLabel}
       startedByLabel={startedByLabel}
       {...(savedLabel === undefined ? {} : { savedLabel })}
+      {...(groups.length === 0 ? {} : { groups })}
       resume={{
         label: kind === 'cancelNight' ? 'Clear cancellation' : 'Resume',
         onClick: weatherDelay.resume,

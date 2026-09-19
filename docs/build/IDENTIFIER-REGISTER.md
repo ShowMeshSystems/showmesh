@@ -637,8 +637,10 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
 | `show.weatherdelay.cancel_night` | reserved | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
-| `show.weatherdelay.enforce` | reserved | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
+| `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | reserved | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
+| `show.weatherdelay.trigger` | reserved | ADR-053 weather delay: an automatic trigger was received from a source |
+| `show.weatherdelay.decision` | reserved | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 
@@ -1297,7 +1299,7 @@ Step 2; add rows here before minting one.
 | `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
-| `showmesh/events/weather_delay/dark/<group-id>` | reserved | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
+| `showmesh/events/weather_delay/dark/<group-id>` | shipped | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1564,7 +1566,7 @@ anything failing loudly.
 | `resolumeRecovery.changed` | shipped | Track D seam D-3a |
 | `nightSession.changed` | reserved | Track F seam F2 |
 | `fppPlaylistEntry.changed` | shipped | SM-150, Track H: latest accepted FPP playlist-entry observation |
-| `weatherDelay.changed` | reserved | ADR-053 weather delay: one kind for every change of the delay state and of any power group's confirmed-dark report |
+| `weatherDelay.changed` | shipped | ADR-053 weather delay: one kind for every change of the delay state and of any power group's confirmed-dark report |
 
 **Track F mints one kind, not one per lifecycle transition.** ADR-020 makes
 the stream non-resumable, so a client that misses frames re-fetches the
