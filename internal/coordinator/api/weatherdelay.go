@@ -520,6 +520,10 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
 
+	// A resume answers an outstanding trigger question too: nothing starts
+	// from it afterwards.
+	h.weatherDelayDismissPendingDecisionOnResume(ctx, now, ac, clientAddr)
+
 	current, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 	if err != nil {
 		h.writeInternalError(w, now, "get weather delay state", err)

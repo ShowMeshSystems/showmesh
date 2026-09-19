@@ -6340,7 +6340,10 @@ paths:
         `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is
         accepted only by the authenticated coordinator API"). Persists not
         active, publishes retained, and sends weatherdelay.resume to the
-        nodes over MQTT only, never HTTP.
+        nodes over MQTT only, never HTTP. It also clears any pending
+        automatic-trigger decision as a dismiss: nothing starts from it
+        afterwards, and the same source and warning stay quiet for the
+        dismiss quiet period.
       requestBody:
         required: true
         content:
@@ -6380,7 +6383,10 @@ paths:
         clears it and suppresses a new question from the same source
         about the same warning for a configurable quiet period. `id`
         must match the currently pending decision's own id; a stale or
-        unknown id is refused with 409.
+        unknown id is refused with 409. A question whose warning has
+        expired, or whose deadline passed more than ten minutes ago,
+        runs nothing: it is cleared and answered with `message` instead
+        of `result`.
       requestBody:
         required: true
         content:
@@ -14912,7 +14918,8 @@ components:
       type: object
       description: >-
         The body of POST /weather-delay/decision. result is present only
-        for answer delay or cancelNight.
+        for answer delay or cancelNight, and is absent with message set
+        when the question had already expired.
       required: [serverTime, answer]
       properties:
         serverTime:
@@ -14923,6 +14930,11 @@ components:
           enum: [delay, cancelNight, dismiss]
         result:
           $ref: "#/components/schemas/WeatherDelayActionResult"
+        message:
+          type: string
+          description: >-
+            Set when the answer ran nothing, so the operator is told why:
+            a question that expired before anyone answered it.
     WeatherDelayHeldPlayer:
       type: object
       required: [instanceId, message]

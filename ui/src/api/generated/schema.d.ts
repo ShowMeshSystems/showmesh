@@ -2155,7 +2155,7 @@ export interface paths {
         put?: never;
         /**
          * Resume from a weather delay (ADR-053)
-         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Persists not active, publishes retained, and sends weatherdelay.resume to the nodes over MQTT only, never HTTP.
+         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Persists not active, publishes retained, and sends weatherdelay.resume to the nodes over MQTT only, never HTTP. It also clears any pending automatic-trigger decision as a dismiss: nothing starts from it afterwards, and the same source and warning stay quiet for the dismiss quiet period.
          */
         post: operations["resumeFromWeatherDelay"];
         delete?: never;
@@ -2175,7 +2175,7 @@ export interface paths {
         put?: never;
         /**
          * Answer a pending automatic-trigger decision (ADR-053 decision 12)
-         * @description Behind `show:weatherdelay:invoke`. Answers the one pending decision an automatic trigger raised. `answer: "delay"` or `"cancelNight"` clears the pending decision and runs exactly `/weather-delay/start` or `/weather-delay/cancel-night`'s own path, `startedBy` the answering operator. `answer: "dismiss"` clears it and suppresses a new question from the same source about the same warning for a configurable quiet period. `id` must match the currently pending decision's own id; a stale or unknown id is refused with 409.
+         * @description Behind `show:weatherdelay:invoke`. Answers the one pending decision an automatic trigger raised. `answer: "delay"` or `"cancelNight"` clears the pending decision and runs exactly `/weather-delay/start` or `/weather-delay/cancel-night`'s own path, `startedBy` the answering operator. `answer: "dismiss"` clears it and suppresses a new question from the same source about the same warning for a configurable quiet period. `id` must match the currently pending decision's own id; a stale or unknown id is refused with 409. A question whose warning has expired, or whose deadline passed more than ten minutes ago, runs nothing: it is cleared and answered with `message` instead of `result`.
          */
         post: operations["answerWeatherDelayDecision"];
         delete?: never;
@@ -5223,13 +5223,15 @@ export interface components {
             /** @enum {string} */
             answer: "delay" | "cancelNight" | "dismiss";
         };
-        /** @description The body of POST /weather-delay/decision. result is present only for answer delay or cancelNight. */
+        /** @description The body of POST /weather-delay/decision. result is present only for answer delay or cancelNight, and is absent with message set when the question had already expired. */
         WeatherDelayDecisionResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
             answer: "delay" | "cancelNight" | "dismiss";
             result?: components["schemas"]["WeatherDelayActionResult"];
+            /** @description Set when the answer ran nothing, so the operator is told why: a question that expired before anyone answered it. */
+            message?: string;
         };
         WeatherDelayHeldPlayer: {
             instanceId: string;

@@ -92,13 +92,18 @@ type weatherDelayDecisionNotifyPayload struct {
 	Question      string `json:"question,omitempty"`
 	DefaultAction string `json:"defaultAction,omitempty"`
 	Deadline      string `json:"deadline,omitempty"`
+	// Outcome is how a resolved decision settled: the answer that ran, or
+	// "expired" or "dismissed by resume" when nothing ran. Empty on
+	// decisionNeeded.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 func (p weatherDelayDecisionNotifyPayload) eventName() string { return p.Event }
 
 // weatherDelayNotifyDecision queues the configured webhook call, if any,
-// for event ("decisionNeeded" or "decisionResolved") about pd.
-func (h *handlers) weatherDelayNotifyDecision(ctx context.Context, event string, pd weathertrigger.PendingDecision) {
+// for event ("decisionNeeded" or "decisionResolved") about pd. outcome is
+// empty for decisionNeeded.
+func (h *handlers) weatherDelayNotifyDecision(ctx context.Context, event string, pd weathertrigger.PendingDecision, outcome string) {
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
 	if err != nil {
 		h.logWarn("weather delay notify: failed to resolve show.weatherdelay config; no webhook could be checked", "error", err)
@@ -111,6 +116,7 @@ func (h *handlers) weatherDelayNotifyDecision(ctx context.Context, event string,
 	body := weatherDelayDecisionNotifyPayload{
 		Event: event, ID: pd.ID, Source: pd.Source, Reason: pd.Reason,
 		Question: pd.Question, DefaultAction: pd.DefaultAction, Deadline: formatTime(pd.Deadline),
+		Outcome: outcome,
 	}
 	h.deps.WeatherDelayNotifier.enqueue(weatherDelayNotifyItem{url: webhookURL, body: body})
 }

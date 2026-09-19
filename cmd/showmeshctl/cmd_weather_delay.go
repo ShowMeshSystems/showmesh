@@ -490,6 +490,7 @@ type weatherDelayDecisionResponse struct {
 	ServerTime time.Time                 `json:"serverTime"`
 	Answer     string                    `json:"answer"`
 	Result     *weatherDelayActionResult `json:"result"`
+	Message    string                    `json:"message"`
 }
 
 // cmdWeatherDelayDecision answers the one pending automatic-trigger
@@ -550,6 +551,10 @@ func cmdWeatherDelayDecision(args []string, stdout, stderr io.Writer, clock func
 	}
 	if resp.Result != nil {
 		return reportWeatherDelayActionResult(stdout, *resp.Result)
+	}
+	if resp.Message != "" {
+		_, _ = fmt.Fprintln(stdout, resp.Message)
+		return exitOK
 	}
 	_, _ = fmt.Fprintln(stdout, "weather delay decision: dismissed")
 	return exitOK

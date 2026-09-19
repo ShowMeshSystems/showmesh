@@ -208,7 +208,7 @@ func (h *handlers) weatherDelayReceiveTrigger(ctx context.Context, now time.Time
 		return true, &existing, "A decision is already pending. This trigger did not raise a second one.", nil
 	}
 	audit("asked", map[string]any{"pendingDecisionId": rec.ID, "question": rec.Question})
-	h.weatherDelayNotifyDecision(ctx, "decisionNeeded", pd)
+	h.weatherDelayNotifyDecision(ctx, "decisionNeeded", pd, "")
 	h.notifyStreamHub()
 	return true, &rec, "", nil
 }
@@ -264,7 +264,11 @@ func (h *handlers) handleWeatherDelayDecision(w http.ResponseWriter, r *http.Req
 		h.writeInternalError(w, now, "get pending weather delay decision", err)
 		return
 	}
-	resp, claimed := h.weatherDelayResolveDecision(ctx, now, pending, req.Answer, ac, clientAddr, false)
+	res := weatherDelayDecisionResolution{Answer: req.Answer, Action: req.Answer, Outcome: req.Answer}
+	if ok && !weathertrigger.DecisionStillActionable(now, pending.Deadline, pending.ExpiresAt) {
+		res = weatherDelayDecisionResolution{Answer: req.Answer, Outcome: weatherDelayDecisionOutcomeExpired}
+	}
+	resp, claimed := h.weatherDelayResolveDecision(ctx, now, pending, res, ac, clientAddr)
 	if !ok || pending.ID != req.ID || !claimed {
 		writeProblem(w, h.logger, now, v1.Problem{
 			Type: ProblemTypeConflict, Title: "No matching pending decision", Status: http.StatusConflict,
@@ -275,16 +279,38 @@ func (h *handlers) handleWeatherDelayDecision(w http.ResponseWriter, r *http.Req
 	jsonWrite(w, resp)
 }
 
+// weatherDelayDecisionResolution is how one pending decision settles:
+// Answer is what is reported as answered, Action is what actually runs
+// (empty runs nothing), and Outcome is reported to the webhook, the audit
+// entry and the change stream. ViaDeadline marks a settlement raised by
+// [handlers.weatherDelayApplyTriggerDeadline] rather than an operator's
+// own POST.
+type weatherDelayDecisionResolution struct {
+	Answer      string
+	Action      string
+	Outcome     string
+	ViaDeadline bool
+}
+
+// The two outcomes that settle a decision without running its action.
+const (
+	weatherDelayDecisionOutcomeExpired           = "expired"
+	weatherDelayDecisionOutcomeDismissedByResume = "dismissed by resume"
+)
+
+// weatherDelayDecisionExpiredMessage is what an operator is told about a
+// question that went stale before anyone answered it.
+const weatherDelayDecisionExpiredMessage = "The weather question expired before it was answered. Nothing was started."
+
 // weatherDelayResolveDecision claims the pending decision by deleting the
-// row carrying pending.ID, and runs answer only if that delete removed it:
-// dismiss persists a suppression, delay and cancelNight run exactly
+// row carrying pending.ID, and runs res.Action only if that delete removed
+// it: dismiss persists a suppression, delay and cancelNight run exactly
 // [handlers.weatherDelayRunStartOrChange], the same path start/cancel-night
 // themselves use. An operator's answer and that decision's own deadline
 // race here, as do two coordinators' timers after a restart, and claimed
-// is how exactly one of them acts. viaDeadline marks an audit entry raised
-// by [handlers.weatherDelayApplyTriggerDeadline] rather than an operator's
-// own POST.
-func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord, answer string, ac authContext, clientAddr string, viaDeadline bool) (v1.WeatherDelayDecisionResponse, bool) {
+// is how exactly one of them acts.
+func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord, res weatherDelayDecisionResolution, ac authContext, clientAddr string) (v1.WeatherDelayDecisionResponse, bool) {
+	answer := res.Answer
 	claimed, err := h.deps.WeatherDelayTrigger.ClearPendingWeatherDelayDecision(ctx, pending.ID)
 	if err != nil {
 		h.logWarn("weather delay decision: failed to claim the pending decision; taking no action on it", "error", err)
@@ -295,11 +321,15 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 	}
 
 	resp := v1.WeatherDelayDecisionResponse{ServerTime: formatTime(now), Answer: answer}
+	if res.Outcome == weatherDelayDecisionOutcomeExpired {
+		resp.Message = weatherDelayDecisionExpiredMessage
+	}
 	auditParams := map[string]any{
-		"pendingDecisionId": pending.ID, "source": pending.Source, "answer": answer, "deadlineDefault": viaDeadline,
+		"pendingDecisionId": pending.ID, "source": pending.Source, "answer": answer,
+		"outcome": res.Outcome, "deadlineDefault": res.ViaDeadline,
 	}
 
-	switch answer {
+	switch res.Action {
 	case weathertrigger.AnswerDismiss:
 		quietMinutes := config.WeatherDelayDefaultPayload.Triggers.DismissQuietMinutes
 		if payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config); err != nil {
@@ -330,7 +360,10 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 	h.weatherDelayNotifyDecision(ctx, "decisionResolved", weathertrigger.PendingDecision{
 		ID: pending.ID, Source: pending.Source, Reason: pending.Reason, Question: pending.Question,
 		DefaultAction: pending.DefaultAction, AskedAt: pending.AskedAt, Deadline: pending.Deadline,
-	})
+	}, res.Outcome)
+	if res.Action == "" {
+		h.appendWeatherDelayChangedEvent(ctx, now, "question "+res.Outcome)
+	}
 	h.notifyStreamHub()
 	return resp, true
 }
@@ -340,7 +373,34 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 // source (ADR-053 decision 12: "startedBy = the trigger source name").
 func (h *handlers) weatherDelayApplyTriggerDeadline(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord) {
 	ac := weatherDelayTriggerSystemAuthContext(pending.Source)
-	_, _ = h.weatherDelayResolveDecision(ctx, now, pending, pending.DefaultAction, ac, "", true)
+	res := weatherDelayDecisionResolution{
+		Answer: pending.DefaultAction, Action: pending.DefaultAction,
+		Outcome: pending.DefaultAction, ViaDeadline: true,
+	}
+	if !weathertrigger.DecisionStillActionable(now, pending.Deadline, pending.ExpiresAt) {
+		res = weatherDelayDecisionResolution{
+			Answer: pending.DefaultAction, Outcome: weatherDelayDecisionOutcomeExpired, ViaDeadline: true,
+		}
+	}
+	_, _ = h.weatherDelayResolveDecision(ctx, now, pending, res, ac, "")
+}
+
+// weatherDelayDismissPendingDecisionOnResume settles any outstanding
+// trigger question the way a resume implies: nothing starts from it, and
+// the same warning stays quiet for the dismiss quiet period.
+func (h *handlers) weatherDelayDismissPendingDecisionOnResume(ctx context.Context, now time.Time, ac authContext, clientAddr string) {
+	pending, ok, err := h.deps.WeatherDelayTrigger.GetPendingWeatherDelayDecision(ctx)
+	if err != nil {
+		h.logWarn("weather delay resume: failed to read the pending decision; leaving it in place", "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	_, _ = h.weatherDelayResolveDecision(ctx, now, pending, weatherDelayDecisionResolution{
+		Answer: weathertrigger.AnswerDismiss, Action: weathertrigger.AnswerDismiss,
+		Outcome: weatherDelayDecisionOutcomeDismissedByResume,
+	}, ac, clientAddr)
 }
 
 // weatherDelayTriggerSystemAuthContext is the synthetic authContext an

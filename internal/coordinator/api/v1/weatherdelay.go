@@ -111,6 +111,9 @@ type WeatherDelayDecisionResponse struct {
 	ServerTime string                    `json:"serverTime"`
 	Answer     string                    `json:"answer"`
 	Result     *WeatherDelayActionResult `json:"result,omitempty"`
+	// Message is set when the answer ran nothing, so the operator is told
+	// why: a question that expired before anyone answered it.
+	Message string `json:"message,omitempty"`
 }
 
 // WeatherDelayHeldPlayer is a player whose gate reads closed while no delay

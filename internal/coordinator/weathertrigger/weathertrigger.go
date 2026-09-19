@@ -188,3 +188,19 @@ func NewPendingDecision(id string, e TriggerEvent, askedAt time.Time, answerWind
 		AskedAt: askedAt, Deadline: askedAt.Add(time.Duration(windowSeconds) * time.Second),
 	}
 }
+
+// StaleDecisionGrace bounds how late a pending decision may still act on
+// its own deadline: a coordinator that was down through the deadline
+// catches up within this window, and after it the question is dropped
+// rather than started on old information.
+const StaleDecisionGrace = 10 * time.Minute
+
+// DecisionStillActionable reports whether a pending decision may still run
+// an action: its warning has not expired (expiresAt zero means the source
+// reported none) and its deadline is no more than [StaleDecisionGrace] old.
+func DecisionStillActionable(now, deadline, expiresAt time.Time) bool {
+	if !expiresAt.IsZero() && !now.Before(expiresAt) {
+		return false
+	}
+	return now.Before(deadline.Add(StaleDecisionGrace))
+}

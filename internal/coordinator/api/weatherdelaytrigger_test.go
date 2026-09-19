@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -414,7 +415,8 @@ func TestWeatherDelayDeadlineRunsOnce(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
 	}
-	advance(time.Hour)
+	// Within the stale grace: a deadline this late still acts.
+	advance(pending.Deadline.Sub(now()) + time.Minute)
 	h.weatherDelayApplyTriggerDeadline(context.Background(), h.now(), pending)
 	first, err := st.GetWeatherDelayState(context.Background())
 	if err != nil {
@@ -464,8 +466,9 @@ func TestWeatherDelayTriggerNeverResumes(t *testing.T) {
 			if viaDeadline {
 				h.weatherDelayApplyTriggerDeadline(ctx, h.now(), pending)
 			} else {
-				h.weatherDelayResolveDecision(ctx, h.now(), pending, answer,
-					weatherDelayTriggerSystemAuthContext("nws"), "", false)
+				h.weatherDelayResolveDecision(ctx, h.now(), pending, weatherDelayDecisionResolution{
+					Answer: answer, Action: answer, Outcome: answer,
+				}, weatherDelayTriggerSystemAuthContext("nws"), "")
 			}
 
 			rec, err := st.GetWeatherDelayState(ctx)
@@ -502,5 +505,163 @@ func TestWeatherDelayPendingDecisionRowHoldsNoWarningText(t *testing.T) {
 	}, "\x00")
 	if strings.Contains(row, "Extreme") {
 		t.Fatalf("the stored decision row carries the source's severity: %q", row)
+	}
+}
+
+// postWeatherDelayDecision answers the pending decision with id.
+func postWeatherDelayDecision(t *testing.T, api *API, adminToken, id, answer string) (*http.Response, []byte) {
+	t.Helper()
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+	return doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/decision",
+		`{"id":"`+id+`","answer":"`+answer+`"}`, auth))
+}
+
+// postWeatherDelayResume resumes, failing the test on a non-200 answer.
+func postWeatherDelayResume(t *testing.T, api *API, adminToken, key string) {
+	t.Helper()
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/resume",
+		`{"idempotencyKey":"`+key+`"}`, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestWeatherDelayStaleDeadlineNeverStartsAnything covers the four ways a
+// deadline can be reached late: a coordinator that was down through it
+// catches up within ten minutes, and a question whose warning has already
+// expired starts nothing however recent its deadline is.
+func TestWeatherDelayStaleDeadlineNeverStartsAnything(t *testing.T) {
+	// The default answer window is 30 seconds, so every lateness below is
+	// measured from the deadline, not from the trigger.
+	for _, tc := range []struct {
+		name        string
+		body        string
+		warningLife time.Duration
+		late        time.Duration
+		wantActive  bool
+	}{
+		{name: "warning expired during the downtime", body: `{"kind":"warning","eventType":"Tornado Warning","expiresAt":"%s"}`, warningLife: time.Minute, late: 2 * time.Minute},
+		{name: "five minutes late with the warning still in effect", body: `{"kind":"warning","eventType":"Tornado Warning","expiresAt":"%s"}`, warningLife: time.Hour, late: 5 * time.Minute, wantActive: true},
+		{name: "eleven minutes late with the warning still in effect", body: `{"kind":"warning","eventType":"Tornado Warning","expiresAt":"%s"}`, warningLife: time.Hour, late: 11 * time.Minute},
+		{name: "lightning five minutes late has no expiry to check", body: `{"kind":"lightning","distanceKm":5}`, late: 5 * time.Minute, wantActive: true},
+		{name: "lightning eleven minutes late", body: `{"kind":"lightning","distanceKm":5}`, late: 11 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			advance, now := mutableClock(time.Now())
+			api, h, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+
+			body := tc.body
+			if strings.Contains(body, "%s") {
+				body = fmt.Sprintf(body, now().Add(tc.warningLife).Format(time.RFC3339))
+			}
+			postWeatherDelayTrigger(t, api, adminToken, "nws", body)
+			pending, ok, err := st.GetPendingWeatherDelayDecision(context.Background())
+			if err != nil || !ok {
+				t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+			}
+
+			advance(pending.Deadline.Sub(now()) + tc.late)
+			h.weatherDelayApplyTriggerDeadline(context.Background(), h.now(), pending)
+
+			rec, err := st.GetWeatherDelayState(context.Background())
+			if err != nil {
+				t.Fatalf("GetWeatherDelayState: %v", err)
+			}
+			if rec.Active != tc.wantActive {
+				t.Fatalf("state after a deadline %v late = %+v, want active=%v", tc.late, rec, tc.wantActive)
+			}
+			if _, ok, err := st.GetPendingWeatherDelayDecision(context.Background()); err != nil || ok {
+				t.Fatalf("pending decision after the deadline: ok=%v, err=%v, want it cleared either way", ok, err)
+			}
+		})
+	}
+}
+
+// TestWeatherDelayAnswerAfterExpiryStartsNothing proves an operator
+// answering a question that already went stale is told so and starts
+// nothing.
+func TestWeatherDelayAnswerAfterExpiryStartsNothing(t *testing.T) {
+	advance, now := mutableClock(time.Now())
+	api, _, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+
+	postWeatherDelayTrigger(t, api, adminToken, "nws", `{"kind":"warning","eventType":"Tornado Warning"}`)
+	pending, ok, err := st.GetPendingWeatherDelayDecision(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+	}
+
+	advance(pending.Deadline.Sub(now()) + 11*time.Minute)
+	resp, body := postWeatherDelayDecision(t, api, adminToken, pending.ID, "delay")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("decision: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	got := decodeJSON[v1.WeatherDelayDecisionResponse](t, body)
+	if got.Result != nil {
+		t.Fatalf("decision result = %+v, want nothing started", got.Result)
+	}
+	if got.Message != weatherDelayDecisionExpiredMessage {
+		t.Fatalf("decision message = %q, want %q", got.Message, weatherDelayDecisionExpiredMessage)
+	}
+
+	rec, err := st.GetWeatherDelayState(context.Background())
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	if rec.Active {
+		t.Fatalf("state after answering an expired question = %+v, want nothing started", rec)
+	}
+}
+
+// TestWeatherDelayResumeAnswersThePendingQuestion proves a resume settles
+// an outstanding question as a dismiss, with and without a delay active:
+// the deadline then starts nothing, the same warning stays quiet for the
+// quiet period, and a warning after it asks again.
+func TestWeatherDelayResumeAnswersThePendingQuestion(t *testing.T) {
+	for _, withDelay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delayActive=%v", withDelay), func(t *testing.T) {
+			advance, now := mutableClock(time.Now())
+			api, h, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+			mustPutWeatherDelayTriggerConfig(t, api, adminToken, `{"triggers":{"dismissQuietMinutes":30}}`)
+			ctx := context.Background()
+
+			if withDelay {
+				auth := map[string]string{"Authorization": "Bearer " + adminToken}
+				doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/start", `{"idempotencyKey":"start-1"}`, auth))
+			}
+			// A trigger that suggests a cancel is the only one an active
+			// delay still lets through.
+			postWeatherDelayTrigger(t, api, adminToken, "nws", `{"kind":"warning","eventType":"Tornado Warning","suggestCancel":true}`)
+			pending, ok, err := st.GetPendingWeatherDelayDecision(ctx)
+			if err != nil || !ok {
+				t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+			}
+
+			postWeatherDelayResume(t, api, adminToken, "resume-1")
+			if _, ok, err := st.GetPendingWeatherDelayDecision(ctx); err != nil || ok {
+				t.Fatalf("pending decision after a resume: ok=%v, err=%v, want it cleared", ok, err)
+			}
+
+			advance(pending.Deadline.Sub(now()) + time.Minute)
+			h.weatherDelayApplyTriggerDeadline(ctx, h.now(), pending)
+			rec, err := st.GetWeatherDelayState(ctx)
+			if err != nil {
+				t.Fatalf("GetWeatherDelayState: %v", err)
+			}
+			if rec.Active {
+				t.Fatalf("state after the deadline of a resumed question = %+v, want nothing started", rec)
+			}
+
+			_, body := postWeatherDelayTrigger(t, api, adminToken, "nws", `{"kind":"warning","eventType":"Tornado Warning","suggestCancel":true}`)
+			if again := decodeJSON[v1.WeatherDelayTriggerResponse](t, body); again.PendingDecision != nil {
+				t.Fatalf("the same warning asked again inside the quiet period: %+v", again.PendingDecision)
+			}
+
+			advance(31 * time.Minute)
+			_, body = postWeatherDelayTrigger(t, api, adminToken, "nws", `{"kind":"warning","eventType":"Tornado Warning","suggestCancel":true}`)
+			if afterQuiet := decodeJSON[v1.WeatherDelayTriggerResponse](t, body); afterQuiet.PendingDecision == nil {
+				t.Fatalf("a warning after the quiet period was still suppressed: %s", body)
+			}
+		})
 	}
 }
