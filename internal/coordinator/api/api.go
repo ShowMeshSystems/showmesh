@@ -14,6 +14,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
@@ -21,6 +22,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -580,6 +582,37 @@ type Dependencies struct {
 	// not active and refuses writes.
 	WeatherDelay WeatherDelayStore
 
+	// WeatherDelayPublisher is start/resume's own MQTT publish-and-await
+	// capability, see [WeatherDelayPublisher]. A nil field is replaced by
+	// [noWeatherDelayPublisher], under which start/resume answer an
+	// internal error naming the missing wiring rather than silently
+	// reporting every node unreachable.
+	WeatherDelayPublisher WeatherDelayPublisher
+
+	// WeatherDelayNodeAddrs answers a plan node's own reported inbound
+	// listener address, see [WeatherDelayNodeAddrs]. A nil field is
+	// replaced by [noWeatherDelayNodeAddrs], under which every node reads
+	// as having reported none, so start falls back to MQTT alone for
+	// every node rather than failing.
+	WeatherDelayNodeAddrs WeatherDelayNodeAddrs
+
+	// WeatherDelaySigner signs the direct-HTTP start path, see
+	// [WeatherDelaySigner]. A nil field is replaced by
+	// [noWeatherDelaySigner], under which the direct-HTTP path is skipped
+	// for every node (MQTT alone still runs) rather than panicking.
+	WeatherDelaySigner WeatherDelaySigner
+
+	// WeatherDelayAssetSync pushes the configured alert assets to the
+	// plan's nodes ahead of time, see [WeatherDelayAssetSync]. A nil
+	// field is replaced by [noWeatherDelayAssetSync], a silent no-op:
+	// asset delivery is best-effort evidence, never a gate on start.
+	WeatherDelayAssetSync WeatherDelayAssetSync
+
+	// WeatherDelayEvents appends the change-stream event on every state
+	// change, see [WeatherDelayEventAppender]. nil (the default) is a
+	// silent no-op: this event is best-effort evidence, never a gate.
+	WeatherDelayEvents WeatherDelayEventAppender
+
 	// FPPObservations is the playlist-entry observation store dependency — see
 	// [FPPObservationStore]. A nil field is replaced by
 	// [noFPPObservationStore], under which GET reports an empty list and
@@ -759,6 +792,21 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.WeatherDelay == nil {
 		d.WeatherDelay = noWeatherDelayStore{}
 	}
+	if _, ok := d.WeatherDelay.(*WeatherDelayStateKeeper); !ok {
+		d.WeatherDelay = NewWeatherDelayStateKeeper(d.WeatherDelay)
+	}
+	if d.WeatherDelayPublisher == nil {
+		d.WeatherDelayPublisher = noWeatherDelayPublisher{}
+	}
+	if d.WeatherDelayNodeAddrs == nil {
+		d.WeatherDelayNodeAddrs = noWeatherDelayNodeAddrs{}
+	}
+	if d.WeatherDelaySigner == nil {
+		d.WeatherDelaySigner = noWeatherDelaySigner{}
+	}
+	if d.WeatherDelayAssetSync == nil {
+		d.WeatherDelayAssetSync = noWeatherDelayAssetSync{}
+	}
 	if d.FPPObservations == nil {
 		d.FPPObservations = noFPPObservationStore{}
 	}
@@ -868,6 +916,45 @@ func (noWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherD
 
 func (noWeatherDelayStore) SetWeatherDelayState(context.Context, store.WeatherDelayStateRecord) error {
 	return fmt.Errorf("api: weather delay store not wired in")
+}
+
+// noWeatherDelayPublisher is [Dependencies.WeatherDelayPublisher]'s
+// default: every publish and await refuses with an internal error, mirroring
+// [noAudioSessionPublisher]'s identical posture.
+type noWeatherDelayPublisher struct{}
+
+func (noWeatherDelayPublisher) Publish(context.Context, string, byte, bool, []byte) error {
+	return fmt.Errorf("api: no weather delay command publisher is configured on this coordinator")
+}
+
+func (noWeatherDelayPublisher) AwaitResponse(context.Context, broker.ResponseRequest) (broker.Message, error) {
+	return broker.Message{}, fmt.Errorf("api: no weather delay command publisher is configured on this coordinator")
+}
+
+// noWeatherDelayNodeAddrs is [Dependencies.WeatherDelayNodeAddrs]'s
+// default: every node reads as having reported no inbound listener, so
+// the direct-HTTP path is skipped for all of them rather than failing.
+type noWeatherDelayNodeAddrs struct{}
+
+func (noWeatherDelayNodeAddrs) InboundListener(string) (string, bool) { return "", false }
+
+// noWeatherDelaySigner is [Dependencies.WeatherDelaySigner]'s default:
+// signing always fails, so the direct-HTTP path is skipped for every node.
+type noWeatherDelaySigner struct{}
+
+func (noWeatherDelaySigner) Sign([]byte) (coordsig.Signature, error) {
+	return nil, fmt.Errorf("api: no weather delay signer is configured on this coordinator")
+}
+
+// noWeatherDelayAssetSync is [Dependencies.WeatherDelayAssetSync]'s
+// default: a silent no-op, since asset delivery is best-effort evidence,
+// never a gate on start.
+type noWeatherDelayAssetSync struct{}
+
+func (noWeatherDelayAssetSync) EnsureAssetOnNode(context.Context, string, string) error { return nil }
+
+func (noWeatherDelayAssetSync) AssetPresence(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 func (noNightSessionStore) InsertNightCueOutboxRow(context.Context, store.NightCueOutboxRecord, time.Time) error {

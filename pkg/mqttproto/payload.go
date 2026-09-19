@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -123,6 +126,12 @@ const (
 	maxCapabilityIDLength = 128
 )
 
+// maxInboundListenerLength bounds HelloPayload.InboundListener, on
+// [ErrPayloadTooLarge]'s reasoning above: hello is retained, so an
+// oversized value is replayed to every subscriber and re-parsed on every
+// coordinator restart.
+const maxInboundListenerLength = 255
+
 // ErrPayloadCapabilitySetTooLarge is wrapped by [HelloPayload.Validate] when
 // the capability set has more than [maxCapabilityCount] members.
 var ErrPayloadCapabilitySetTooLarge = errors.New("mqttproto: capability set exceeds the maximum allowed size")
@@ -136,6 +145,12 @@ var ErrPayloadTooLarge = errors.New("mqttproto: payload field exceeds the maximu
 // ErrPayloadCapabilityIDTooLong is wrapped by [HelloPayload.Validate] when a
 // capability ID exceeds [maxCapabilityIDLength].
 var ErrPayloadCapabilityIDTooLong = errors.New("mqttproto: capability ID exceeds the maximum allowed length")
+
+// ErrPayloadInvalidInboundListener is wrapped by [HelloPayload.Validate]
+// when InboundListener is present but is not a "host:port" pair a
+// coordinator could dial: unparseable, an empty or unspecified host
+// (0.0.0.0, ::), a port outside 1-65535, or over [maxInboundListenerLength].
+var ErrPayloadInvalidInboundListener = errors.New("mqttproto: invalid inbound listener address")
 
 // Validate reports whether p has every field a well-formed hello payload
 // requires: non-empty Platform, AgentVersion, and BootID, and a non-zero
@@ -165,8 +180,42 @@ func (p HelloPayload) Validate() error {
 			return fmt.Errorf("%w: %d bytes, max %d", ErrPayloadCapabilityIDTooLong, len(c.ID), maxCapabilityIDLength)
 		}
 	}
+	if err := validateInboundListener(p.InboundListener); err != nil {
+		return err
+	}
 	return nil
 }
+
+// validateInboundListener accepts empty (no listener) or a "host:port" pair
+// whose host is non-empty, not 0.0.0.0 or ::, and whose port is in
+// [1, 65535].
+func validateInboundListener(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	if len(addr) > maxInboundListenerLength {
+		return fmt.Errorf("%w: %d bytes, max %d", ErrPayloadInvalidInboundListener, len(addr), maxInboundListenerLength)
+	}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrPayloadInvalidInboundListener, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return fmt.Errorf("%w: host %q is empty or unspecified", ErrPayloadInvalidInboundListener, host)
+	}
+	if net.ParseIP(host) == nil && !inboundListenerHostnamePattern.MatchString(host) {
+		return fmt.Errorf("%w: host %q is not an IP address or a hostname", ErrPayloadInvalidInboundListener, host)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%w: port %q is not in range [1, 65535]", ErrPayloadInvalidInboundListener, portStr)
+	}
+	return nil
+}
+
+// inboundListenerHostnamePattern admits DNS labels only, so the host can
+// never carry a path, userinfo, query or fragment into the URL built from it.
+var inboundListenerHostnamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`)
 
 // HealthPayload is the payload of the showmesh.node.health/v1 schema,
 // published retained on showmesh/nodes/<node-id>/observed/health: a

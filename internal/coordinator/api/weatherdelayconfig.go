@@ -91,6 +91,17 @@ func (h *handlers) handlePutWeatherDelayConfig(w http.ResponseWriter, r *http.Re
 	ctx := r.Context()
 	ac := authFromContext(ctx)
 
+	// ADR-053 decision 13: no config value may bypass the hold, which
+	// includes changing show.weatherdelay's own settings out from under
+	// an active delay.
+	if active, err := h.weatherDelayActive(ctx); err != nil {
+		h.writeInternalError(w, now, "check weather delay state", err)
+		return
+	} else if active {
+		writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume before changing its settings."))
+		return
+	}
+
 	precondition, precondProblem := parseRevisionPrecondition(r)
 	if precondProblem != nil {
 		writeProblem(w, h.logger, now, *precondProblem)

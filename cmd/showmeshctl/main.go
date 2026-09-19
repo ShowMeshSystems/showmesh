@@ -76,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdNight(rest, stdout, stderr, clock)
 	case "emergency-stop":
 		return cmdEmergencyStop(rest, stdout, stderr, clock)
+	case "weather-delay":
+		return cmdWeatherDelay(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
@@ -301,6 +303,12 @@ Commands:
   emergency-stop config set           write a new show.emergencystop revision from a JSON payload
                                        (write, full replacement, requires config:write)
   emergency-stop config revisions     list show.emergencystop revision history, newest first
+  weather-delay start                 start a weather delay: nothing starts output until resumed
+                                       (write, requires show:weatherdelay:invoke, no confirmation)
+  weather-delay resume                resume from an active weather delay (write, requires
+                                       show:weatherdelay:resume, a separate scope from start)
+  weather-delay status                report the current state and each plan node's own alert
+                                       asset readiness
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports

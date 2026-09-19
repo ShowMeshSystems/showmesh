@@ -1242,6 +1242,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/audio/sessions/{sessionId}/pause:
@@ -6208,11 +6210,17 @@ paths:
   /weather-delay/start:
     post:
       operationId: startWeatherDelay
-      summary: Start a weather delay (ADR-053) - not yet available
+      summary: Start a weather delay (ADR-053)
       description: >-
-        Behind `show:weatherdelay:invoke`. The route, scope, and request
-        shape are fixed by this record; dispatching an actual delay is
-        later work. Always answers `501` today.
+        Behind `show:weatherdelay:invoke`. No confirmation step (ADR-053
+        decision 1). Persists the state as active BEFORE any stop is sent,
+        then concurrently dispatches the emergency-stop level 1 fan-out, a
+        render surface clear, the weatherdelay.start node command over
+        MQTT and a signed direct HTTP request to each plan node, and
+        audio.node.silence to every declared node outside the plan. A
+        failed target is reported, never hidden, and never rolls the
+        state back. Starting while already active re-sends everything and
+        does not reset `startedAt`.
       requestBody:
         required: true
         content:
@@ -6220,6 +6228,15 @@ paths:
             schema:
               $ref: "#/components/schemas/WeatherDelayActionRequest"
       responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherDelayActionResponse"
         "400":
           $ref: "#/components/responses/InvalidParameter"
         "401":
@@ -6228,15 +6245,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
-        "501":
-          description: Not implemented yet.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /weather-delay/cancel-night:
     post:
       operationId: cancelNightForWeather
@@ -6272,12 +6282,13 @@ paths:
   /weather-delay/resume:
     post:
       operationId: resumeFromWeatherDelay
-      summary: Resume from a weather delay (ADR-053) - not yet available
+      summary: Resume from a weather delay (ADR-053)
       description: >-
         Behind `show:weatherdelay:resume`, its OWN scope, separate from
         `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is
-        accepted only by the authenticated coordinator API"). Always
-        answers `501` today.
+        accepted only by the authenticated coordinator API"). Persists not
+        active, publishes retained, and sends weatherdelay.resume to the
+        nodes over MQTT only, never HTTP.
       requestBody:
         required: true
         content:
@@ -6285,6 +6296,15 @@ paths:
             schema:
               $ref: "#/components/schemas/WeatherDelayActionRequest"
       responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherDelayActionResponse"
         "400":
           $ref: "#/components/responses/InvalidParameter"
         "401":
@@ -6293,15 +6313,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
-        "501":
-          description: Not implemented yet.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/show.weatherdelay:
     get:
       operationId: getWeatherDelayConfig
@@ -7241,6 +7254,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.playlist:
@@ -14580,6 +14595,35 @@ components:
           description: >-
             Monotonic per change. Fits a JS safe integer - never derived
             from a timestamp.
+        assets:
+          type: array
+          description: >-
+            Per plan node, whether each configured alert asset is present
+            and hash-verified there (ADR-053 decision 7's own alert
+            asset), so an operator can see on a calm day that the alert is
+            ready. Empty when no alert asset is configured.
+          items:
+            $ref: "#/components/schemas/WeatherDelayNodeAssets"
+    WeatherDelayNodeAssets:
+      type: object
+      required: [nodeId]
+      properties:
+        nodeId:
+          type: string
+        delayAsset:
+          $ref: "#/components/schemas/WeatherDelayAssetStatus"
+        cancelNightAsset:
+          $ref: "#/components/schemas/WeatherDelayAssetStatus"
+    WeatherDelayAssetStatus:
+      type: object
+      required: [assetId, present]
+      properties:
+        assetId:
+          type: string
+        present:
+          type: boolean
+        filename:
+          type: string
     WeatherDelayActionRequest:
       type: object
       description: The body of POST /weather-delay/start, /cancel-night, and /resume.
@@ -14587,6 +14631,74 @@ components:
       properties:
         idempotencyKey:
           type: string
+    WeatherDelayTargetOutcome:
+      type: object
+      description: >-
+        One target's own start/resume dispatch outcome. targetKind is fpp,
+        node, resolume, or render (the same four kinds emergency stop
+        reports), or node-command for the weatherdelay.start/resume node
+        command itself, whose deliveredVia is one of mqtt, http, both, or
+        none (ADR-053 decision 8: a node reached by either path counts as
+        reached).
+      required: [instanceId, targetKind, outcome, outcomeReason]
+      properties:
+        instanceId:
+          type: string
+        targetKind:
+          type: string
+          enum: [fpp, node, resolume, render, node-command]
+        outcome:
+          type: string
+        outcomeReason:
+          type: string
+        deliveredVia:
+          type: string
+          enum: [mqtt, http, both, none]
+        dispatchedAt:
+          type: string
+          format: date-time
+          nullable: true
+    WeatherDelayActionResult:
+      type: object
+      required: [kind, idempotencyKey, active, revision, targets]
+      properties:
+        kind:
+          type: string
+        idempotencyKey:
+          type: string
+        active:
+          type: boolean
+        startedAt:
+          type: string
+          format: date-time
+        startedBy:
+          type: string
+        revision:
+          type: integer
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayTargetOutcome"
+        notSaved:
+          type: boolean
+          description: >-
+            Start only. True when the active state could not be stored: every
+            target was still dispatched and this coordinator process holds
+            the delay, but it will not survive a coordinator restart. Absent
+            when the state was stored.
+        notSavedMessage:
+          type: string
+          description: The operator sentence for notSaved. Present only when notSaved is true.
+    WeatherDelayActionResponse:
+      type: object
+      description: The body of POST /weather-delay/start and /weather-delay/resume.
+      required: [serverTime, result]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        result:
+          $ref: "#/components/schemas/WeatherDelayActionResult"
     ConfigWeatherDelayAlertPayload:
       type: object
       description: >-

@@ -168,6 +168,16 @@ func (h *handlers) dispatchRenderCommand(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	if desiredState == "running" {
+		if p, err := h.weatherDelayHeldProblem(ctx, "A weather delay is active. Resume the show to start projection."); err != nil {
+			h.writeInternalError(w, now, "check weather delay state", err)
+			return
+		} else if p != nil {
+			writeProblem(w, h.logger, now, *p)
+			return
+		}
+	}
+
 	ac := authFromContext(ctx)
 	issuerID := ac.result.Principal.ID
 	issuerName := ac.result.Principal.Name

@@ -97,6 +97,16 @@ type Manager struct {
 	livenessMu   sync.Mutex
 	lastLiveness map[string]Liveness
 
+	// inboundListenerMu and inboundListeners back [Manager.InboundListener]:
+	// this process's own in-memory record of each node's last-reported
+	// hello InboundListener address. Not persisted (ADR-053 decision 8's
+	// weather delay start does not need a migration for this): hello is
+	// retained, so a restarted coordinator receives every node's hello
+	// again and this map refills itself. A node's hello with an empty
+	// InboundListener clears its entry, matching "no listener" honestly.
+	inboundListenerMu sync.Mutex
+	inboundListeners  map[string]string
+
 	// renderSink receives every decoded render report — see
 	// [WithRenderSink]. nil (the default) means no render ingestion at all:
 	// a "render" observed subpath is then dropped exactly like any other
@@ -269,12 +279,13 @@ func New(st *store.Store, logger *slog.Logger, opts ...Option) *Manager {
 		logger = slog.Default()
 	}
 	m := &Manager{
-		store:          st,
-		logger:         logger,
-		now:            time.Now,
-		lastLiveness:   make(map[string]Liveness),
-		renderBaseline: make(map[string]int64),
-		renderFailed:   make(map[string]bool),
+		store:            st,
+		logger:           logger,
+		now:              time.Now,
+		lastLiveness:     make(map[string]Liveness),
+		renderBaseline:   make(map[string]int64),
+		renderFailed:     make(map[string]bool),
+		inboundListeners: make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -340,6 +351,19 @@ func (m *Manager) recordLivenessTransition(ctx context.Context, nodeID string) {
 // ([Manager.lastLiveness]) is this package's own private state.
 func (m *Manager) RecordLivenessObservation(ctx context.Context, nodeID string, liveness Liveness, reason string) {
 	m.observeLiveness(ctx, nodeID, liveness, reason)
+}
+
+// InboundListener returns the "host:port" nodeID last reported in its
+// hello's InboundListener field, and whether it has reported one at all.
+// This is the weather delay start's own signed-HTTP path's ONLY source for
+// a node's address (ADR-053 decision 8): a node that has never sent a
+// hello, or whose last hello carried an empty InboundListener, has no
+// entry, and that caller falls back to MQTT alone for it.
+func (m *Manager) InboundListener(nodeID string) (string, bool) {
+	m.inboundListenerMu.Lock()
+	defer m.inboundListenerMu.Unlock()
+	addr, ok := m.inboundListeners[nodeID]
+	return addr, ok
 }
 
 // observeLiveness is the shared bookkeeping [recordLivenessTransition] and
@@ -547,6 +571,13 @@ func (m *Manager) handleHello(ctx context.Context, nodeID string, msg broker.Mes
 		m.logger.Error("failed to store hello", "node_id", nodeID, "error", err)
 		return
 	}
+	m.inboundListenerMu.Lock()
+	if hello.InboundListener == "" {
+		delete(m.inboundListeners, nodeID)
+	} else {
+		m.inboundListeners[nodeID] = hello.InboundListener
+	}
+	m.inboundListenerMu.Unlock()
 	m.notify()
 	m.recordLivenessTransition(ctx, nodeID)
 	if m.onHello != nil {

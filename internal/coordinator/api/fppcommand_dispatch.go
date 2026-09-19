@@ -504,6 +504,14 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		return FPPCommandOutcome{}, &p, nil
 	}
 
+	if weatherDelayHeldFPPActions[in.Action] {
+		if p, err := h.weatherDelayHeldProblem(ctx, "A weather delay is active. Resume the show to start playback."); err != nil {
+			return FPPCommandOutcome{}, nil, &fppCommandInternalError{"check weather delay state", err}
+		} else if p != nil {
+			return FPPCommandOutcome{}, p, nil
+		}
+	}
+
 	if err := mqttproto.ValidateNodeID(in.InstanceID); err != nil {
 		p := invalidParameterProblem("instanceId is not a syntactically valid instance ID: " + err.Error())
 		return FPPCommandOutcome{}, &p, nil
