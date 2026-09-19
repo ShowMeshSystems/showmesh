@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/weathertrigger"
 )
 
 // The optional show.weatherdelay.notify webhook. Best effort: it never
@@ -34,8 +36,16 @@ var weatherDelayWebhookClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// weatherDelayNotifyPayload is the small JSON document every webhook call
-// carries, exactly the fields ADR-053 decision 13 names.
+// weatherDelayNotifyBody is anything the webhook queue can deliver: the
+// state-change payload below and, for a trigger, [weatherDelayDecisionNotifyPayload].
+// eventName is used only for a dropped-queue log line.
+type weatherDelayNotifyBody interface {
+	eventName() string
+}
+
+// weatherDelayNotifyPayload is the small JSON document every start, cancel
+// night, or resume webhook call carries, exactly the fields ADR-053
+// decision 13 names.
 type weatherDelayNotifyPayload struct {
 	Event     string `json:"event"`
 	Kind      string `json:"kind"`
@@ -44,6 +54,8 @@ type weatherDelayNotifyPayload struct {
 	StartedBy string `json:"startedBy,omitempty"`
 	ChangedAt string `json:"changedAt"`
 }
+
+func (p weatherDelayNotifyPayload) eventName() string { return p.Event }
 
 // weatherDelayNotify queues the configured webhook call, if any, for the
 // delivery worker. event is delay_started, changed_to_cancel_night,
@@ -67,6 +79,42 @@ func (h *handlers) weatherDelayNotify(ctx context.Context, event, kind string, a
 	h.deps.WeatherDelayNotifier.enqueue(weatherDelayNotifyItem{url: webhookURL, body: body})
 }
 
+// weatherDelayDecisionNotifyPayload is the "decisionNeeded"/"decisionResolved"
+// webhook payload (ADR-053 decision 12): exactly the fields the task
+// names, and nothing from the warning's own text. This is how an outside
+// system puts the question on a phone; ShowMesh itself sends no messages
+// to anyone.
+type weatherDelayDecisionNotifyPayload struct {
+	Event         string `json:"event"`
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	Reason        string `json:"reason,omitempty"`
+	Question      string `json:"question,omitempty"`
+	DefaultAction string `json:"defaultAction,omitempty"`
+	Deadline      string `json:"deadline,omitempty"`
+}
+
+func (p weatherDelayDecisionNotifyPayload) eventName() string { return p.Event }
+
+// weatherDelayNotifyDecision queues the configured webhook call, if any,
+// for event ("decisionNeeded" or "decisionResolved") about pd.
+func (h *handlers) weatherDelayNotifyDecision(ctx context.Context, event string, pd weathertrigger.PendingDecision) {
+	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
+	if err != nil {
+		h.logWarn("weather delay notify: failed to resolve show.weatherdelay config; no webhook could be checked", "error", err)
+		return
+	}
+	webhookURL := payload.Notify.WebhookURL
+	if webhookURL == "" {
+		return
+	}
+	body := weatherDelayDecisionNotifyPayload{
+		Event: event, ID: pd.ID, Source: pd.Source, Reason: pd.Reason,
+		Question: pd.Question, DefaultAction: pd.DefaultAction, Deadline: formatTime(pd.Deadline),
+	}
+	h.deps.WeatherDelayNotifier.enqueue(weatherDelayNotifyItem{url: webhookURL, body: body})
+}
+
 // weatherDelayNotifyQueueSize bounds the events waiting for the webhook.
 const weatherDelayNotifyQueueSize = 64
 
@@ -76,7 +124,7 @@ const weatherDelayNotifyDroppedMessage = "A weather notification was dropped bec
 
 type weatherDelayNotifyItem struct {
 	url  string
-	body weatherDelayNotifyPayload
+	body weatherDelayNotifyBody
 }
 
 // WeatherDelayNotifier delivers webhook events one at a time, in the order
@@ -110,7 +158,7 @@ func (n *WeatherDelayNotifier) enqueue(item weatherDelayNotifyItem) {
 		n.queue = n.queue[1:]
 		n.pending--
 		n.cache.setNotifyError(weatherDelayNotifyDroppedMessage)
-		n.logger.Warn("weather delay notify: queue full; dropped the oldest event", "event", dropped.body.Event)
+		n.logger.Warn("weather delay notify: queue full; dropped the oldest event", "event", dropped.body.eventName())
 	}
 	n.queue = append(n.queue, item)
 	n.pending++
@@ -157,7 +205,7 @@ func (n *WeatherDelayNotifier) deliver(ctx context.Context, item weatherDelayNot
 	reason := weatherDelayPostNotify(ctx, item.url, item.body)
 	n.cache.setNotifyError(reason)
 	if reason != "" {
-		n.logger.Warn("weather delay notify: webhook delivery failed", "event", item.body.Event, "error", reason)
+		n.logger.Warn("weather delay notify: webhook delivery failed", "event", item.body.eventName(), "error", reason)
 	}
 }
 
@@ -173,7 +221,7 @@ func (n *WeatherDelayNotifier) waitIdle() {
 // weatherDelayPostNotify POSTs body to webhookURL under ctx, never the
 // triggering request's context. Returns "" on a 2xx response, else a reason
 // for lastNotifyError.
-func weatherDelayPostNotify(ctx context.Context, webhookURL string, body weatherDelayNotifyPayload) string {
+func weatherDelayPostNotify(ctx context.Context, webhookURL string, body weatherDelayNotifyBody) string {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Sprintf("failed to encode the notification: %v", err)

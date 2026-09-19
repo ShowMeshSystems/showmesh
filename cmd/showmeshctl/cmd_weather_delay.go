@@ -39,6 +39,10 @@ func cmdWeatherDelay(args []string, stdout, stderr io.Writer, clock func() time.
 		return cmdWeatherDelayStatus(rest, stdout, stderr, clock)
 	case "presign":
 		return cmdWeatherDelayPresign(rest, stdout, stderr, clock)
+	case "decision":
+		return cmdWeatherDelayDecision(rest, stdout, stderr, clock)
+	case "trigger":
+		return cmdWeatherDelayTrigger(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl weather-delay: unknown subcommand %q\n\n", sub)
 		printWeatherDelayUsage(stderr)
@@ -75,6 +79,16 @@ power-off/emergency stop keep working. See ADR-053.
                 send directly to a node if this coordinator is down.
                 Requires config:write. Replaying it can only start a
                 delay or a cancel night, never a resume.
+  decision      Answer the one pending automatic-trigger decision:
+                -id and -answer (delay, cancel-night, or dismiss).
+                Requires show:weatherdelay:invoke.
+  trigger       Report an automatic trigger from an outside system, the
+                same intake the built-in NWS poller uses internally:
+                -source, -kind (warning or lightning), and the optional
+                -event-type, -severity, -expires-at, -distance-km,
+                -suggest-cancel. Requires show:weatherdelay:invoke. Never
+                starts, ends, or changes a delay itself: it only raises
+                (or leaves alone) a pending decision.
 `)
 }
 
@@ -130,6 +144,27 @@ type weatherDelayStateResponse struct {
 	PowerGroups     []weatherDelayPowerGroupStatus `json:"powerGroups"`
 	HeldPlayers     []weatherDelayHeldPlayer       `json:"heldPlayers"`
 	LastNotifyError string                         `json:"lastNotifyError"`
+	PendingDecision *weatherDelayPendingDecision   `json:"pendingDecision"`
+	Sources         []weatherDelaySourceHealth     `json:"sources"`
+	SourcesMessage  string                         `json:"sourcesMessage"`
+}
+
+type weatherDelayPendingDecision struct {
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	Reason        string `json:"reason"`
+	Question      string `json:"question"`
+	DefaultAction string `json:"defaultAction"`
+	AskedAt       string `json:"askedAt"`
+	Deadline      string `json:"deadline"`
+}
+
+type weatherDelaySourceHealth struct {
+	Source        string `json:"source"`
+	Enabled       bool   `json:"enabled"`
+	LastError     string `json:"lastError"`
+	LastErrorAt   string `json:"lastErrorAt"`
+	LastSuccessAt string `json:"lastSuccessAt"`
 }
 
 type weatherDelayHeldPlayer struct {
@@ -318,6 +353,26 @@ func cmdWeatherDelayStatus(args []string, stdout, stderr io.Writer, clock func()
 	for _, p := range resp.HeldPlayers {
 		_, _ = fmt.Fprintln(stdout, "  "+p.Message)
 	}
+	if resp.PendingDecision != nil {
+		d := resp.PendingDecision
+		_, _ = fmt.Fprintf(stdout, "  pending decision %s from %s: %s (question=%s, default=%s, deadline=%s)\n",
+			d.ID, d.Source, d.Reason, d.Question, d.DefaultAction, d.Deadline)
+	}
+	for _, s := range resp.Sources {
+		state := "disabled"
+		if s.Enabled {
+			state = "enabled"
+			if s.LastError != "" {
+				state = fmt.Sprintf("enabled, last error at %s: %s", s.LastErrorAt, s.LastError)
+			} else if s.LastSuccessAt != "" {
+				state = "enabled, last success at " + s.LastSuccessAt
+			}
+		}
+		_, _ = fmt.Fprintf(stdout, "  source %s: %s\n", s.Source, state)
+	}
+	if resp.SourcesMessage != "" {
+		_, _ = fmt.Fprintln(stdout, "  "+resp.SourcesMessage)
+	}
 	return exitOK
 }
 
@@ -419,4 +474,183 @@ func printWeatherDelayAssetStatus(stdout io.Writer, label string, s *weatherDela
 		state = "present and hash-verified"
 	}
 	_, _ = fmt.Fprintf(stdout, "    %s (%s): %s\n", label, s.AssetID, state)
+}
+
+// weatherDelayTriggerResponse is the body of POST
+// /weather-delay/triggers/{source}.
+type weatherDelayTriggerResponse struct {
+	ServerTime      time.Time                    `json:"serverTime"`
+	Accepted        bool                         `json:"accepted"`
+	Message         string                       `json:"message"`
+	PendingDecision *weatherDelayPendingDecision `json:"pendingDecision"`
+}
+
+// weatherDelayDecisionResponse is the body of POST /weather-delay/decision.
+type weatherDelayDecisionResponse struct {
+	ServerTime time.Time                 `json:"serverTime"`
+	Answer     string                    `json:"answer"`
+	Result     *weatherDelayActionResult `json:"result"`
+}
+
+// cmdWeatherDelayDecision answers the one pending automatic-trigger
+// decision.
+func cmdWeatherDelayDecision(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "showmeshctl weather-delay decision"
+	fs, g := newFlagSet(cmdLabel, stderr)
+	id := fs.String("id", "", "the pending decision's own id, from \"weather-delay status\"")
+	answer := fs.String("answer", "", `"delay", "cancel-night", or "dismiss"`)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: %s -id <id> -answer <delay|cancel-night|dismiss> [flags]\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	if len(fs.Args()) != 0 {
+		fs.Usage()
+		return exitUsage
+	}
+	if *id == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl weather-delay decision: -id is required")
+		fs.Usage()
+		return exitUsage
+	}
+	wireAnswer, err := weatherDelayCLIAnswer(*answer)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl weather-delay decision: %v\n", err)
+		fs.Usage()
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp weatherDelayDecisionResponse
+	body := map[string]string{"id": *id, "answer": wireAnswer}
+	if err := c.postJSON(ctx, "/api/v1/weather-delay/decision", body, &resp); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, cmdLabel, err)
+		}
+		if resp.Result != nil {
+			return exitCodeForWeatherDelayResult(*resp.Result)
+		}
+		return exitOK
+	}
+	if resp.Result != nil {
+		return reportWeatherDelayActionResult(stdout, *resp.Result)
+	}
+	_, _ = fmt.Fprintln(stdout, "weather delay decision: dismissed")
+	return exitOK
+}
+
+// weatherDelayCLIAnswer maps the CLI's own "cancel-night" spelling (this
+// build's file-path/flag convention throughout) onto the wire's
+// "cancelNight", and passes "delay"/"dismiss" through unchanged.
+func weatherDelayCLIAnswer(answer string) (string, error) {
+	switch answer {
+	case "delay", "dismiss":
+		return answer, nil
+	case "cancel-night":
+		return "cancelNight", nil
+	default:
+		return "", fmt.Errorf(`-answer must be "delay", "cancel-night", or "dismiss", got %q`, answer)
+	}
+}
+
+// cmdWeatherDelayTrigger reports an automatic trigger from an outside
+// system, the same intake the built-in NWS poller uses internally.
+func cmdWeatherDelayTrigger(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "showmeshctl weather-delay trigger"
+	fs, g := newFlagSet(cmdLabel, stderr)
+	source := fs.String("source", "", "a short id for this trigger source, same syntax as an MQTT node id")
+	kind := fs.String("kind", "", `"warning" or "lightning"`)
+	eventType := fs.String("event-type", "", `the warning's own type, e.g. "Severe Thunderstorm Warning"`)
+	severity := fs.String("severity", "", "the warning's own severity")
+	expiresAt := fs.String("expires-at", "", "the warning's own expiry, RFC 3339")
+	distanceKm := fs.Float64("distance-km", 0, "a lightning report's own distance, kilometers (0 means unknown)")
+	suggestCancel := fs.Bool("suggest-cancel", false,
+		"set only when this source itself knows tonight's schedule and judges too little of it would remain")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: %s -source <id> -kind <warning|lightning> [flags]\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	if len(fs.Args()) != 0 {
+		fs.Usage()
+		return exitUsage
+	}
+	if *source == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl weather-delay trigger: -source is required")
+		fs.Usage()
+		return exitUsage
+	}
+	if *kind != "warning" && *kind != "lightning" {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl weather-delay trigger: -kind must be \"warning\" or \"lightning\", got %q\n", *kind)
+		fs.Usage()
+		return exitUsage
+	}
+
+	body := map[string]any{"kind": *kind}
+	if *eventType != "" {
+		body["eventType"] = *eventType
+	}
+	if *severity != "" {
+		body["severity"] = *severity
+	}
+	if *expiresAt != "" {
+		body["expiresAt"] = *expiresAt
+	}
+	if *distanceKm != 0 {
+		body["distanceKm"] = *distanceKm
+	}
+	if *suggestCancel {
+		body["suggestCancel"] = true
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp weatherDelayTriggerResponse
+	if err := c.postJSON(ctx, "/api/v1/weather-delay/triggers/"+*source, body, &resp); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, cmdLabel, err)
+		}
+		return exitOK
+	}
+	_, _ = fmt.Fprintf(stdout, "weather delay trigger: accepted=%t\n", resp.Accepted)
+	if resp.Message != "" {
+		_, _ = fmt.Fprintln(stdout, "  "+resp.Message)
+	}
+	if resp.PendingDecision != nil {
+		d := resp.PendingDecision
+		_, _ = fmt.Fprintf(stdout, "  pending decision %s: %s (question=%s, default=%s, deadline=%s)\n",
+			d.ID, d.Reason, d.Question, d.DefaultAction, d.Deadline)
+	}
+	return exitOK
 }

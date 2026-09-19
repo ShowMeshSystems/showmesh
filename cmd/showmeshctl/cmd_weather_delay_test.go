@@ -109,3 +109,110 @@ func TestCmdWeatherDelayPresign(t *testing.T) {
 		t.Fatalf("stdout = %q, want the signed document to hold", out)
 	}
 }
+
+func TestCmdWeatherDelayTrigger(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = decodeJSONBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-19T20:00:00Z","accepted":true,"message":"","pendingDecision":{"id":"d1","source":"nws","reason":"A tornado warning is in effect.","question":"delay","defaultAction":"delay","askedAt":"2026-09-19T20:00:00Z","deadline":"2026-09-19T20:00:30Z"}}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWeatherDelay([]string{
+		"trigger", "--server", srv.URL, "-source", "nws", "-kind", "warning",
+		"-event-type", "Tornado Warning", "-severity", "Extreme",
+	}, &stdout, &stderr, func() time.Time { return time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC) })
+	if code != exitOK {
+		t.Fatalf("trigger exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/weather-delay/triggers/nws" {
+		t.Fatalf("path = %q, want /api/v1/weather-delay/triggers/nws", gotPath)
+	}
+	if gotBody["kind"] != "warning" || gotBody["eventType"] != "Tornado Warning" || gotBody["severity"] != "Extreme" {
+		t.Fatalf("request body = %+v, want kind/eventType/severity set", gotBody)
+	}
+	if _, ok := gotBody["suggestCancel"]; ok {
+		t.Fatalf("request body = %+v, want no suggestCancel key when the flag was not set", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "A tornado warning is in effect.") {
+		t.Fatalf("stdout = %q, want the pending decision's reason", stdout.String())
+	}
+}
+
+func TestCmdWeatherDelayTriggerRequiresSourceAndValidKind(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdWeatherDelay([]string{"trigger", "-kind", "warning"}, &stdout, &stderr, func() time.Time { return time.Time{} })
+	if code != exitUsage {
+		t.Fatalf("trigger with no -source: exit code = %d, want exitUsage", code)
+	}
+
+	stderr.Reset()
+	code = cmdWeatherDelay([]string{"trigger", "-source", "nws", "-kind", "hail"}, &stdout, &stderr, func() time.Time { return time.Time{} })
+	if code != exitUsage {
+		t.Fatalf("trigger with a bad -kind: exit code = %d, want exitUsage", code)
+	}
+}
+
+func TestCmdWeatherDelayDecision(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = decodeJSONBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-19T20:00:10Z","answer":"cancelNight","result":{"kind":"cancelNight","idempotencyKey":"","active":true,"startedAt":"2026-09-19T20:00:10Z","startedBy":"admin-1","startedByName":"Admin","revision":1,"targets":[]}}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWeatherDelay([]string{"decision", "--server", srv.URL, "-id", "d1", "-answer", "cancel-night"},
+		&stdout, &stderr, func() time.Time { return time.Date(2026, 9, 19, 20, 0, 10, 0, time.UTC) })
+	if code != exitOK {
+		t.Fatalf("decision exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/weather-delay/decision" {
+		t.Fatalf("path = %q, want /api/v1/weather-delay/decision", gotPath)
+	}
+	if gotBody["id"] != "d1" || gotBody["answer"] != "cancelNight" {
+		t.Fatalf("request body = %+v, want id=d1 answer=cancelNight (wire spelling)", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "startedBy=Admin") {
+		t.Fatalf("stdout = %q, want startedBy=Admin", stdout.String())
+	}
+}
+
+func TestCmdWeatherDelayDecisionDismiss(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-19T20:00:10Z","answer":"dismiss"}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWeatherDelay([]string{"decision", "--server", srv.URL, "-id", "d1", "-answer", "dismiss"},
+		&stdout, &stderr, func() time.Time { return time.Date(2026, 9, 19, 20, 0, 10, 0, time.UTC) })
+	if code != exitOK {
+		t.Fatalf("decision exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "dismissed") {
+		t.Fatalf("stdout = %q, want it to report the dismiss", stdout.String())
+	}
+}
+
+func TestCmdWeatherDelayDecisionRequiresIDAndValidAnswer(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdWeatherDelay([]string{"decision", "-answer", "delay"}, &stdout, &stderr, func() time.Time { return time.Time{} })
+	if code != exitUsage {
+		t.Fatalf("decision with no -id: exit code = %d, want exitUsage", code)
+	}
+
+	stderr.Reset()
+	code = cmdWeatherDelay([]string{"decision", "-id", "d1", "-answer", "bogus"}, &stdout, &stderr, func() time.Time { return time.Time{} })
+	if code != exitUsage {
+		t.Fatalf("decision with a bad -answer: exit code = %d, want exitUsage", code)
+	}
+}

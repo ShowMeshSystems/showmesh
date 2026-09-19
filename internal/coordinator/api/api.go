@@ -22,6 +22,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/weathertrigger"
 	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -582,6 +583,18 @@ type Dependencies struct {
 	// not active and refuses writes.
 	WeatherDelay WeatherDelayStore
 
+	// WeatherDelayTrigger is ADR-053 decision 12's pending decision and
+	// suppression store, see [WeatherDelayTriggerStore]. A nil field is
+	// replaced by [noWeatherDelayTriggerStore], under which no decision is
+	// ever pending and a write refuses.
+	WeatherDelayTrigger WeatherDelayTriggerStore
+
+	// WeatherDelayNWS reports the built-in NWS poller's own health, see
+	// [WeatherDelayNWSHealth]. A nil field is replaced by
+	// [noWeatherDelayNWSHealth], under which GET /weather-delay reports no
+	// source health, matching an installation with the poller disabled.
+	WeatherDelayNWS WeatherDelayNWSHealth
+
 	// WeatherDelayPublisher is start/resume's own MQTT publish-and-await
 	// capability, see [WeatherDelayPublisher]. A nil field is replaced by
 	// [noWeatherDelayPublisher], under which start/resume answer an
@@ -801,6 +814,12 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.WeatherDelay == nil {
 		d.WeatherDelay = noWeatherDelayStore{}
 	}
+	if d.WeatherDelayTrigger == nil {
+		d.WeatherDelayTrigger = noWeatherDelayTriggerStore{}
+	}
+	if d.WeatherDelayNWS == nil {
+		d.WeatherDelayNWS = noWeatherDelayNWSHealth{}
+	}
 	if _, ok := d.WeatherDelay.(*WeatherDelayStateKeeper); !ok {
 		d.WeatherDelay = NewWeatherDelayStateKeeper(d.WeatherDelay)
 	}
@@ -931,6 +950,38 @@ func (noWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherD
 
 func (noWeatherDelayStore) SetWeatherDelayState(context.Context, store.WeatherDelayStateRecord) error {
 	return fmt.Errorf("api: weather delay store not wired in")
+}
+
+// noWeatherDelayTriggerStore is [Dependencies.WeatherDelayTrigger]'s
+// default: Get reports nothing pending or suppressed, and a write refuses.
+type noWeatherDelayTriggerStore struct{}
+
+func (noWeatherDelayTriggerStore) GetPendingWeatherDelayDecision(context.Context) (store.PendingWeatherDelayDecisionRecord, bool, error) {
+	return store.PendingWeatherDelayDecisionRecord{}, false, nil
+}
+
+func (noWeatherDelayTriggerStore) SetPendingWeatherDelayDecision(context.Context, store.PendingWeatherDelayDecisionRecord) error {
+	return fmt.Errorf("api: weather delay trigger store not wired in")
+}
+
+func (noWeatherDelayTriggerStore) ClearPendingWeatherDelayDecision(context.Context) error {
+	return fmt.Errorf("api: weather delay trigger store not wired in")
+}
+
+func (noWeatherDelayTriggerStore) GetWeatherDelayTriggerSuppression(context.Context, string) (store.WeatherDelayTriggerSuppressionRecord, bool, error) {
+	return store.WeatherDelayTriggerSuppressionRecord{}, false, nil
+}
+
+func (noWeatherDelayTriggerStore) SetWeatherDelayTriggerSuppression(context.Context, store.WeatherDelayTriggerSuppressionRecord) error {
+	return fmt.Errorf("api: weather delay trigger store not wired in")
+}
+
+// noWeatherDelayNWSHealth is [Dependencies.WeatherDelayNWS]'s default: no
+// poller has ever run.
+type noWeatherDelayNWSHealth struct{}
+
+func (noWeatherDelayNWSHealth) Health() (weathertrigger.NWSHealth, bool) {
+	return weathertrigger.NWSHealth{}, false
 }
 
 // noWeatherDelayPublisher is [Dependencies.WeatherDelayPublisher]'s
@@ -2090,6 +2141,8 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/weather-delay/cancel-night", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayCancelNight))
 	mux.HandleFunc("POST /api/v1/weather-delay/resume", h.writeGuard(&scopeShowWeatherDelayResume, h.handleWeatherDelayResume))
 	mux.HandleFunc("POST /api/v1/weather-delay/presigned-start", h.writeGuard(&scopeConfigWrite, h.handleWeatherDelayPresignedStart))
+	mux.HandleFunc("POST /api/v1/weather-delay/decision", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayDecision))
+	mux.HandleFunc("POST /api/v1/weather-delay/triggers/{source}", h.writeGuard(&scopeShowWeatherDelayInvoke, h.handleWeatherDelayTrigger))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

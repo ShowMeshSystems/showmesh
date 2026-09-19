@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/weathertrigger"
 	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -530,6 +531,26 @@ type NightSessionStore interface {
 type WeatherDelayStore interface {
 	GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error)
 	SetWeatherDelayState(ctx context.Context, rec store.WeatherDelayStateRecord) error
+}
+
+// WeatherDelayTriggerStore reads and writes ADR-053 decision 12's pending
+// trigger decision and dismiss-suppression rows. *store.Store satisfies it.
+type WeatherDelayTriggerStore interface {
+	GetPendingWeatherDelayDecision(ctx context.Context) (store.PendingWeatherDelayDecisionRecord, bool, error)
+	SetPendingWeatherDelayDecision(ctx context.Context, rec store.PendingWeatherDelayDecisionRecord) error
+	ClearPendingWeatherDelayDecision(ctx context.Context) error
+	GetWeatherDelayTriggerSuppression(ctx context.Context, source string) (store.WeatherDelayTriggerSuppressionRecord, bool, error)
+	SetWeatherDelayTriggerSuppression(ctx context.Context, rec store.WeatherDelayTriggerSuppressionRecord) error
+}
+
+// WeatherDelayNWSHealth answers the built-in NWS poller's own health for
+// GET /weather-delay, through a stable handle
+// ([*WeatherDelayNWSStatus]) wired once at startup while
+// [WeatherDelayTriggerLoop] swaps the poller underneath it as
+// show.weatherdelay's triggers.nws configuration changes. ok is false
+// when no poller has ever run (disabled, or not yet reconciled).
+type WeatherDelayNWSHealth interface {
+	Health() (health weathertrigger.NWSHealth, ok bool)
 }
 
 // WeatherDelayPublisher is the coordinator's MQTT publish-and-await
