@@ -94,16 +94,20 @@ guarantees nothing. It is the display doing its best not to be the hazard.
    nothing else new, and it never accepts a resume. ADR-044's reasoning stands
    for every other capability.
 
-10. **Dark is confirmed per power group, and an unconfirmed group can lose
-    power.** A power group is a set of devices that share a switched supply,
-    such as lighting or projection. The coordinator publishes, per group, a
-    heartbeat that means "this group is confirmed dark": players idle with
-    gates reporting zero, layers and surfaces reporting clear. An external
-    controller that stops hearing the heartbeat for a group during a delay cuts
-    that group's power and no other. The timeouts are generous and configurable
-    because restarting projectors and moving lights is slow, and a group that
-    confirmed dark is never cut. The coordinator, the alert audio path and any
-    transmitter must be supplied from outside every power group.
+10. **Dark is confirmed per power group, and cutting power is never ShowMesh's
+    job.** A power group is an operator-defined set of devices that share a
+    switched supply. An installation defines as many groups as it has, with
+    whatever membership it has: lighting only, lighting and projection, moving
+    lights on their own, or none at all. For each group the coordinator reports
+    whether it is confirmed dark (players idle with gates reporting zero,
+    layers and surfaces reporting clear) and, when configured to, publishes
+    that as a heartbeat. ShowMesh never switches power as part of a delay. An
+    installation that wants a cutoff points its own power controller at the
+    heartbeat: a controller that stops hearing a group's heartbeat during a
+    delay cuts that group and no other, on timeouts the installation sets. An
+    installation with its own power system, or none, publishes nothing and
+    loses nothing else. Where a cutoff is used, the coordinator, the alert
+    audio path and any transmitter must be supplied from outside every group.
 
 11. **Resume starts the show from the top.** Resume clears the state, opens the
     gate, and returns the night session to its transition into the show, which
