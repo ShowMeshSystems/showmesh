@@ -6594,6 +6594,8 @@ export interface components {
             boundary: components["schemas"]["NightBoundary"];
             cues: components["schemas"]["NightCues"];
             backgroundAudio: components["schemas"]["NightBackgroundAudio"];
+            /** @description Every cycle this session has already completed, oldest first. The current, still-open cycle (`cycle` above) is never included here. A cycle that ran before this field existed has no recorded outcome and is simply absent, never a synthesized "not recorded" entry. */
+            finishedCycles?: components["schemas"]["NightCycleOutcome"][];
             degraded: boolean;
             degradedReason?: string;
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
@@ -6601,6 +6603,18 @@ export interface components {
             authorization: components["schemas"]["NightAuthorization"];
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description One already-finished cycle of a night session: when its show started and ended, and how it ended. */
+        NightCycleOutcome: {
+            cycle: number;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            endedAt: string;
+            /** @enum {string} */
+            outcome: "completed" | "stopped" | "interrupted" | "unknown";
+            /** @description An operator-readable explanation. Only ever present for "stopped", "interrupted", or "unknown"; a "completed" cycle needs none. */
+            reason?: string;
         };
         /** @description Who authorized this session, recorded for provenance and surviving a coordinator restart. The night controller performs autonomous actions as its own session-scoped system actor and never as this principal, so this is a record of authority rather than a live credential. State is "unknown" when nothing has been attributed yet; autonomous actions still run in that case, and the session carries attributionDegraded. */
         NightAuthorization: {

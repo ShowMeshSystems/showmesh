@@ -754,6 +754,9 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		cur.BoundaryJSON = ""
 		return cur
 	})
+	if err := h.deps.NightSessions.OpenNightCycleOutcome(ctx, rec.ID, rec.Cycle, now); err != nil {
+		h.logWarn("night loop: failed to open night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
+	}
 }
 
 // nightShowLaunchStaleNudgeWindow bounds one stale-evidence episode's wait
@@ -913,11 +916,19 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	}
 	if unmet != "" {
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
+			if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeInterrupted,
+				"The player stopped reporting the show as playing before it could be confirmed finished. The night was left degraded until an operator recovers it."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+				h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
+			}
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
 				"live hasn't confirmed the show ended after %s: %s",
 				nightAdvanceLiveDeadline, unmet))
 		}
 		return
+	}
+	outcome, reason := h.nightResolveCycleOutcome(ctx, rec, anchor)
+	if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, outcome, reason); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+		h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
 	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.State = nightStateTransitionToResting
@@ -926,6 +937,67 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 		cur.BoundaryJSON = ""
 		return cur
 	})
+}
+
+// nightCycleUnknownOutcomeReason explains why a cycle closes unknown: the
+// player's own playlist position was never confirmed for it.
+const nightCycleUnknownOutcomeReason = "The player's playlist position was not reported for this cycle, so whether the show reached its last sequence could not be confirmed."
+
+// nightCycleInterruptedOutcomeReason is the operator-readable reason
+// recorded when the player left the bound show playlist before its last
+// entry played.
+const nightCycleInterruptedOutcomeReason = "The player left the show before its last sequence played. The night returned to the resting playlist."
+
+// nightResolveCycleOutcome decides completed vs interrupted vs unknown from
+// evidence, never from idle-with-no-playlist alone: a player restarted
+// mid-show also reports idle with nothing playing, so that condition alone
+// cannot distinguish a finished show from an abandoned one. Completed
+// requires proof the LAST entry of the cycle's own bound show playlist (the
+// same lookup nightStageFirstShowCueAudio uses) was observed playing on or
+// after rec.StateEnteredAt, the moment this cycle's show went live. Missing
+// or stale evidence never resolves to completed; it resolves to unknown.
+func (h *handlers) nightResolveCycleOutcome(ctx context.Context, rec store.NightSessionRecord, anchor nightContentAnchor) (outcome, reason string) {
+	entries, err := nightShowPlaylistEntries(ctx, h.deps.Config, anchor.Playlist)
+	if err != nil || len(entries) == 0 {
+		return store.NightCycleOutcomeUnknown, nightCycleUnknownOutcomeReason
+	}
+	last := entries[len(entries)-1].FPP
+	if last == nil {
+		return store.NightCycleOutcomeUnknown, nightCycleUnknownOutcomeReason
+	}
+	instanceUUID, ok, err := h.nightResolveInstanceUUID(ctx, anchor.FPPInstanceID)
+	if err != nil || !ok {
+		return store.NightCycleOutcomeUnknown, nightCycleUnknownOutcomeReason
+	}
+	entryObs, err := h.deps.FPPObservations.GetFPPPlaylistEntryObservation(ctx, instanceUUID)
+	if err != nil || entryObs.Unavailable != "" || entryObs.ObservedAt.Before(rec.StateEnteredAt) {
+		return store.NightCycleOutcomeUnknown, nightCycleUnknownOutcomeReason
+	}
+	if entryObs.Section == last.Section && entryObs.Position == int64(last.Position) {
+		return store.NightCycleOutcomeCompleted, ""
+	}
+	return store.NightCycleOutcomeInterrupted, nightCycleInterruptedOutcomeReason
+}
+
+// nightResolveInstanceUUID looks up instanceID's currently reported FPP
+// system UUID, the identity fpp_playlist_entry_observations is keyed on -
+// mirroring [handlers.resolveFPPEndpoint]'s identical lookup one field
+// over. ok is false when instanceID names no currently configured endpoint
+// or that endpoint has never reported a uuid.
+func (h *handlers) nightResolveInstanceUUID(ctx context.Context, instanceID string) (instanceUUID string, ok bool, err error) {
+	if instanceID == "" {
+		return "", false, nil
+	}
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, v := range views {
+		if v.InstanceID == instanceID && v.InstanceUUID != nil {
+			return v.InstanceUUID.UUID, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time.Time, rec store.NightSessionRecord) {

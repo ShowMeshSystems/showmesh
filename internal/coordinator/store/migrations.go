@@ -168,6 +168,12 @@ var migrations = []migration{
 	// upgraded coordinator cannot decode its own stored revision and
 	// stops pushing audio configuration to every node.
 	{version: 39, fn: migrateV39AudioSettingsBackfillMultisyncFields},
+	// v40: adds night_cycle_outcomes, one row per night session cycle
+	// recording how its show ended (nightcycleoutcome.go's own doc
+	// comment). A pure addition, like schemaV17/schemaV25/schemaV33/
+	// schemaV36/schemaV38: no existing table is touched, and a cycle that
+	// ran before this migration simply has no row.
+	{version: 40, sql: schemaV40},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
