@@ -407,10 +407,8 @@ function WeatherDelayOutcomePanel() {
 
 /**
  * ADR-053 decision 7's own alert asset, per plan node, from GET
- * /weather-delay's `assets` field - the only readiness fact this API
- * reports. Power-group "confirmed dark" is not: no field for it exists on
- * `WeatherDelayStateResponse`, so nothing renders for it here (the four
- * absences: a subsystem the API does not report is not rendered).
+ * /weather-delay's `assets` field. Power-group "confirmed dark" renders in
+ * the shell's own weather-delay banner (every screen), not here.
  */
 function WeatherDelayReadiness() {
   const weatherDelay = useWeatherDelay()
