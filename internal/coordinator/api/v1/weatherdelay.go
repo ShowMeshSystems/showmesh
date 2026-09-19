@@ -61,6 +61,9 @@ type WeatherDelayPendingDecision struct {
 	DefaultAction string `json:"defaultAction"`
 	AskedAt       string `json:"askedAt"`
 	Deadline      string `json:"deadline"`
+	// ExpiresAt is the warning's own expiry as its source reported it,
+	// omitted when the source reported none.
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // WeatherDelaySourceHealth is one configured trigger source's own health.

@@ -5176,6 +5176,11 @@ export interface components {
             askedAt: string;
             /** Format: date-time */
             deadline: string;
+            /**
+             * Format: date-time
+             * @description The warning's own expiry as its source reported it, absent when the source reported none. Nothing acts on it yet; the deadline runs its default action whether or not the warning has expired.
+             */
+            expiresAt?: string;
         };
         WeatherDelaySourceHealth: {
             source: string;

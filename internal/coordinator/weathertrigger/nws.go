@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -29,8 +30,9 @@ const (
 )
 
 // NWSAlertsResponse is the https://api.weather.gov/alerts/active response
-// shape, narrowed to exactly the fields ADR-053 decision 12 permits this
-// package to read: an alert's id, event type, severity, and expiry. A
+// shape, narrowed to the fields ADR-053 decision 12 permits this package
+// to read: an alert's id, event type, severity, and the timing and
+// classification fields that say whether it is real and in force. A
 // field is deliberately absent from this type, not merely unused, for
 // every other property the real API returns (headline, description,
 // instruction, area description, and more): decoding into this struct
@@ -47,10 +49,76 @@ type NWSAlertFeature struct {
 }
 
 // NWSAlertProperties is deliberately narrow: see [NWSAlertsResponse].
+// Status, MessageType, Effective, Onset and Ends carry no warning text;
+// they are what decides whether an alert is a real, current, first
+// statement of a hazard, which is the difference between a trigger and a
+// darkened show for no reason.
 type NWSAlertProperties struct {
-	Event    string `json:"event"`
-	Severity string `json:"severity"`
-	Expires  string `json:"expires"`
+	Status      string `json:"status"`
+	MessageType string `json:"messageType"`
+	Event       string `json:"event"`
+	Severity    string `json:"severity"`
+	Effective   string `json:"effective"`
+	Onset       string `json:"onset"`
+	Ends        string `json:"ends"`
+	Expires     string `json:"expires"`
+}
+
+// The alert status and message type that may ask. An empty field is
+// accepted, for a feed that omits it; a field that is present and says
+// something else never asks.
+const (
+	nwsStatusActual      = "Actual"
+	nwsMessageTypeAlert  = "Alert"
+	nwsMessageTypeUpdate = "Update"
+)
+
+// nwsAlertMayAsk reports whether f is a real, currently in force, first
+// statement of a configured hazard. Everything else is refused: a Test,
+// Exercise, Draft or System alert; a Cancel, Ack or Error message; an
+// Update, which by definition restates an alert the feed already carried;
+// an alert that has expired or ended; and one that does not take effect
+// yet.
+func nwsAlertMayAsk(f NWSAlertFeature, wanted map[string]bool, now time.Time) (skipReason string, ok bool) {
+	p := f.Properties
+	switch {
+	case f.ID == "":
+		return "no alert id", false
+	case !wanted[p.Event]:
+		return "event type is not configured", false
+	case p.Status != "" && p.Status != nwsStatusActual:
+		return "status is not " + nwsStatusActual, false
+	case p.MessageType == nwsMessageTypeUpdate:
+		return "an update restates an alert the feed already carried", false
+	case p.MessageType != "" && p.MessageType != nwsMessageTypeAlert:
+		return "message type is not " + nwsMessageTypeAlert, false
+	}
+	if t, parsed := nwsParseTime(p.Expires); parsed && !t.After(now) {
+		return "the alert has expired", false
+	}
+	if t, parsed := nwsParseTime(p.Ends); parsed && !t.After(now) {
+		return "the alert has ended", false
+	}
+	if t, parsed := nwsParseTime(p.Onset); parsed && t.After(now) {
+		return "the alert is not in effect yet", false
+	}
+	if t, parsed := nwsParseTime(p.Effective); parsed && t.After(now) {
+		return "the alert is not in effect yet", false
+	}
+	return "", true
+}
+
+// nwsParseTime reads an RFC 3339 field, reporting false for an absent or
+// unreadable one so a malformed timestamp never silently decides anything.
+func nwsParseTime(v string) (time.Time, bool) {
+	if v == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // NWSPollerConfig is the built-in poller's configuration, decoded from
@@ -181,6 +249,17 @@ func (p *NWSPoller) recordSuccess(now time.Time) {
 	p.mu.Unlock()
 }
 
+// nwsErrorWithoutURL strips the request URL from a transport error. That
+// URL carries the installation's own coordinates, and this error is read
+// back through GET /weather-delay and written to the log.
+func nwsErrorWithoutURL(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) && uerr.Err != nil {
+		return uerr.Err
+	}
+	return err
+}
+
 func (p *NWSPoller) fetch(ctx context.Context) (NWSAlertsResponse, error) {
 	url := fmt.Sprintf("%s/alerts/active?point=%g,%g", p.baseURL, p.cfg.Latitude, p.cfg.Longitude)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -192,7 +271,7 @@ func (p *NWSPoller) fetch(ctx context.Context) (NWSAlertsResponse, error) {
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return NWSAlertsResponse{}, fmt.Errorf("request: %w", err)
+		return NWSAlertsResponse{}, fmt.Errorf("request: %w", nwsErrorWithoutURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -214,9 +293,9 @@ func (p *NWSPoller) fetch(ctx context.Context) (NWSAlertsResponse, error) {
 	return out, nil
 }
 
-// reportNewAlerts prunes expired ids from seen, then calls onAlert once for
-// every feature whose event type is configured and whose id has not
-// already asked.
+// reportNewAlerts prunes expired ids from seen, then calls onAlert once
+// for every feature [nwsAlertMayAsk] accepts and whose id has not already
+// asked.
 func (p *NWSPoller) reportNewAlerts(now time.Time, resp NWSAlertsResponse) {
 	wanted := make(map[string]bool, len(p.cfg.EventTypes))
 	for _, et := range p.cfg.EventTypes {
@@ -232,7 +311,10 @@ func (p *NWSPoller) reportNewAlerts(now time.Time, resp NWSAlertsResponse) {
 	p.mu.Unlock()
 
 	for _, f := range resp.Features {
-		if f.ID == "" || !wanted[f.Properties.Event] {
+		if reason, ok := nwsAlertMayAsk(f, wanted, now); !ok {
+			if reason != "event type is not configured" && f.ID != "" {
+				p.logger.Debug("weather delay: NWS alert did not ask", "alert_id", f.ID, "reason", reason)
+			}
 			continue
 		}
 		p.mu.Lock()

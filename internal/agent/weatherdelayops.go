@@ -82,8 +82,13 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 		if err != nil {
 			return OperationResult{}, fmt.Errorf("weatherdelay.start: params.plan: %w", err)
 		}
-		if err := o.holder.SetPlanLocal(plan); err != nil {
-			o.holder.log().Warn("weatherdelay.start: failed to persist the plan carried in the command", "error", err)
+		// An empty plan means the coordinator could not build one, not
+		// that there is no alert: overwriting with it would throw away a
+		// plan this node already had and silence the alert.
+		if plan.Delay != nil || plan.CancelNight != nil {
+			if err := o.holder.SetPlanLocal(plan); err != nil {
+				o.holder.log().Warn("weatherdelay.start: failed to persist the plan carried in the command", "error", err)
+			}
 		}
 	}
 

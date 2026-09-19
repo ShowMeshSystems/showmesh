@@ -170,6 +170,10 @@ type PendingWeatherDelayDecisionRecord struct {
 	DefaultAction string
 	AskedAt       time.Time
 	Deadline      time.Time
+	// ExpiresAt is the warning's own expiry as its source reported it,
+	// zero when the source reported none. It is carried so a late
+	// deadline can be judged against it; nothing acts on it yet.
+	ExpiresAt time.Time
 	// WarningKey identifies "the same warning" this decision was raised
 	// about (see weathertrigger.WarningKey), so a dismiss answer can
 	// suppress it without this package needing the trigger's own fields.
@@ -178,15 +182,15 @@ type PendingWeatherDelayDecisionRecord struct {
 
 func getPendingWeatherDelayDecision(ctx context.Context, q querier) (PendingWeatherDelayDecisionRecord, bool, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT id, source, reason, question, default_action, asked_at, deadline, warning_key
+		SELECT id, source, reason, question, default_action, asked_at, deadline, expires_at, warning_key
 		FROM weather_delay_pending_decision WHERE row_id = ?
 	`, weatherDelayPendingDecisionRowID)
 
 	var (
-		rec               PendingWeatherDelayDecisionRecord
-		askedAt, deadline sql.NullString
+		rec                          PendingWeatherDelayDecisionRecord
+		askedAt, deadline, expiresAt sql.NullString
 	)
-	err := row.Scan(&rec.ID, &rec.Source, &rec.Reason, &rec.Question, &rec.DefaultAction, &askedAt, &deadline, &rec.WarningKey)
+	err := row.Scan(&rec.ID, &rec.Source, &rec.Reason, &rec.Question, &rec.DefaultAction, &askedAt, &deadline, &expiresAt, &rec.WarningKey)
 	switch {
 	case err == sql.ErrNoRows:
 		return PendingWeatherDelayDecisionRecord{}, false, nil
@@ -201,6 +205,9 @@ func getPendingWeatherDelayDecision(ctx context.Context, q querier) (PendingWeat
 	}
 	if rec.Deadline, err = dbToTimePtrValue(deadline); err != nil {
 		return PendingWeatherDelayDecisionRecord{}, false, fmt.Errorf("store: parse pending weather delay decision deadline: %w", err)
+	}
+	if rec.ExpiresAt, err = dbToTimePtrValue(expiresAt); err != nil {
+		return PendingWeatherDelayDecisionRecord{}, false, fmt.Errorf("store: parse pending weather delay decision expires_at: %w", err)
 	}
 	return rec, true, nil
 }
@@ -217,56 +224,68 @@ func (t *Tx) GetPendingWeatherDelayDecision(ctx context.Context) (PendingWeather
 	return getPendingWeatherDelayDecision(ctx, t.tx)
 }
 
-func setPendingWeatherDelayDecision(ctx context.Context, q querier, rec PendingWeatherDelayDecisionRecord) error {
-	_, err := q.ExecContext(ctx, `
-		INSERT INTO weather_delay_pending_decision (row_id, id, source, reason, question, default_action, asked_at, deadline, warning_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(row_id) DO UPDATE SET
-			id             = excluded.id,
-			source         = excluded.source,
-			reason         = excluded.reason,
-			question       = excluded.question,
-			default_action = excluded.default_action,
-			asked_at       = excluded.asked_at,
-			deadline       = excluded.deadline,
-			warning_key    = excluded.warning_key
+// setPendingWeatherDelayDecision inserts rec only when no decision is
+// pending. It never overwrites one: two sources reporting at the same
+// moment must produce one question, not a second that silently replaces
+// the first and resets its deadline.
+func setPendingWeatherDelayDecision(ctx context.Context, q querier, rec PendingWeatherDelayDecisionRecord) (bool, error) {
+	res, err := q.ExecContext(ctx, `
+		INSERT INTO weather_delay_pending_decision (row_id, id, source, reason, question, default_action, asked_at, deadline, expires_at, warning_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(row_id) DO NOTHING
 	`, weatherDelayPendingDecisionRowID, rec.ID, rec.Source, rec.Reason, rec.Question, rec.DefaultAction,
-		timeToDB(rec.AskedAt), timeToDB(rec.Deadline), rec.WarningKey)
+		timeToDB(rec.AskedAt), timeToDB(rec.Deadline), timeToDB(rec.ExpiresAt), rec.WarningKey)
 	if err != nil {
-		return fmt.Errorf("store: set pending weather delay decision: %w", err)
+		return false, fmt.Errorf("store: set pending weather delay decision: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: set pending weather delay decision: %w", err)
+	}
+	return n > 0, nil
 }
 
-// SetPendingWeatherDelayDecision replaces the pending decision. rec.ID must
-// not be empty; use [Store.ClearPendingWeatherDelayDecision] to clear it.
-func (s *Store) SetPendingWeatherDelayDecision(ctx context.Context, rec PendingWeatherDelayDecisionRecord) error {
+// SetPendingWeatherDelayDecision stores rec as the pending decision and
+// reports whether it won: false means one was already pending and rec was
+// not stored. Use [Store.ClearPendingWeatherDelayDecision] to clear one.
+func (s *Store) SetPendingWeatherDelayDecision(ctx context.Context, rec PendingWeatherDelayDecisionRecord) (bool, error) {
 	guardNotInTx(ctx, "Store.SetPendingWeatherDelayDecision")
 	return setPendingWeatherDelayDecision(ctx, s.db, rec)
 }
 
 // SetPendingWeatherDelayDecision is [Store.SetPendingWeatherDelayDecision]'s [Tx] form.
-func (t *Tx) SetPendingWeatherDelayDecision(ctx context.Context, rec PendingWeatherDelayDecisionRecord) error {
+func (t *Tx) SetPendingWeatherDelayDecision(ctx context.Context, rec PendingWeatherDelayDecisionRecord) (bool, error) {
 	return setPendingWeatherDelayDecision(ctx, t.tx, rec)
 }
 
-func clearPendingWeatherDelayDecision(ctx context.Context, q querier) error {
-	_, err := q.ExecContext(ctx, `DELETE FROM weather_delay_pending_decision WHERE row_id = ?`, weatherDelayPendingDecisionRowID)
+// clearPendingWeatherDelayDecision deletes the pending decision only when
+// it still carries id, and reports whether this caller is the one that
+// removed it. That is what makes an answer and its own deadline race
+// safely: exactly one of them claims the decision and runs its action.
+func clearPendingWeatherDelayDecision(ctx context.Context, q querier, id string) (bool, error) {
+	res, err := q.ExecContext(ctx,
+		`DELETE FROM weather_delay_pending_decision WHERE row_id = ? AND id = ?`,
+		weatherDelayPendingDecisionRowID, id)
 	if err != nil {
-		return fmt.Errorf("store: clear pending weather delay decision: %w", err)
+		return false, fmt.Errorf("store: clear pending weather delay decision: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: clear pending weather delay decision: %w", err)
+	}
+	return n > 0, nil
 }
 
-// ClearPendingWeatherDelayDecision removes the pending decision, if any.
-func (s *Store) ClearPendingWeatherDelayDecision(ctx context.Context) error {
+// ClearPendingWeatherDelayDecision removes the pending decision carrying
+// id and reports whether it was this call that removed it.
+func (s *Store) ClearPendingWeatherDelayDecision(ctx context.Context, id string) (bool, error) {
 	guardNotInTx(ctx, "Store.ClearPendingWeatherDelayDecision")
-	return clearPendingWeatherDelayDecision(ctx, s.db)
+	return clearPendingWeatherDelayDecision(ctx, s.db, id)
 }
 
 // ClearPendingWeatherDelayDecision is [Store.ClearPendingWeatherDelayDecision]'s [Tx] form.
-func (t *Tx) ClearPendingWeatherDelayDecision(ctx context.Context) error {
-	return clearPendingWeatherDelayDecision(ctx, t.tx)
+func (t *Tx) ClearPendingWeatherDelayDecision(ctx context.Context, id string) (bool, error) {
+	return clearPendingWeatherDelayDecision(ctx, t.tx, id)
 }
 
 // WeatherDelayTriggerSuppressionRecord is one source's dismissed-warning
@@ -333,6 +352,7 @@ CREATE TABLE IF NOT EXISTS weather_delay_pending_decision (
 	default_action TEXT NOT NULL DEFAULT '',
 	asked_at       TEXT,
 	deadline       TEXT,
+	expires_at     TEXT,
 	warning_key    TEXT NOT NULL DEFAULT ''
 );
 

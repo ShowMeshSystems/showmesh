@@ -537,8 +537,8 @@ type WeatherDelayStore interface {
 // trigger decision and dismiss-suppression rows. *store.Store satisfies it.
 type WeatherDelayTriggerStore interface {
 	GetPendingWeatherDelayDecision(ctx context.Context) (store.PendingWeatherDelayDecisionRecord, bool, error)
-	SetPendingWeatherDelayDecision(ctx context.Context, rec store.PendingWeatherDelayDecisionRecord) error
-	ClearPendingWeatherDelayDecision(ctx context.Context) error
+	SetPendingWeatherDelayDecision(ctx context.Context, rec store.PendingWeatherDelayDecisionRecord) (claimed bool, err error)
+	ClearPendingWeatherDelayDecision(ctx context.Context, id string) (claimed bool, err error)
 	GetWeatherDelayTriggerSuppression(ctx context.Context, source string) (store.WeatherDelayTriggerSuppressionRecord, bool, error)
 	SetWeatherDelayTriggerSuppression(ctx context.Context, rec store.WeatherDelayTriggerSuppressionRecord) error
 }

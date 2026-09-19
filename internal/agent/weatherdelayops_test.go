@@ -699,3 +699,69 @@ func jsonRoundTrip(t *testing.T, v any) any {
 	}
 	return out
 }
+
+// TestWeatherDelayStartOperationKeepsItsPlanWhenTheCommandCarriesAnEmptyOne
+// proves the coordinator failing to build a plan does not cost this node
+// the plan it already had. The coordinator sends params.plan on every
+// start, including when it could not build one, and an empty plan means
+// "I do not know", never "there is no alert".
+func TestWeatherDelayStartOperationKeepsItsPlanWhenTheCommandCarriesAnEmptyOne(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	plan := weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 3)
+
+	holder := NewWeatherDelayHolder(dir, discardLogger())
+	if err := holder.SetPlanLocal(plan); err != nil {
+		t.Fatalf("SetPlanLocal: %v", err)
+	}
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	result, err := ops.start(context.Background(), map[string]any{
+		"kind": "delay",
+		"plan": jsonRoundTrip(t, mqttproto.WeatherDelayPlan{}),
+	}, clock.now)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if holder.Current().Plan.Delay == nil || holder.Current().Plan.Delay.AssetID != "alert-asset" {
+		t.Fatalf("holder plan after an empty plan param = %+v, want the plan this node already had", holder.Current().Plan)
+	}
+	value, ok := result.Value.(map[string]any)
+	if !ok || !value["alertPlaying"].(bool) {
+		t.Fatalf("Value = %+v, want alertPlaying true: the node's own plan should still have played", result.Value)
+	}
+	startCount := 0
+	for _, c := range engine.snapshot() {
+		if c.kind == "start" {
+			startCount++
+		}
+	}
+	if startCount != 1 {
+		t.Fatalf("engine Start calls = %d, want 1", startCount)
+	}
+}
+
+// TestWeatherDelayStartOperationRefusesAPlanNamingAFileOutsideTheAssetDir
+// proves a plan arriving in the command cannot name a file outside this
+// node's asset directory.
+func TestWeatherDelayStartOperationRefusesAPlanNamingAFileOutsideTheAssetDir(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManager(t, dir, clock)
+	holder := NewWeatherDelayHolder(dir, discardLogger())
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	for _, filename := range []string{"../../etc/passwd", "/etc/passwd", "sub/alert.wav"} {
+		_, err := ops.start(context.Background(), map[string]any{
+			"kind": "delay",
+			"plan": map[string]any{"delay": map[string]any{
+				"assetId": "a", "contentHash": "h", "filename": filename,
+			}},
+		}, clock.now)
+		if err == nil {
+			t.Fatalf("start with filename %q succeeded, want a refusal", filename)
+		}
+	}
+}

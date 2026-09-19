@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,8 +13,9 @@ import (
 
 // Fixtures below are hand-written from the public api.weather.gov
 // alerts/active response shape (a GeoJSON FeatureCollection whose
-// properties carry many fields; only event, severity, and expires are
-// read here). No test in this file calls the real service.
+// properties carry many fields; only the id, event, severity, and the
+// timing and classification fields are read here). No test in this file
+// calls the real service.
 
 const nwsFixtureOneTornadoWarning = `{
   "type": "FeatureCollection",
@@ -226,5 +228,115 @@ func TestNWSPollerCapsResponseSize(t *testing.T) {
 
 	if h := p.Health(); h.LastError == "" {
 		t.Fatal("Health().LastError is empty after an oversize response")
+	}
+}
+
+// nwsFixtureAlert builds a one-alert FeatureCollection around the
+// properties a test wants to vary. Only fields this package reads are
+// written; the real response carries many more.
+func nwsFixtureAlert(id, properties string) string {
+	return fmt.Sprintf(`{"type":"FeatureCollection","features":[{"id":%q,"type":"Feature","properties":{%s}}]}`, id, properties)
+}
+
+// TestNWSPollerRefusesAnAlertThatIsNotAFirstRealInForceWarning proves the
+// alerts that must never darken a show ask nothing: a drill or test
+// message, a cancellation or an update of an alert the feed already
+// carried, one that has already expired or ended, and one that does not
+// take effect yet.
+func TestNWSPollerRefusesAnAlertThatIsNotAFirstRealInForceWarning(t *testing.T) {
+	now := time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)
+	base := `"event":"Tornado Warning","severity":"Extreme"`
+	cases := map[string]string{
+		"a test message":         base + `,"status":"Test","messageType":"Alert"`,
+		"an exercise message":    base + `,"status":"Exercise","messageType":"Alert"`,
+		"a draft message":        base + `,"status":"Draft","messageType":"Alert"`,
+		"a cancellation":         base + `,"status":"Actual","messageType":"Cancel"`,
+		"an update":              base + `,"status":"Actual","messageType":"Update"`,
+		"an acknowledgement":     base + `,"status":"Actual","messageType":"Ack"`,
+		"an expired alert":       base + `,"status":"Actual","messageType":"Alert","expires":"2026-09-19T19:59:00Z"`,
+		"an ended alert":         base + `,"status":"Actual","messageType":"Alert","ends":"2026-09-19T19:00:00Z"`,
+		"one not in effect yet":  base + `,"status":"Actual","messageType":"Alert","effective":"2026-09-19T22:00:00Z"`,
+		"one whose onset is off": base + `,"status":"Actual","messageType":"Alert","onset":"2026-09-19T23:00:00Z"`,
+	}
+	for name, properties := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := nwsFixtureAlert("urn:oid:2.49.0.1.840.0.alert-0000000000", properties)
+			asked := 0
+			p := newTestNWSPoller(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}, func(TriggerEvent) error { asked++; return nil }, now)
+			p.Poll(context.Background())
+			if asked != 0 {
+				t.Fatalf("%s asked %d times, want 0", name, asked)
+			}
+		})
+	}
+}
+
+// TestNWSPollerAsksForARealInForceWarning is the positive half of the case
+// above: the same fixture shape, with the classifications a genuine
+// warning carries, does ask.
+func TestNWSPollerAsksForARealInForceWarning(t *testing.T) {
+	now := time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)
+	body := nwsFixtureAlert("urn:oid:2.49.0.1.840.0.alert-0000000000",
+		`"event":"Tornado Warning","severity":"Extreme","status":"Actual","messageType":"Alert",`+
+			`"effective":"2026-09-19T19:50:00Z","expires":"2026-09-19T20:45:00Z"`)
+	asked := 0
+	p := newTestNWSPoller(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}, func(TriggerEvent) error { asked++; return nil }, now)
+	p.Poll(context.Background())
+	if asked != 1 {
+		t.Fatalf("a real in-force tornado warning asked %d times, want 1", asked)
+	}
+}
+
+// TestNWSPollerExpiredAlertNeverAsksAgainOnALaterPoll proves an alert the
+// feed keeps returning past its own expiry does not ask once per poll: the
+// expiry check refuses it whether or not it was pruned from seen.
+func TestNWSPollerExpiredAlertNeverAsksAgainOnALaterPoll(t *testing.T) {
+	now := time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)
+	body := nwsFixtureAlert("urn:oid:2.49.0.1.840.0.alert-0000000000",
+		`"event":"Tornado Warning","status":"Actual","messageType":"Alert","expires":"2026-09-19T20:10:00Z"`)
+	asked := 0
+	current := now
+	p := newTestNWSPoller(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}, func(TriggerEvent) error { asked++; return nil }, now)
+	p.now = func() time.Time { return current }
+
+	p.Poll(context.Background())
+	current = now.Add(time.Hour) // past the alert's own expiry, so seen is pruned
+	p.Poll(context.Background())
+	p.Poll(context.Background())
+	if asked != 1 {
+		t.Fatalf("an expired alert asked %d times, want 1 (the poll while it was in force)", asked)
+	}
+}
+
+// TestNWSPollerHealthNeverCarriesTheConfiguredCoordinates proves a failed
+// poll's reported error does not carry the request URL: that URL carries
+// the installation's own coordinates, and this error is read back through
+// GET /weather-delay and written to the log.
+func TestNWSPollerHealthNeverCarriesTheConfiguredCoordinates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Close() // nothing is listening, so the request fails in the transport
+
+	cfg := NWSPollerConfig{
+		Latitude: 43.0731, Longitude: -89.4012, Contact: "ops@example.com",
+		PollSeconds: 60, EventTypes: []string{"Tornado Warning"},
+	}
+	p := NewNWSPoller(cfg, func(TriggerEvent) error { return nil },
+		func() time.Time { return time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC) }, nil).WithBaseURL(srv.URL)
+	p.Poll(context.Background())
+
+	got := p.Health().LastError
+	if got == "" {
+		t.Fatal("a failed poll recorded no error")
+	}
+	for _, secret := range []string{"43.0731", "89.4012", "point="} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("reported poll error %q carries %q from the request URL", got, secret)
+		}
 	}
 }

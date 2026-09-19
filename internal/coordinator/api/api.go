@@ -960,12 +960,12 @@ func (noWeatherDelayTriggerStore) GetPendingWeatherDelayDecision(context.Context
 	return store.PendingWeatherDelayDecisionRecord{}, false, nil
 }
 
-func (noWeatherDelayTriggerStore) SetPendingWeatherDelayDecision(context.Context, store.PendingWeatherDelayDecisionRecord) error {
-	return fmt.Errorf("api: weather delay trigger store not wired in")
+func (noWeatherDelayTriggerStore) SetPendingWeatherDelayDecision(context.Context, store.PendingWeatherDelayDecisionRecord) (bool, error) {
+	return false, fmt.Errorf("api: weather delay trigger store not wired in")
 }
 
-func (noWeatherDelayTriggerStore) ClearPendingWeatherDelayDecision(context.Context) error {
-	return fmt.Errorf("api: weather delay trigger store not wired in")
+func (noWeatherDelayTriggerStore) ClearPendingWeatherDelayDecision(context.Context, string) (bool, error) {
+	return false, fmt.Errorf("api: weather delay trigger store not wired in")
 }
 
 func (noWeatherDelayTriggerStore) GetWeatherDelayTriggerSuppression(context.Context, string) (store.WeatherDelayTriggerSuppressionRecord, bool, error) {

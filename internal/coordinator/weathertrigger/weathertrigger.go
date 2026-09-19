@@ -113,9 +113,10 @@ func WarningKey(e TriggerEvent) string {
 }
 
 // BuildReason builds the operator-visible sentence for e: fact only, no
-// clock time (an owner ruling superseding the brief this package was built
-// from: ADR-038 leaves the coordinator with no calendar or time zone to
-// render one correctly), and never the warning's own text.
+// clock time, and never the warning's own text. ADR-038 decision 1 leaves
+// the coordinator with no calendar or time zone, so it cannot render a
+// clock time correctly; every time travels as its own RFC 3339 field
+// instead.
 func BuildReason(e TriggerEvent) string {
 	switch e.Kind {
 	case KindWarning:
@@ -145,11 +146,14 @@ func kmToMiles(km float64) int {
 	return int(math.Round(km * 0.621371))
 }
 
-// ClassifyQuestion is ADR-053 decision 12's question logic, reduced to what
-// the coordinator can actually know (owner ruling): every trigger asks
-// "delay" unless it says outright that the night is lost, which only
-// suggestCancel (set by a source that itself knows tonight's schedule) can
-// do. The coordinator computes no schedule of its own.
+// ClassifyQuestion is ADR-053 decision 12's question logic, reduced to
+// what the coordinator can actually know: every trigger asks "delay"
+// unless it says outright that the night is lost, which only suggestCancel
+// (set by a source that itself knows tonight's schedule) can do. ADR-053
+// decision 12 also reaches the cancel question when too little of the
+// night would remain after the warning expires; ADR-038 decision 1 gives
+// the coordinator no calendar or time zone with which to judge that, so
+// that route is not reachable here and is recorded as an acceptance gap.
 func ClassifyQuestion(suggestCancel bool) (question, defaultAction string) {
 	if suggestCancel {
 		return QuestionDelayOrCancel, ActionCancelNight

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -363,5 +364,143 @@ func TestWeatherDelayDecisionRefusesAMismatchedID(t *testing.T) {
 		`{"id":"does-not-exist","answer":"dismiss"}`, auth))
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("decision with an unknown id: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestWeatherDelayDeadlineNeverRunsAfterADismiss proves the failure an
+// unconditional clear allowed: the operator dismisses the question, and a
+// deadline that was already in flight then starts the very delay they
+// declined. The dismiss and the deadline both hold the same decision
+// record; only the one that claims it may act.
+func TestWeatherDelayDeadlineNeverRunsAfterADismiss(t *testing.T) {
+	advance, now := mutableClock(time.Now())
+	api, h, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+
+	postWeatherDelayTrigger(t, api, adminToken, "nws", `{"kind":"warning","eventType":"Tornado Warning"}`)
+	pending, ok, err := st.GetPendingWeatherDelayDecision(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+	}
+
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/decision",
+		`{"id":"`+pending.ID+`","answer":"dismiss"}`, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dismiss: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	// The deadline fires holding the record it read before the dismiss.
+	advance(time.Hour)
+	h.weatherDelayApplyTriggerDeadline(context.Background(), h.now(), pending)
+
+	rec, err := st.GetWeatherDelayState(context.Background())
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	if rec.Active {
+		t.Fatalf("weather delay state = %+v, want nothing started: the operator dismissed the question", rec)
+	}
+}
+
+// TestWeatherDelayDeadlineRunsOnce proves two deadline passes over the same
+// decision run its default action once, which is what a restart at the
+// deadline and two coordinators' timers both look like.
+func TestWeatherDelayDeadlineRunsOnce(t *testing.T) {
+	advance, now := mutableClock(time.Now())
+	api, h, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+
+	postWeatherDelayTrigger(t, api, adminToken, "gateway-1", `{"kind":"warning","eventType":"Tornado Warning","suggestCancel":true}`)
+	pending, ok, err := st.GetPendingWeatherDelayDecision(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+	}
+	advance(time.Hour)
+	h.weatherDelayApplyTriggerDeadline(context.Background(), h.now(), pending)
+	first, err := st.GetWeatherDelayState(context.Background())
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	if !first.Active || first.Kind != "cancelNight" {
+		t.Fatalf("state after the deadline = %+v, want an active cancelNight", first)
+	}
+
+	h.weatherDelayApplyTriggerDeadline(context.Background(), h.now(), pending)
+	second, err := st.GetWeatherDelayState(context.Background())
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	if second.Revision != first.Revision {
+		t.Fatalf("revision after a second deadline pass = %d, want it unchanged at %d", second.Revision, first.Revision)
+	}
+}
+
+// TestWeatherDelayTriggerNeverResumes proves ADR-053 decision 12's "a
+// trigger may start a delay and may never end one" where the trigger path
+// actually lives. Every answer and every defaulted deadline is run against
+// an active cancel night; none of them clears it.
+func TestWeatherDelayTriggerNeverResumes(t *testing.T) {
+	for _, answer := range []string{"delay", "cancelNight", "dismiss"} {
+		for _, viaDeadline := range []bool{false, true} {
+			advance, now := mutableClock(time.Now())
+			_, h, st, _ := newWeatherDelayTriggerTestAPI(t, now)
+			ctx := context.Background()
+
+			if err := st.SetWeatherDelayState(ctx, store.WeatherDelayStateRecord{
+				Active: true, Kind: "cancelNight", StartedAt: now(), StartedBy: "admin-1",
+				StartedByName: "admin-1", Revision: 7,
+			}); err != nil {
+				t.Fatalf("SetWeatherDelayState: %v", err)
+			}
+			pending := store.PendingWeatherDelayDecisionRecord{
+				ID: "dec-" + answer, Source: "nws", Reason: "A tornado warning is in effect.",
+				Question: "delay", DefaultAction: answer, AskedAt: now(), Deadline: now().Add(time.Minute),
+				WarningKey: "nws:warning:Tornado Warning",
+			}
+			if stored, err := st.SetPendingWeatherDelayDecision(ctx, pending); err != nil || !stored {
+				t.Fatalf("SetPendingWeatherDelayDecision: stored=%v, err=%v", stored, err)
+			}
+
+			advance(time.Hour)
+			if viaDeadline {
+				h.weatherDelayApplyTriggerDeadline(ctx, h.now(), pending)
+			} else {
+				h.weatherDelayResolveDecision(ctx, h.now(), pending, answer,
+					weatherDelayTriggerSystemAuthContext("nws"), "", false)
+			}
+
+			rec, err := st.GetWeatherDelayState(ctx)
+			if err != nil {
+				t.Fatalf("GetWeatherDelayState: %v", err)
+			}
+			if !rec.Active || rec.Kind != "cancelNight" {
+				t.Fatalf("answer %q (viaDeadline=%v) left state %+v, want the cancel night still set", answer, viaDeadline, rec)
+			}
+		}
+	}
+}
+
+// TestWeatherDelayPendingDecisionRowHoldsNoWarningText proves the v43 row
+// carries only ShowMesh's own sentence: the severity a source reported and
+// any text it sent along appear in no column.
+func TestWeatherDelayPendingDecisionRowHoldsNoWarningText(t *testing.T) {
+	_, now := mutableClock(time.Now())
+	api, _, st, adminToken := newWeatherDelayTriggerTestAPI(t, now)
+
+	postWeatherDelayTrigger(t, api, adminToken, "nws",
+		`{"kind":"warning","eventType":"Tornado Warning","severity":"Extreme"}`)
+
+	pending, ok, err := st.GetPendingWeatherDelayDecision(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetPendingWeatherDelayDecision: ok=%v, err=%v", ok, err)
+	}
+	if pending.Reason != "A tornado warning is in effect." {
+		t.Fatalf("reason = %q, want ShowMesh's own sentence", pending.Reason)
+	}
+	row := strings.Join([]string{
+		pending.ID, pending.Source, pending.Reason, pending.Question,
+		pending.DefaultAction, pending.WarningKey,
+	}, "\x00")
+	if strings.Contains(row, "Extreme") {
+		t.Fatalf("the stored decision row carries the source's severity: %q", row)
 	}
 }

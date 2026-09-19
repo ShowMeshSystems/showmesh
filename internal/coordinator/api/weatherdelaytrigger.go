@@ -22,9 +22,9 @@ import (
 
 // ADR-053 decision 12: automatic triggers that ask first, then start a
 // delay or cancel the night. A trigger may start or change to a cancel; it
-// may never resume (see internal/coordinator/weathertrigger's own
-// TestPackageNeverImportsAPI for the strongest statement of that rule this
-// build makes).
+// may never resume: weatherDelayResolveDecision below runs only start and
+// cancel-night, never the resume path, and
+// TestWeatherDelayTriggerNeverResumes holds it to that.
 
 const (
 	maxWeatherDelayTriggerRequestBodyBytes  = 2048
@@ -113,10 +113,14 @@ func (h *handlers) handleWeatherDelayTrigger(w http.ResponseWriter, r *http.Requ
 }
 
 func mapWeatherDelayPendingDecision(rec store.PendingWeatherDelayDecisionRecord) v1.WeatherDelayPendingDecision {
-	return v1.WeatherDelayPendingDecision{
+	wire := v1.WeatherDelayPendingDecision{
 		ID: rec.ID, Source: rec.Source, Reason: rec.Reason, Question: rec.Question,
 		DefaultAction: rec.DefaultAction, AskedAt: formatTime(rec.AskedAt), Deadline: formatTime(rec.Deadline),
 	}
+	if !rec.ExpiresAt.IsZero() {
+		wire.ExpiresAt = formatTime(rec.ExpiresAt)
+	}
+	return wire
 }
 
 // weatherDelayReceiveTrigger is ADR-053 decision 12's trigger intake,
@@ -125,8 +129,8 @@ func mapWeatherDelayPendingDecision(rec store.PendingWeatherDelayDecisionRecord)
 // on its own: it only raises or leaves alone the one pending decision.
 // err is non-nil only for a failure that is worth the caller retrying (a
 // poller re-polls; the HTTP handler answers an internal error); every
-// other outcome — suppressed, already active, already pending, invalid —
-// is a normal, non-error answer.
+// other outcome (suppressed, already active, already pending, invalid) is
+// a normal, non-error answer.
 func (h *handlers) weatherDelayReceiveTrigger(ctx context.Context, now time.Time, ev weathertrigger.TriggerEvent, ac authContext, clientAddr string) (accepted bool, pending *store.PendingWeatherDelayDecisionRecord, message string, err error) {
 	audit := func(outcome string, params map[string]any) {
 		if params == nil {
@@ -184,9 +188,24 @@ func (h *handlers) weatherDelayReceiveTrigger(ctx context.Context, now time.Time
 		ID: pd.ID, Source: pd.Source, Reason: pd.Reason, Question: pd.Question, DefaultAction: pd.DefaultAction,
 		AskedAt: pd.AskedAt, Deadline: pd.Deadline, WarningKey: warningKey,
 	}
-	if serr := h.deps.WeatherDelayTrigger.SetPendingWeatherDelayDecision(ctx, rec); serr != nil {
+	if ev.ExpiresAt != nil {
+		rec.ExpiresAt = *ev.ExpiresAt
+	}
+	stored, serr := h.deps.WeatherDelayTrigger.SetPendingWeatherDelayDecision(ctx, rec)
+	if serr != nil {
 		audit("failed: could not persist the pending decision", map[string]any{"error": serr.Error()})
 		return false, nil, "The pending decision could not be saved. Try again.", serr
+	}
+	// A decision raised between the read above and this write keeps its
+	// place: one question at a time, whichever source got there first.
+	if !stored {
+		existing, ok, perr := h.deps.WeatherDelayTrigger.GetPendingWeatherDelayDecision(ctx)
+		if perr != nil || !ok {
+			audit("ignored: a decision is already pending", nil)
+			return true, nil, "A decision is already pending. This trigger did not raise a second one.", nil
+		}
+		audit("ignored: a decision is already pending", map[string]any{"pendingDecisionId": existing.ID})
+		return true, &existing, "A decision is already pending. This trigger did not raise a second one.", nil
 	}
 	audit("asked", map[string]any{"pendingDecisionId": rec.ID, "question": rec.Question})
 	h.weatherDelayNotifyDecision(ctx, "decisionNeeded", pd)
@@ -245,27 +264,34 @@ func (h *handlers) handleWeatherDelayDecision(w http.ResponseWriter, r *http.Req
 		h.writeInternalError(w, now, "get pending weather delay decision", err)
 		return
 	}
-	if !ok || pending.ID != req.ID {
+	resp, claimed := h.weatherDelayResolveDecision(ctx, now, pending, req.Answer, ac, clientAddr, false)
+	if !ok || pending.ID != req.ID || !claimed {
 		writeProblem(w, h.logger, now, v1.Problem{
 			Type: ProblemTypeConflict, Title: "No matching pending decision", Status: http.StatusConflict,
 			Detail: "There is no pending weather delay decision with that id. It may already have been answered or timed out.",
 		})
 		return
 	}
-
-	resp := h.weatherDelayResolveDecision(ctx, now, pending, req.Answer, ac, clientAddr, false)
 	jsonWrite(w, resp)
 }
 
-// weatherDelayResolveDecision clears the pending decision and runs answer:
+// weatherDelayResolveDecision claims the pending decision by deleting the
+// row carrying pending.ID, and runs answer only if that delete removed it:
 // dismiss persists a suppression, delay and cancelNight run exactly
 // [handlers.weatherDelayRunStartOrChange], the same path start/cancel-night
-// themselves use. viaDeadline marks an audit entry raised by
-// [handlers.weatherDelayApplyTriggerDeadline] rather than an operator's own
-// POST.
-func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord, answer string, ac authContext, clientAddr string, viaDeadline bool) v1.WeatherDelayDecisionResponse {
-	if err := h.deps.WeatherDelayTrigger.ClearPendingWeatherDelayDecision(ctx); err != nil {
-		h.logWarn("weather delay decision: failed to clear the pending decision; proceeding anyway", "error", err)
+// themselves use. An operator's answer and that decision's own deadline
+// race here, as do two coordinators' timers after a restart, and claimed
+// is how exactly one of them acts. viaDeadline marks an audit entry raised
+// by [handlers.weatherDelayApplyTriggerDeadline] rather than an operator's
+// own POST.
+func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord, answer string, ac authContext, clientAddr string, viaDeadline bool) (v1.WeatherDelayDecisionResponse, bool) {
+	claimed, err := h.deps.WeatherDelayTrigger.ClearPendingWeatherDelayDecision(ctx, pending.ID)
+	if err != nil {
+		h.logWarn("weather delay decision: failed to claim the pending decision; taking no action on it", "error", err)
+		return v1.WeatherDelayDecisionResponse{ServerTime: formatTime(now), Answer: answer}, false
+	}
+	if !claimed {
+		return v1.WeatherDelayDecisionResponse{ServerTime: formatTime(now), Answer: answer}, false
 	}
 
 	resp := v1.WeatherDelayDecisionResponse{ServerTime: formatTime(now), Answer: answer}
@@ -306,7 +332,7 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 		DefaultAction: pending.DefaultAction, AskedAt: pending.AskedAt, Deadline: pending.Deadline,
 	})
 	h.notifyStreamHub()
-	return resp
+	return resp, true
 }
 
 // weatherDelayApplyTriggerDeadline runs pending's default action once its
@@ -314,7 +340,7 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 // source (ADR-053 decision 12: "startedBy = the trigger source name").
 func (h *handlers) weatherDelayApplyTriggerDeadline(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord) {
 	ac := weatherDelayTriggerSystemAuthContext(pending.Source)
-	h.weatherDelayResolveDecision(ctx, now, pending, pending.DefaultAction, ac, "", true)
+	_, _ = h.weatherDelayResolveDecision(ctx, now, pending, pending.DefaultAction, ac, "", true)
 }
 
 // weatherDelayTriggerSystemAuthContext is the synthetic authContext an

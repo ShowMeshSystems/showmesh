@@ -24,8 +24,8 @@ func TestPendingWeatherDelayDecisionRoundTrip(t *testing.T) {
 		Question: "delay", DefaultAction: "delay", AskedAt: asked, Deadline: deadline,
 		WarningKey: "nws:warning:Severe Thunderstorm Warning",
 	}
-	if err := st.SetPendingWeatherDelayDecision(ctx, rec); err != nil {
-		t.Fatalf("SetPendingWeatherDelayDecision: %v", err)
+	if stored, err := st.SetPendingWeatherDelayDecision(ctx, rec); err != nil || !stored {
+		t.Fatalf("SetPendingWeatherDelayDecision = (stored=%v, err=%v), want stored=true", stored, err)
 	}
 
 	got, ok, err := st.GetPendingWeatherDelayDecision(ctx)
@@ -36,27 +36,38 @@ func TestPendingWeatherDelayDecisionRoundTrip(t *testing.T) {
 		t.Fatalf("GetPendingWeatherDelayDecision = %+v, want %+v", got, rec)
 	}
 
-	// A second set overwrites in place: only one decision is ever pending.
+	// A second set never displaces the first: whichever source asked
+	// first keeps the question and its own deadline.
 	rec2 := rec
 	rec2.ID, rec2.Question, rec2.DefaultAction = "dec-2", "delayOrCancel", "cancelNight"
-	if err := st.SetPendingWeatherDelayDecision(ctx, rec2); err != nil {
-		t.Fatalf("SetPendingWeatherDelayDecision (overwrite): %v", err)
+	if stored, err := st.SetPendingWeatherDelayDecision(ctx, rec2); err != nil || stored {
+		t.Fatalf("SetPendingWeatherDelayDecision over a pending one = (stored=%v, err=%v), want stored=false", stored, err)
 	}
 	got, ok, err = st.GetPendingWeatherDelayDecision(ctx)
-	if err != nil || !ok || got.ID != "dec-2" {
-		t.Fatalf("GetPendingWeatherDelayDecision after overwrite = %+v, ok=%v, err=%v, want dec-2", got, ok, err)
+	if err != nil || !ok || got.ID != "dec-1" {
+		t.Fatalf("GetPendingWeatherDelayDecision after a losing set = %+v, ok=%v, err=%v, want dec-1", got, ok, err)
 	}
 
-	if err := st.ClearPendingWeatherDelayDecision(ctx); err != nil {
-		t.Fatalf("ClearPendingWeatherDelayDecision: %v", err)
+	// Clearing under a different id claims nothing and removes nothing.
+	if claimed, err := st.ClearPendingWeatherDelayDecision(ctx, "dec-2"); err != nil || claimed {
+		t.Fatalf("ClearPendingWeatherDelayDecision under the wrong id = (claimed=%v, err=%v), want claimed=false", claimed, err)
+	}
+	if _, ok, err := st.GetPendingWeatherDelayDecision(ctx); err != nil || !ok {
+		t.Fatalf("GetPendingWeatherDelayDecision after a wrong-id clear = (ok=%v, err=%v), want it still pending", ok, err)
+	}
+
+	if claimed, err := st.ClearPendingWeatherDelayDecision(ctx, "dec-1"); err != nil || !claimed {
+		t.Fatalf("ClearPendingWeatherDelayDecision = (claimed=%v, err=%v), want claimed=true", claimed, err)
 	}
 	if _, ok, err := st.GetPendingWeatherDelayDecision(ctx); err != nil || ok {
 		t.Fatalf("GetPendingWeatherDelayDecision after clear = (ok=%v, err=%v), want ok=false, err=nil", ok, err)
 	}
 
-	// Clearing an already-clear row is a no-op, not an error.
-	if err := st.ClearPendingWeatherDelayDecision(ctx); err != nil {
-		t.Fatalf("ClearPendingWeatherDelayDecision (already clear): %v", err)
+	// Exactly one caller claims a decision: a second clear of the same id
+	// removes nothing, which is what makes an answer and its own deadline
+	// race safely.
+	if claimed, err := st.ClearPendingWeatherDelayDecision(ctx, "dec-1"); err != nil || claimed {
+		t.Fatalf("ClearPendingWeatherDelayDecision (already claimed) = (claimed=%v, err=%v), want claimed=false", claimed, err)
 	}
 }
 
