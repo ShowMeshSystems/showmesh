@@ -635,10 +635,10 @@ register entry comes from the code and never from a plan.
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
 | `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
-| `show.weatherdelay.cancel_night` | reserved | ADR-053 weather delay: a cancel night started, or a delay changed into one |
+| `show.weatherdelay.cancel_night` | shipped | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
-| `show.weatherdelay.presign` | reserved | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
+| `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
 | `show.weatherdelay.trigger` | reserved | ADR-053 weather delay: an automatic trigger was received from a source |
 | `show.weatherdelay.decision` | reserved | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
@@ -1407,6 +1407,7 @@ The store schema version, bumped by migrations in
 | v40 | shipped | owner ask 2026-09-18: adds `night_cycle_outcomes`, one row per night session cycle recording how its show ended (`nightcycleoutcome.go`'s own doc comment), so a finished cycle can be reported instead of the operator UI's placeholder. A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36/schemaV38: no existing table is touched, and a cycle that ran before this migration simply has no row |
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
+| v43 | reserved | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
 | v43+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
