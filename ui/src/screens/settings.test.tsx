@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
+import { makeNode } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
 
 const stubs = vi.hoisted(() => ({
@@ -22,6 +23,9 @@ const stubs = vi.hoisted(() => ({
   getRenderSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putRenderSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getRenderSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getWeatherDelayConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -59,6 +63,9 @@ vi.mock('../api', async () => {
     getRenderSettingsConfig: (...args: never[]) => stubs.getRenderSettingsConfig(...args),
     putRenderSettingsConfig: (...args: never[]) => stubs.putRenderSettingsConfig(...args),
     getRenderSettingsConfigRevisions: (...args: never[]) => stubs.getRenderSettingsConfigRevisions(...args),
+    getWeatherDelayConfig: (...args: never[]) => stubs.getWeatherDelayConfig(...args),
+    putWeatherDelayConfig: (...args: never[]) => stubs.putWeatherDelayConfig(...args),
+    getWeatherDelayConfigRevisions: (...args: never[]) => stubs.getWeatherDelayConfigRevisions(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
     putAudioSettingsConfig: (...args: never[]) => stubs.putAudioSettingsConfig(...args),
     getAudioSettingsConfigRevisions: (...args: never[]) => stubs.getAudioSettingsConfigRevisions(...args),
@@ -387,6 +394,112 @@ describe('Settings › Render recovery', () => {
     renderAt('/settings/recovery')
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
+  })
+})
+
+describe('Settings › Weather delay', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  function weatherDelayConfig(payload: Record<string, unknown> = {}, revision = 1, source = 'api') {
+    return {
+      serverTime: '2026-09-19T21:00:00Z',
+      kind: 'show.weatherdelay',
+      revision,
+      payload,
+      updatedAt: '2026-09-19T18:00:00Z',
+      createdByPrincipalId: revision === 0 ? null : 'p1',
+      createdByPrincipalName: revision === 0 ? null : 'erbartos',
+      source,
+    }
+  }
+
+  it('says nothing has been written rather than showing a bare zero for revision 0/source default', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}, 0, 'default'))
+
+    renderAt('/settings/recovery')
+
+    await waitFor(() => expect(screen.getByText(/Nothing has been written for weather delay yet/)).toBeInTheDocument())
+    expect(screen.getByText('No power group is configured.')).toBeInTheDocument()
+  })
+
+  it('saves the alert repeat count and target nodes, every field optional', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.putWeatherDelayConfig = vi.fn((payload: unknown) =>
+      Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
+    )
+
+    renderAt('/settings/recovery', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
+
+    await screen.findByText('Weather delay')
+    fireEvent.change(screen.getByLabelText('Repeat count'), { target: { value: '6' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /stage-node/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
+
+    await waitFor(() => expect(stubs.putWeatherDelayConfig).toHaveBeenCalledTimes(1))
+    expect(stubs.putWeatherDelayConfig).toHaveBeenCalledWith({
+      alert: { repeatCount: 6, nodeIds: ['stage-node'] },
+      powerGroups: [],
+      triggers: {},
+    })
+  })
+
+  it('adds a power group and saves its id, heartbeat, and members', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.putWeatherDelayConfig = vi.fn((payload: unknown) =>
+      Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
+    )
+
+    renderAt('/settings/recovery')
+    await screen.findByText('Weather delay')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add power group' }))
+    fireEvent.change(screen.getByLabelText('Id'), { target: { value: 'lighting' } })
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Lighting' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /publish this group.s dark heartbeat/i }))
+    fireEvent.change(screen.getByLabelText('Heartbeat interval (seconds)'), { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
+
+    await waitFor(() => expect(stubs.putWeatherDelayConfig).toHaveBeenCalledTimes(1))
+    expect(stubs.putWeatherDelayConfig).toHaveBeenCalledWith({
+      alert: {},
+      powerGroups: [{ id: 'lighting', label: 'Lighting', heartbeat: { enabled: true, intervalSeconds: 30 } }],
+      triggers: {},
+    })
+  })
+
+  it('shows a saved alert asset by its id when the asset list does not include it, not as No alert asset', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({ alert: { delayAssetId: 'asset-siren' } }))
+    stubs.listAssets = () => Promise.reject(new ApiError('Assets could not be listed.', 503))
+
+    renderAt('/settings/recovery')
+
+    await screen.findByText('Weather delay')
+    expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
+    expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
+  })
+
+  it('refuses a save while a delay is active and shows the coordinator’s own message verbatim', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.putWeatherDelayConfig = () =>
+      Promise.reject(new ApiError('A weather delay is active. Configuration cannot change until it is cleared.', 409))
+
+    renderAt('/settings/recovery')
+    await screen.findByText('Weather delay')
+    fireEvent.change(screen.getByLabelText('Repeat count'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
+
+    expect(await screen.findByText('A weather delay is active. Configuration cannot change until it is cleared.')).toBeInTheDocument()
   })
 })
 

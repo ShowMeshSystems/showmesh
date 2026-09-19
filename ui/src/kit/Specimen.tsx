@@ -11,6 +11,7 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  WeatherDelayBanner,
   ConfirmDialog,
   ConnectionPill,
   DefinitionStrip,
@@ -376,6 +377,19 @@ export function Specimen() {
             />
             <ChromeProgress value={0.61} label="Position in the current item" />
             <ClockSkewStrip>This browser&rsquo;s clock is behind the coordinator&rsquo;s, the reference clock, by about 4 m 12 s. Every age and relative time shown here is off by roughly that much.</ClockSkewStrip>
+            <WeatherDelayBanner
+              kindLabel="Weather delay"
+              elapsedLabel="Started 6 m 12 s ago"
+              startedByLabel="Started by operator"
+              savedLabel="Saved"
+              resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
+              cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <WeatherDelayBanner
+              unknown
+              kindLabel="Weather delay state unknown"
+              elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
+            />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>

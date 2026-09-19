@@ -51,6 +51,7 @@ import {
   type NightCommandName,
   type ObservationEntry,
   type ResolumeActionResult,
+  type WeatherDelayTargetOutcome,
 } from '../api'
 import {
   Button,
@@ -77,6 +78,7 @@ import {
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis } from '../domain/time'
 import {
@@ -316,6 +318,153 @@ function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeState | nu
   )
 }
 
+type WeatherDelayActionName = 'start' | 'cancelNight' | 'resume'
+
+const WEATHER_DELAY_ACTION_LABEL: Record<WeatherDelayActionName, string> = {
+  start: 'Weather delay',
+  cancelNight: 'Cancel night',
+  resume: 'Resume',
+}
+
+/** The five target-kind groups a weather-delay action's own targets fall into, in display order - mirrors [STOP_OUTCOME_TARGET_KIND_GROUPS] plus render surfaces and the weatherdelay.start/resume node command itself (ADR-053 decision 8). */
+const WEATHER_DELAY_TARGET_KIND_GROUPS: Array<{ kind: string; label: string; column: string }> = [
+  { kind: 'fpp', label: 'FPP', column: 'FPP instance' },
+  { kind: 'node', label: 'audio node', column: 'Audio node' },
+  { kind: 'resolume', label: 'Resolume', column: 'Resolume instance' },
+  { kind: 'render', label: 'render surface', column: 'Render surface' },
+  { kind: 'node-command', label: 'node command', column: 'Target' },
+]
+
+function groupWeatherDelayTargetsByKind(
+  targets: WeatherDelayTargetOutcome[],
+): Array<{ kind: string; label: string; column: string; targets: WeatherDelayTargetOutcome[] }> {
+  return WEATHER_DELAY_TARGET_KIND_GROUPS.map((g) => ({ ...g, targets: targets.filter((row) => row.targetKind === g.kind) }))
+}
+
+/**
+ * Reuses [instanceOutcomeTone] and the same grouped-table shape
+ * [EmergencyStopOutcome] renders: what each target's own outcome was, per
+ * kind, with no combined pass/fail rollup - a node reached by only one of
+ * its two delivery paths (mqtt/http) still shows as its own row, via
+ * `deliveredVia`. [WeatherDelayActionResult.notSavedMessage] is the
+ * coordinator's own operator sentence, rendered verbatim.
+ */
+function WeatherDelayOutcomePanel() {
+  const weatherDelay = useWeatherDelay()
+  const { outcome } = weatherDelay
+  if (outcome.kind === 'idle') return null
+  if (outcome.kind === 'error') {
+    const headline =
+      outcome.status !== undefined
+        ? `${WEATHER_DELAY_ACTION_LABEL[outcome.action]} was refused: ${outcome.message}`
+        : `${WEATHER_DELAY_ACTION_LABEL[outcome.action]}: the coordinator reported no outcome: ${outcome.message}`
+    return <Notice tone="bad" headline={headline} />
+  }
+  const { action, result } = outcome
+  const groups = groupWeatherDelayTargetsByKind(result.targets)
+  return (
+    <div className="sm-lc-emergency__outcome">
+      <p className="sm-small">
+        <strong>{WEATHER_DELAY_ACTION_LABEL[action]}</strong> was dispatched.
+      </p>
+      {result.notSaved === true && result.notSavedMessage !== undefined && (
+        <Notice tone="warn" live="status" headline={result.notSavedMessage} />
+      )}
+      {groups.map(
+        (group) =>
+          group.targets.length > 0 && (
+            <TableWrap key={group.kind} label={`${WEATHER_DELAY_ACTION_LABEL[action]}, per ${group.label} target`}>
+              <Table minWidth={480}>
+                <thead>
+                  <tr>
+                    <th scope="col">{group.column}</th>
+                    <th scope="col">Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.targets.map((row) => (
+                    <tr key={`${row.targetKind}:${row.instanceId}`}>
+                      <td>
+                        <span className="sm-data">{row.instanceId}</span>
+                      </td>
+                      <td>
+                        <StatusPair tone={instanceOutcomeTone(row.outcome)} label={row.outcome} />
+                        <p className="sm-small sm-muted">{row.outcomeReason}</p>
+                        {row.deliveredVia !== undefined && (
+                          <p className="sm-small sm-faint">Delivered via {row.deliveredVia}.</p>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ),
+      )}
+    </div>
+  )
+}
+
+/**
+ * ADR-053 decision 7's own alert asset, per plan node, from GET
+ * /weather-delay's `assets` field - the only readiness fact this API
+ * reports. Power-group "confirmed dark" is not: no field for it exists on
+ * `WeatherDelayStateResponse`, so nothing renders for it here (the four
+ * absences: a subsystem the API does not report is not rendered).
+ */
+function WeatherDelayReadiness() {
+  const weatherDelay = useWeatherDelay()
+  if (weatherDelay.state.kind !== 'loaded') return null
+  const assets = weatherDelay.state.response.assets ?? []
+  if (assets.length === 0) return null
+  return (
+    <TableWrap label="Weather delay, alert readiness per node">
+      <Table minWidth={480}>
+        <thead>
+          <tr>
+            <th scope="col">Node</th>
+            <th scope="col">Delay alert</th>
+            <th scope="col">Cancel-night alert</th>
+          </tr>
+        </thead>
+        <tbody>
+          {assets.map((row) => (
+            <tr key={row.nodeId}>
+              <td>
+                <span className="sm-data">{row.nodeId}</span>
+              </td>
+              <td>
+                {row.delayAsset === undefined ? (
+                  <span className="sm-small sm-faint">Not configured</span>
+                ) : (
+                  <StatusPair
+                    tone={row.delayAsset.present ? 'good' : 'bad'}
+                    label={row.delayAsset.present ? 'On node' : 'Missing on node'}
+                  />
+                )}
+                {row.delayAsset?.filename !== undefined && <p className="sm-small sm-muted">{row.delayAsset.filename}</p>}
+              </td>
+              <td>
+                {row.cancelNightAsset === undefined ? (
+                  <span className="sm-small sm-faint">Not configured</span>
+                ) : (
+                  <StatusPair
+                    tone={row.cancelNightAsset.present ? 'good' : 'bad'}
+                    label={row.cancelNightAsset.present ? 'On node' : 'Missing on node'}
+                  />
+                )}
+                {row.cancelNightAsset?.filename !== undefined && (
+                  <p className="sm-small sm-muted">{row.cancelNightAsset.filename}</p>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </TableWrap>
+  )
+}
+
 export function LiveControl() {
   const model = useModelContext()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
@@ -326,6 +475,8 @@ export function LiveControl() {
   const resolumeGate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
   const audioGate = evaluateScope(model.session, model.sessionFetchFailed, 'audio:command')
   const emergencyGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:emergencystop:invoke')
+  const weatherDelayGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:invoke')
+  const weatherDelay = useWeatherDelay()
 
   const [selected, setSelected] = useState<string | null>(null)
   const instance = model.fpp.find((entry) => entry.instanceId === selected) ?? model.fpp[0]
@@ -607,6 +758,32 @@ export function LiveControl() {
               >
                 Fire hard stop
               </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!weatherDelayGate.allowed || weatherDelay.busy !== false}
+              title={
+                weatherDelayGate.allowed
+                  ? 'Stops the display and starts the configured weather alert. The show is dark for as long as this stays active; resume tonight when it is safe.'
+                  : weatherDelayGate.reason
+              }
+              onClick={weatherDelay.start}
+            >
+              {weatherDelay.busy === 'start' ? 'Starting…' : 'Weather delay'}
+            </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!weatherDelayGate.allowed || weatherDelay.busy !== false}
+              title={
+                weatherDelayGate.allowed
+                  ? 'Stops the display, starts the configured cancel-night alert, and runs the normal graceful power-down. The show will not resume tonight.'
+                  : weatherDelayGate.reason
+              }
+              onClick={weatherDelay.cancelNight}
+            >
+              {weatherDelay.busy === 'cancelNight' ? 'Cancelling night…' : 'Cancel night'}
+            </Button>
           </ButtonRow>
           {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
           {hardStopArm !== null && armRemainingMs !== null && (
@@ -624,6 +801,8 @@ export function LiveControl() {
           {resolumeBlackoutError !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={resolumeBlackoutError} />}
 
           <EmergencyStopOutcome outcome={emergencyOutcome} />
+          <WeatherDelayOutcomePanel />
+          <WeatherDelayReadiness />
         </div>
       </Section>
   )
