@@ -85,10 +85,6 @@ func (e *wedgingEngine) SetGain(ctx context.Context, handle EngineHandle, gain p
 // holds the call no longer than its bound, is reported as unmuted, and does
 // not stop every other session being muted.
 func TestZeroGainExceptDoesNotHangOnAWedgedSession(t *testing.T) {
-	old := engineCallTimeout
-	engineCallTimeout = 200 * time.Millisecond
-	defer func() { engineCallTimeout = old }()
-
 	c := newClock(time.Now())
 	dir := t.TempDir()
 	fake := NewFakeEngine(c.now)
@@ -112,9 +108,14 @@ func TestZeroGainExceptDoesNotHangOnAWedgedSession(t *testing.T) {
 	engine.wedge = wedgedSession.handle
 	wedgedSession.mu.Unlock()
 
+	// Cancelling the mute's own context releases the wedged engine call
+	// when the test ends.
+	muteCtx, cancelMute := context.WithCancel(ctx)
+	defer cancelMute()
+
 	const bound = 50 * time.Millisecond
 	began := time.Now()
-	unmuted := m.ZeroGainExcept(ctx, excluded, bound)
+	unmuted := m.ZeroGainExcept(muteCtx, excluded, bound)
 	if elapsed := time.Since(began); elapsed > bound+100*time.Millisecond {
 		t.Fatalf("ZeroGainExcept took %v, want no more than about %v", elapsed, bound)
 	}
@@ -174,10 +175,6 @@ func TestSilenceAllExceptLeavesTheExcludedSessionPlaying(t *testing.T) {
 // lock is held by another call (a commanded Stop wedged in the engine)
 // cannot hold up ZeroGainExcept, and so cannot hold up the alert.
 func TestZeroGainExceptDoesNotWaitOnAHeldSessionLock(t *testing.T) {
-	old := engineCallTimeout
-	engineCallTimeout = 200 * time.Millisecond
-	defer func() { engineCallTimeout = old }()
-
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()

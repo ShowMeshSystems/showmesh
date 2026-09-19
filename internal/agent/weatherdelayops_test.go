@@ -126,6 +126,7 @@ func TestWeatherDelayStartOrdering(t *testing.T) {
 
 	const other = pkgaudio.SessionID("other-session")
 	otherRef := writeTestWAV(t, dir, "other.wav", "other-asset")
+	t.Cleanup(weatherDelayBackground.Wait)
 	if r := mgr.Apply(context.Background(), other, "apply-other", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(otherRef)}); r.Outcome == pkgaudio.OutcomeRefused {
 		t.Fatalf("apply other: %+v", r)
 	}
@@ -195,6 +196,7 @@ func TestWeatherDelayStartsAlertEvenWhenAnotherSessionsStopBlocksForever(t *test
 
 	const wedged = pkgaudio.SessionID("wedged-session")
 	wedgedRef := writeTestWAV(t, dir, "wedged.wav", "wedged-asset")
+	t.Cleanup(weatherDelayBackground.Wait)
 	mgr.Apply(context.Background(), wedged, "apply-wedged", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(wedgedRef)})
 	mgr.Start(context.Background(), wedged, "start-wedged", 2)
 	wedgedHandle, ok := fake.LastLoadedHandle()
@@ -377,6 +379,7 @@ func TestWeatherDelayStartWithNoConfiguredAssetStillZeroesAndSilences(t *testing
 
 	const other = pkgaudio.SessionID("other-session")
 	otherRef := writeTestWAV(t, dir, "other.wav", "other-asset")
+	t.Cleanup(weatherDelayBackground.Wait)
 	mgr.Apply(context.Background(), other, "apply-other", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(otherRef)})
 	mgr.Start(context.Background(), other, "start-other", 2)
 

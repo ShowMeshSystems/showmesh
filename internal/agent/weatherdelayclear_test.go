@@ -48,6 +48,7 @@ func newWeatherDelayFixture(t *testing.T) *weatherDelayFixture {
 
 func startOtherSession(t *testing.T, mgr *audio.Manager, dir string) {
 	t.Helper()
+	t.Cleanup(weatherDelayBackground.Wait)
 	ref := writeTestWAV(t, dir, "other.wav", "other-asset")
 	if r := mgr.Apply(context.Background(), weatherDelayOtherSession, "apply-other", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome == pkgaudio.OutcomeRefused {
 		t.Fatalf("apply other: %+v", r)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -30,6 +31,10 @@ var weatherDelayMuteBound = 500 * time.Millisecond
 
 var weatherDelayStartKnownKeys = map[string]bool{"kind": true}
 var weatherDelayResumeKnownKeys = map[string]bool{}
+
+// weatherDelayBackground counts the stop passes still running after a start
+// sequence returned, so a test can wait for them before its directory goes.
+var weatherDelayBackground sync.WaitGroup
 
 type weatherDelayOperations struct {
 	holder   *WeatherDelayHolder
@@ -105,7 +110,11 @@ func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind stri
 	alertPlaying, alertReason = o.startAlert(ctx, kind)
 
 	if o.audioMgr != nil {
-		go o.audioMgr.SilenceAllExcept(context.Background(), weatherDelayAlertSessionID)
+		weatherDelayBackground.Add(1)
+		go func() {
+			defer weatherDelayBackground.Done()
+			o.audioMgr.SilenceAllExcept(context.Background(), weatherDelayAlertSessionID)
+		}()
 	}
 	return alertPlaying, alertReason, unsilenced
 }
