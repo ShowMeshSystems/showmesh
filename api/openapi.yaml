@@ -14613,6 +14613,23 @@ components:
             configured; nothing else about this response changes.
           items:
             $ref: "#/components/schemas/WeatherDelayPowerGroupStatus"
+        heldPlayers:
+          type: array
+          description: >-
+            Players whose gate reads closed while no delay is active. The
+            coordinator never opens a gate on its own; only POST
+            /weather-delay/resume does. Empty while a delay is active.
+          items:
+            $ref: "#/components/schemas/WeatherDelayHeldPlayer"
+    WeatherDelayHeldPlayer:
+      type: object
+      required: [instanceId, message]
+      properties:
+        instanceId:
+          type: string
+        message:
+          type: string
+          description: An operator sentence naming the player and the Resume action.
     WeatherDelayPowerGroupStatus:
       type: object
       required: [id, confirmedDark, members]
@@ -19715,11 +19732,12 @@ components:
       description: >-
         The payload of a "weatherDelay.changed" SSE event (ADR-053): one
         kind for both the delay's own state change (start, resume, cancel)
-        and a power group's own confirmedDark flip, mirroring
+        a power group's own confirmedDark flip, and a change in
+        heldPlayers, mirroring
         NightSessionChangedEvent's own "full state, not delta" posture.
         The fields are the same ones GET /weather-delay reports, minus
         assets, which this stream does not carry.
-      required: [seq, serverTime, active, revision, powerGroups]
+      required: [seq, serverTime, active, revision, powerGroups, heldPlayers]
       properties:
         seq:
           type: integer
@@ -19743,6 +19761,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WeatherDelayPowerGroupStatus"
+        heldPlayers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayHeldPlayer"
     NightInterlockOverride:
       type: object
       description: >-

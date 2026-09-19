@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -257,33 +259,127 @@ func TestWeatherDelayEnforceTreatsAFailingGateReadAsNotClosed(t *testing.T) {
 	}
 }
 
-func TestWeatherDelayEnforceNotActiveSendsOnlyTheStaleGateReopen(t *testing.T) {
+func TestWeatherDelayEnforceNotActiveNeverOpensAClosedGateAndReportsIt(t *testing.T) {
 	fpp := newFakeFPPPluginServer(t)
-	fpp.setGate(true, 3) // stayed closed after a resume it never learned about
+	fpp.setGate(true, 3) // closed by a start this coordinator never saw
 	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
 	h.setState(false, 5)
 	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValuePlaying, h.now)})
 
 	e := h.enforcer()
-	e.tick(context.Background(), h.now)
+	for i := 0; i < 8; i++ {
+		e.tick(context.Background(), h.now.Add(time.Duration(i)*weatherDelayEnforceInterval))
+	}
 
 	if cmds := fpp.commandList(); len(cmds) != 0 {
 		t.Fatalf("commands = %v, want none while not active, even for a playing observation", cmds)
 	}
-	if fpp.isClosed() {
-		t.Fatal("the stale-closed gate was not reopened")
+	if got := fpp.gateSetCount(); got != 0 || !fpp.isClosed() {
+		t.Fatalf("gate set count = %d, closed = %v; want no write and the gate still closed", got, fpp.isClosed())
 	}
-	if got := fpp.gateSetCount(); got != 1 {
-		t.Fatalf("gate set count = %d, want exactly 1", got)
+	held := h.handlers().weatherDelayHeldPlayers(context.Background(), h.now.Add(35*time.Second), false)
+	want := "Player player-01 is being held dark and no weather delay is active. Press Resume to release it."
+	if len(held) != 1 || held[0].InstanceID != "player-01" || held[0].Message != want {
+		t.Fatalf("heldPlayers = %+v, want player-01 with the operator sentence", held)
+	}
+	entries, err := h.deps.Identity.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	for _, en := range entries {
+		if en.Action == identity.AuditActionShowWeatherDelayEnforce {
+			t.Fatalf("audit entry %+v written while no delay is active", en)
+		}
+	}
+}
+
+func TestWeatherDelayEnforceNotActiveReadsGatesAtTheIdleInterval(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.setState(false, 5)
+
+	e := h.enforcer()
+	e.tick(context.Background(), h.now)
+	fpp.setGate(true, 3)
+	e.tick(context.Background(), h.now.Add(weatherDelayEnforceInterval))
+	if held := h.handlers().weatherDelayHeldPlayers(context.Background(), h.now.Add(weatherDelayEnforceInterval), false); len(held) != 0 {
+		t.Fatalf("heldPlayers = %+v, want none before the next idle read", held)
+	}
+	e.tick(context.Background(), h.now.Add(weatherDelayIdleGateReadInterval))
+	if held := h.handlers().weatherDelayHeldPlayers(context.Background(), h.now.Add(weatherDelayIdleGateReadInterval), false); len(held) != 1 {
+		t.Fatalf("heldPlayers = %+v, want player-01 after the idle read", held)
+	}
+}
+
+func TestWeatherDelayResumeWhileNotActiveReleasesAHeldPlayer(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(true, 3)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.setState(false, 5)
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
+	events := &recordingWeatherDelayEvents{}
+	h.deps.WeatherDelayEvents = events
+	e := h.enforcer()
+	e.tick(context.Background(), h.now)
+	if got := events.heldFlips(); got != 1 {
+		t.Fatalf("held-player change events = %d, want 1 when player-01 first reads held", got)
 	}
 
-	// A second tick immediately after must not reopen again: throttled to
-	// once per 30 seconds per instance.
-	fpp.setGate(true, 3)
-	e.tick(context.Background(), h.now.Add(time.Second))
-	if got := fpp.gateSetCount(); got != 1 {
-		t.Fatalf("gate set count after a second immediate tick = %d, want still 1 (throttled)", got)
+	svc := h.deps.Identity
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	auth := map[string]string{"Authorization": "Bearer " + mustIssueToken(t, svc, admin.ID)}
+	srv := New(h.deps, Options{Clock: func() time.Time { return h.now }, Logger: testLogger()})
+	read := func() v1.WeatherDelayStateResponse {
+		t.Helper()
+		resp, body := doRawRequest(t, srv.Handler, newJSONRequest(t, http.MethodGet, "/api/v1/weather-delay", "", auth))
+		var out v1.WeatherDelayStateResponse
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &out) != nil {
+			t.Fatalf("GET weather-delay: status %d body %s", resp.StatusCode, body)
+		}
+		return out
 	}
+	if got := read().HeldPlayers; len(got) != 1 || got[0].InstanceID != "player-01" {
+		t.Fatalf("heldPlayers before resume = %+v, want player-01", got)
+	}
+
+	resp, body := doRawRequest(t, srv.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/weather-delay/resume", `{"idempotencyKey":"resume-1"}`, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume: status = %d, body %s", resp.StatusCode, body)
+	}
+	if fpp.isClosed() {
+		t.Fatal("resume while not active left the gate closed")
+	}
+	if got := read().HeldPlayers; len(got) != 0 {
+		t.Fatalf("heldPlayers after resume = %+v, want none", got)
+	}
+	e.tick(context.Background(), h.now.Add(weatherDelayEnforceInterval))
+	if got := events.heldFlips(); got != 2 {
+		t.Fatalf("held-player change events = %d, want 2 after player-01 left the list", got)
+	}
+}
+
+type recordingWeatherDelayEvents struct {
+	mu        sync.Mutex
+	summaries []string
+}
+
+func (r *recordingWeatherDelayEvents) AppendEvent(_ context.Context, ev store.EventRecord) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.summaries = append(r.summaries, ev.Summary)
+	return int64(len(r.summaries)), nil
+}
+
+func (r *recordingWeatherDelayEvents) heldFlips() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.summaries {
+		if strings.HasPrefix(s, "weather delay players held dark") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestWeatherDelayEnforceResumesAfterRestartOverSameStore(t *testing.T) {
@@ -626,25 +722,4 @@ func TestWeatherDelayEnforceSurvivesAPanicInOnePlayersPass(t *testing.T) {
 	if cmds := good.commandList(); len(cmds) != 1 || cmds[0] != "Stop Now" {
 		t.Fatalf("healthy player commands = %v, want Stop Now despite another player's pass panicking", cmds)
 	}
-}
-
-func TestWeatherDelayEnforceAuditsAStaleGateReopen(t *testing.T) {
-	fpp := newFakeFPPPluginServer(t)
-	fpp.setGate(true, 3)
-	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
-	h.setState(false, 5)
-	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
-
-	h.enforcer().tick(context.Background(), h.now)
-
-	entries, err := h.deps.Identity.ListAudit(context.Background(), 0, 100)
-	if err != nil {
-		t.Fatalf("list audit: %v", err)
-	}
-	for _, e := range entries {
-		if e.Action == identity.AuditActionShowWeatherDelayEnforce && e.Target == "player-01" {
-			return
-		}
-	}
-	t.Fatal("reopening a gate left no show.weatherdelay.enforce audit entry")
 }

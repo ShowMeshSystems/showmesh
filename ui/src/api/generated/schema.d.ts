@@ -5090,6 +5090,13 @@ export interface components {
             assets?: components["schemas"]["WeatherDelayNodeAssets"][];
             /** @description Every configured power group's own dark confirmation (ADR-053 decision 10). Empty when no power group is configured; nothing else about this response changes. */
             powerGroups?: components["schemas"]["WeatherDelayPowerGroupStatus"][];
+            /** @description Players whose gate reads closed while no delay is active. The coordinator never opens a gate on its own; only POST /weather-delay/resume does. Empty while a delay is active. */
+            heldPlayers?: components["schemas"]["WeatherDelayHeldPlayer"][];
+        };
+        WeatherDelayHeldPlayer: {
+            instanceId: string;
+            /** @description An operator sentence naming the player and the Resume action. */
+            message: string;
         };
         WeatherDelayPowerGroupStatus: {
             id: string;
@@ -6898,7 +6905,7 @@ export interface components {
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
         };
-        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) and a power group's own confirmedDark flip, mirroring NightSessionChangedEvent's own "full state, not delta" posture. The fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
+        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) a power group's own confirmedDark flip, and a change in heldPlayers, mirroring NightSessionChangedEvent's own "full state, not delta" posture. The fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
         WeatherDelayChangedEvent: {
             /** @description Per-connection only; never a durable cursor. */
             seq: number;
@@ -6912,6 +6919,7 @@ export interface components {
             startedBy?: string;
             revision: number;
             powerGroups: components["schemas"]["WeatherDelayPowerGroupStatus"][];
+            heldPlayers: components["schemas"]["WeatherDelayHeldPlayer"][];
         };
         /** @description One entry of NightCommandRequest.interlockOverrides (RESTING-MODE.md §10.1, Track F seam F6): a request to override a named "block" interlock rule currently withholding the command's own phase. Honored only when that rule declares `overridePolicy: authorized-operator`, the caller separately holds `night:override`, and the rule is actually withholding the phase being entered (server-side; not expressible here). Every accepted override is audited with the rule, phase, reason, and a bounded (this-invocation-only) scope. */
         NightInterlockOverride: {

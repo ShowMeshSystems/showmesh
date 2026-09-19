@@ -18,6 +18,7 @@ type WeatherDelayChangedEvent struct {
 	StartedBy   string                         `json:"startedBy,omitempty"`
 	Revision    int64                          `json:"revision"`
 	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
 }
 
 // WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
@@ -34,6 +35,14 @@ type WeatherDelayStateResponse struct {
 	Revision    int64                          `json:"revision"`
 	Assets      []WeatherDelayNodeAssets       `json:"assets"`
 	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []WeatherDelayHeldPlayer       `json:"heldPlayers"`
+}
+
+// WeatherDelayHeldPlayer is a player whose gate reads closed while no delay
+// is active. Only a resume opens it; Message is the operator sentence.
+type WeatherDelayHeldPlayer struct {
+	InstanceID string `json:"instanceId"`
+	Message    string `json:"message"`
 }
 
 // WeatherDelayPowerGroupStatus is one configured power group's own dark

@@ -677,22 +677,23 @@ func (h *Hub) render(ctx context.Context) {
 		}
 	}
 
-	// weatherdelay:current carries the delay state and every power group's
-	// confirmedDark, so a state change or a group flip renders a new frame.
+	// weatherdelay:current carries the delay state, every power group's
+	// confirmedDark and the held players, so any of them changing renders a new frame.
 	// Silent until a delay has existed or a power group is configured.
 	if rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx); err != nil {
 		h.logger.Warn("stream hub: get weather delay state failed", "error", err)
 	} else {
 		groups := []v1.WeatherDelayPowerGroupStatus{}
+		hs := &handlers{deps: h.deps, clock: h.clock, logger: h.logger}
+		held := hs.weatherDelayHeldPlayers(ctx, now, rec.Active)
 		if payload, _, _, _, cerr := resolveWeatherDelayConfig(ctx, h.deps.Config); cerr != nil {
 			h.logger.Warn("stream hub: resolve show.weatherdelay config failed", "error", cerr)
 		} else {
-			hs := &handlers{deps: h.deps, clock: h.clock, logger: h.logger}
 			groups = hs.weatherDelayPowerGroupStatuses(ctx, now, payload)
 		}
-		if rec.Active || rec.Revision > 0 || len(groups) > 0 {
+		if rec.Active || rec.Revision > 0 || len(groups) > 0 || len(held) > 0 {
 			const key = "weatherdelay:current"
-			state := v1.WeatherDelayChangedEvent{Active: rec.Active, Revision: rec.Revision, PowerGroups: groups}
+			state := v1.WeatherDelayChangedEvent{Active: rec.Active, Revision: rec.Revision, PowerGroups: groups, HeldPlayers: held}
 			if rec.Active {
 				state.Kind, state.StartedAt, state.StartedBy = rec.Kind, formatTime(rec.StartedAt), rec.StartedBy
 			}

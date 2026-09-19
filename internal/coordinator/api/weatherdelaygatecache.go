@@ -12,7 +12,7 @@ type WeatherDelayGateCache struct {
 	mu         sync.Mutex
 	gates      map[string]weatherDelayGateStatus
 	groups     map[string]weatherDelayGroupStatus
-	reopened   map[string]time.Time
+	idleReads  map[string]time.Time
 	heartbeats map[string]time.Time
 	gateWrites map[string]*sync.Mutex
 }
@@ -26,6 +26,16 @@ type weatherDelayGateStatus struct {
 	unreadable             bool
 	effectiveOutputPercent int
 	observedAt             time.Time
+	freshFor               time.Duration
+}
+
+// freshWindow is how old this reading may be and still count: the idle
+// window for a reading taken while no delay was active, else the short one.
+func (st weatherDelayGateStatus) freshWindow() time.Duration {
+	if st.freshFor > 0 {
+		return st.freshFor
+	}
+	return weatherDelayGateFreshnessWindow
 }
 
 // weatherDelayGroupStatus is one power group's own last computed dark
@@ -40,7 +50,7 @@ type weatherDelayGroupStatus struct {
 func NewWeatherDelayGateCache() *WeatherDelayGateCache {
 	return &WeatherDelayGateCache{
 		gates: map[string]weatherDelayGateStatus{}, groups: map[string]weatherDelayGroupStatus{},
-		reopened: map[string]time.Time{}, heartbeats: map[string]time.Time{},
+		idleReads: map[string]time.Time{}, heartbeats: map[string]time.Time{},
 		gateWrites: map[string]*sync.Mutex{},
 	}
 }
@@ -99,19 +109,19 @@ func (c *WeatherDelayGateCache) getGate(instanceID string) (weatherDelayGateStat
 	return st, ok
 }
 
-// reopenDue reports whether instanceID's reopen is due and records now as
-// the attempt, so a failed send still waits out the interval.
-func (c *WeatherDelayGateCache) reopenDue(instanceID string, now time.Time, minInterval time.Duration) bool {
+// idleReadDue reports whether instanceID's idle gate read is due and
+// records now as the attempt, so a failed read still waits out the interval.
+func (c *WeatherDelayGateCache) idleReadDue(instanceID string, now time.Time, minInterval time.Duration) bool {
 	if c == nil {
 		return true
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	last, ok := c.reopened[instanceID]
+	last, ok := c.idleReads[instanceID]
 	if ok && now.Sub(last) < minInterval {
 		return false
 	}
-	c.reopened[instanceID] = now
+	c.idleReads[instanceID] = now
 	return true
 }
 

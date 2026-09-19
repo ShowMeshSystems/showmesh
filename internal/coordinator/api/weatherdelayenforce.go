@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,9 +18,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// The enforcement loop only stops playlists and closes gates, except that it
-// reopens a gate left closed after a delay ended. No configuration value,
-// mode, scope or flag may disable, slow or exempt a player. Do not add one.
+// The enforcement loop only stops playlists and closes gates; it never opens
+// one. No configuration value, mode, scope or flag may disable, slow or
+// exempt a player. Do not add one.
 
 // weatherDelayEnforceInterval is how often the loop ticks. A var so a test
 // can drive it down; production never overrides it.
@@ -35,13 +36,17 @@ var weatherDelayEnforceInstanceTimeout = 4 * time.Second
 // re-sends both a stop and a close.
 const weatherDelayEnforceAuditInterval = time.Minute
 
-// weatherDelayStaleGateReopenInterval bounds the not-active reopen
-// exception to at most once per instance per 30 seconds.
-const weatherDelayStaleGateReopenInterval = 30 * time.Second
+// weatherDelayIdleGateReadInterval is how often a gate is read while no
+// delay is active, only to report a player still held dark.
+const weatherDelayIdleGateReadInterval = 30 * time.Second
 
 // weatherDelayGateFreshnessWindow is the oldest gate reading a power group
 // may count as dark: three ticks, so one skipped tick never flips a group.
 const weatherDelayGateFreshnessWindow = 15 * time.Second
+
+// weatherDelayIdleGateFreshnessWindow is the same three-read allowance for a
+// reading taken at the idle interval.
+const weatherDelayIdleGateFreshnessWindow = 3 * weatherDelayIdleGateReadInterval
 
 // weatherDelayFPPClientTimeout bounds each FPP request, shorter than the
 // per-instance timeout. A var so a test can drive it down.
@@ -59,6 +64,7 @@ type WeatherDelayEnforcer struct {
 	mu        sync.Mutex
 	lastAudit map[string]time.Time
 	lastState store.WeatherDelayStateRecord
+	lastHeld  string
 }
 
 // NewWeatherDelayEnforcer builds a [WeatherDelayEnforcer] against
@@ -104,7 +110,7 @@ func (e *WeatherDelayEnforcer) Run(ctx context.Context) {
 // [handlers.nightTick]'s identical testing shape.
 func (e *WeatherDelayEnforcer) tick(ctx context.Context, now time.Time) {
 	h := e.h
-	rec, fresh := e.state(ctx)
+	rec, _ := e.state(ctx)
 
 	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
 	if err != nil {
@@ -118,13 +124,31 @@ func (e *WeatherDelayEnforcer) tick(ctx context.Context, now time.Time) {
 		go func(ep config.FPPEndpoint) {
 			defer wg.Done()
 			defer e.recoverPanic(ep.ID)
-			e.tickInstance(ctx, now, ep, rec, fresh)
+			e.tickInstance(ctx, now, ep, rec)
 		}(ep)
 	}
 	wg.Wait()
 
 	rec, _ = e.state(ctx)
 	h.weatherDelayTickPowerGroups(ctx, now, rec)
+	e.reportHeldPlayers(ctx, now, rec.Active)
+}
+
+// reportHeldPlayers records weatherDelay.changed when the set of players
+// held dark with no delay active changes.
+func (e *WeatherDelayEnforcer) reportHeldPlayers(ctx context.Context, now time.Time, active bool) {
+	var ids []string
+	for _, p := range e.h.weatherDelayHeldPlayers(ctx, now, active) {
+		ids = append(ids, p.InstanceID)
+	}
+	key := strings.Join(ids, ",")
+	e.mu.Lock()
+	changed := key != e.lastHeld
+	e.lastHeld = key
+	e.mu.Unlock()
+	if changed {
+		e.h.appendWeatherDelayChangedEvent(ctx, now, fmt.Sprintf("players held dark with no delay active: [%s]", key))
+	}
 }
 
 // state reads the weather delay state. A failed read falls back to the
@@ -154,8 +178,15 @@ func (e *WeatherDelayEnforcer) recoverPanic(scope string) {
 // tickInstance runs one FPP instance's own stop/gate work, bounded by
 // [weatherDelayEnforceInstanceTimeout] so it can never delay another
 // instance's tick.
-func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, ep config.FPPEndpoint, rec store.WeatherDelayStateRecord, fresh bool) {
+func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, ep config.FPPEndpoint, rec store.WeatherDelayStateRecord) {
 	h := e.h
+	freshFor := weatherDelayGateFreshnessWindow
+	if !rec.Active {
+		if !h.deps.WeatherDelayGateCache.idleReadDue(ep.ID, now, weatherDelayIdleGateReadInterval) {
+			return
+		}
+		freshFor = weatherDelayIdleGateFreshnessWindow
+	}
 	instCtx, cancel := context.WithTimeout(ctx, weatherDelayEnforceInstanceTimeout)
 	defer cancel()
 
@@ -165,7 +196,7 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 		return
 	}
 
-	var stopped, closed, reopened bool
+	var stopped, closed bool
 
 	if rec.Active && h.weatherDelayFPPShouldStop(instCtx, ep.ID, now) {
 		if cur, _ := e.state(instCtx); !cur.Active {
@@ -183,59 +214,35 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 	if gateErr == nil {
 		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
 			closed: gateOutcome.Closed, supported: true,
-			effectiveOutputPercent: gateOutcome.EffectiveOutputPercent, observedAt: now,
+			effectiveOutputPercent: gateOutcome.EffectiveOutputPercent, observedAt: now, freshFor: freshFor,
 		})
 	} else if unsupported {
-		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: false, observedAt: now})
+		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: false, observedAt: now, freshFor: freshFor})
 	} else {
-		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: true, unreadable: true, observedAt: now})
+		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: true, unreadable: true, observedAt: now, freshFor: freshFor})
 	}
 
-	switch {
-	case rec.Active:
-		if unsupported {
-			break
-		}
+	if rec.Active && !unsupported {
 		if gateErr != nil || !gateOutcome.Closed {
 			unlock := h.deps.WeatherDelayGateCache.lockGateWrite(ep.ID)
 			defer unlock()
-			cur, _ := e.state(instCtx)
-			if !cur.Active {
-				break
-			}
-			setOutcome, err := client.SetWeatherGate(instCtx, true, cur.Revision)
-			if err != nil {
-				h.logWarn("weather delay enforce: close failed", "instanceId", ep.ID, "error", err)
-			} else {
-				closed = true
-				h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
-					closed: setOutcome.Closed, supported: true,
-					effectiveOutputPercent: setOutcome.EffectiveOutputPercent, observedAt: now,
-				})
-			}
-		}
-	default:
-		if fresh && gateErr == nil && gateOutcome.Closed && h.deps.WeatherDelayGateCache.reopenDue(ep.ID, now, weatherDelayStaleGateReopenInterval) {
-			unlock := h.deps.WeatherDelayGateCache.lockGateWrite(ep.ID)
-			defer unlock()
-			cur, curFresh := e.state(instCtx)
-			if !curFresh || cur.Active {
-				break
-			}
-			if setOutcome, err := client.SetWeatherGate(instCtx, false, cur.Revision); err != nil {
-				h.logWarn("weather delay enforce: reopening a gate a delay never told this instance to open failed", "instanceId", ep.ID, "error", err)
-			} else {
-				reopened = true
-				h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
-					closed: setOutcome.Closed, supported: true,
-					effectiveOutputPercent: setOutcome.EffectiveOutputPercent, observedAt: now,
-				})
+			if cur, _ := e.state(instCtx); cur.Active {
+				setOutcome, err := client.SetWeatherGate(instCtx, true, cur.Revision)
+				if err != nil {
+					h.logWarn("weather delay enforce: close failed", "instanceId", ep.ID, "error", err)
+				} else {
+					closed = true
+					h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
+						closed: setOutcome.Closed, supported: true,
+						effectiveOutputPercent: setOutcome.EffectiveOutputPercent, observedAt: now,
+					})
+				}
 			}
 		}
 	}
 
-	if stopped || closed || reopened {
-		e.auditEnforce(ctx, now, ep.ID, stopped, closed, reopened)
+	if stopped || closed {
+		e.auditEnforce(ctx, now, ep.ID, stopped, closed)
 	}
 }
 
@@ -254,7 +261,7 @@ func (h *handlers) weatherDelayFPPShouldStop(ctx context.Context, instanceID str
 // auditEnforce records show.weatherdelay.enforce, rate limited to at most
 // one per instance per minute, and only when this tick actually re-sent a
 // stop or a close.
-func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, instanceID string, stopped, closed, reopened bool) {
+func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, instanceID string, stopped, closed bool) {
 	e.mu.Lock()
 	last, ok := e.lastAudit[instanceID]
 	if ok && now.Sub(last) < weatherDelayEnforceAuditInterval {
@@ -266,8 +273,6 @@ func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, 
 
 	reason := "closed the gate"
 	switch {
-	case reopened:
-		reason = "opened a gate left closed after the weather delay ended"
 	case stopped && closed:
 		reason = "sent Stop Now and closed the gate"
 	case stopped:
@@ -277,7 +282,7 @@ func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, 
 		Timestamp: now, PrincipalID: weatherDelayEnforceSystemPrincipalID(instanceID),
 		PrincipalName: "weather delay enforcement", Action: identity.AuditActionShowWeatherDelayEnforce,
 		Target: instanceID, Kind: identity.AuditOutcome, Outcome: outcomeWordConfirmed, OutcomeReason: reason,
-		Params: map[string]any{"stopped": stopped, "closedGate": closed, "openedGate": reopened},
+		Params: map[string]any{"stopped": stopped, "closedGate": closed},
 	}); err != nil {
 		e.h.logWarn("weather delay enforce: failed to write the audit entry", "instanceId", instanceID, "error", err)
 	}
@@ -380,7 +385,7 @@ func (h *handlers) weatherDelayFPPMemberDark(ctx context.Context, now time.Time,
 	if gate.unreadable {
 		return false, fmt.Sprintf("Player %s's gate could not be read.", instanceID)
 	}
-	if now.Sub(gate.observedAt) > weatherDelayGateFreshnessWindow {
+	if now.Sub(gate.observedAt) > gate.freshWindow() {
 		return false, fmt.Sprintf("Player %s's last gate reading is too old to trust.", instanceID)
 	}
 	if !gate.closed || gate.effectiveOutputPercent != 0 {

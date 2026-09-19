@@ -102,6 +102,12 @@ type weatherDelayStateResponse struct {
 	Revision    int64                          `json:"revision"`
 	Assets      []weatherDelayNodeAssets       `json:"assets"`
 	PowerGroups []weatherDelayPowerGroupStatus `json:"powerGroups"`
+	HeldPlayers []weatherDelayHeldPlayer       `json:"heldPlayers"`
+}
+
+type weatherDelayHeldPlayer struct {
+	InstanceID string `json:"instanceId"`
+	Message    string `json:"message"`
 }
 
 type weatherDelayPowerGroupMember struct {
@@ -275,6 +281,9 @@ func cmdWeatherDelayStatus(args []string, stdout, stderr io.Writer, clock func()
 			}
 			_, _ = fmt.Fprintf(stdout, "    %s %s: %s\n", m.Kind, m.ID, state)
 		}
+	}
+	for _, p := range resp.HeldPlayers {
+		_, _ = fmt.Fprintln(stdout, "  "+p.Message)
 	}
 	return exitOK
 }

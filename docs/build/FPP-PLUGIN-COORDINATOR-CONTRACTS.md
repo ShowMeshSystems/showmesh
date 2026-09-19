@@ -683,9 +683,16 @@ out-of-order closed report must never darken a player after a resume, and an
 open report from a source that is not the coordinator's own write must never
 end a delay a player is still supposed to be holding.
 
+Only a resume opens a gate. The coordinator's enforcement loop closes gates
+while a delay is active and never opens one. A gate can be closed by a start
+the coordinator never saw, so a gate that reads closed while no delay is
+active is reported in `heldPlayers` on `GET /api/v1/weather-delay` and stays
+closed until `POST /api/v1/weather-delay/resume`, which opens every player's
+gate each time it is called.
+
 Persistence: the gate is written to both of the plugin's own record
-generations, and both must agree on it before either is trusted. If both
-records are unreadable, the gate **restarts open**, the same posture every
+generations on every gate change, so the two agree. If a crash leaves them
+disagreeing, a readable primary wins. If both records are unreadable, the gate **restarts open**, the same posture every
 other unconfigured or freshly-initialized brightness value takes, and the
 coordinator's own enforcement loop, running unconditionally, closes it again
 within one tick of finding the stored weather-delay state active. This is

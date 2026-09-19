@@ -100,6 +100,7 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 	}
 
 	resp := v1.WeatherDelayStateResponse{ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision, Assets: []v1.WeatherDelayNodeAssets{}, PowerGroups: []v1.WeatherDelayPowerGroupStatus{}}
+	resp.HeldPlayers = h.weatherDelayHeldPlayers(ctx, now, rec.Active)
 	if rec.Active {
 		resp.Kind = rec.Kind
 		resp.StartedAt = formatTime(rec.StartedAt)
@@ -114,6 +115,31 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		resp.PowerGroups = h.weatherDelayPowerGroupStatuses(ctx, now, payload)
 	}
 	jsonWrite(w, resp)
+}
+
+// weatherDelayHeldPlayers lists the players whose last fresh gate reading
+// is closed while no delay is active. Empty while a delay is active.
+func (h *handlers) weatherDelayHeldPlayers(ctx context.Context, now time.Time, active bool) []v1.WeatherDelayHeldPlayer {
+	out := []v1.WeatherDelayHeldPlayer{}
+	if active {
+		return out
+	}
+	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
+	if err != nil {
+		h.logWarn("weather delay: failed to list configured FPP instances; reporting no held players", "error", err)
+		return out
+	}
+	for _, ep := range endpoints {
+		gate, ok := h.deps.WeatherDelayGateCache.getGate(ep.ID)
+		if !ok || !gate.supported || gate.unreadable || !gate.closed || now.Sub(gate.observedAt) > gate.freshWindow() {
+			continue
+		}
+		out = append(out, v1.WeatherDelayHeldPlayer{
+			InstanceID: ep.ID,
+			Message:    fmt.Sprintf("Player %s is being held dark and no weather delay is active. Press Resume to release it.", ep.ID),
+		})
+	}
+	return out
 }
 
 // weatherDelayPowerGroupStatuses computes every power group's darkness
