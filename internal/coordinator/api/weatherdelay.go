@@ -99,12 +99,17 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	resp := v1.WeatherDelayStateResponse{ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision, Assets: []v1.WeatherDelayNodeAssets{}, PowerGroups: []v1.WeatherDelayPowerGroupStatus{}}
+	resp := v1.WeatherDelayStateResponse{
+		ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision,
+		Assets: []v1.WeatherDelayNodeAssets{}, PowerGroups: []v1.WeatherDelayPowerGroupStatus{},
+		LastNotifyError: h.deps.WeatherDelayGateCache.notifyError(),
+	}
 	resp.HeldPlayers = h.weatherDelayHeldPlayers(ctx, now, rec.Active)
 	if rec.Active {
 		resp.Kind = rec.Kind
 		resp.StartedAt = formatTime(rec.StartedAt)
 		resp.StartedBy = rec.StartedBy
+		resp.StartedByName = rec.StartedByName
 	}
 
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
@@ -258,10 +263,24 @@ func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string
 	return idempotencyKey, nil
 }
 
-// handleWeatherDelayStart persists and publishes the active state before
-// any stop, then sends every stop and node start concurrently. A failed
-// target or a failed write is reported and never rolls the state back.
+// weatherDelayAlreadyCancelledMessage answers a start while the night is
+// cancelled; the cancel is sent again instead of a delay.
+const weatherDelayAlreadyCancelledMessage = "The night is already cancelled, so the cancel was sent again. Resume the show to clear it."
+
+// handleWeatherDelayStart serves POST /api/v1/weather-delay/start.
 func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
+	h.weatherDelayStartOrChange(w, r, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, nil)
+}
+
+// handleWeatherDelayCancelNight serves POST /api/v1/weather-delay/cancel-night.
+func (h *handlers) handleWeatherDelayCancelNight(w http.ResponseWriter, r *http.Request) {
+	h.weatherDelayStartOrChange(w, r, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, h.weatherDelayCancelNightAfterDispatch)
+}
+
+// weatherDelayStartOrChange persists the active state before any stop, then
+// sends every stop and node start concurrently. A delay changes to a cancel
+// in place; a cancel is never downgraded. afterDispatch runs after the reply.
+func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Request, desiredKind, auditAction string, afterDispatch func(rec store.WeatherDelayStateRecord, planNodeIDs []string)) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(weatherDelayHandlerWriteDeadline()))
 	ctx := context.WithoutCancel(r.Context())
@@ -276,6 +295,10 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	issuerID := ac.result.Principal.ID
 	if issuerID == "" {
 		issuerID = "unknown"
+	}
+	issuerName := ac.result.Principal.Name
+	if issuerName == "" {
+		issuerName = issuerID
 	}
 
 	// A failed read never stops the stops either: start as not active at
@@ -293,14 +316,36 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	// state in this process and the republish loop retries the write.
 	rec := current
 	var saveErr error
-	if !current.Active {
+	var event, message string
+	switch {
+	case !current.Active:
 		rec = store.WeatherDelayStateRecord{
-			Active: true, Kind: weatherdelay.KindDelay, StartedAt: now, StartedBy: issuerID,
+			Active: true, Kind: desiredKind, StartedAt: now, StartedBy: issuerID, StartedByName: issuerName,
 			Revision: current.Revision + 1,
 		}
 		saveErr = h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec)
-	} else if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
-		saveErr = keeper.SaveUnsaved(ctx)
+		if desiredKind == weatherdelay.KindCancelNight {
+			event = "cancel_night_started"
+		} else {
+			event = "delay_started"
+		}
+	case current.Kind == desiredKind:
+		if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
+			saveErr = keeper.SaveUnsaved(ctx)
+		}
+	case desiredKind == weatherdelay.KindCancelNight:
+		rec = current
+		rec.Kind, rec.StartedBy, rec.StartedByName, rec.Revision = weatherdelay.KindCancelNight, issuerID, issuerName, current.Revision+1
+		saveErr = h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec)
+		event = "changed_to_cancel_night"
+	default:
+		// desiredKind is delay while cancelNight is already active: the
+		// cancellation stays set (decision 3); re-affirm it rather than
+		// downgrade it.
+		if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
+			saveErr = keeper.SaveUnsaved(ctx)
+		}
+		message = weatherDelayAlreadyCancelledMessage
 	}
 	if saveErr != nil {
 		h.logWarn("weather delay start: failed to store the active state; holding it in this process and stopping everything anyway", "error", saveErr)
@@ -344,7 +389,7 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	}()
 	go func() {
 		defer wg.Done()
-		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", weatherdelay.KindDelay, idempotencyKey, planNodeIDs, ac, clientAddr, true)
+		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", rec.Kind, idempotencyKey, planNodeIDs, ac, clientAddr, true)
 	}()
 	// The gate close runs beside the node dispatch; the alert never waits on it.
 	go func() {
@@ -372,11 +417,11 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	targets = append(targets, gateOutcomes...)
 
 	result := v1.WeatherDelayActionResult{
-		Kind: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey, Active: true,
-		StartedAt: formatTime(rec.StartedAt), StartedBy: rec.StartedBy, Revision: rec.Revision,
-		Targets: targets,
+		Kind: rec.Kind, IdempotencyKey: idempotencyKey, Active: true,
+		StartedAt: formatTime(rec.StartedAt), StartedBy: rec.StartedBy, StartedByName: rec.StartedByName, Revision: rec.Revision,
+		Targets: targets, Message: message,
 	}
-	auditParams := map[string]any{"targets": len(targets), "revision": rec.Revision}
+	auditParams := map[string]any{"targets": len(targets), "revision": rec.Revision, "kind": rec.Kind}
 	if saveErr != nil {
 		result.NotSaved, result.NotSavedMessage = true, weatherDelayNotSavedMessage
 		auditParams["notSaved"], auditParams["notSavedMessage"] = true, weatherDelayNotSavedMessage
@@ -385,13 +430,20 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
-		Action: identity.AuditActionShowWeatherDelayStart, Target: weatherdelay.KindDelay, IdempotencyKey: idempotencyKey,
+		Action: auditAction, Target: rec.Kind, IdempotencyKey: idempotencyKey,
 		Kind: identity.AuditOutcome, Params: auditParams,
 	})
 	h.appendWeatherDelayChangedEvent(ctx, now, "started")
+	if event != "" {
+		h.weatherDelayNotify(ctx, event, rec.Kind, true, rec.StartedAt, rec.StartedBy, now)
+	}
 	h.notifyStreamHub()
 
 	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: result})
+
+	if afterDispatch != nil {
+		afterDispatch(rec, planNodeIDs)
+	}
 }
 
 // handleWeatherDelayResume always takes full effect, even when the stored
@@ -418,12 +470,16 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	}
 
 	// The night session is rewound while the delay still holds the night
-	// loop, so no tick can act on the stopped show in between.
+	// loop. Clearing a cancelled night never touches the night session.
 	nightOutcome := "untouched: no weather delay was active"
-	if current.Active {
+	switch {
+	case current.Active && current.Kind == weatherdelay.KindCancelNight:
+		nightOutcome = "untouched: clearing a cancelled night does not restart or touch the night session"
+	case current.Active:
 		nightOutcome = h.weatherDelayResumeNightSession(ctx, now)
 	}
 
+	clearedKind := current.Kind
 	rec := store.WeatherDelayStateRecord{Active: false, Revision: current.Revision + 1}
 	if err := h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec); err != nil {
 		h.writeInternalError(w, now, "set weather delay state", err)
@@ -467,6 +523,13 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 		Kind: identity.AuditOutcome, Params: map[string]any{"targets": len(targets), "revision": rec.Revision, "wasActive": current.Active, "nightSession": nightOutcome},
 	})
 	h.appendWeatherDelayChangedEvent(ctx, now, "resumed")
+	if current.Active {
+		event := "resumed"
+		if clearedKind == weatherdelay.KindCancelNight {
+			event = "cleared"
+		}
+		h.weatherDelayNotify(ctx, event, clearedKind, false, current.StartedAt, current.StartedBy, now)
+	}
 	h.notifyStreamHub()
 
 	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: v1.WeatherDelayActionResult{
@@ -667,7 +730,7 @@ func (h *handlers) weatherDelaySilenceNonPlanNodes(ctx context.Context, now time
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "this silence could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "This silence could not be sent. Try again."}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "refused", OutcomeReason: problem.Detail}
 			default:
@@ -892,19 +955,4 @@ func (h *handlers) appendWeatherDelayChangedEvent(ctx context.Context, now time.
 	if err != nil {
 		h.logWarn("weather delay: failed to append change-stream event", "error", err)
 	}
-}
-
-// handleWeatherDelayCancelNight serves POST /api/v1/weather-delay/cancel-night.
-func (h *handlers) handleWeatherDelayCancelNight(w http.ResponseWriter, r *http.Request) {
-	h.handleWeatherDelayNotImplemented(w, r, "cancelling the night for weather")
-}
-
-func (h *handlers) handleWeatherDelayNotImplemented(w http.ResponseWriter, r *http.Request, action string) {
-	now := h.now()
-	if _, problem := decodeWeatherDelayActionRequestBody(r); problem != nil {
-		writeProblem(w, h.logger, now, *problem)
-		return
-	}
-	writeProblem(w, h.logger, now, notImplementedProblem(
-		fmt.Sprintf("%s is not available yet on this coordinator", action)))
 }

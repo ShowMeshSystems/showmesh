@@ -508,7 +508,7 @@ func (h *handlers) weatherDelaySetOneGate(ctx context.Context, now time.Time, ep
 	if err != nil {
 		if errors.Is(err, fppcommand.ErrWeatherGateUnsupported) {
 			h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: false, observedAt: now})
-			return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "refused", OutcomeReason: "this player cannot be held dark by ShowMesh", DispatchedAt: &dispatchedAt}
+			return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "refused", OutcomeReason: "This player cannot be held dark by ShowMesh.", DispatchedAt: &dispatchedAt}
 		}
 		return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "failed", OutcomeReason: err.Error(), DispatchedAt: &dispatchedAt}
 	}

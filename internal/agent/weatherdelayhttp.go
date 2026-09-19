@@ -99,23 +99,35 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 	if s.now != nil {
 		now = s.now
 	}
-	age := now().Sub(signed.Request.IssuedAt)
-	if age > weatherDelayHTTPMaxAge {
-		http.Error(w, "request is too old", http.StatusForbidden)
-		return
-	}
+	nowVal := now()
+	age := nowVal.Sub(signed.Request.IssuedAt)
 	if age < -weatherDelayHTTPMaxFuture {
 		http.Error(w, "request is too far in the future", http.StatusForbidden)
 		return
 	}
+	// A notAfter replaces the 24 hour rule; Verify already refused one more
+	// than 400 days past issuedAt. Without one the 24 hour rule applies.
+	if !signed.Request.NotAfter.IsZero() {
+		if nowVal.After(signed.Request.NotAfter) {
+			http.Error(w, "request has expired", http.StatusForbidden)
+			return
+		}
+	} else if age > weatherDelayHTTPMaxAge {
+		http.Error(w, "request is too old", http.StatusForbidden)
+		return
+	}
 
 	// Detached so a caller that hangs up cannot cancel the alert mid-start.
-	alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.doStart(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
+	heldKind, alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.startHeld(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
 
-	fppConnectWriteJSON(w, http.StatusOK, map[string]any{
-		"kind":         signed.Request.Kind,
+	resp := map[string]any{
+		"kind":         heldKind,
 		"alertPlaying": alertPlaying,
 		"alertReason":  alertReason,
 		"unsilenced":   unsilenced,
-	})
+	}
+	if heldKind != signed.Request.Kind {
+		resp["message"] = weatherDelayAlreadyCancelledMessage
+	}
+	fppConnectWriteJSON(w, http.StatusOK, resp)
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -83,11 +84,24 @@ type WeatherDelayTriggersPayload struct {
 	RestartMinutes            int `json:"restartMinutes"`
 }
 
+// WeatherDelayNotifyPayload is the optional webhook (ADR-053 decision 13's
+// "the coordinator... calls a configured webhook"). An empty WebhookURL
+// means no webhook is configured.
+type WeatherDelayNotifyPayload struct {
+	WebhookURL string `json:"webhookUrl"`
+}
+
+// weatherDelayWebhookURLMaxLength bounds a webhook URL: generous for any
+// real endpoint, short enough that a misconfiguration cannot smuggle a
+// large blob into stored configuration.
+const weatherDelayWebhookURLMaxLength = 2048
+
 // WeatherDelayPayload is the decoded, validated show.weatherdelay payload.
 type WeatherDelayPayload struct {
 	Alert       WeatherDelayAlertPayload        `json:"alert"`
 	PowerGroups []WeatherDelayPowerGroupPayload `json:"powerGroups"`
 	Triggers    WeatherDelayTriggersPayload     `json:"triggers"`
+	Notify      WeatherDelayNotifyPayload       `json:"notify"`
 }
 
 // WeatherDelayDefaultPayload is reported when nothing has been written.
@@ -102,11 +116,12 @@ var WeatherDelayDefaultPayload = WeatherDelayPayload{
 }
 
 var (
-	weatherDelayTopLevelKeys   = map[string]bool{"alert": true, "powerGroups": true, "triggers": true}
+	weatherDelayTopLevelKeys   = map[string]bool{"alert": true, "powerGroups": true, "triggers": true, "notify": true}
 	weatherDelayAlertKeys      = map[string]bool{"delayAssetId": true, "cancelNightAssetId": true, "repeatCount": true, "nodeIds": true}
 	weatherDelayPowerGroupKeys = map[string]bool{"id": true, "label": true, "fppInstanceIds": true, "resolumeInstanceIds": true, "renderNodeIds": true, "heartbeat": true}
 	weatherDelayHeartbeatKeys  = map[string]bool{"enabled": true, "intervalSeconds": true}
 	weatherDelayTriggersKeys   = map[string]bool{"answerWindowSeconds": true, "cancelAnswerWindowSeconds": true, "restartMinutes": true}
+	weatherDelayNotifyKeys     = map[string]bool{"webhookUrl": true}
 )
 
 // EncodeWeatherDelayPayload marshals an already validated p for storage.
@@ -147,8 +162,64 @@ func DecodeWeatherDelayPayload(raw string) (WeatherDelayPayload, *ValidationErro
 	if verr != nil {
 		return WeatherDelayPayload{}, verr
 	}
+	notify, verr := decodeWeatherDelayNotify(top)
+	if verr != nil {
+		return WeatherDelayPayload{}, verr
+	}
 
-	return WeatherDelayPayload{Alert: alert, PowerGroups: powerGroups, Triggers: triggers}, nil
+	return WeatherDelayPayload{Alert: alert, PowerGroups: powerGroups, Triggers: triggers, Notify: notify}, nil
+}
+
+// decodeWeatherDelayNotify reads the optional notify object. Absent or
+// {} decodes to no webhook configured.
+func decodeWeatherDelayNotify(top map[string]json.RawMessage) (WeatherDelayNotifyPayload, *ValidationError) {
+	raw, present := top["notify"]
+	if !present {
+		return WeatherDelayNotifyPayload{}, nil
+	}
+	if isJSONNull(raw) {
+		return WeatherDelayNotifyPayload{}, &ValidationError{Code: ValidationCodeFieldNull, Field: "notify", Detail: "notify must not be null; omit it for no webhook"}
+	}
+	fields, verr := decodeRequiredObjectFromRaw(raw, "notify")
+	if verr != nil {
+		return WeatherDelayNotifyPayload{}, verr
+	}
+	if verr := rejectUnknownKeysUnder(fields, weatherDelayNotifyKeys, "notify"); verr != nil {
+		return WeatherDelayNotifyPayload{}, verr
+	}
+	webhookURL, verr := decodeOptionalString(fields, "webhookUrl", "notify.webhookUrl")
+	if verr != nil {
+		return WeatherDelayNotifyPayload{}, verr
+	}
+	if webhookURL != "" {
+		if verr := validateWeatherDelayWebhookURL(webhookURL); verr != nil {
+			return WeatherDelayNotifyPayload{}, verr
+		}
+	}
+	return WeatherDelayNotifyPayload{WebhookURL: webhookURL}, nil
+}
+
+// validateWeatherDelayWebhookURL accepts an absolute http(s) URL with a
+// host and no embedded credentials, within the length cap.
+func validateWeatherDelayWebhookURL(raw string) *ValidationError {
+	field := "notify.webhookUrl"
+	if len(raw) > weatherDelayWebhookURLMaxLength {
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be at most %d characters", field, weatherDelayWebhookURLMaxLength)}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s: %v", field, err)}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: field + " must be an http or https URL"}
+	}
+	if u.Host == "" {
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: field + " must include a host"}
+	}
+	if u.User != nil {
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: field + " must not include a username or password"}
+	}
+	return nil
 }
 
 func decodeWeatherDelayAlert(top map[string]json.RawMessage) (WeatherDelayAlertPayload, *ValidationError) {

@@ -202,6 +202,7 @@ func mapWeatherDelayPayload(p config.WeatherDelayPayload) v1.ConfigWeatherDelayP
 			AnswerWindowSeconds: p.Triggers.AnswerWindowSeconds, CancelAnswerWindowSeconds: p.Triggers.CancelAnswerWindowSeconds,
 			RestartMinutes: p.Triggers.RestartMinutes,
 		},
+		Notify: v1.ConfigWeatherDelayNotifyPayload{WebhookURL: p.Notify.WebhookURL},
 	}
 }
 

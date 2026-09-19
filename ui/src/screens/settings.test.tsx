@@ -437,7 +437,7 @@ describe('Settings › Weather delay', () => {
     renderAt('/settings/recovery', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
 
     await screen.findByText('Weather delay')
-    fireEvent.change(screen.getByLabelText('Repeat count'), { target: { value: '6' } })
+    fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /stage-node/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
 
@@ -496,7 +496,7 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/recovery')
     await screen.findByText('Weather delay')
-    fireEvent.change(screen.getByLabelText('Repeat count'), { target: { value: '3' } })
+    fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
 
     expect(await screen.findByText('A weather delay is active. Configuration cannot change until it is cleared.')).toBeInTheDocument()

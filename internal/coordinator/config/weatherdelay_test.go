@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecodeWeatherDelayPayloadEmptyBodyIsFullDefault(t *testing.T) {
 	p, verr := DecodeWeatherDelayPayload(`{}`)
@@ -96,6 +99,50 @@ func TestDecodeWeatherDelayPayloadRejectsNullSections(t *testing.T) {
 		if _, verr := DecodeWeatherDelayPayload(raw); verr == nil {
 			t.Errorf("DecodeWeatherDelayPayload(%s) accepted a null section", raw)
 		}
+	}
+}
+
+func TestDecodeWeatherDelayPayloadNotifyDefaultsToNoWebhook(t *testing.T) {
+	p, verr := DecodeWeatherDelayPayload(`{}`)
+	if verr != nil {
+		t.Fatalf("DecodeWeatherDelayPayload(\"{}\") = %v", verr)
+	}
+	if p.Notify.WebhookURL != "" {
+		t.Fatalf("Notify.WebhookURL = %q, want empty", p.Notify.WebhookURL)
+	}
+}
+
+func TestDecodeWeatherDelayPayloadAcceptsHTTPSWebhook(t *testing.T) {
+	p, verr := DecodeWeatherDelayPayload(`{"notify":{"webhookUrl":"https://example.com/hook"}}`)
+	if verr != nil {
+		t.Fatalf("DecodeWeatherDelayPayload = %v", verr)
+	}
+	if p.Notify.WebhookURL != "https://example.com/hook" {
+		t.Fatalf("Notify.WebhookURL = %q, want https://example.com/hook", p.Notify.WebhookURL)
+	}
+}
+
+func TestDecodeWeatherDelayPayloadRejectsBadWebhookURLs(t *testing.T) {
+	cases := []string{
+		`{"notify":{"webhookUrl":"ftp://example.com/hook"}}`,
+		`{"notify":{"webhookUrl":"not a url"}}`,
+		`{"notify":{"webhookUrl":"https://"}}`,
+		`{"notify":{"webhookUrl":"https://user:pass@example.com/hook"}}`,
+		`{"notify":null}`,
+		`{"notify":{"bogus":1}}`,
+	}
+	for _, raw := range cases {
+		if _, verr := DecodeWeatherDelayPayload(raw); verr == nil {
+			t.Errorf("DecodeWeatherDelayPayload(%s) accepted a bad webhook configuration", raw)
+		}
+	}
+}
+
+func TestDecodeWeatherDelayPayloadRejectsOversizeWebhookURL(t *testing.T) {
+	long := "https://example.com/" + strings.Repeat("a", weatherDelayWebhookURLMaxLength)
+	raw := `{"notify":{"webhookUrl":"` + long + `"}}`
+	if _, verr := DecodeWeatherDelayPayload(raw); verr == nil {
+		t.Fatal("DecodeWeatherDelayPayload accepted an oversize webhook URL")
 	}
 }
 

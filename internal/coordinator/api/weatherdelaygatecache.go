@@ -9,12 +9,64 @@ import (
 // gate and each power group's darkness, read by GET /api/v1/weather-delay so
 // a request never waits on an FPP host. coordinator.go shares one instance.
 type WeatherDelayGateCache struct {
-	mu         sync.Mutex
-	gates      map[string]weatherDelayGateStatus
-	groups     map[string]weatherDelayGroupStatus
-	idleReads  map[string]time.Time
-	heartbeats map[string]time.Time
-	gateWrites map[string]*sync.Mutex
+	mu              sync.Mutex
+	gates           map[string]weatherDelayGateStatus
+	groups          map[string]weatherDelayGroupStatus
+	idleReads       map[string]time.Time
+	heartbeats      map[string]time.Time
+	gateWrites      map[string]*sync.Mutex
+	lastNotifyError string
+	cancelShutdowns map[int64]bool
+}
+
+// claimCancelShutdown reports whether the caller may start the cancel
+// night shutdown watcher for revision; false while one already runs.
+func (c *WeatherDelayGateCache) claimCancelShutdown(revision int64) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelShutdowns[revision] {
+		return false
+	}
+	if c.cancelShutdowns == nil {
+		c.cancelShutdowns = map[int64]bool{}
+	}
+	c.cancelShutdowns[revision] = true
+	return true
+}
+
+// releaseCancelShutdown ends a claim taken by claimCancelShutdown.
+func (c *WeatherDelayGateCache) releaseCancelShutdown(revision int64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.cancelShutdowns, revision)
+	c.mu.Unlock()
+}
+
+// setNotifyError records the webhook's latest delivery failure, or clears it
+// with "". It is held in memory only, so a restart clears it.
+func (c *WeatherDelayGateCache) setNotifyError(reason string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.lastNotifyError = reason
+	c.mu.Unlock()
+}
+
+// notifyError returns the webhook's last recorded delivery failure, or ""
+// when the last delivery (or the first attempt) succeeded.
+func (c *WeatherDelayGateCache) notifyError() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastNotifyError
 }
 
 // weatherDelayGateStatus is one FPP instance's most recently read gate
