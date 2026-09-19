@@ -5087,6 +5087,27 @@ export interface components {
             revision: number;
             /** @description Per plan node, whether each configured alert asset is present and hash-verified there (ADR-053 decision 7's own alert asset), so an operator can see on a calm day that the alert is ready. Empty when no alert asset is configured. */
             assets?: components["schemas"]["WeatherDelayNodeAssets"][];
+            /** @description Every configured power group's own dark confirmation (ADR-053 decision 10). Empty when no power group is configured; nothing else about this response changes. */
+            powerGroups?: components["schemas"]["WeatherDelayPowerGroupStatus"][];
+        };
+        WeatherDelayPowerGroupStatus: {
+            id: string;
+            label?: string;
+            confirmedDark: boolean;
+            /**
+             * Format: date-time
+             * @description When confirmedDark became true. Absent while confirmedDark is false.
+             */
+            since?: string;
+            members: components["schemas"]["WeatherDelayPowerGroupMember"][];
+        };
+        WeatherDelayPowerGroupMember: {
+            /** @enum {string} */
+            kind: "fpp" | "resolume" | "render";
+            id: string;
+            dark: boolean;
+            /** @description An operator sentence. Set whenever dark is false. */
+            reason?: string;
         };
         WeatherDelayNodeAssets: {
             nodeId: string;
@@ -5102,11 +5123,11 @@ export interface components {
         WeatherDelayActionRequest: {
             idempotencyKey: string;
         };
-        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), or node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached). */
+        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached), or weather-gate for the gate close (on start) or open (on resume) sent to one configured FPP instance. */
         WeatherDelayTargetOutcome: {
             instanceId: string;
             /** @enum {string} */
-            targetKind: "fpp" | "node" | "resolume" | "render" | "node-command";
+            targetKind: "fpp" | "node" | "resolume" | "render" | "node-command" | "weather-gate";
             outcome: string;
             outcomeReason: string;
             /** @enum {string} */

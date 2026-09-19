@@ -654,6 +654,11 @@ func Run() int {
 	// weatherDelayState is shared by the API, the Resolume gate and the
 	// republish loop, so a start whose write failed is held by all three.
 	weatherDelayState := api.NewWeatherDelayStateKeeper(st)
+	// weatherDelayGateCache is shared by the API and the enforcer loop
+	// (weatherdelayenforce.go), the identical reasoning weatherDelayState
+	// above gives: one enforcer tick's own gate reading must be visible to
+	// GET /api/v1/weather-delay regardless of which *handlers computed it.
+	weatherDelayGateCache := api.NewWeatherDelayGateCache()
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -938,6 +943,9 @@ func Run() int {
 		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
 		// adapter, matching AudioPublisher's identical wiring above.
 		WeatherDelayPublisher: bm,
+		// WeatherDelayGateCache is shared with the enforcer loop started
+		// below, see weatherDelayGateCache's own doc comment above.
+		WeatherDelayGateCache: weatherDelayGateCache,
 		// WeatherDelayNodeAddrs: a node's address for the direct start
 		// comes from its own retained hello, never from operator config.
 		WeatherDelayNodeAddrs: inv,
@@ -1308,6 +1316,19 @@ func Run() int {
 	nightLoop := api.NewNightLoop(apiDeps, apiOpts)
 	spawnBackground(func() {
 		nightLoop.Run(ctx)
+	})
+
+	// weatherDelayEnforcer.Run owns ADR-053 decision 4's own enforcement
+	// loop (weatherdelayenforce.go): it stops any FPP instance it observes
+	// playing and re-closes any gate it finds open while a delay is
+	// active, and reopens a gate a player kept closed after a delay it
+	// never learned had ended, started unconditionally like every other
+	// reconcile loop here — decision 13 forbids any configuration value
+	// from exempting an instance from it, so there is no "only if
+	// configured" gate to check before starting it.
+	weatherDelayEnforcer := api.NewWeatherDelayEnforcer(apiDeps, apiOpts)
+	spawnBackground(func() {
+		weatherDelayEnforcer.Run(ctx)
 	})
 
 	// cueActivationLoop.Run owns Track H seam H4's own activation trigger

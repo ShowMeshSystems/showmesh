@@ -14604,6 +14604,46 @@ components:
             ready. Empty when no alert asset is configured.
           items:
             $ref: "#/components/schemas/WeatherDelayNodeAssets"
+        powerGroups:
+          type: array
+          description: >-
+            Every configured power group's own dark confirmation
+            (ADR-053 decision 10). Empty when no power group is
+            configured; nothing else about this response changes.
+          items:
+            $ref: "#/components/schemas/WeatherDelayPowerGroupStatus"
+    WeatherDelayPowerGroupStatus:
+      type: object
+      required: [id, confirmedDark, members]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        confirmedDark:
+          type: boolean
+        since:
+          type: string
+          format: date-time
+          description: When confirmedDark became true. Absent while confirmedDark is false.
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeatherDelayPowerGroupMember"
+    WeatherDelayPowerGroupMember:
+      type: object
+      required: [kind, id, dark]
+      properties:
+        kind:
+          type: string
+          enum: [fpp, resolume, render]
+        id:
+          type: string
+        dark:
+          type: boolean
+        reason:
+          type: string
+          description: An operator sentence. Set whenever dark is false.
     WeatherDelayNodeAssets:
       type: object
       required: [nodeId]
@@ -14636,17 +14676,18 @@ components:
       description: >-
         One target's own start/resume dispatch outcome. targetKind is fpp,
         node, resolume, or render (the same four kinds emergency stop
-        reports), or node-command for the weatherdelay.start/resume node
+        reports), node-command for the weatherdelay.start/resume node
         command itself, whose deliveredVia is one of mqtt, http, both, or
         none (ADR-053 decision 8: a node reached by either path counts as
-        reached).
+        reached), or weather-gate for the gate close (on start) or open
+        (on resume) sent to one configured FPP instance.
       required: [instanceId, targetKind, outcome, outcomeReason]
       properties:
         instanceId:
           type: string
         targetKind:
           type: string
-          enum: [fpp, node, resolume, render, node-command]
+          enum: [fpp, node, resolume, render, node-command, weather-gate]
         outcome:
           type: string
         outcomeReason:

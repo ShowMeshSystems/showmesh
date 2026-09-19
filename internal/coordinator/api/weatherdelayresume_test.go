@@ -11,6 +11,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -94,6 +95,11 @@ func newResumeHarnessWith(t *testing.T, weatherDelay func(*store.Store) WeatherD
 	t.Helper()
 	r := &resumeHarness{t: t, now: time.Date(2026, 10, 31, 20, 30, 0, 0, time.UTC), obs: &mutableObservationLister{}}
 	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == fppcommand.WeatherGatePath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"weatherGateClosed":false,"weatherGateRevision":0,"effectiveOutputPercent":0}`))
+			return
+		}
 		var body struct {
 			Command string   `json:"command"`
 			Args    []string `json:"args"`

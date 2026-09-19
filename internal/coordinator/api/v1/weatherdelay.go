@@ -10,13 +10,35 @@ const EventKindWeatherDelayChanged = "weatherDelay.changed"
 // and hash-verified there, so an operator can see on
 // a calm day that the alert is ready.
 type WeatherDelayStateResponse struct {
-	ServerTime string                   `json:"serverTime"`
-	Active     bool                     `json:"active"`
-	Kind       string                   `json:"kind,omitempty"`
-	StartedAt  string                   `json:"startedAt,omitempty"`
-	StartedBy  string                   `json:"startedBy,omitempty"`
-	Revision   int64                    `json:"revision"`
-	Assets     []WeatherDelayNodeAssets `json:"assets"`
+	ServerTime  string                         `json:"serverTime"`
+	Active      bool                           `json:"active"`
+	Kind        string                         `json:"kind,omitempty"`
+	StartedAt   string                         `json:"startedAt,omitempty"`
+	StartedBy   string                         `json:"startedBy,omitempty"`
+	Revision    int64                          `json:"revision"`
+	Assets      []WeatherDelayNodeAssets       `json:"assets"`
+	PowerGroups []WeatherDelayPowerGroupStatus `json:"powerGroups"`
+}
+
+// WeatherDelayPowerGroupStatus is one configured power group's own dark
+// confirmation (ADR-053 decision 10). Since is empty while ConfirmedDark
+// is false.
+type WeatherDelayPowerGroupStatus struct {
+	ID            string                         `json:"id"`
+	Label         string                         `json:"label"`
+	ConfirmedDark bool                           `json:"confirmedDark"`
+	Since         string                         `json:"since,omitempty"`
+	Members       []WeatherDelayPowerGroupMember `json:"members"`
+}
+
+// WeatherDelayPowerGroupMember is one device tracked by a power group.
+// Kind is "fpp", "resolume" or "render". Reason is an operator sentence,
+// set whenever Dark is false.
+type WeatherDelayPowerGroupMember struct {
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Dark   bool   `json:"dark"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // WeatherDelayNodeAssets is one plan node's own alert asset readiness.
@@ -61,6 +83,10 @@ type WeatherDelayTargetOutcome struct {
 // (audio.node.silence), since weather delay never sends that action to a
 // plan node, where it would race the alert.
 const WeatherDelayTargetKindNodeCommand = "node-command"
+
+// WeatherDelayTargetKindGate is the weather gate close/open dispatch's own
+// target kind, one entry per configured FPP instance.
+const WeatherDelayTargetKindGate = "weather-gate"
 
 // WeatherDelayActionResult is the shared result shape start and resume
 // both answer with.
