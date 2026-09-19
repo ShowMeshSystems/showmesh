@@ -20,8 +20,19 @@ import (
 
 type failingWeatherDelayStore struct {
 	*store.Store
-	mu   sync.Mutex
-	fail bool
+	mu       sync.Mutex
+	fail     bool
+	failRead bool
+}
+
+func (f *failingWeatherDelayStore) GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error) {
+	f.mu.Lock()
+	failRead := f.failRead
+	f.mu.Unlock()
+	if failRead {
+		return store.WeatherDelayStateRecord{}, errors.New("disk I/O error")
+	}
+	return f.Store.GetWeatherDelayState(ctx)
 }
 
 func (f *failingWeatherDelayStore) setFail(fail bool) {
@@ -113,6 +124,43 @@ func TestWeatherDelayStartWriteFailureStillStopsAndHolds(t *testing.T) {
 	stored, err := r.st.GetWeatherDelayState(context.Background())
 	if err != nil || !stored.Active || stored.Revision != result.Revision {
 		t.Fatalf("stored state after the retry = %+v (err %v), want active at revision %d", stored, err, result.Revision)
+	}
+}
+
+func TestWeatherDelayStartReadFailureStillStopsAndHolds(t *testing.T) {
+	r, fs := newNotSavedHarness(t)
+	r.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, r.now)})
+	fs.mu.Lock()
+	fs.failRead = true
+	fs.mu.Unlock()
+
+	result := r.start()
+
+	if !result.Active || !result.NotSaved {
+		t.Fatalf("start result = %+v, want active and not saved", result)
+	}
+	if cmds, _ := r.fppCommands(); len(cmds) == 0 {
+		t.Fatal("no FPP command was sent: a failed read must never stop the stops")
+	}
+	r.pub.mu.Lock()
+	actions := append([]string(nil), r.pub.actions...)
+	r.pub.mu.Unlock()
+	if len(actions) == 0 || actions[0] != "weatherdelay.start" {
+		t.Fatalf("node actions = %v, want weatherdelay.start", actions)
+	}
+	if active, err := r.h.weatherDelayActive(context.Background()); err != nil || !active {
+		t.Fatalf("weatherDelayActive = %v (err %v), want held in this process", active, err)
+	}
+
+	fs.mu.Lock()
+	fs.failRead = false
+	fs.mu.Unlock()
+	fs.setFail(false)
+	if err := r.h.deps.WeatherDelay.(*WeatherDelayStateKeeper).SaveUnsaved(context.Background()); err != nil {
+		t.Fatalf("SaveUnsaved: %v", err)
+	}
+	if stored, err := r.st.GetWeatherDelayState(context.Background()); err != nil || !stored.Active {
+		t.Fatalf("stored state after the retry = %+v (err %v), want active", stored, err)
 	}
 }
 

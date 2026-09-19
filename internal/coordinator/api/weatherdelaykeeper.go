@@ -19,6 +19,9 @@ type WeatherDelayStateKeeper struct {
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	unsaved *store.WeatherDelayStateRecord
+	// lastRevision is the highest state revision this process has read or
+	// written, for a start that cannot read the store.
+	lastRevision int64
 }
 
 // NewWeatherDelayStateKeeper wraps inner.
@@ -35,7 +38,26 @@ func (k *WeatherDelayStateKeeper) GetWeatherDelayState(ctx context.Context) (sto
 	if unsaved != nil {
 		return *unsaved, nil
 	}
-	return k.inner.GetWeatherDelayState(ctx)
+	rec, err := k.inner.GetWeatherDelayState(ctx)
+	if err == nil {
+		k.noteRevision(rec.Revision)
+	}
+	return rec, err
+}
+
+// LastRevision is the highest state revision this process has seen.
+func (k *WeatherDelayStateKeeper) LastRevision() int64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.lastRevision
+}
+
+func (k *WeatherDelayStateKeeper) noteRevision(revision int64) {
+	k.mu.Lock()
+	if revision > k.lastRevision {
+		k.lastRevision = revision
+	}
+	k.mu.Unlock()
 }
 
 // SetWeatherDelayState stores rec and drops any unsaved state. A failed
@@ -44,6 +66,7 @@ func (k *WeatherDelayStateKeeper) SetWeatherDelayState(ctx context.Context, rec 
 	k.writeMu.Lock()
 	defer k.writeMu.Unlock()
 	err := k.inner.SetWeatherDelayState(ctx, rec)
+	k.noteRevision(rec.Revision)
 	k.mu.Lock()
 	k.unsaved = nil
 	if err != nil && rec.Active {
@@ -65,9 +88,16 @@ func (k *WeatherDelayStateKeeper) SaveUnsaved(ctx context.Context) error {
 	if unsaved == nil {
 		return nil
 	}
-	if err := k.inner.SetWeatherDelayState(ctx, *unsaved); err != nil {
+	toSave := *unsaved
+	// A start that could not read the store guessed its revision; take the
+	// stored one plus one so the retry is not refused as not increasing.
+	if stored, err := k.inner.GetWeatherDelayState(ctx); err == nil && stored.Revision >= toSave.Revision {
+		toSave.Revision = stored.Revision + 1
+	}
+	if err := k.inner.SetWeatherDelayState(ctx, toSave); err != nil {
 		return err
 	}
+	k.noteRevision(toSave.Revision)
 	k.mu.Lock()
 	k.unsaved = nil
 	k.mu.Unlock()

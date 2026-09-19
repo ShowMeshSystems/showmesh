@@ -225,10 +225,15 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		issuerID = "unknown"
 	}
 
+	// A failed read never stops the stops either: start as not active at
+	// the highest state number this process has seen.
 	current, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 	if err != nil {
-		h.writeInternalError(w, now, "get weather delay state", err)
-		return
+		h.logWarn("weather delay start: failed to read the stored state; starting anyway", "error", err)
+		current = store.WeatherDelayStateRecord{}
+		if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
+			current.Revision = keeper.LastRevision()
+		}
 	}
 
 	// A failed write never stops the stops: the keeper holds the active
