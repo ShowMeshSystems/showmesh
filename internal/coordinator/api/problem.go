@@ -102,11 +102,8 @@ const (
 	// to that file's owner — see this task's report.
 	ProblemTypeInternalError = problemBaseURI + "internal-error"
 
-	// ProblemTypeNotImplemented is a 501: the route exists, is behind the
-	// right scope, and accepts a well-shaped request, but the behavior it
-	// names has not shipped yet. ADR-053's three weather-delay trigger
-	// routes are its first use, while their own night-loop/enforcement/
-	// plugin-gate behavior lands on later branches.
+	// ProblemTypeNotImplemented is a 501: the route checked scope and body,
+	// but its behavior has not shipped yet.
 	ProblemTypeNotImplemented = problemBaseURI + "not-implemented"
 
 	// ProblemTypeFPPStartPlaylistEvidenceNotCurrent is startPlaylist's own

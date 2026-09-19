@@ -14,9 +14,8 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// GET/PUT/revisions for the "show.weatherdelay" configuration kind, on
-// emergencystopconfig.go's own shape: config:write gated, singleton,
-// well-defined default so GET never 404s.
+// GET, PUT and revisions for show.weatherdelay, shaped like
+// show.emergencystop. GET never 404s.
 
 const maxWeatherDelayConfigRequestBodyBytes = 8192
 
@@ -64,8 +63,7 @@ func (h *handlers) handleGetWeatherDelayConfig(w http.ResponseWriter, r *http.Re
 }
 
 // handleGetWeatherDelayConfigRevisions serves
-// GET /api/v1/config/show.weatherdelay/revisions, on
-// handleGetEmergencyStopConfigRevisions's own identical shape.
+// GET /api/v1/config/show.weatherdelay/revisions.
 func (h *handlers) handleGetWeatherDelayConfigRevisions(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -86,10 +84,8 @@ func (h *handlers) handleGetWeatherDelayConfigRevisions(w http.ResponseWriter, r
 	jsonWrite(w, v1.ConfigRevisionsResponse{ServerTime: formatTime(now), Kind: config.ShowWeatherDelayConfigKind, Revisions: out})
 }
 
-// handlePutWeatherDelayConfig serves PUT /api/v1/config/show.weatherdelay:
-// validates a full replacement (every member optional with a working
-// default), appends an immutable revision, and activates it in the SAME
-// transaction as its audit log entry (ADR-024 decision 11).
+// handlePutWeatherDelayConfig serves PUT /api/v1/config/show.weatherdelay,
+// activating the new revision in the same transaction as its audit entry.
 func (h *handlers) handlePutWeatherDelayConfig(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()

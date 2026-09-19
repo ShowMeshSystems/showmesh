@@ -3,15 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-// openDatabaseAtV40 mirrors openDatabaseAtV39 one migration further: a
-// database carrying every migration up to and including v40, stamped at
-// that version, so a test can watch v41 add weather_delay_state underneath
-// a store that predates it.
+// openDatabaseAtV40 returns a database migrated to v40 and stamped there.
 func openDatabaseAtV40(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "pre-v41.db"))
@@ -126,5 +124,40 @@ func TestMigrateV41ThenStoreLayerCanRoundTripWeatherDelayState(t *testing.T) {
 	}
 	if !got.StartedAt.IsZero() {
 		t.Errorf("StartedAt after clear = %v, want zero", got.StartedAt)
+	}
+}
+
+func TestWeatherDelayStateRefusesASecondRow(t *testing.T) {
+	db := openDatabaseAtV40(t)
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO weather_delay_state (id) VALUES ('other')`); err == nil {
+		t.Fatal("inserting a second weather_delay_state row succeeded, want a constraint failure")
+	}
+}
+
+func TestSetWeatherDelayStateRefusesARevisionThatDoesNotIncrease(t *testing.T) {
+	db := openDatabaseAtV40(t)
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	st := &Store{db: db, now: time.Now}
+	ctx := context.Background()
+
+	if err := st.SetWeatherDelayState(ctx, WeatherDelayStateRecord{Revision: 3}); err != nil {
+		t.Fatalf("SetWeatherDelayState(3): %v", err)
+	}
+	for _, rev := range []int64{3, 0} {
+		if err := st.SetWeatherDelayState(ctx, WeatherDelayStateRecord{Revision: rev}); !errors.Is(err, ErrWeatherDelayRevisionNotIncreasing) {
+			t.Errorf("SetWeatherDelayState(%d) = %v, want ErrWeatherDelayRevisionNotIncreasing", rev, err)
+		}
+	}
+	got, err := st.GetWeatherDelayState(ctx)
+	if err != nil {
+		t.Fatalf("GetWeatherDelayState: %v", err)
+	}
+	if got.Revision != 3 {
+		t.Fatalf("Revision = %d, want 3", got.Revision)
 	}
 }

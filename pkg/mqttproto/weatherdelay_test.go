@@ -1,16 +1,15 @@
 package mqttproto
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
-// TestWeatherDelayKindsMatchPkgWeatherdelay keeps this package's own
-// duplicated kind literals (weatherdelay.go's own doc comment explains why
-// they are duplicated rather than imported) from drifting off
-// pkg/weatherdelay's.
+// TestWeatherDelayKindsMatchPkgWeatherdelay keeps the copied kind literals
+// equal to pkg/weatherdelay's.
 func TestWeatherDelayKindsMatchPkgWeatherdelay(t *testing.T) {
 	if WeatherDelayKindDelay != weatherdelay.KindDelay {
 		t.Fatalf("WeatherDelayKindDelay = %q, want %q", WeatherDelayKindDelay, weatherdelay.KindDelay)
@@ -217,5 +216,19 @@ func TestDecodeWeatherDelayDarkMessageRefusesMalformedPayloads(t *testing.T) {
 		if _, err := DecodeWeatherDelayDarkMessage([]byte(raw)); err == nil {
 			t.Errorf("%s: DecodeWeatherDelayDarkMessage accepted %q", name, raw)
 		}
+	}
+}
+
+func TestEncodeWeatherDelayMessageOmitsStartedAtWhileNotActive(t *testing.T) {
+	m, err := NewWeatherDelayMessage(false, "", time.Time{}, "", 1, WeatherDelayPlan{}, time.Now())
+	if err != nil {
+		t.Fatalf("NewWeatherDelayMessage: %v", err)
+	}
+	b, err := EncodeWeatherDelayMessage(m)
+	if err != nil {
+		t.Fatalf("EncodeWeatherDelayMessage: %v", err)
+	}
+	if strings.Contains(string(b), "startedAt") {
+		t.Fatalf("encoded inactive message carries startedAt: %s", b)
 	}
 }

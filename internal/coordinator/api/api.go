@@ -576,13 +576,8 @@ type Dependencies struct {
 	// API failing" posture.
 	NightSessions NightSessionStore
 
-	// WeatherDelay is ADR-053's own store dependency — see
-	// [WeatherDelayStore]. A nil field is replaced by [noWeatherDelayStore],
-	// under which GET still reports the correct "not active" default (a
-	// real, valid answer, not degraded) and Set refuses with an internal
-	// error, matching this struct's standing "an unwired dependency is not
-	// this API failing" posture. Not yet wired in
-	// internal/coordinator/coordinator.go — a later branch's job.
+	// WeatherDelay is the weather delay state store. A nil field reads as
+	// not active and refuses writes.
 	WeatherDelay WeatherDelayStore
 
 	// FPPObservations is the playlist-entry observation store dependency — see
@@ -863,11 +858,8 @@ func (noNightSessionStore) InTx(context.Context, func(context.Context, *store.Tx
 	return fmt.Errorf("api: night session store not wired in")
 }
 
-// noWeatherDelayStore is [Dependencies.WeatherDelay]'s nil-safe default:
-// Get reports the zero record (not active), which store.GetWeatherDelayState
-// already reports for a real, never-written row — so an unwired dependency
-// and a genuinely empty one read identically, both correctly. Set refuses,
-// matching every other unwired write-capable dependency in this file.
+// noWeatherDelayStore is [Dependencies.WeatherDelay]'s default: Get reports
+// not active and Set refuses.
 type noWeatherDelayStore struct{}
 
 func (noWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherDelayStateRecord, error) {
@@ -1986,13 +1978,8 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
 	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
 
-	// ADR-053 weather delay: the live state (working now), the
-	// show.weatherdelay configuration kind (working now, on
-	// show.emergencystop's own shape), and the three trigger routes
-	// (start/cancel-night/resume, currently always 501 — see
-	// weatherdelay.go's own doc comment). Resume holds its own scope,
-	// separate from start/cancel-night's shared invoke scope (ADR-053
-	// decision 8).
+	// Weather delay (ADR-053). Resume has its own scope, separate from the
+	// invoke scope start and cancel-night share.
 	mux.HandleFunc("GET /api/v1/weather-delay", h.readGuard(identity.ScopeObservationRead, h.handleGetWeatherDelayState))
 	mux.HandleFunc("GET /api/v1/config/show.weatherdelay", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfig))
 	mux.HandleFunc("PUT /api/v1/config/show.weatherdelay", h.writeGuard(&scopeConfigWrite, h.handlePutWeatherDelayConfig))

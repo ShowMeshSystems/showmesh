@@ -523,10 +523,8 @@ type NightSessionStore interface {
 	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
 }
 
-// WeatherDelayStore is ADR-053's own store dependency: the single
-// persisted weather_delay_state row (store/weatherdelay.go). *store.Store
-// already satisfies this with no adapter needed, matching
-// [NightSessionStore]'s identical pattern.
+// WeatherDelayStore reads and writes the stored weather delay state.
+// *store.Store satisfies it.
 type WeatherDelayStore interface {
 	GetWeatherDelayState(ctx context.Context) (store.WeatherDelayStateRecord, error)
 	SetWeatherDelayState(ctx context.Context, rec store.WeatherDelayStateRecord) error

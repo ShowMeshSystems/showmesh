@@ -14652,10 +14652,16 @@ components:
       properties:
         answerWindowSeconds:
           type: integer
+          minimum: 1
+          maximum: 3600
         cancelAnswerWindowSeconds:
           type: integer
+          minimum: 1
+          maximum: 3600
         restartMinutes:
           type: integer
+          minimum: 0
+          maximum: 1440
     ConfigWeatherDelayPayload:
       type: object
       description: >-

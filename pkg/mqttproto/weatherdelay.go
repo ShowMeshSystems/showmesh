@@ -10,23 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// This file carries ADR-053's weather-delay state to nodes, on
-// showmode.go's own precedent: retained, events-family, not wrapped in an
-// [Envelope] (the state is installation-wide, not node-scoped — see
-// showmode.go's header comment for the full reasoning, which applies here
-// unchanged).
-//
-// WeatherDelayDarkTopic is the one deliberate departure: it is PER POWER
-// GROUP (ADR-053 decision 10) and NOT retained. A late-joining subscriber
-// (an installation's own power controller) must not act on a stale "dark"
-// heartbeat left over from a previous delay — decision 10's own words are
-// "a controller that stops hearing a group's heartbeat during a delay cuts
-// that group", which only works if silence, not a retained message,
-// carries the meaning. Retaining it would mean a controller that starts
-// after a delay ended still sees the last "dark" it was ever told and
-// never cuts power for the wrong reason, but also never clears the
-// stale message on its own the way an [EventDeliveryPolicy] topic
-// otherwise would.
+// The weather delay state is retained on one installation-wide events
+// topic, like show mode. The per-power-group dark heartbeat is not retained:
+// a power controller acts on its silence, so a stale message must not linger.
 
 // SchemaWeatherDelayV1 is the schema string of [WeatherDelayMessage],
 // published retained on [WeatherDelayTopic].
@@ -37,13 +23,8 @@ const SchemaWeatherDelayV1 = "showmesh.weatherdelay/v1"
 // [WeatherDelayDarkTopic].
 const SchemaWeatherDelayDarkV1 = "showmesh.weatherdelay.dark/v1"
 
-// The two members of ADR-053 decision 1's closed vocabulary, the wire
-// spelling of [weatherdelay.KindDelay]/[weatherdelay.KindCancelNight].
-// This package does not import pkg/weatherdelay (it carries no
-// dependency on any other package's own vocabulary type, mirroring
-// showmode.go's own closed, self-contained enum), so the two are
-// duplicated as literals here; TestWeatherDelayKindsMatchPkgWeatherdelay
-// is what keeps them from drifting apart.
+// The wire spelling of weatherdelay.KindDelay and KindCancelNight, copied
+// so this package imports no vocabulary package. A test keeps them equal.
 const (
 	WeatherDelayKindDelay       = "delay"
 	WeatherDelayKindCancelNight = "cancelNight"
@@ -61,28 +42,20 @@ const (
 	weatherDelayDarkTopicSubpath = "weather_delay/dark"
 )
 
-// WeatherDelayDeliveryPolicy is retained QoS 1: the state is state, per
-// [ShowModeDeliveryPolicy]'s own identical reasoning.
+// WeatherDelayDeliveryPolicy is retained QoS 1, like [ShowModeDeliveryPolicy].
 var WeatherDelayDeliveryPolicy = DeliveryPolicy{Retain: true, QoS: 1}
 
-// WeatherDelayDarkDeliveryPolicy is QoS 1, NOT retained: see this file's
-// header comment for why a stale "dark" heartbeat must never survive past
-// the delay that produced it.
+// WeatherDelayDarkDeliveryPolicy is QoS 1 and not retained.
 var WeatherDelayDarkDeliveryPolicy = DeliveryPolicy{Retain: false, QoS: 1}
 
-// WeatherDelayTopic is "showmesh/events/weather_delay", the single
-// retained topic the installation-wide weather-delay state is published
-// on. Takes no arguments, mirroring [ShowModeTopic]: there is exactly one
-// weather-delay state for the installation (ADR-053 decision 2).
+// WeatherDelayTopic is "showmesh/events/weather_delay", the one retained
+// topic for the installation-wide state.
 func WeatherDelayTopic() string {
 	return eventsPrefix + "/" + weatherDelayTopicSubpath
 }
 
-// WeatherDelayDarkTopic builds
-// "showmesh/events/weather_delay/dark/<group-id>", the per-power-group
-// dark-confirmation heartbeat (ADR-053 decision 10). groupID is the
-// operator-configured power group id, validated with the same
-// [subpathSegmentPattern] every other topic segment in this package uses.
+// WeatherDelayDarkTopic builds "showmesh/events/weather_delay/dark/<group-id>",
+// one power group's dark heartbeat topic (ADR-053 decision 10).
 func WeatherDelayDarkTopic(groupID string) (string, error) {
 	if err := validateWeatherDelayGroupID(groupID); err != nil {
 		return "", err
@@ -90,11 +63,8 @@ func WeatherDelayDarkTopic(groupID string) (string, error) {
 	return eventsPrefix + "/" + weatherDelayDarkTopicSubpath + "/" + groupID, nil
 }
 
-// validateWeatherDelayGroupID enforces [subpathSegmentPattern] on groupID
-// as ONE segment, deliberately stricter than [validateSubpath] (which
-// permits internal '/' to express hierarchy): a group id placed directly
-// into a topic path must never itself contain a level separator, or an
-// operator-chosen id could inject an extra topic level.
+// validateWeatherDelayGroupID accepts exactly one topic segment, so a group
+// id can never add a topic level or a wildcard.
 func validateWeatherDelayGroupID(groupID string) error {
 	if !subpathSegmentPattern.MatchString(groupID) {
 		return fmt.Errorf("%w: group id %q must match [a-z0-9][a-z0-9_-]*", ErrInvalidSubpath, groupID)
@@ -102,11 +72,8 @@ func validateWeatherDelayGroupID(groupID string) error {
 	return nil
 }
 
-// WeatherDelayAlertAssetRef names one alert asset a node opens: the
-// coordinator's asset id, its content hash (so a node can confirm it holds
-// the right bytes without a separate fetch round trip), and the runtime
-// filename to open. All three are required whenever a ref is present — an
-// asset a node cannot verify or cannot open is not a usable reference.
+// WeatherDelayAlertAssetRef names one alert asset a node plays. All three
+// fields are required, so a node can check the bytes it holds and open them.
 type WeatherDelayAlertAssetRef struct {
 	AssetID     string `json:"assetId"`
 	ContentHash string `json:"contentHash"`
@@ -130,28 +97,16 @@ func (r WeatherDelayAlertAssetRef) Validate() error {
 	return nil
 }
 
-// weatherDelayPlanMinRepeatCount and weatherDelayPlanMaxRepeatCount mirror
-// internal/coordinator/config's own weatherDelayMinRepeatCount/
-// weatherDelayMaxRepeatCount (ADR-053 decision 7): this package cannot
-// import that one (agent/plugin-facing, config is coordinator-only), so
-// the bound is duplicated as a literal here, the same
-// [WeatherDelayKindDelay]/[WeatherDelayKindCancelNight] duplication this
-// file's own doc comment already explains.
+// The alert repeat bounds, copied from internal/coordinator/config because
+// nodes cannot import coordinator packages.
 const (
 	weatherDelayPlanMinRepeatCount = 1
 	weatherDelayPlanMaxRepeatCount = 50
 )
 
-// WeatherDelayPlan is what a node needs to play the configured alert
-// without a further round trip once it receives a bare signed start
-// (ADR-053 decision 9): which asset for each kind, how many times, and
-// which nodes. Present on every [WeatherDelayMessage], even one reporting
-// "not active" — a node that later receives a signed start already knows
-// what to play. Delay/CancelNight are nil when that kind's alert asset is
-// not configured (ADR-053 decision 13: every part is independently
-// optional); RepeatCount 0 means nothing has ever configured a value (the
-// coordinator's own resolved default is 10, never republished as this
-// zero value once show.weatherdelay has actually been written).
+// WeatherDelayPlan is the alert a node plays, sent on every state message so
+// a node that later gets only a signed start already knows what to play.
+// A nil asset means none is configured; RepeatCount 0 means unset.
 type WeatherDelayPlan struct {
 	Delay       *WeatherDelayAlertAssetRef `json:"delay,omitempty"`
 	CancelNight *WeatherDelayAlertAssetRef `json:"cancelNight,omitempty"`
@@ -163,14 +118,8 @@ type WeatherDelayPlan struct {
 // [WeatherDelayPlan.Validate] returns.
 var ErrInvalidWeatherDelayPlan = errors.New("mqttproto: invalid weather delay plan")
 
-// Validate reports whether p is well-formed: an absent plan (the zero
-// value) and absent Delay/CancelNight entries are both valid — this is
-// deliberately permissive, not "required once a plan exists", because a
-// coordinator that has never configured show.weatherdelay still publishes
-// this message with its own zero Plan. A present Delay/CancelNight ref
-// must itself be complete ([WeatherDelayAlertAssetRef.Validate]), and a
-// non-zero RepeatCount must fall in [1, 50] (ADR-053 decision 7) — only a
-// RepeatCount that was actually SET to something out of range is refused.
+// Validate accepts the zero plan. A present asset ref must be complete and a
+// non-zero RepeatCount must be in [1, 50].
 func (p WeatherDelayPlan) Validate() error {
 	if p.Delay != nil {
 		if err := p.Delay.Validate(); err != nil {
@@ -188,42 +137,27 @@ func (p WeatherDelayPlan) Validate() error {
 	return nil
 }
 
-// WeatherDelayMessage is the payload of the showmesh.weatherdelay/v1
-// schema: the wire projection of [weatherdelay.State], carried directly
-// rather than importing that type, mirroring [ShowModeMessage]'s own
-// self-contained shape.
+// WeatherDelayMessage is the showmesh.weatherdelay/v1 payload: the wire form
+// of weatherdelay.State plus the alert plan.
 type WeatherDelayMessage struct {
 	Schema    string    `json:"schema"`
 	MessageID string    `json:"messageId"`
 	Active    bool      `json:"active"`
 	Kind      string    `json:"kind,omitempty"`
-	StartedAt time.Time `json:"startedAt,omitempty"`
+	StartedAt time.Time `json:"startedAt,omitzero"`
 	StartedBy string    `json:"startedBy,omitempty"`
 
-	// Revision is the coordinator's weather-delay state revision this
-	// value came from, mirroring [ShowModeMessage.Revision]'s own
-	// informational, non-gating role.
-	Revision int64 `json:"revision"`
-
-	// Plan is the alert plan a node needs to play without a further round
-	// trip once it receives a bare signed start. See [WeatherDelayPlan].
-	Plan WeatherDelayPlan `json:"plan"`
-
-	// PublishedAt is the coordinator's clock at build time, mirroring
-	// [ShowModeMessage.PublishedAt]'s identical "not freshness evidence on
-	// the receiving side" rule.
-	PublishedAt time.Time `json:"publishedAt"`
+	Revision    int64            `json:"revision"`
+	Plan        WeatherDelayPlan `json:"plan"`
+	PublishedAt time.Time        `json:"publishedAt"`
 }
 
 // ErrInvalidWeatherDelayMessage is wrapped by every error
 // [WeatherDelayMessage.Validate] and [DecodeWeatherDelayMessage] return.
 var ErrInvalidWeatherDelayMessage = errors.New("mqttproto: invalid weather delay message")
 
-// Validate reports whether m is well-formed: the expected schema, a
-// non-empty message id, a non-negative revision, a non-zero publishedAt,
-// and — while Active — a kind from the closed vocabulary, a non-zero
-// startedAt, and a non-empty startedBy; while not Active, none of those
-// three, mirroring [weatherdelay.State.Validate]'s identical rule.
+// Validate checks the schema, id, revision, publishedAt and plan, and that
+// kind, startedAt and startedBy are set while Active and unset otherwise.
 func (m WeatherDelayMessage) Validate() error {
 	switch {
 	case m.Schema != SchemaWeatherDelayV1:
@@ -257,9 +191,7 @@ func (m WeatherDelayMessage) Validate() error {
 }
 
 // NewWeatherDelayMessage builds a validated [WeatherDelayMessage] with a
-// fresh message id and now stamped in UTC. plan is carried through
-// verbatim — see [WeatherDelayPlan]'s own doc comment for why it is
-// present even when active is false.
+// fresh message id and now stamped in UTC.
 func NewWeatherDelayMessage(active bool, kind string, startedAt time.Time, startedBy string, revision int64, plan WeatherDelayPlan, now time.Time) (WeatherDelayMessage, error) {
 	m := WeatherDelayMessage{
 		Schema: SchemaWeatherDelayV1, MessageID: uuid.NewString(),
@@ -275,9 +207,7 @@ func NewWeatherDelayMessage(active bool, kind string, startedAt time.Time, start
 	return m, nil
 }
 
-// EncodeWeatherDelayMessage marshals m after validating it, mirroring
-// [EncodeShowModeMessage]'s identical "never let a malformed message reach
-// the retained topic" rule.
+// EncodeWeatherDelayMessage marshals m after validating it.
 func EncodeWeatherDelayMessage(m WeatherDelayMessage) ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -289,9 +219,8 @@ func EncodeWeatherDelayMessage(m WeatherDelayMessage) ([]byte, error) {
 	return b, nil
 }
 
-// DecodeWeatherDelayMessage parses data and validates it, mirroring
-// [DecodeShowModeMessage]'s identical shape, including its "an empty
-// payload is refused rather than read as any state" rule.
+// DecodeWeatherDelayMessage parses and validates data. An empty payload is
+// refused rather than read as any state.
 func DecodeWeatherDelayMessage(data []byte) (WeatherDelayMessage, error) {
 	if len(data) > maxEnvelopeSize {
 		return WeatherDelayMessage{}, fmt.Errorf("%w: %w", ErrInvalidWeatherDelayMessage, ErrEnvelopeTooLarge)
@@ -309,11 +238,8 @@ func DecodeWeatherDelayMessage(data []byte) (WeatherDelayMessage, error) {
 	return m, nil
 }
 
-// WeatherDelayDarkMessage is the payload of the
-// showmesh.weatherdelay.dark/v1 schema: one power group's own current dark
-// confirmation (ADR-053 decision 10). Published only while a delay is
-// active; a group that has never confirmed dark since the delay started
-// simply has no message published for it yet, never a "false" placeholder.
+// WeatherDelayDarkMessage is the showmesh.weatherdelay.dark/v1 payload: one
+// power group's dark confirmation, published only while a delay is active.
 type WeatherDelayDarkMessage struct {
 	Schema      string    `json:"schema"`
 	MessageID   string    `json:"messageId"`
@@ -327,9 +253,8 @@ type WeatherDelayDarkMessage struct {
 // return.
 var ErrInvalidWeatherDelayDarkMessage = errors.New("mqttproto: invalid weather delay dark message")
 
-// Validate reports whether m is well-formed: the expected schema, a
-// non-empty message id, a group id valid as a topic segment, and a
-// non-zero publishedAt.
+// Validate checks the schema, id, publishedAt, and that the group id is one
+// topic segment.
 func (m WeatherDelayDarkMessage) Validate() error {
 	switch {
 	case m.Schema != SchemaWeatherDelayDarkV1:

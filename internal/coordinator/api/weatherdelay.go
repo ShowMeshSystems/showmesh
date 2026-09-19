@@ -8,15 +8,11 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/pkg/command"
 )
 
-// GET /api/v1/weather-delay (the live state, working now) and the three
-// trigger routes (start/cancel-night/resume). ADR-053 decision 1 fixes the
-// vocabulary; none of the three trigger routes dispatches anything yet —
-// each answers [ProblemTypeNotImplemented] behind its own scope, so a
-// caller can already tell "not authorized" apart from "not built yet"
-// before the night loop, cue activation refusal, enforcement loop, and
-// plugin output gate land on later branches.
+// GET /api/v1/weather-delay reports the stored state. The start,
+// cancel-night and resume routes check scope and body, then answer 501.
 
 var (
 	scopeShowWeatherDelayInvoke = identity.ScopeShowWeatherDelayInvoke
@@ -25,9 +21,7 @@ var (
 
 const maxWeatherDelayActionRequestBodyBytes = 1024
 
-// handleGetWeatherDelayState serves GET /api/v1/weather-delay: the
-// persisted state, or "not active" when nothing has ever been written
-// (store.GetWeatherDelayState's own default).
+// handleGetWeatherDelayState serves GET /api/v1/weather-delay.
 func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -47,11 +41,8 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 	jsonWrite(w, resp)
 }
 
-// decodeWeatherDelayActionRequestBody parses and validates the shared
-// {"idempotencyKey": string} body every trigger route accepts, on
-// decodeEmergencyStopIdempotencyKeyBody's own shape (this route accepts no
-// armToken sibling key: nothing here is a deliberate-intent hard-stop-style
-// gate).
+// decodeWeatherDelayActionRequestBody reads the {"idempotencyKey": string}
+// body the three action routes share.
 func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string, problem *v1.Problem) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWeatherDelayActionRequestBodyBytes+1))
 	if err != nil {
@@ -80,28 +71,29 @@ func decodeWeatherDelayActionRequestBody(r *http.Request) (idempotencyKey string
 		return "", &p
 	}
 	if raw, ok := top["idempotencyKey"]; ok {
-		_ = json.Unmarshal(raw, &idempotencyKey)
+		if err := json.Unmarshal(raw, &idempotencyKey); err != nil {
+			p := invalidParameterProblem("idempotencyKey must be a string")
+			return "", &p
+		}
+	}
+	if err := command.ValidateIdempotencyKey(idempotencyKey); err != nil {
+		p := invalidParameterProblem("idempotencyKey: " + err.Error())
+		return "", &p
 	}
 	return idempotencyKey, nil
 }
 
-// handleWeatherDelayStart serves POST /api/v1/weather-delay/start: behind
-// show:weatherdelay:invoke, ADR-053 decision 8's "starting is accepted
-// from anywhere" scope.
+// handleWeatherDelayStart serves POST /api/v1/weather-delay/start.
 func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Request) {
 	h.handleWeatherDelayNotImplemented(w, r, "starting a weather delay")
 }
 
-// handleWeatherDelayCancelNight serves POST /api/v1/weather-delay/cancel-night,
-// behind the same show:weatherdelay:invoke umbrella authority as start
-// (ADR-053 decision 1: "Both take one press ... available in the API").
+// handleWeatherDelayCancelNight serves POST /api/v1/weather-delay/cancel-night.
 func (h *handlers) handleWeatherDelayCancelNight(w http.ResponseWriter, r *http.Request) {
 	h.handleWeatherDelayNotImplemented(w, r, "cancelling the night for weather")
 }
 
-// handleWeatherDelayResume serves POST /api/v1/weather-delay/resume,
-// behind its OWN scope, show:weatherdelay:resume (ADR-053 decision 8:
-// "Resume is accepted only by the authenticated coordinator API").
+// handleWeatherDelayResume serves POST /api/v1/weather-delay/resume.
 func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Request) {
 	h.handleWeatherDelayNotImplemented(w, r, "resuming from a weather delay")
 }

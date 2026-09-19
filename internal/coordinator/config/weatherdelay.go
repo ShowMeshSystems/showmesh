@@ -8,57 +8,35 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// This file is ADR-053's "show.weatherdelay" configuration kind: how the
-// optional alert, power groups, and automatic triggers are set up. It
-// authors configuration only; nothing here evaluates a trigger, dispatches
-// an alert, or reads the live weather-delay state (store/weatherdelay.go).
-//
-// Singleton, on emergencystop.go's own shape: one config object id, PUT is
-// a full replacement. UNLIKE emergencystop.go, every field here is
-// OPTIONAL with a working default (ADR-053 decision 13: "The feature is
-// optional... Every part is independently optional"), so an empty PUT body
-// `{}` is a valid, fully-defaulted configuration, not a refusal.
+// The "show.weatherdelay" configuration kind: the optional alert, power
+// groups and trigger timing. A singleton, fully replaced on PUT. Every field
+// is optional (ADR-053 decision 13), so `{}` is a valid configuration.
 
 const (
-	// ShowWeatherDelayConfigKind is config_objects.kind and
-	// config_revisions.kind for this object, and the second path segment of
-	// GET/PUT /api/v1/config/show.weatherdelay.
-	ShowWeatherDelayConfigKind = "show.weatherdelay"
-
-	// ShowWeatherDelayConfigObjectID is the single config_objects.id this
-	// kind ever uses, on ShowEmergencyStopConfigObjectID's own precedent.
+	ShowWeatherDelayConfigKind     = "show.weatherdelay"
 	ShowWeatherDelayConfigObjectID = "default"
-
-	// ShowWeatherDelaySourceAPI is this kind's only config_revisions.source
-	// value: nothing ever backed it as a start-time environment variable.
+	// ShowWeatherDelaySourceAPI is the only source: no environment variable
+	// sets this kind.
 	ShowWeatherDelaySourceAPI = "api"
 )
 
-// weatherDelayDefaultRepeatCount, weatherDelayMinRepeatCount, and
-// weatherDelayMaxRepeatCount are ADR-053 decision 7's own numbers: "The
-// alert plays a configured number of times, ten by default."
+// The alert plays ten times by default (ADR-053 decision 7).
 const (
 	weatherDelayDefaultRepeatCount = 10
 	weatherDelayMinRepeatCount     = 1
 	weatherDelayMaxRepeatCount     = 50
 )
 
-// weatherDelayDefaultAnswerWindowSeconds, weatherDelayDefaultCancelAnswer
-// WindowSeconds, and weatherDelayDefaultRestartMinutes are ADR-053 decision
-// 12's own defaults for an automatic trigger: "a delay... a longer window"
-// for the delay-or-cancel question, and a rough guess at how long an
-// interrupted show still has time to restart within.
+// Trigger defaults (ADR-053 decision 12). The ADR sets only that the cancel
+// window is longer; these numbers are unmeasured choices.
 const (
 	weatherDelayDefaultAnswerWindowSeconds       = 30
 	weatherDelayDefaultCancelAnswerWindowSeconds = 180
 	weatherDelayDefaultRestartMinutes            = 15
 )
 
-// weatherDelayDefaultHeartbeatIntervalSeconds is a SHOWMESH GUESS, NOT
-// SPECIFIED BY ADR-053: decision 10 requires the heartbeat interval be
-// operator-set ("on timeouts the installation sets") but names no default
-// cadence. 30s is chosen the way [Config.ResolumeRecoverySettle]'s own
-// default is: workable, not measured against a real power controller.
+// weatherDelayDefaultHeartbeatIntervalSeconds is an unmeasured choice; the
+// ADR leaves the cadence to the installation.
 const weatherDelayDefaultHeartbeatIntervalSeconds = 30
 
 const (
@@ -70,11 +48,9 @@ const (
 	weatherDelayMaxHeartbeatSeconds    = 3600
 )
 
-// WeatherDelayAlertPayload is the optional alert an active delay or
-// cancel-night plays (ADR-053 decision 7). DelayAssetID/CancelNightAssetID
-// empty means no alert asset is configured for that kind; NodeIDs empty
-// means every declared audio node (the task's own "empty = every audio
-// node" rule), never "no nodes".
+// WeatherDelayAlertPayload is the optional alert (ADR-053 decision 7). An
+// empty asset id means no alert for that kind; empty NodeIDs means every
+// declared audio node.
 type WeatherDelayAlertPayload struct {
 	DelayAssetID       string   `json:"delayAssetId"`
 	CancelNightAssetID string   `json:"cancelNightAssetId"`
@@ -82,17 +58,14 @@ type WeatherDelayAlertPayload struct {
 	NodeIDs            []string `json:"nodeIds"`
 }
 
-// WeatherDelayHeartbeatPayload is one power group's own optional dark
-// heartbeat publication (ADR-053 decision 10).
+// WeatherDelayHeartbeatPayload is one power group's optional dark heartbeat.
 type WeatherDelayHeartbeatPayload struct {
 	Enabled         bool `json:"enabled"`
 	IntervalSeconds int  `json:"intervalSeconds"`
 }
 
-// WeatherDelayPowerGroupPayload is one operator-defined power group
-// (ADR-053 decision 10): the devices whose dark confirmation this group's
-// own heartbeat reports on. An installation with no cutoff configures no
-// groups at all.
+// WeatherDelayPowerGroupPayload is one operator-defined power group: the
+// devices its dark heartbeat reports on (ADR-053 decision 10).
 type WeatherDelayPowerGroupPayload struct {
 	ID                  string                       `json:"id"`
 	Label               string                       `json:"label"`
@@ -102,28 +75,22 @@ type WeatherDelayPowerGroupPayload struct {
 	Heartbeat           WeatherDelayHeartbeatPayload `json:"heartbeat"`
 }
 
-// WeatherDelayTriggersPayload is ADR-053 decision 12's automatic-trigger
-// timing: how long the operator has to answer before a delay starts on its
-// own, and, when too little of the night would remain, the longer
-// delay-or-cancel window.
+// WeatherDelayTriggersPayload is the automatic trigger timing (ADR-053
+// decision 12).
 type WeatherDelayTriggersPayload struct {
 	AnswerWindowSeconds       int `json:"answerWindowSeconds"`
 	CancelAnswerWindowSeconds int `json:"cancelAnswerWindowSeconds"`
 	RestartMinutes            int `json:"restartMinutes"`
 }
 
-// WeatherDelayPayload is config_revisions.payload_json's decoded,
-// VALIDATED shape for [ShowWeatherDelayConfigKind]. Every member is
-// optional on the wire; see this file's header comment.
+// WeatherDelayPayload is the decoded, validated show.weatherdelay payload.
 type WeatherDelayPayload struct {
 	Alert       WeatherDelayAlertPayload        `json:"alert"`
 	PowerGroups []WeatherDelayPowerGroupPayload `json:"powerGroups"`
 	Triggers    WeatherDelayTriggersPayload     `json:"triggers"`
 }
 
-// WeatherDelayDefaultPayload is the value reported when nothing has ever
-// been written for this kind: no alert asset configured, no power groups,
-// and this file's own default trigger windows.
+// WeatherDelayDefaultPayload is reported when nothing has been written.
 var WeatherDelayDefaultPayload = WeatherDelayPayload{
 	Alert:       WeatherDelayAlertPayload{RepeatCount: weatherDelayDefaultRepeatCount, NodeIDs: []string{}},
 	PowerGroups: []WeatherDelayPowerGroupPayload{},
@@ -142,9 +109,7 @@ var (
 	weatherDelayTriggersKeys   = map[string]bool{"answerWindowSeconds": true, "cancelAnswerWindowSeconds": true, "restartMinutes": true}
 )
 
-// EncodeWeatherDelayPayload marshals p into config_revisions.payload_json's
-// column shape. p is assumed already valid (the product of
-// DecodeWeatherDelayPayload); this function does not re-validate.
+// EncodeWeatherDelayPayload marshals an already validated p for storage.
 func EncodeWeatherDelayPayload(p WeatherDelayPayload) (string, error) {
 	if p.PowerGroups == nil {
 		p.PowerGroups = []WeatherDelayPowerGroupPayload{}
@@ -159,9 +124,8 @@ func EncodeWeatherDelayPayload(p WeatherDelayPayload) (string, error) {
 	return string(b), nil
 }
 
-// DecodeWeatherDelayPayload parses and validates raw. Every top-level key
-// is optional: an empty object `{}` decodes to [WeatherDelayDefaultPayload].
-// Unknown keys, at every level, are refused by name rather than ignored.
+// DecodeWeatherDelayPayload parses and validates raw. `{}` decodes to
+// [WeatherDelayDefaultPayload]; unknown keys at any level are refused by name.
 func DecodeWeatherDelayPayload(raw string) (WeatherDelayPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
@@ -356,11 +320,8 @@ func decodeWeatherDelayTriggers(top map[string]json.RawMessage) (WeatherDelayTri
 	return WeatherDelayTriggersPayload{AnswerWindowSeconds: answerWindowSeconds, CancelAnswerWindowSeconds: cancelAnswerWindowSeconds, RestartMinutes: restartMinutes}, nil
 }
 
-// decodeWeatherDelayIDList reads key as an optional array of node-id-syntax
-// strings: absent or `[]` both mean "none" (for nodeIds, this file's own
-// "empty = every audio node" rule; for the three power-group id lists,
-// "none of this kind"). Every entry is checked with
-// [mqttproto.ValidateNodeID] and against duplicates within the same list.
+// decodeWeatherDelayIDList reads an optional list of unique ids in node id
+// syntax. Absent reads as empty.
 func decodeWeatherDelayIDList(top map[string]json.RawMessage, key, field string) ([]string, *ValidationError) {
 	ptr, verr := decodeOptionalStringList(top, key, field)
 	if verr != nil {
@@ -383,9 +344,8 @@ func decodeWeatherDelayIDList(top map[string]json.RawMessage, key, field string)
 	return *ptr, nil
 }
 
-// decodeDefaultedIntRange reads key from top: absent takes def; present
-// (including present-and-null) is refused-then-validated like
-// [decodeRequiredInt], then bounds-checked against [min, max].
+// decodeDefaultedIntRange reads an optional whole number in [min, max].
+// Absent takes def; null is refused.
 func decodeDefaultedIntRange(top map[string]json.RawMessage, key, field string, def, min, max int) (int, *ValidationError) {
 	raw, present := top[key]
 	if !present {

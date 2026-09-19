@@ -1,22 +1,11 @@
 package v1
 
-// This file is ADR-053's weather-delay wire contract: the read-only
-// current state, the "show.weatherdelay" configuration kind, and the
-// three trigger routes' request shape. The three trigger routes
-// (start/cancel-night/resume) currently always answer 501 — see
-// api/openapi.yaml's own description of each - so this file carries no
-// response type for them beyond the shared [Problem] document.
-
-// EventKindWeatherDelayChanged is the change-stream event kind a future
-// build publishes when the weather-delay state changes. Reserved here, not
-// yet wired into the stream: stream.go's pendingFrame switch gains a case
-// for it in a later branch.
+// EventKindWeatherDelayChanged is the change-stream event kind for a
+// weather delay state change. Reserved; nothing publishes it yet.
 const EventKindWeatherDelayChanged = "weatherDelay.changed"
 
-// WeatherDelayStateResponse is the body of GET /api/v1/weather-delay:
-// [pkg/weatherdelay.State]'s wire projection. Kind/StartedAt/StartedBy are
-// empty/omitted while Active is false, mirroring [ShowModeConfigResponse]'s
-// own "never a partial or stale value while inactive" posture.
+// WeatherDelayStateResponse is the body of GET /api/v1/weather-delay. Kind,
+// StartedAt and StartedBy are omitted while Active is false.
 type WeatherDelayStateResponse struct {
 	ServerTime string `json:"serverTime"`
 	Active     bool   `json:"active"`
@@ -26,9 +15,8 @@ type WeatherDelayStateResponse struct {
 	Revision   int64  `json:"revision"`
 }
 
-// WeatherDelayActionRequest is the body of POST .../weather-delay/start,
-// .../cancel-night, and .../resume: an idempotencyKey, on
-// [EmergencyStopRequest]'s own identical shape.
+// WeatherDelayActionRequest is the body of the start, cancel-night and
+// resume routes.
 type WeatherDelayActionRequest struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 }
@@ -68,11 +56,8 @@ type ConfigWeatherDelayTriggersPayload struct {
 	RestartMinutes            int `json:"restartMinutes"`
 }
 
-// ConfigWeatherDelayPayload is the "show.weatherdelay" configuration
-// kind's decoded payload: the body PUT /config/show.weatherdelay accepts
-// (a full replacement, every member optional with a working default -
-// UNLIKE [ConfigEmergencyStopPayload]), and the "payload" member of
-// GET /config/show.weatherdelay's response.
+// ConfigWeatherDelayPayload is the show.weatherdelay payload: the PUT body
+// and the GET "payload" member. Every member is optional.
 type ConfigWeatherDelayPayload struct {
 	Alert       ConfigWeatherDelayAlertPayload        `json:"alert"`
 	PowerGroups []ConfigWeatherDelayPowerGroupPayload `json:"powerGroups"`

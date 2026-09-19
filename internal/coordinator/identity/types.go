@@ -227,16 +227,11 @@ const (
 	ScopeCueActivate Scope = "cue:activate"
 
 	// ScopeShowWeatherDelayInvoke gates starting a weather delay or
-	// cancelling the night (ADR-053 decision 1), on
-	// [ScopeShowEmergencyStopInvoke]'s own umbrella-authority precedent.
+	// cancelling the night (ADR-053 decision 1).
 	ScopeShowWeatherDelayInvoke Scope = "show:weatherdelay:invoke"
 
-	// ScopeShowWeatherDelayResume gates resuming from a weather delay
-	// (ADR-053 decision 8: "Resume is accepted only by the authenticated
-	// coordinator API"). Deliberately its OWN scope, never folded into
-	// [ScopeShowWeatherDelayInvoke]: a principal trusted to start a delay
-	// (a low-stakes, degrade-safely act) is not automatically trusted to
-	// relight a display in a storm.
+	// ScopeShowWeatherDelayResume gates resuming. It is separate from
+	// [ScopeShowWeatherDelayInvoke] because a resume relights the display.
 	ScopeShowWeatherDelayResume Scope = "show:weatherdelay:resume"
 )
 
@@ -547,11 +542,8 @@ type AuditEntry struct {
 	OutcomeReason string
 }
 
-// The four ADR-053 weather-delay audit action strings: minted here, not
-// alongside a handler, because the config kind, the store, and the API all
-// need to agree on them and none of those packages is the obvious sole
-// owner. Spelled to match the URL path/JSON vocabulary exactly, on
-// auditActionEmergencyStop's own precedent (internal/coordinator/api).
+// The weather delay audit actions (ADR-053), kept here so every package
+// that records one uses the same string.
 const (
 	AuditActionShowWeatherDelayStart       = "show.weatherdelay.start"
 	AuditActionShowWeatherDelayCancelNight = "show.weatherdelay.cancel_night"
