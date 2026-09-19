@@ -103,6 +103,21 @@ test-integration-fppmqtt:
 test-integration-broker:
 	./scripts/test-integration-broker.sh
 
+# test-integration-weatherdelay proves ADR-053 (weather delay) end to end
+# across real process boundaries: a real showmesh-coordinator, a real
+# showmesh-agent (the real cgo GStreamer engine against "fakesink", never a
+# separate build), a real throwaway Mosquitto broker this target starts
+# itself, and a small stand-in HTTP server playing an FPP player and its
+# ShowMesh plugin's weather gate route. Behind the `integration` build tag,
+# so it is never part of `test`/`check`. Unlike test-integration.sh's shared
+# broker, this target's own script (scripts/test-integration-weatherdelay.sh)
+# starts a uniquely-named container on a kernel-assigned port, so it never
+# collides with that target, a concurrent run of itself, or a developer's
+# own running dev stack.
+.PHONY: test-integration-weatherdelay
+test-integration-weatherdelay:
+	./scripts/test-integration-weatherdelay.sh
+
 GOLANGCI_LINT_VERSION := v2.9.0
 
 .PHONY: lint

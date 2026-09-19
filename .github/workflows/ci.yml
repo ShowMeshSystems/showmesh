@@ -520,6 +520,49 @@ jobs:
       - name: Integration tests (broker package against real Mosquitto, including a mid-wait restart)
         run: make test-integration-broker
 
+  integration-weatherdelay:
+    runs-on: ubuntu-latest
+    # ADR-053 weather delay proved end to end: a real coordinator, a real
+    # agent (the real cgo GStreamer engine, against "fakesink", see the
+    # `integration` job's own identical reasoning for why this cannot be a
+    # container: job and needs the Debian/GStreamer toolchain below), a real
+    # Mosquitto broker this job's own script starts, and a stand-in HTTP
+    # server for an FPP player and its plugin. A separate job from
+    # `integration` for the same reason `integration-fppmqtt` and
+    # `integration-broker` are: a weather delay wiring problem should be
+    # distinguishable from the ADR-008 control-plane suite at a glance, and
+    # this target starts its own uniquely-named, kernel-assigned-port broker
+    # container rather than sharing that job's.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Integration tests (weather delay end to end)
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
+          docker run --rm \
+            --network host \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE":"$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE" \
+            -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
+            -e HOME=/tmp \
+            golang:1.26.6-trixie \
+            bash -euxo pipefail -c '
+              apt-get update -o Acquire::Retries=2
+              apt-get install -y --no-install-recommends \
+                pkg-config gstreamer1.0-tools gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+                libltc-dev docker-cli
+              pkg-config --atleast-version=1.26.0 gstreamer-1.0
+              pkg-config --atleast-version=2.80 glib-2.0
+              git config --global --add safe.directory "*"
+              make test-integration-weatherdelay
+            '
+
   lint:
     runs-on: ubuntu-latest
     container:

@@ -124,6 +124,7 @@ topic write showmesh/nodes/$username/observed/#
 topic write showmesh/nodes/$username/result/+
 topic read  showmesh/nodes/$username/cmd
 topic read  showmesh/events/show_mode
+topic read  showmesh/events/weather_delay
 EOF
   done < "$PASSWD_FILE"
 
