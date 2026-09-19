@@ -645,7 +645,7 @@ Coordinator anchor: `WeatherDelayEnforcer`. Its own client is
 brightness engine gains a third term beside the ceiling and the transition
 gain, a gate that is either open or closed, written only by the weather delay
 state. Closed forces every channel to zero, including channels outside the
-configured apply and exclude ranges — the gate's own write ignores both,
+configured apply and exclude ranges. The gate's own write ignores both,
 unlike a transition-gain fade, which respects them. See section 2.1's updated
 composition line.
 
@@ -679,14 +679,14 @@ peer-reported **closed** gate is adopted at a strictly greater revision than
 the plugin's own stored one; a peer-reported **open** gate is never adopted
 from a peer at all, only from a coordinator write. A delay may reach a player
 by more than one path (ADR-053 decision 8); a stale, replayed, or
-out-of-order closed report must never relight a player mid-storm, and an
+out-of-order closed report must never darken a player after a resume, and an
 open report from a source that is not the coordinator's own write must never
 end a delay a player is still supposed to be holding.
 
 Persistence: the gate is written to both of the plugin's own record
 generations, and both must agree on it before either is trusted. If both
-records are unreadable, the gate **restarts open** — the same posture every
-other unconfigured or freshly-initialized brightness value takes — and the
+records are unreadable, the gate **restarts open**, the same posture every
+other unconfigured or freshly-initialized brightness value takes, and the
 coordinator's own enforcement loop, running unconditionally, closes it again
 within one tick of finding the stored weather-delay state active. This is
 why the loop exists rather than a one-time close on start: persistence on

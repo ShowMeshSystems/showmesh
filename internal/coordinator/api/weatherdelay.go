@@ -116,11 +116,9 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 	jsonWrite(w, resp)
 }
 
-// weatherDelayPowerGroupStatuses reports every configured power group's
-// own dark confirmation, computed fresh against the same observation and
-// gate-cache evidence the enforcer tick uses, so a GET between two ticks
-// still reflects the latest evidence rather than a stale cached verdict.
-// "since" is read from the cache, which only the enforcer tick advances.
+// weatherDelayPowerGroupStatuses computes every power group's darkness
+// fresh from the same evidence the enforcer uses; only "since" comes from
+// the enforcer's cache.
 func (h *handlers) weatherDelayPowerGroupStatuses(ctx context.Context, now time.Time, payload config.WeatherDelayPayload) []v1.WeatherDelayPowerGroupStatus {
 	if len(payload.PowerGroups) == 0 {
 		return []v1.WeatherDelayPowerGroupStatus{}
@@ -322,10 +320,7 @@ func (h *handlers) handleWeatherDelayStart(w http.ResponseWriter, r *http.Reques
 		defer wg.Done()
 		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", weatherdelay.KindDelay, idempotencyKey, planNodeIDs, ac, clientAddr, true)
 	}()
-	// Closing the gate on every configured FPP instance runs concurrently
-	// with the node dispatch above and every other target, never awaited
-	// by it (ADR-053 decision 5): it is its own goroutine in this same
-	// wait group, not sequenced before or after the alert dispatch.
+	// The gate close runs beside the node dispatch; the alert never waits on it.
 	go func() {
 		defer wg.Done()
 		gateOutcomes = h.weatherDelayCloseGatesOnAllInstances(ctx, now, rec.Revision)

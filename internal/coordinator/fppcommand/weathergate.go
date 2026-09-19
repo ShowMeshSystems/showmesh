@@ -10,21 +10,15 @@ import (
 	"net/http"
 )
 
-// The weather gate write and read, ADR-053 decision 5 and
-// FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.5. It lives beside
-// [Client.SetTransitionGain] because it is the same shape and reuses the
-// same Client transport rather than building a second one.
+// The weather gate write and read, FPP-PLUGIN-COORDINATOR-CONTRACTS.md
+// section 2.5, sharing the transition gain write's transport.
 
-// WeatherGatePath is the coordinator-facing address for both the write and
-// the read, mirroring [TransitionGainPath]'s own doc comment: it carries
-// the /api/plugin-apis prefix Apache proxies to the plugin's own server,
-// which is not the shorter path the plugin registers.
+// WeatherGatePath is the address for both the write and the read, with the
+// /api/plugin-apis prefix Apache proxies to the plugin.
 const WeatherGatePath = "/api/plugin-apis/showmesh/brightness/weather-gate"
 
-// ErrWeatherGateUnsupported is returned when the FPP host's plugin has no
-// weather gate route (404): an installation running a plugin build that
-// predates ADR-053. A caller must report this instance as unable to be
-// held dark by ShowMesh, never treat it as a closed or open gate.
+// ErrWeatherGateUnsupported means the plugin has no weather gate route (404).
+// Report the player as unable to be held dark, never as open or closed.
 var ErrWeatherGateUnsupported = errors.New("fppcommand: this FPP host's plugin has no weather gate route; it cannot be held dark by ShowMesh")
 
 type weatherGateRequest struct {
@@ -56,13 +50,8 @@ type WeatherGateOutcome struct {
 	Body string
 }
 
-// SetWeatherGate writes closed/revision to this Client's FPP instance. A
-// coordinator write always applies (section 2.5): the plugin's stored
-// revision becomes max(stored+1, revision), never refused for being
-// behind.
-//
-// A 404 is reported as [ErrWeatherGateUnsupported], distinguishable via
-// [errors.Is], never as a closed or open gate.
+// SetWeatherGate writes the gate. The plugin always applies a coordinator
+// write, storing max(stored+1, revision). A 404 is [ErrWeatherGateUnsupported].
 func (c *Client) SetWeatherGate(ctx context.Context, closed bool, revision int64) (WeatherGateOutcome, error) {
 	if revision < 0 {
 		return WeatherGateOutcome{}, fmt.Errorf("fppcommand: weather gate revision %d must not be negative", revision)
@@ -74,11 +63,8 @@ func (c *Client) SetWeatherGate(ctx context.Context, closed bool, revision int64
 	return c.doWeatherGate(ctx, http.MethodPost, bytes.NewReader(payload))
 }
 
-// ReadWeatherGate reads this Client's FPP instance's current gate state
-// from the same address, with no body.
-//
-// A 404 is reported as [ErrWeatherGateUnsupported], identically to
-// [Client.SetWeatherGate].
+// ReadWeatherGate reads the gate from the same address. A 404 is
+// [ErrWeatherGateUnsupported].
 func (c *Client) ReadWeatherGate(ctx context.Context) (WeatherGateOutcome, error) {
 	return c.doWeatherGate(ctx, http.MethodGet, nil)
 }

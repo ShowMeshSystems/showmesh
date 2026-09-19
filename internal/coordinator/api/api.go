@@ -613,12 +613,9 @@ type Dependencies struct {
 	// silent no-op: this event is best-effort evidence, never a gate.
 	WeatherDelayEvents WeatherDelayEventAppender
 
-	// WeatherDelayGateCache is [WeatherDelayEnforcer]'s own shared record
-	// of each FPP instance's last-read gate state and each power group's
-	// own dark confirmation, read by GET /api/v1/weather-delay. Built
-	// once in coordinator.go and shared with the enforcer exactly as
-	// [WeatherDelayStateKeeper] is; a nil field is replaced by a fresh,
-	// empty [WeatherDelayGateCache] under which every reading is unknown.
+	// WeatherDelayGateCache holds the enforcer's last gate readings and power
+	// group verdicts for GET /api/v1/weather-delay. Share one instance with the
+	// enforcer; nil becomes an empty cache in which every reading is unknown.
 	WeatherDelayGateCache *WeatherDelayGateCache
 
 	// FPPObservations is the playlist-entry observation store dependency — see

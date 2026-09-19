@@ -5,21 +5,16 @@ import (
 	"time"
 )
 
-// WeatherDelayGateCache is the shared, in-memory record of what
-// [WeatherDelayEnforcer] most recently observed for each FPP instance's
-// weather gate and each configured power group's own dark confirmation.
-// It is written only by the enforcer's own tick and read by the GET
-// /api/v1/weather-delay handler, so an ordinary API request never waits on
-// a live HTTP read against an FPP host. One instance is shared between the
-// enforcer's own private *handlers and the HTTP server's, exactly as
-// [WeatherDelayStateKeeper] is shared, by construction in coordinator.go
-// before either is built.
+// WeatherDelayGateCache is the enforcer's in-memory record of each player's
+// gate and each power group's darkness, read by GET /api/v1/weather-delay so
+// a request never waits on an FPP host. coordinator.go shares one instance.
 type WeatherDelayGateCache struct {
 	mu         sync.Mutex
 	gates      map[string]weatherDelayGateStatus
 	groups     map[string]weatherDelayGroupStatus
 	reopened   map[string]time.Time
 	heartbeats map[string]time.Time
+	gateWrites map[string]*sync.Mutex
 }
 
 // weatherDelayGateStatus is one FPP instance's most recently read gate
@@ -28,6 +23,7 @@ type WeatherDelayGateCache struct {
 type weatherDelayGateStatus struct {
 	closed                 bool
 	supported              bool
+	unreadable             bool
 	effectiveOutputPercent int
 	observedAt             time.Time
 }
@@ -45,15 +41,31 @@ func NewWeatherDelayGateCache() *WeatherDelayGateCache {
 	return &WeatherDelayGateCache{
 		gates: map[string]weatherDelayGateStatus{}, groups: map[string]weatherDelayGroupStatus{},
 		reopened: map[string]time.Time{}, heartbeats: map[string]time.Time{},
+		gateWrites: map[string]*sync.Mutex{},
 	}
 }
 
-// heartbeatDue reports whether groupID's dark heartbeat has never been
-// published, or was published at least interval ago, and records now as
-// the publish time. A group that stops being dark has its own record
-// cleared by [WeatherDelayGateCache.recordGroupDark], so the heartbeat
-// publishes immediately the next time it becomes dark again rather than
-// waiting out the interval from a publish that happened before the gap.
+// lockGateWrite serializes gate writes to one player. The enforcer checks
+// the state again under it, so its write never lands after a start's
+// close or a resume's open that the check did not see.
+func (c *WeatherDelayGateCache) lockGateWrite(instanceID string) (unlock func()) {
+	if c == nil {
+		return func() {}
+	}
+	c.mu.Lock()
+	m, ok := c.gateWrites[instanceID]
+	if !ok {
+		m = &sync.Mutex{}
+		c.gateWrites[instanceID] = m
+	}
+	c.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// heartbeatDue reports whether groupID's heartbeat is due and records now.
+// recordGroupDark clears the record when a group stops being dark, so it
+// publishes at once when the group is dark again.
 func (c *WeatherDelayGateCache) heartbeatDue(groupID string, now time.Time, interval time.Duration) bool {
 	if c == nil {
 		return true
@@ -87,11 +99,8 @@ func (c *WeatherDelayGateCache) getGate(instanceID string) (weatherDelayGateStat
 	return st, ok
 }
 
-// reopenDue reports whether instanceID's stale-closed-gate reopen has
-// never been attempted, or was attempted at least minInterval ago, and
-// records now as the attempt time. Called only when a reopen is about to
-// be sent, so a failed send still counts as an attempt: ADR-053 places no
-// requirement on retrying it faster than the throttle.
+// reopenDue reports whether instanceID's reopen is due and records now as
+// the attempt, so a failed send still waits out the interval.
 func (c *WeatherDelayGateCache) reopenDue(instanceID string, now time.Time, minInterval time.Duration) bool {
 	if c == nil {
 		return true
@@ -106,10 +115,8 @@ func (c *WeatherDelayGateCache) reopenDue(instanceID string, now time.Time, minI
 	return true
 }
 
-// recordGroupDark updates groupID's cached dark state and returns the
-// since timestamp: now on a flip from not-dark (or unknown) to dark, the
-// already-recorded since while staying dark, and the zero time while not
-// dark.
+// recordGroupDark stores groupID's darkness and returns since: now on a
+// flip to dark, the kept value while dark, zero while not dark.
 func (c *WeatherDelayGateCache) recordGroupDark(groupID string, dark bool, now time.Time) (since time.Time, changed bool) {
 	if c == nil {
 		if dark {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -51,6 +53,7 @@ type fakeFPPPluginServer struct {
 	revision        int64
 	gateUnsupported bool
 	gateReadFails   bool
+	gateWriteFails  bool
 	responseDelay   time.Duration
 }
 
@@ -93,6 +96,10 @@ func (f *fakeFPPPluginServer) handleGate(w http.ResponseWriter, r *http.Request)
 	defer f.mu.Unlock()
 	if f.gateUnsupported {
 		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodPost && f.gateWriteFails {
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -423,4 +430,221 @@ func TestWeatherDelayEnforceReportsAPluginWithoutTheRouteRatherThanCountingItDar
 	if reason == "" {
 		t.Fatal("want a reason naming that this player cannot be held dark")
 	}
+}
+
+// scriptedWeatherDelayStore answers each read with the next scripted
+// result, repeating the last one, so a test can place a state change
+// between the enforcer's own reads.
+type scriptedWeatherDelayStore struct {
+	mu    sync.Mutex
+	reads []scriptedWeatherDelayRead
+}
+
+type scriptedWeatherDelayRead struct {
+	rec store.WeatherDelayStateRecord
+	err error
+}
+
+func (s *scriptedWeatherDelayStore) GetWeatherDelayState(context.Context) (store.WeatherDelayStateRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.reads[0]
+	if len(s.reads) > 1 {
+		s.reads = s.reads[1:]
+	}
+	return next.rec, next.err
+}
+
+func (s *scriptedWeatherDelayStore) SetWeatherDelayState(context.Context, store.WeatherDelayStateRecord) error {
+	return nil
+}
+
+func (s *scriptedWeatherDelayStore) script(reads ...scriptedWeatherDelayRead) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads = reads
+}
+
+func activeRead(revision int64) scriptedWeatherDelayRead {
+	return scriptedWeatherDelayRead{rec: store.WeatherDelayStateRecord{Active: true, Kind: weatherdelay.KindDelay, Revision: revision}}
+}
+
+func inactiveRead(revision int64) scriptedWeatherDelayRead {
+	return scriptedWeatherDelayRead{rec: store.WeatherDelayStateRecord{Revision: revision}}
+}
+
+var errScriptedStateRead = errors.New("state store unavailable")
+
+func failedRead() scriptedWeatherDelayRead {
+	return scriptedWeatherDelayRead{err: errScriptedStateRead}
+}
+
+func (h *enforceHarness) useScriptedState(reads ...scriptedWeatherDelayRead) *scriptedWeatherDelayStore {
+	s := &scriptedWeatherDelayStore{}
+	s.script(reads...)
+	h.deps.WeatherDelay = s
+	return s
+}
+
+func TestWeatherDelayEnforceStateReadFailureNeverStopsAShowItNeverKnewDelayed(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(true, 3)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.useScriptedState(failedRead())
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValuePlaying, h.now)})
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	if cmds := fpp.commandList(); len(cmds) != 0 {
+		t.Fatalf("commands = %v, want none: this process never saw a delay active", cmds)
+	}
+	if got := fpp.gateSetCount(); got != 0 {
+		t.Fatalf("gate set count = %d, want 0 while the state is unknown", got)
+	}
+}
+
+func TestWeatherDelayEnforceStateReadFailureKeepsEnforcingADelayItKnewActive(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.useScriptedState(activeRead(5), failedRead())
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValuePlaying, h.now)})
+
+	e := h.enforcer()
+	e.tick(context.Background(), h.now)
+	fpp.setGate(false, 9)
+	e.tick(context.Background(), h.now.Add(5*time.Second))
+
+	if cmds := fpp.commandList(); len(cmds) != 2 {
+		t.Fatalf("commands = %v, want Stop Now on both ticks", cmds)
+	}
+	if !fpp.isClosed() {
+		t.Fatal("gate left open while the last known state was an active delay")
+	}
+}
+
+func TestWeatherDelayEnforceStopsAPlayerStoppingGracefullyAfterItsLoop(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.setState(true, 5)
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueStoppingGracefullyAfterLoop, h.now)})
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	if cmds := fpp.commandList(); len(cmds) != 1 || cmds[0] != "Stop Now" {
+		t.Fatalf("commands = %v, want Stop Now for a player still finishing its loop", cmds)
+	}
+}
+
+func TestWeatherDelayEnforceNeverReopensAGateAStartClosedDuringTheTick(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(true, 6)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.useScriptedState(inactiveRead(5), activeRead(6))
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	if !fpp.isClosed() {
+		t.Fatal("the enforcer opened a gate a delay started during its own tick had closed")
+	}
+}
+
+func TestWeatherDelayEnforceNeverClosesAGateAResumeOpenedDuringTheTick(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(false, 6)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.useScriptedState(activeRead(5), inactiveRead(6))
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	if fpp.isClosed() {
+		t.Fatal("the enforcer closed a gate a resume during its own tick had opened")
+	}
+}
+
+func TestWeatherDelayEnforceGroupIsNotDarkWhenTheGateCannotBeRead(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(true, 5)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.setState(true, 5)
+	setWeatherDelayPowerGroupsForTest(t, h.st, []config.WeatherDelayPowerGroupPayload{{
+		ID: "group-a", Label: "Front Yard", FPPInstanceIDs: []string{"player-01"},
+		ResolumeInstanceIDs: []string{}, RenderNodeIDs: []string{},
+		Heartbeat: config.WeatherDelayHeartbeatPayload{Enabled: true, IntervalSeconds: 1},
+	}})
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
+
+	e := h.enforcer()
+	e.tick(context.Background(), h.now)
+	if got := h.pub.darkPublishCount("group-a"); got != 1 {
+		t.Fatalf("dark heartbeat publish count = %d, want 1 before the gate read fails", got)
+	}
+
+	fpp.mu.Lock()
+	fpp.gateReadFails, fpp.gateWriteFails = true, true
+	fpp.mu.Unlock()
+	later := h.now.Add(5 * time.Second)
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, later)})
+	e.tick(context.Background(), later)
+
+	if dark, _ := h.handlers().weatherDelayFPPMemberDark(context.Background(), later, "player-01"); dark {
+		t.Fatal("a player whose gate could not be read was counted dark")
+	}
+	if got := h.pub.darkPublishCount("group-a"); got != 1 {
+		t.Fatalf("dark heartbeat publish count = %d, want still 1 after the gate read failed", got)
+	}
+}
+
+// panickingObservationLister panics for one instance's reads, standing in
+// for any defect in one player's pass.
+type panickingObservationLister struct {
+	inner      ObservationLister
+	panicForID string
+}
+
+func (p panickingObservationLister) ListObservations(ctx context.Context, f ObservationFilter) ([]observation.Observation, error) {
+	if f.ResourceID != nil && *f.ResourceID == p.panicForID {
+		panic("test panic for " + p.panicForID)
+	}
+	return p.inner.ListObservations(ctx, f)
+}
+
+func TestWeatherDelayEnforceSurvivesAPanicInOnePlayersPass(t *testing.T) {
+	bad := newFakeFPPPluginServer(t)
+	good := newFakeFPPPluginServer(t)
+	h := newEnforceHarness(t, []FPPInstanceView{
+		{InstanceID: "player-panic", Endpoint: bad.srv.URL},
+		{InstanceID: "player-good", Endpoint: good.srv.URL},
+	})
+	h.setState(true, 5)
+	h.obs.set([]observation.Observation{statusObservation("player-good", fppStatusValuePlaying, h.now)})
+	h.deps.Observations = panickingObservationLister{inner: h.obs, panicForID: "player-panic"}
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	if cmds := good.commandList(); len(cmds) != 1 || cmds[0] != "Stop Now" {
+		t.Fatalf("healthy player commands = %v, want Stop Now despite another player's pass panicking", cmds)
+	}
+}
+
+func TestWeatherDelayEnforceAuditsAStaleGateReopen(t *testing.T) {
+	fpp := newFakeFPPPluginServer(t)
+	fpp.setGate(true, 3)
+	h := newEnforceHarness(t, []FPPInstanceView{{InstanceID: "player-01", Endpoint: fpp.srv.URL}})
+	h.setState(false, 5)
+	h.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, h.now)})
+
+	h.enforcer().tick(context.Background(), h.now)
+
+	entries, err := h.deps.Identity.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	for _, e := range entries {
+		if e.Action == identity.AuditActionShowWeatherDelayEnforce && e.Target == "player-01" {
+			return
+		}
+	}
+	t.Fatal("reopening a gate left no show.weatherdelay.enforce audit entry")
 }

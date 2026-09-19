@@ -6,13 +6,9 @@ package v1
 // [WeatherDelayChangedEvent]).
 const EventKindWeatherDelayChanged = "weatherDelay.changed"
 
-// WeatherDelayChangedEvent is the "weatherDelay.changed" stream frame, one
-// kind for the delay's own state change (start, resume, cancel) and a
-// power group's own confirmedDark flip, mirroring
-// [NightSessionChangedEvent]'s identical "full state, not delta" posture:
-// this stream is not resumable, so a reconnecting client re-fetches
-// GET /api/v1/weather-delay on any gap rather than reconstructing state
-// from a transition history.
+// WeatherDelayChangedEvent is the "weatherDelay.changed" stream frame for a
+// state change or a power group flip. It is full state, not a delta; a
+// reconnecting client re-reads GET /api/v1/weather-delay.
 type WeatherDelayChangedEvent struct {
 	Seq         uint64                         `json:"seq"`
 	ServerTime  string                         `json:"serverTime"`

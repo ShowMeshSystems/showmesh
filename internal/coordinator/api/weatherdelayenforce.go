@@ -17,17 +17,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// ADR-053 decision 4: the coordinator's own enforcement loop. It runs
-// unconditionally, like every other reconcile loop in coordinator.go, and
-// reads the stored state fresh every tick so a coordinator restart
-// mid-delay resumes enforcing with no special-cased startup path. It only
-// ever stops a playlist and closes a gate; the one exception is reopening
-// a gate a player kept closed after a delay it never learned had ended
-// (ADR-053 decision 10's own dark-heartbeat reasoning applies here too: a
-// player that missed the resume must not stay dark forever).
-//
-// No configuration value, mode, scope or flag may disable, slow, or exempt
-// an instance from this loop (ADR-053 decision 13). Do not add one.
+// The enforcement loop only stops playlists and closes gates, except that it
+// reopens a gate left closed after a delay ended. No configuration value,
+// mode, scope or flag may disable, slow or exempt a player. Do not add one.
 
 // weatherDelayEnforceInterval is how often the loop ticks. A var so a test
 // can drive it down; production never overrides it.
@@ -47,16 +39,12 @@ const weatherDelayEnforceAuditInterval = time.Minute
 // exception to at most once per instance per 30 seconds.
 const weatherDelayStaleGateReopenInterval = 30 * time.Second
 
-// weatherDelayGateFreshnessWindow bounds how old a cached gate reading may
-// be and still count toward a power group's own confirmedDark: three
-// ticks of headroom over [weatherDelayEnforceInterval], so one skipped
-// tick never flips a group's own reported darkness.
+// weatherDelayGateFreshnessWindow is the oldest gate reading a power group
+// may count as dark: three ticks, so one skipped tick never flips a group.
 const weatherDelayGateFreshnessWindow = 15 * time.Second
 
-// weatherDelayFPPClientTimeout bounds each of the enforcer's own FPP
-// requests (stop, gate read, gate write), shorter than
-// [weatherDelayEnforceInstanceTimeout] so a client-level deadline fires
-// before the per-instance context does. A var so a test can drive it down.
+// weatherDelayFPPClientTimeout bounds each FPP request, shorter than the
+// per-instance timeout. A var so a test can drive it down.
 var weatherDelayFPPClientTimeout = 3 * time.Second
 
 // WeatherDelayEnforcer is this loop's own background driver, built the
@@ -70,6 +58,7 @@ type WeatherDelayEnforcer struct {
 
 	mu        sync.Mutex
 	lastAudit map[string]time.Time
+	lastState store.WeatherDelayStateRecord
 }
 
 // NewWeatherDelayEnforcer builds a [WeatherDelayEnforcer] against
@@ -86,10 +75,8 @@ func NewWeatherDelayEnforcer(deps Dependencies, opts Options) *WeatherDelayEnfor
 	}
 }
 
-// Run ticks until ctx is done, mirroring [NightLoop.Run]'s own
-// non-blocking-mutex shape: a tick still running when the next one is due
-// is left to finish, and the next tick is skipped rather than piled up
-// behind it.
+// Run ticks until ctx is done. A tick still running when the next is due is
+// left to finish and the next one is skipped, so ticks never pile up.
 func (e *WeatherDelayEnforcer) Run(ctx context.Context) {
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
@@ -103,6 +90,7 @@ func (e *WeatherDelayEnforcer) Run(ctx context.Context) {
 			case e.inFlight <- struct{}{}:
 				go func() {
 					defer func() { <-e.inFlight }()
+					defer e.recoverPanic("tick")
 					e.tick(ctx, e.h.now())
 				}()
 			default:
@@ -116,11 +104,7 @@ func (e *WeatherDelayEnforcer) Run(ctx context.Context) {
 // [handlers.nightTick]'s identical testing shape.
 func (e *WeatherDelayEnforcer) tick(ctx context.Context, now time.Time) {
 	h := e.h
-	rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
-	if err != nil {
-		h.logWarn("weather delay enforce: failed to read the stored state; holding every instance dark this tick as a precaution", "error", err)
-		rec.Active = true
-	}
+	rec, fresh := e.state(ctx)
 
 	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
 	if err != nil {
@@ -133,18 +117,44 @@ func (e *WeatherDelayEnforcer) tick(ctx context.Context, now time.Time) {
 		wg.Add(1)
 		go func(ep config.FPPEndpoint) {
 			defer wg.Done()
-			e.tickInstance(ctx, now, ep, rec)
+			defer e.recoverPanic(ep.ID)
+			e.tickInstance(ctx, now, ep, rec, fresh)
 		}(ep)
 	}
 	wg.Wait()
 
+	rec, _ = e.state(ctx)
 	h.weatherDelayTickPowerGroups(ctx, now, rec)
+}
+
+// state reads the weather delay state. A failed read falls back to the
+// last state this process read, so a delay it knew active stays enforced
+// and a store outage outside a delay stops nothing. fresh is false then.
+func (e *WeatherDelayEnforcer) state(ctx context.Context) (rec store.WeatherDelayStateRecord, fresh bool) {
+	rec, err := e.h.deps.WeatherDelay.GetWeatherDelayState(ctx)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err == nil {
+		e.lastState = rec
+		return rec, true
+	}
+	e.h.logWarn("weather delay enforce: failed to read the stored state; acting on the last state read", "lastActive", e.lastState.Active, "error", err)
+	if e.lastState.Active {
+		return e.lastState, false
+	}
+	return store.WeatherDelayStateRecord{}, false
+}
+
+func (e *WeatherDelayEnforcer) recoverPanic(scope string) {
+	if r := recover(); r != nil {
+		e.h.logWarn("weather delay enforce: pass panicked; recovered", "scope", scope, "panic", fmt.Sprintf("%v", r))
+	}
 }
 
 // tickInstance runs one FPP instance's own stop/gate work, bounded by
 // [weatherDelayEnforceInstanceTimeout] so it can never delay another
 // instance's tick.
-func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, ep config.FPPEndpoint, rec store.WeatherDelayStateRecord) {
+func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, ep config.FPPEndpoint, rec store.WeatherDelayStateRecord, fresh bool) {
 	h := e.h
 	instCtx, cancel := context.WithTimeout(ctx, weatherDelayEnforceInstanceTimeout)
 	defer cancel()
@@ -155,9 +165,12 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 		return
 	}
 
-	var stopped, closed bool
+	var stopped, closed, reopened bool
 
 	if rec.Active && h.weatherDelayFPPShouldStop(instCtx, ep.ID, now) {
+		if cur, _ := e.state(instCtx); !cur.Active {
+			return
+		}
 		if _, err := client.StopPlaylist(instCtx); err != nil {
 			h.logWarn("weather delay enforce: stop failed", "instanceId", ep.ID, "error", err)
 		} else {
@@ -174,6 +187,8 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 		})
 	} else if unsupported {
 		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: false, observedAt: now})
+	} else {
+		h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: true, unreadable: true, observedAt: now})
 	}
 
 	switch {
@@ -182,7 +197,13 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 			break
 		}
 		if gateErr != nil || !gateOutcome.Closed {
-			setOutcome, err := client.SetWeatherGate(instCtx, true, rec.Revision)
+			unlock := h.deps.WeatherDelayGateCache.lockGateWrite(ep.ID)
+			defer unlock()
+			cur, _ := e.state(instCtx)
+			if !cur.Active {
+				break
+			}
+			setOutcome, err := client.SetWeatherGate(instCtx, true, cur.Revision)
 			if err != nil {
 				h.logWarn("weather delay enforce: close failed", "instanceId", ep.ID, "error", err)
 			} else {
@@ -194,10 +215,17 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 			}
 		}
 	default:
-		if gateErr == nil && gateOutcome.Closed && h.deps.WeatherDelayGateCache.reopenDue(ep.ID, now, weatherDelayStaleGateReopenInterval) {
-			if setOutcome, err := client.SetWeatherGate(instCtx, false, rec.Revision); err != nil {
+		if fresh && gateErr == nil && gateOutcome.Closed && h.deps.WeatherDelayGateCache.reopenDue(ep.ID, now, weatherDelayStaleGateReopenInterval) {
+			unlock := h.deps.WeatherDelayGateCache.lockGateWrite(ep.ID)
+			defer unlock()
+			cur, curFresh := e.state(instCtx)
+			if !curFresh || cur.Active {
+				break
+			}
+			if setOutcome, err := client.SetWeatherGate(instCtx, false, cur.Revision); err != nil {
 				h.logWarn("weather delay enforce: reopening a gate a delay never told this instance to open failed", "instanceId", ep.ID, "error", err)
 			} else {
+				reopened = true
 				h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
 					closed: setOutcome.Closed, supported: true,
 					effectiveOutputPercent: setOutcome.EffectiveOutputPercent, observedAt: now,
@@ -206,28 +234,27 @@ func (e *WeatherDelayEnforcer) tickInstance(ctx context.Context, now time.Time, 
 		}
 	}
 
-	if stopped || closed {
-		e.auditEnforce(ctx, now, ep.ID, stopped, closed)
+	if stopped || closed || reopened {
+		e.auditEnforce(ctx, now, ep.ID, stopped, closed, reopened)
 	}
 }
 
-// weatherDelayFPPShouldStop reports whether ep's latest FPP observation
-// says a playlist is playing, or the status is not current (unknown or
-// stale) — ADR-053 decision 4's own "sends Stop Now to any FPP instance it
-// observes playing" plus the safe default for evidence it cannot trust.
+// weatherDelayFPPShouldStop reports whether ep's latest FPP observation is
+// anything but a current idle status: playing, paused, still finishing a
+// loop, unknown or stale all get Stop Now.
 func (h *handlers) weatherDelayFPPShouldStop(ctx context.Context, instanceID string, now time.Time) bool {
 	value, _, current, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, fppStatusSignal, time.Time{}, now)
 	if !current {
 		return true
 	}
 	status, _ := value.(string)
-	return status == fppStatusValuePlaying || status == fppStatusValueUnknown
+	return status != fppStatusValueIdle
 }
 
 // auditEnforce records show.weatherdelay.enforce, rate limited to at most
 // one per instance per minute, and only when this tick actually re-sent a
 // stop or a close.
-func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, instanceID string, stopped, closed bool) {
+func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, instanceID string, stopped, closed, reopened bool) {
 	e.mu.Lock()
 	last, ok := e.lastAudit[instanceID]
 	if ok && now.Sub(last) < weatherDelayEnforceAuditInterval {
@@ -239,6 +266,8 @@ func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, 
 
 	reason := "closed the gate"
 	switch {
+	case reopened:
+		reason = "opened a gate left closed after the weather delay ended"
 	case stopped && closed:
 		reason = "sent Stop Now and closed the gate"
 	case stopped:
@@ -248,7 +277,7 @@ func (e *WeatherDelayEnforcer) auditEnforce(ctx context.Context, now time.Time, 
 		Timestamp: now, PrincipalID: weatherDelayEnforceSystemPrincipalID(instanceID),
 		PrincipalName: "weather delay enforcement", Action: identity.AuditActionShowWeatherDelayEnforce,
 		Target: instanceID, Kind: identity.AuditOutcome, Outcome: outcomeWordConfirmed, OutcomeReason: reason,
-		Params: map[string]any{"stopped": stopped, "closedGate": closed},
+		Params: map[string]any{"stopped": stopped, "closedGate": closed, "openedGate": reopened},
 	}); err != nil {
 		e.h.logWarn("weather delay enforce: failed to write the audit entry", "instanceId", instanceID, "error", err)
 	}
@@ -263,11 +292,9 @@ func weatherDelayEnforceSystemPrincipalID(instanceID string) string {
 
 // --- power groups: dark confirmation and the per-group dark heartbeat ---
 
-// weatherDelayTickPowerGroups computes every configured power group's own
-// confirmedDark, records it (so GET /api/v1/weather-delay and the next
-// tick agree), emits weatherDelay.changed on a flip, and publishes the
-// dark heartbeat for a group that is active, confirmed dark, and has its
-// own heartbeat enabled.
+// weatherDelayTickPowerGroups records each power group's darkness, emits
+// weatherDelay.changed on a flip, and publishes the dark heartbeat only for
+// a group that is dark, has it enabled, and while the delay is active.
 func (h *handlers) weatherDelayTickPowerGroups(ctx context.Context, now time.Time, rec store.WeatherDelayStateRecord) {
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
 	if err != nil || len(payload.PowerGroups) == 0 {
@@ -350,6 +377,9 @@ func (h *handlers) weatherDelayFPPMemberDark(ctx context.Context, now time.Time,
 	if !gate.supported {
 		return false, fmt.Sprintf("Player %s cannot be held dark by ShowMesh.", instanceID)
 	}
+	if gate.unreadable {
+		return false, fmt.Sprintf("Player %s's gate could not be read.", instanceID)
+	}
 	if now.Sub(gate.observedAt) > weatherDelayGateFreshnessWindow {
 		return false, fmt.Sprintf("Player %s's last gate reading is too old to trust.", instanceID)
 	}
@@ -364,11 +394,8 @@ func (h *handlers) weatherDelayFPPMemberDark(ctx context.Context, now time.Time,
 	return true, ""
 }
 
-// weatherDelayResolumeLayerActiveClipNone is this package's own copy of
-// internal/coordinator/collector/resolume's identical unexported value
-// (its own doc comment explains why it is a value, not an absence): two
-// packages agreeing today because they share a literal are not proven to
-// still agree once one of them changes, only asserted to.
+// weatherDelayResolumeLayerActiveClipNone copies the Resolume collector's
+// unexported "no clip" value rather than importing it.
 const weatherDelayResolumeLayerActiveClipNone = "none: no clip is connected on this layer"
 
 func (h *handlers) weatherDelayResolumeMemberDark(ctx context.Context, now time.Time, instanceID string) (bool, string) {
@@ -395,21 +422,16 @@ func (h *handlers) weatherDelayResolumeMemberDark(ctx context.Context, now time.
 	return true, ""
 }
 
-// isResolumeActiveClipSignal reports whether sig is one of
-// "resolume.layer.<id>.active_clip" — this package's own copy of the
-// signal shape internal/coordinator/collector/resolume mints, not an
-// import of it (this file's own doc comment on the identical reasoning
-// one function up).
+// isResolumeActiveClipSignal reports whether sig is
+// "resolume.layer.<id>.active_clip", as the Resolume collector mints it.
 func isResolumeActiveClipSignal(sig observation.SignalID) bool {
 	s := string(sig)
 	return len(s) > len("resolume.layer..active_clip") &&
 		s[:len("resolume.layer.")] == "resolume.layer." && s[len(s)-len(".active_clip"):] == ".active_clip"
 }
 
-// weatherDelaySurfaceOutputModeSignal is "surface.output.mode"'s own
-// literal, copied rather than imported from
-// internal/coordinator/collector/noderender for the identical reason
-// [fppStatusSignal]'s doc comment gives.
+// weatherDelaySurfaceOutputModeSignal copies the render collector's
+// "surface.output.mode" literal rather than importing it.
 const weatherDelaySurfaceOutputModeSignal = "surface.output.mode"
 
 // weatherDelaySurfaceOutputModeIdle is that signal's "cleared" value.
@@ -467,6 +489,8 @@ func (h *handlers) weatherDelaySetGatesOnAllInstances(ctx context.Context, now t
 }
 
 func (h *handlers) weatherDelaySetOneGate(ctx context.Context, now time.Time, ep config.FPPEndpoint, closed bool, revision int64) v1.WeatherDelayTargetOutcome {
+	unlock := h.deps.WeatherDelayGateCache.lockGateWrite(ep.ID)
+	defer unlock()
 	reqCtx, cancel := context.WithTimeout(ctx, weatherDelayFPPClientTimeout)
 	defer cancel()
 

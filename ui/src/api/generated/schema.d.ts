@@ -6898,7 +6898,7 @@ export interface components {
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
         };
-        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) and a power group's own confirmedDark flip, mirroring NightSessionChangedEvent's own "full state, not delta" posture — the fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
+        /** @description The payload of a "weatherDelay.changed" SSE event (ADR-053): one kind for both the delay's own state change (start, resume, cancel) and a power group's own confirmedDark flip, mirroring NightSessionChangedEvent's own "full state, not delta" posture. The fields are the same ones GET /weather-delay reports, minus assets, which this stream does not carry. */
         WeatherDelayChangedEvent: {
             /** @description Per-connection only; never a durable cursor. */
             seq: number;

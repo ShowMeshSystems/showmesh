@@ -677,19 +677,9 @@ func (h *Hub) render(ctx context.Context) {
 		}
 	}
 
-	// ADR-053: the weather delay state, one fixed singleton resource keyed
-	// "weatherdelay:current" — full-frame only, same posture as
-	// nightsession:current immediately above, including its own "skipped
-	// entirely when there is nothing to announce yet" rule: an
-	// installation that has never started a delay and configured no power
-	// group has no natural event to report, so this stays silent rather
-	// than putting a "not active" frame on every stream this coordinator
-	// ever serves. GET /api/v1/weather-delay (unlike the stream) still
-	// answers that state directly on every read. This one projection
-	// carries both the delay's own state and every configured power
-	// group's own confirmedDark, so a change to either — a start/resume/
-	// cancel or a group's own dark flip — is the same "does the rendered
-	// projection differ" check.
+	// weatherdelay:current carries the delay state and every power group's
+	// confirmedDark, so a state change or a group flip renders a new frame.
+	// Silent until a delay has existed or a power group is configured.
 	if rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx); err != nil {
 		h.logger.Warn("stream hub: get weather delay state failed", "error", err)
 	} else {
