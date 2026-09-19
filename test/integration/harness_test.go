@@ -1360,7 +1360,7 @@ func provisionBrokerCredential(t *testing.T, username string) (gotUsername, pass
 	// Every other credential receives a narrow, explicit agent block. Global
 	// Mosquitto `pattern` rules would also apply these grants to fixed roles.
 	switch username {
-	case "coordinator", "fpp", "healthcheck":
+	case "coordinator", "fpp", "healthcheck", "observer":
 		// No agent ACL block for a fixed role.
 	default:
 		acl := fmt.Sprintf(`
@@ -1373,6 +1373,7 @@ topic write showmesh/nodes/%s/observed/#
 topic write showmesh/nodes/%s/result/+
 topic read  showmesh/nodes/%s/cmd
 topic read  showmesh/events/show_mode
+topic read  showmesh/events/weather_delay
 `, username, username, username, username, username, username, username)
 		appendACL := exec.Command("docker", "exec", "-i", mosquittoContainer,
 			"sh", "-ec", "cat >> /mosquitto/config/acl.generated.conf")
