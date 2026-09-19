@@ -65,7 +65,6 @@ export function MonitorActivity() {
       <Section
         id="mo-activity-full"
         title="Activity"
-        detail="System events and operator actions in one stream, you usually need to know both, in order."
       >
         {model.eventsGap && (
           <Notice
@@ -127,9 +126,6 @@ export function MonitorActivity() {
                 </tbody>
               </Table>
             </TableWrap>
-            <p className="sm-section__footnote">
-              Operator actions are audit records and need an audit-read scope; system events do not.
-            </p>
           </>
         )}
       </Section>

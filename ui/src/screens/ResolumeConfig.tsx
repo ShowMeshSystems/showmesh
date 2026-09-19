@@ -3,7 +3,6 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ApiError,
   getResolumeComposition,
-  getResolumeInstancesConfig,
   getResolumeRecovery,
   getResolumeRecoveryConfig,
   getResolumeRecoveryConfigRevisions,
@@ -117,36 +116,6 @@ function useResolumeRecovery(): { state: RecoveryState; reload: () => void } {
   return { state, reload: () => setAttempt((n) => n + 1) }
 }
 
-type AddressState = { kind: 'loading' } | { kind: 'found'; url: string } | { kind: 'unavailable' }
-
-/** `GET /config/resolume.instances` needs `config:write`; a device without it simply does not learn the address. */
-function useResolumeAddress(instanceId: string, gateAllowed: boolean): AddressState {
-  const [state, setState] = useState<AddressState>({ kind: 'loading' })
-
-  useEffect(() => {
-    if (!gateAllowed) {
-      setState({ kind: 'unavailable' })
-      return
-    }
-    let cancelled = false
-    setState({ kind: 'loading' })
-    getResolumeInstancesConfig()
-      .then((response) => {
-        if (cancelled) return
-        const match = response.payload.instances.find((instance) => instance.id === instanceId)
-        setState(match === undefined ? { kind: 'unavailable' } : { kind: 'found', url: match.url })
-      })
-      .catch(() => {
-        if (!cancelled) setState({ kind: 'unavailable' })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [instanceId, gateAllowed])
-
-  return state
-}
-
 const RECORD_TONE = { clip: 'good', dark: 'pending', unknown: 'unknown' } as const
 const RECORD_LABEL = { clip: 'Clip connected', dark: 'Dark', unknown: 'Unknown' } as const
 
@@ -181,8 +150,6 @@ export function ResolumeConfig() {
   // what establishes ground truth on first load and after a reconnect.
   const recoveryState: RecoveryState =
     model.resolumeRecovery !== null ? { kind: 'loaded', response: model.resolumeRecovery } : restRecoveryState
-  const address = useResolumeAddress(instanceId, gate.allowed)
-
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -331,15 +298,6 @@ export function ResolumeConfig() {
             <h1 className="sm-page__title">{instance.instanceId}</h1>
             <StatusPair tone={RESOLUME_HEALTH_TONE[instance.health]} label={healthLabel} />
           </div>
-          <p className="sm-page__lede">
-            {address.kind === 'found' ? (
-              <>
-                Resolume Arena at <span className="sm-data">{address.url}</span>, timecode-driven, never frame-synced by ShowMesh.
-              </>
-            ) : (
-              'Resolume Arena, timecode-driven, never frame-synced by ShowMesh. Its configured address is not available to this device.'
-            )}
-          </p>
         </div>
         <ButtonRow>
           <NotWired>
@@ -355,11 +313,6 @@ export function ResolumeConfig() {
       <div className="sm-grid sm-grid--wider" style={{ gap: 'var(--s-5)', alignItems: 'start' }}>
         <div>
       <Section id="rz-comp" title="Stored composition" aside={<span className="sm-small sm-muted">Uploaded, not read live</span>}>
-        <p className="sm-small sm-muted">
-          ShowMesh stores an id map of the composition so actions can name a layer or clip instead of an object id. Re-export and re-upload
-          whenever the composition changes in Arena, or names will resolve to the wrong objects.
-        </p>
-
         {compositionState.kind === 'loading' && (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the stored composition." />
         )}
@@ -503,11 +456,6 @@ export function ResolumeConfig() {
             const total = composition.composition.clipCount + composition.composition.persistentClipCount
             return (
               <>
-                <p className="sm-small sm-muted">
-                  Actions reference clips by name, so two clips sharing a name on the same layer and deck (or two persistent clips sharing a name
-                  and layer) cannot be told apart. The coordinator computes this and refuses to guess: an action naming one of these will not
-                  resolve.
-                </p>
                 {ambiguous.length === 0 ? (
                   <RuledStrip absence="empty" label="None" fact={`0 of ${total} clips are ambiguous. Every action naming a clip resolves to exactly one object.`} />
                 ) : (
@@ -547,11 +495,6 @@ export function ResolumeConfig() {
                           })}
                         </tbody>
                       </Table>
-                      <div className="sm-section__footnote">
-                        Fix in Arena: rename one of them (the column tells you which is which), then re-upload. A clip sharing a name across{' '}
-                        <em>different</em> layers is fine, because the layer name disambiguates it. Clip ids are shown only here, where names cannot
-                        do the job.
-                      </div>
                     </TableWrap>
                   </>
                 )}
@@ -583,11 +526,6 @@ export function ResolumeConfig() {
           ) : undefined
         }
       >
-        <p className="sm-small sm-muted">
-          When on, ShowMesh records which clip each layer had connected, so it can restore them after Arena restarts. It only restores what
-          it recorded; it cannot reconstruct a composition it never saw.
-        </p>
-
         {recoveryState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for recovery state." />}
         {recoveryState.kind === 'failed' && (
           <RuledStrip
@@ -859,14 +797,13 @@ function ResolumeSignalsSection({
         absence="unavailable"
         label="Unavailable"
         fact="The composition's own name cannot be read from Arena."
-        detail={compositionNameSignal?.reason ?? 'Composition identity comes from the stored map above, not from a live read.'}
+        detail={compositionNameSignal?.reason}
       />
 
       <RuledStrip
         absence="unavailable"
         label="Unavailable"
         fact="Timecode lock is not something Arena reports, so there is nothing to collect and nothing to retry."
-        detail="Only the audio node's side of the LTC path is observable."
       />
     </Section>
   )

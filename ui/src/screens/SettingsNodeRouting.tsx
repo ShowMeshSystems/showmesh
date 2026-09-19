@@ -13,11 +13,10 @@ import {
   type ConfigObjectSummary,
   type NodeClockConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
 import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
-import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { advertisedRoutes, audioNodeVerdict, hasAudioCapability, nodeClockVerdict, type NodeClockProvider } from './settingsModel'
@@ -146,10 +145,6 @@ export function SettingsNodeRouting() {
     <>
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Audio <span className="sm-faint">/</span> Node routing</p>
       <h2 className="sm-section__title">Where this node's audio leaves the building</h2>
-      <p className="sm-page__lede">
-        Program and LTC leave through one interface in one clock domain. The coordinator refuses a split. A route
-        this node has not advertised is refused on save.
-      </p>
 
       <Section id="st-node" title="Node">
         {nodesState.kind === 'loading' ? (
@@ -159,7 +154,7 @@ export function SettingsNodeRouting() {
         ) : nodesState.nodes.length === 0 ? (
           <RuledStrip absence="empty" label="None" fact="No audio.node object has ever been configured." />
         ) : (
-          <Field label="Audio node" help={<>Nodes advertising <span className="sm-data">audio.output.local</span> or <span className="sm-data">audio.output.ltc</span>.</>}>
+          <Field label="Audio node">
             {(props) => (
               <Select
                 {...props}
@@ -190,7 +185,7 @@ export function SettingsNodeRouting() {
           <RuledStrip absence="failed" label="Read failed" fact={nodeClockObjectsState.reason} />
         ) : (
           nodeClockObjectsState.objects.length > 0 && (
-            <Field label="Existing node" help="Nodes that already carry a node.clock object. Independent of the audio node picker above: node.clock is its own config kind.">
+            <Field label="Existing node">
               {(props) => (
                 <Select
                   {...props}
@@ -208,7 +203,7 @@ export function SettingsNodeRouting() {
             </Field>
           )
         )}
-        <Field label="New node id" help="Type a node id and press Enter, or move on to another field, to open its PTP clock section, whether or not it has a node.clock object yet.">
+        <Field label="New node id">
           {(props) => (
             <Input
               {...props}
@@ -235,8 +230,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const model = useModelContext()
   const node = model.nodes.find((n) => n.nodeId === nodeId) ?? null
   const programRoutes = node !== null ? advertisedRoutes(node, 'audio.output.local') : null
-  const ltcRoutesAdvertised = node !== null ? advertisedRoutes(node, 'audio.output.ltc') : null
-  const heardAt = node?.evidence.hello.observedAt ?? null
 
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<NodeState>({ kind: 'loading' })
@@ -435,11 +428,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
               setDirty(true)
             }}
           />
-          <p className="sm-small sm-muted">
-            Only one audio node may hold program+ltc; the coordinator refuses a second.
-          </p>
           {role === 'zone' && (
-            <Field label="Zone" help="Your name for the speaker zone this node drives.">
+            <Field label="Zone">
               {(props) => (
                 <Input
                   {...props}
@@ -458,7 +448,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       <Section id="st-program" title="Program output">
         <div className="sm-grid sm-form-column">
           {programRoutes !== null && programRoutes.length > 0 ? (
-            <Field label="Route" help={heardAt !== null ? `Advertised by ${nodeId} at ${formatClock(heardAt)}.` : `Advertised by ${nodeId}.`}>
+            <Field label="Route">
               {(props) => (
                 <Select
                   {...props}
@@ -478,12 +468,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             </Field>
           ) : (
             <div className="sm-panel">
-              <p className="sm-small sm-faint" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>No channel inventory</p>
-              <p className="sm-small sm-muted">
-                {nodeId} has advertised no routes. The agent advertises routes, not which channels exist behind them,
-                so there is nothing to pick from. Enter the route yourself. A route or channel the node rejects is
-                refused on save.
-              </p>
               <Field label="Route">
                 {(props) => (
                   <Input
@@ -498,7 +482,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
               </Field>
             </div>
           )}
-          <Field label="Program channels" help="Distinct, 1-based, comma separated.">
+          <Field label="Program channels">
             {(props) => (
               <Input
                 {...props}
@@ -520,7 +504,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             }}
           />
           {sinkBackend === 'pipewiresink' && (
-            <Field label="PipeWire target node" help="The PipeWire node name program audio targets. Leave blank for PipeWire's own default sink.">
+            <Field label="PipeWire target node">
               {(props) => (
                 <Input
                   {...props}
@@ -533,21 +517,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
               )}
             </Field>
           )}
-        </div>
-
-        <div className="sm-panel sm-stack-4">
-          {/* Stays NotWired: the agent's only per-route channel signal is a probe
-              negotiation outcome, not a channel inventory (audiocapabilities.go's
-              routeAttributes), so a picker built from it could hide real channels. */}
-          <NotWiredBanner
-            what="Output groups"
-            missing={
-              <>
-                <code className="sm-data">outputGroups</code> attribute on the <code className="sm-data">audio.output.local</code> capability
-              </>
-            }
-            detail="Once the agent advertises groups, this picker replaces the manual channel field above. Nothing sends outputGroups today; the picker is shown so the target is on record, not because it works."
-          />
         </div>
       </Section>
 
@@ -571,16 +540,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             <div className="sm-field">
               <span className="sm-field__label">Route</span>
               <p className="sm-input sm-data sm-muted">{programRoute === '' ? 'Set a program route first' : programRoute}</p>
-              <span className="sm-field__help">Follows the program route. It cannot differ.</span>
             </div>
-            <Field
-              label="Channel"
-              help={
-                ltcRoutesAdvertised === null
-                  ? '1-based, and not one of the program channels above. No channel inventory is advertised, so pick one the interface has.'
-                  : '1-based, and not one of the program channels above.'
-              }
-            >
+            <Field label="Channel">
               {(props) => (
                 <Select
                   {...props}
@@ -605,11 +566,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
       <Section id="st-clock" title="Clock domain">
         <div className="sm-panel" style={{ borderStyle: 'dashed' }}>
-          <p className="sm-small sm-faint" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Not reported by the API</p>
-          <p className="sm-small sm-muted">
-            The coordinator does not advertise authoritative clock choices, so there is nothing to pick from and no
-            browser clock is used. These two fields are your declaration, and they are recorded as such.
-          </p>
           <div className="sm-grid sm-stack-4">
             <Field label="Domain">
               {(props) => (
@@ -623,7 +579,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                 />
               )}
             </Field>
-            <Field label="How you know" help="Recorded alongside the change, so a later reader knows what this claim rests on.">
+            <Field label="How you know">
               {(props) => (
                 <Input
                   {...props}
@@ -640,11 +596,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       </Section>
 
       <Section id="st-output-latency" title="Output latency">
-        <p className="sm-small sm-muted">
-          This node's measured output delay is subtracted from a scheduled start so the sample lands at the right
-          instant. Unmeasured applies zero. A measured value only holds for the buffer, quantum, and sample rate it
-          was recorded under, and it changes when the engine restarts, so that configuration is shown here too.
-        </p>
         <div className="sm-grid sm-form-column">
           <Segmented
             label="Method"
@@ -657,7 +608,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           />
           {outputLatencyMethod !== 'unmeasured' && (
             <div className="sm-grid sm-stack-4">
-              <Field label="Value (microseconds)" help="Signed offset subtracted from the scheduled start instant.">
+              <Field label="Value (microseconds)">
                 {(props) => (
                   <Input
                     {...props}
@@ -669,7 +620,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                   />
                 )}
               </Field>
-              <Field label="Measured at" help="When this value was measured, RFC 3339.">
+              <Field label="Measured at">
                 {(props) => (
                   <Input
                     {...props}
@@ -681,7 +632,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                   />
                 )}
               </Field>
-              <Field label="Reference" help="What this was measured against: a loopback/acoustic capture, or a datasheet section.">
+              <Field label="Reference">
                 {(props) => (
                   <Input
                     {...props}
@@ -693,7 +644,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                   />
                 )}
               </Field>
-              <Field label="Confidence" help="Your own judgment of how much to trust this value.">
+              <Field label="Confidence">
                 {(props) => (
                   <Input
                     {...props}
@@ -705,10 +656,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                   />
                 )}
               </Field>
-              <Field
-                label="Configuration"
-                help="The buffer/quantum/sample-rate configuration this was measured under. A configuration change makes this value stale; re-measure rather than trust it unchanged."
-              >
+              <Field label="Configuration">
                 {(props) => (
                   <Input
                     {...props}
@@ -984,7 +932,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             setDirty(true)
           }}
         />
-        <Field label="Interface" help="A network interface name, such as eno2 or eth0. Never a device path: for the external provider, a PTP hardware clock device goes in PHC device instead.">
+        <Field label="Interface">
           {(props) => (
             <Input
               {...props}
@@ -996,10 +944,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             />
           )}
         </Field>
-        <Field
-          label="PTP domain number"
-          help="The ptp4l domain number, 0 to 255."
-        >
+        <Field label="PTP domain number">
           {(props) => (
             <Input
               {...props}
@@ -1011,7 +956,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             />
           )}
         </Field>
-        <Field label="Holdover limit (seconds)" help="How long a lost lock is reported as holdover before this node gives up and reports unsynchronized. Defaults to 60 when left blank.">
+        <Field label="Holdover limit (seconds)">
           {(props) => (
             <Input
               {...props}
@@ -1043,7 +988,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
               }}
               label="Hardware timestamping"
             />
-            <Field label="Priority1 · optional" help="0 to 255. Applies to managed only.">
+            <Field label="Priority1 · optional">
               {(props) => (
                 <Input
                   {...props}
@@ -1059,7 +1004,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         )}
         {provider === 'external' && (
           <>
-            <Field label="External UDS address · optional" help="Defaults to linuxptp's own /var/run/ptp/ptp4lro when left blank.">
+            <Field label="External UDS address · optional">
               {(props) => (
                 <Input
                   {...props}
@@ -1071,10 +1016,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
                 />
               )}
             </Field>
-            <Field
-              label="PHC device · optional"
-              help="A Linux PTP hardware clock device path, such as /dev/ptp0. Separate from the interface name above."
-            >
+            <Field label="PHC device · optional">
               {(props) => (
                 <Input
                   {...props}
@@ -1089,7 +1031,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
           </>
         )}
         {provider === 'fpp' && (
-          <Field label="FPP base URL" help="Required when the provider is fpp.">
+          <Field label="FPP base URL">
             {(props) => (
               <Input
                 {...props}

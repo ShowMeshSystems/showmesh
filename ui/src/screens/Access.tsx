@@ -40,25 +40,14 @@ import { effectiveServerTimeIso, formatDateClock } from '../domain/time'
 import {
   credentialCount,
   daysUnused,
-  currentCredentialIsUnreported,
   isLongUnused,
   isSignedInPrincipal,
   latestTokenUse,
   principalStateLabel,
-  UNUSED_CREDENTIAL_WARNING_DAYS,
   type TokenRead,
 } from './accessModel'
 
 const CREATABLE_ROLES: readonly PrincipalObject['role'][] = ['viewer', 'operator', 'admin', 'scheduler', 'recovery']
-
-/** One plain sentence per role for the create-principal picker; only recovery is non-obvious from its name. */
-const ROLE_HELP: Readonly<Record<PrincipalObject['role'], string>> = {
-  viewer: 'Can read everything and change nothing.',
-  operator: 'Runs the show night-to-night: macros, night commands, and the usual live controls.',
-  admin: 'Everything, including managing other principals.',
-  scheduler: 'Runs macros on a schedule, nothing else.',
-  recovery: 'Holds exactly one scope: Resolume action requests. That is the narrow bundle the built-in automatic-recovery principal uses, not a general operator or machine login.',
-}
 
 type AccessData =
   | { kind: 'denied'; reason: string }
@@ -192,10 +181,6 @@ export function Access() {
       </p>
 
       <h1 className="sm-page__title">Access</h1>
-      <p className="sm-page__lede">
-        Who can change this installation, and what each of them may change. Every write is attributed to a
-        principal; nothing here affects who can <em>see</em> the show.
-      </p>
 
       <DefinitionStrip
         items={[
@@ -216,7 +201,6 @@ export function Access() {
       <Section
         id="ac-princ"
         title="Principals"
-        detail="Shows your own scopes; other principals show their role."
         aside={
           <Button
             variant="primary"
@@ -260,11 +244,6 @@ export function Access() {
                 </tbody>
               </Table>
             </TableWrap>
-            <p className="sm-section__footnote">
-              A principal with no write scopes can still read everything. That is what "reads are open" means,
-              not a permission anyone granted. "Consider revoking" flags a credential unused for{' '}
-              {UNUSED_CREDENTIAL_WARNING_DAYS} days or more.
-            </p>
           </>
         )}
       </Section>
@@ -300,7 +279,6 @@ export function Access() {
                 <CredentialsPanel
                   principal={selectedPrincipal}
                   tokens={selectedTokens}
-                  session={model.session}
                   writeGate={writeGate}
                   readDenied={data.kind === 'denied'}
                   readFailed={data.kind === 'failed' ? data.reason : null}
@@ -336,12 +314,6 @@ export function Access() {
             absence="failed"
             label="This session"
             fact="At least one step was dispatched with no authorizing principal recorded. How many, and which, are not reported."
-            detail={
-              <>
-                <strong>This never clears for the rest of the session.</strong> It is a permanent statement that
-                tonight's record has a hole in it.
-              </>
-            }
           />
         )}
       </Section>
@@ -624,7 +596,7 @@ function AdministrationPanel({
       </div>
       {roleConfirming && (
         <div className="sm-panel">
-          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+          <Field label={`Type ${principal.name} to confirm`}>
             {(props) => <Input {...props} value={roleConfirmText} onChange={(e) => setRoleConfirmText(e.target.value)} />}
           </Field>
           {roleError !== null && <RuledStrip absence="failed" label="Refused" fact={roleError} />}
@@ -652,7 +624,7 @@ function AdministrationPanel({
       {enableError !== null && <RuledStrip absence="failed" label="Refused" fact={enableError} />}
       {disableConfirming && !principal.disabled && (
         <div className="sm-panel">
-          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+          <Field label={`Type ${principal.name} to confirm`}>
             {(props) => <Input {...props} value={disableConfirmText} onChange={(e) => setDisableConfirmText(e.target.value)} />}
           </Field>
           {disableError !== null && <RuledStrip absence="failed" label="Refused" fact={disableError} />}
@@ -697,7 +669,7 @@ function AdministrationPanel({
       </Field>
       {passwordConfirming && (
         <div className="sm-panel">
-          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+          <Field label={`Type ${principal.name} to confirm`}>
             {(props) => <Input {...props} value={passwordConfirmText} onChange={(e) => setPasswordConfirmText(e.target.value)} />}
           </Field>
           {passwordError !== null && <RuledStrip absence="failed" label="Refused" fact={passwordError} />}
@@ -716,7 +688,6 @@ function AdministrationPanel({
           </ButtonRow>
         </div>
       )}
-      <p className="sm-small sm-faint">Resetting signs this principal out of every session and invalidates every token it holds.</p>
       {passwordOutcome !== null && (
         <p className="sm-small sm-data" role="status">
           {passwordOutcome}
@@ -744,11 +715,6 @@ function BootstrapRow({ session }: { session: Model['session'] }) {
         session.bootstrapRequired
           ? 'Bootstrap is still required. No principal has claimed it yet.'
           : 'Bootstrap has been claimed. Who claimed it and when are not reported.'
-      }
-      detail={
-        session.bootstrapRequired
-          ? undefined
-          : "The one-time code from the coordinator's data volume is spent and cannot be reused."
       }
     />
   )
@@ -798,7 +764,6 @@ function CreatePrincipalPanel({
           if (value === 'machine') setPassword('')
         }}
       />
-      <p className="sm-small sm-faint">Decides whether a password makes sense at all for this principal.</p>
 
       <div className="sm-grid sm-form-column">
         <Field label="Name">{(props) => <Input {...props} value={name} onChange={(e) => setName(e.target.value)} />}</Field>
@@ -809,10 +774,9 @@ function CreatePrincipalPanel({
             options={CREATABLE_ROLES.map((option) => ({ value: option, label: option }))}
             onChange={setRole}
           />
-          <p className="sm-small sm-faint">{ROLE_HELP[role]}</p>
         </div>
         {kind === 'human' && (
-          <Field label="Password · optional" help="Leave it blank for a principal that will only ever use an issued token.">
+          <Field label="Password · optional">
             {(props) => <Input {...props} type="password" value={password} onChange={(e) => setPassword(e.target.value)} />}
           </Field>
         )}
@@ -840,7 +804,6 @@ function CreatePrincipalPanel({
 function CredentialsPanel({
   principal,
   tokens,
-  session,
   writeGate,
   readDenied,
   readFailed,
@@ -850,7 +813,6 @@ function CredentialsPanel({
 }: {
   principal: PrincipalObject
   tokens: TokenRead
-  session: Model['session']
   writeGate: ScopeGate
   readDenied: boolean
   readFailed: string | null
@@ -917,14 +879,6 @@ function CredentialsPanel({
 
   return (
     <>
-      <p className="sm-small sm-muted">A token is shown once, at the moment it is issued, and never again. If it is lost, revoke it and issue another.</p>
-      {currentCredentialIsUnreported(session) && (
-        <p className="sm-small sm-faint">
-          This device is authenticated by a token. Which of these it is, is not reported, so no row is marked as the one in use. Revoking the wrong
-          one signs this device out.
-        </p>
-      )}
-
       {readDenied && <RuledStrip absence="noPermission" label="Credentials not shown" fact="This device may not read credentials." />}
       {readFailed !== null && <RuledStrip absence="failed" label="Read failed" fact={readFailed} />}
 
@@ -1003,13 +957,12 @@ function CredentialsPanel({
               })}
             </tbody>
           </Table>
-          <p className="sm-section__footnote">Revoking takes effect on the next request, not on anything already in flight.</p>
         </TableWrap>
       )}
 
       <ButtonRow>
         <Field label="Label · optional">{(props) => <Input {...props} value={label} onChange={(e) => setLabel(e.target.value)} />}</Field>
-        <Field label="Expires · optional" help="Leave it blank and this token never expires.">
+        <Field label="Expires · optional">
           {(props) => <Input {...props} type="datetime-local" value={expiresLocal} onChange={(e) => setExpiresLocal(e.target.value)} />}
         </Field>
         <Button onClick={issue} disabled={issuing || !writeGate.allowed} title={writeGate.allowed ? undefined : writeGate.reason}>
@@ -1020,11 +973,7 @@ function CredentialsPanel({
 
       {revokeTarget !== null && (
         <div className="sm-panel">
-          <p className="sm-small sm-muted">
-            Revoking <span className="sm-data">{revokeTarget.id}</span> takes effect on the next request, not on
-            anything already in flight.
-          </p>
-          <Field label={`Type ${revokeTarget.id} to confirm`} help="Asks for the credential id before it proceeds.">
+          <Field label={`Type ${revokeTarget.id} to confirm`}>
             {(props) => <Input {...props} value={revokeConfirmText} onChange={(e) => setRevokeConfirmText(e.target.value)} />}
           </Field>
           {revokeError !== null && <RuledStrip absence="failed" label="Refused" fact={revokeError} />}

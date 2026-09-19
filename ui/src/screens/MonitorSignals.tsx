@@ -30,7 +30,6 @@ export function MonitorSignals() {
         id="mo-signals"
         title="Signals"
         aside={<Segmented label="Resource kind" value={kind} options={KINDS} onChange={setKind} />}
-        detail="Every observation the coordinator holds, across nodes, FPP and Resolume, in one table. Kind narrows it the same way Fleet does."
       >
         {shown.length === 0 ? (
           <RuledStrip

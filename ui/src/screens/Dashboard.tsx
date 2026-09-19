@@ -238,15 +238,11 @@ export function Dashboard() {
             to="/monitor/signals"
           />
         </Tiles>
-        <p className="sm-section__footnote">
-          Health is each resource's own report, not a ShowMesh-side verdict.
-          {staleLeader !== null && (
-            <>
-              {' '}
-              {staleLeader.count} of the stale signals belong to {staleLeader.label} alone.
-            </>
-          )}
-        </p>
+        {staleLeader !== null && (
+          <p className="sm-section__footnote">
+            {staleLeader.count} of the stale signals belong to {staleLeader.label} alone.
+          </p>
+        )}
       </Section>
     </>
   )

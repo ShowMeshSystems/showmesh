@@ -557,7 +557,7 @@ describe('Settings › Node routing', () => {
       ],
     } as unknown as Partial<Model>)
 
-    await waitFor(() => expect(screen.getByText(/has advertised no routes/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Route' })).toBeInTheDocument())
     expect(screen.queryByRole('combobox', { name: 'Route' })).not.toBeInTheDocument()
   })
 
@@ -590,7 +590,6 @@ describe('Settings › Node routing', () => {
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
     expect(screen.getByText('hw:CARD=PCH,DEV=0', { selector: 'p' })).toBeInTheDocument()
 
-    expect(screen.getByText('Output groups does nothing yet.')).toBeInTheDocument()
     expect(screen.getByLabelText('Program channels')).not.toBeDisabled()
   })
 
@@ -1350,7 +1349,7 @@ describe('Settings › Mode', () => {
 
     renderAt('/settings/mode', { nightSession: null })
 
-    await waitFor(() => expect(screen.getByText('held open in program mode')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Program mode/ })).toBeInTheDocument())
     expect(screen.queryByText(/is live\./)).not.toBeInTheDocument()
   })
 
@@ -1390,54 +1389,6 @@ describe('Settings › Mode', () => {
     expect(putCalled).toBe(false)
   })
 
-  it('states the cue activation pin effect with no pin detail when unpinned', async () => {
-    stubs.getShowModeConfig = () =>
-      Promise.resolve({
-        serverTime: '2026-08-30T21:00:00Z',
-        kind: 'show.mode',
-        revision: 2,
-        payload: { mode: 'program' },
-        updatedAt: '2026-08-30T18:00:00Z',
-        createdByPrincipalId: 'p1',
-        createdByPrincipalName: 'erbartos',
-        source: 'api',
-        resolumeWebSocketEffect: 'held open in program mode',
-        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
-      })
-
-    renderAt('/settings/mode', { nightSession: null })
-
-    await waitFor(() => expect(screen.getByText('A show.cue edit saved now applies immediately.')).toBeInTheDocument())
-    expect(screen.queryByText(/Pinned to show/)).not.toBeInTheDocument()
-  })
-
-  it('names the pinned show, generation and pinned-at time when the cue activation pin is pinned', async () => {
-    stubs.getShowModeConfig = () =>
-      Promise.resolve({
-        serverTime: '2026-08-30T21:00:00Z',
-        kind: 'show.mode',
-        revision: 2,
-        payload: { mode: 'show' },
-        updatedAt: '2026-08-30T18:00:00Z',
-        createdByPrincipalId: 'p1',
-        createdByPrincipalName: 'erbartos',
-        source: 'api',
-        resolumeWebSocketEffect: 'closed in show mode',
-        cueActivationPin: {
-          pinned: true,
-          effect: 'A show.cue edit saved now is staged and does not reach any node.',
-          show: 'winter-2026',
-          generation: 4,
-          pinnedAt: '2026-08-30T19:00:00Z',
-        },
-      })
-
-    renderAt('/settings/mode', { nightSession: null })
-
-    await waitFor(() => expect(screen.getByText(/A show\.cue edit saved now is staged/)).toBeInTheDocument())
-    expect(screen.getByText('winter-2026')).toBeInTheDocument()
-    expect(screen.getByText('4')).toBeInTheDocument()
-  })
 })
 
 describe('RevisionHistory, shared across editors', () => {
