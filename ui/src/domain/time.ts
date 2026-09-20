@@ -48,6 +48,14 @@ export function effectiveServerTimeIso(
   return new Date(serverMs + (nowMs - serverTimeReceivedAt)).toISOString()
 }
 
+/** "0:22", "2:47": time remaining until a deadline, clamped so it never goes negative once the deadline has passed. */
+export function formatCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
 /** Clock time only: "20:41". Absence is stated by the caller, never here. */
 export function formatClock(iso: string | null): string | null {
   const ms = parseIsoMs(iso)

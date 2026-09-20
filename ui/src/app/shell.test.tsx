@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, CSRFRejectedError, TooManyRequestsError } from '../api'
@@ -26,6 +26,7 @@ const getServiceDescriptorMock = vi.fn()
 const getWeatherDelayStateMock = vi.fn()
 const resumeFromWeatherDelayMock = vi.fn()
 const cancelNightForWeatherMock = vi.fn()
+const answerWeatherDelayDecisionMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -44,6 +45,7 @@ vi.mock('../api', async () => {
     getWeatherDelayState: (...args: unknown[]) => getWeatherDelayStateMock(...args),
     resumeFromWeatherDelay: (...args: unknown[]) => resumeFromWeatherDelayMock(...args),
     cancelNightForWeather: (...args: unknown[]) => cancelNightForWeatherMock(...args),
+    answerWeatherDelayDecision: (...args: unknown[]) => answerWeatherDelayDecisionMock(...args),
   }
 })
 
@@ -131,6 +133,7 @@ describe('app shell', () => {
     getWeatherDelayStateMock.mockReset().mockResolvedValue({ serverTime: '2026-09-01T00:00:00Z', active: false, revision: 0 })
     resumeFromWeatherDelayMock.mockReset()
     cancelNightForWeatherMock.mockReset()
+    answerWeatherDelayDecisionMock.mockReset()
     clearStoredToken()
   })
   afterEach(cleanup)
@@ -974,6 +977,224 @@ describe('app shell', () => {
       await waitFor(() => expect(getWeatherDelayStateMock).toHaveBeenCalled())
       expect(screen.queryByText('Players held dark')).not.toBeInTheDocument()
       expect(screen.queryByText('Weather delay')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('ADR-053 decision 12 the pending trigger question', () => {
+    const PENDING_DELAY_QUESTION = {
+      id: 'q1',
+      source: 'nws',
+      reason: 'A severe thunderstorm warning is in effect.',
+      question: 'delay' as const,
+      defaultAction: 'delay' as const,
+      askedAt: '2026-09-01T00:05:40Z',
+      deadline: '2026-09-01T00:06:10Z',
+    }
+
+    function invokeSession() {
+      return authenticatedSession({ scopes: ['config:write', 'show:weatherdelay:invoke'] })
+    }
+
+    it('shows the reason verbatim, what happens when it runs out, and a countdown that advances toward the deadline', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      const base = { session: authenticatedSession(), serverTime: '2026-09-01T00:05:48Z' }
+      const view = renderShell(base)
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+      expect(screen.getByText('A weather delay starts when this runs out.')).toBeInTheDocument()
+      expect(screen.getByText('0:22 left')).toBeInTheDocument()
+
+      view.rerender(shellTree({ ...base, serverTime: '2026-09-01T00:06:05Z' }))
+      await screen.findByText('0:05 left')
+    })
+
+    it('advances the countdown on its own second by second, and clamps it at zero past the deadline', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date('2026-09-01T00:05:48Z') })
+      try {
+        renderShell({ session: authenticatedSession(), serverTime: '2026-09-01T00:05:48Z', serverTimeReceivedAt: Date.now() })
+        await screen.findByText('0:22 left')
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3_000)
+        })
+        expect(screen.getByText('0:19 left')).toBeInTheDocument()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000)
+        })
+        expect(screen.getByText('0:00 left')).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not offer Cancel night for a plain delay question while no delay is active', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      renderShell({ session: invokeSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+      expect(screen.getByRole('button', { name: /^start weather delay$/i })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^cancel night$/i })).not.toBeInTheDocument()
+    })
+
+    it('sends exactly one matching answer for each of Start weather delay, Cancel night and Dismiss', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: { ...PENDING_DELAY_QUESTION, question: 'delayOrCancel' as const },
+      })
+      answerWeatherDelayDecisionMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:50Z',
+        answer: 'delay',
+        result: { kind: 'start', idempotencyKey: 'k1', active: true, revision: 2, targets: [] },
+      })
+
+      renderShell({ session: invokeSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+
+      fireEvent.click(screen.getByRole('button', { name: /^start weather delay$/i }))
+      await waitFor(() => expect(answerWeatherDelayDecisionMock).toHaveBeenCalledTimes(1))
+      expect(answerWeatherDelayDecisionMock).toHaveBeenCalledWith('q1', 'delay')
+
+      fireEvent.click(screen.getByRole('button', { name: /^cancel night$/i }))
+      await waitFor(() => expect(answerWeatherDelayDecisionMock).toHaveBeenCalledTimes(2))
+      expect(answerWeatherDelayDecisionMock).toHaveBeenNthCalledWith(2, 'q1', 'cancelNight')
+
+      fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }))
+      await waitFor(() => expect(answerWeatherDelayDecisionMock).toHaveBeenCalledTimes(3))
+      expect(answerWeatherDelayDecisionMock).toHaveBeenNthCalledWith(3, 'q1', 'dismiss')
+    })
+
+    it('offers Cancel night from a plain "delay" question once a delay is already active, without hiding Resume', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        ...ACTIVE_DELAY,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      renderShell({
+        session: authenticatedSession({ scopes: ['config:write', 'show:weatherdelay:resume', 'show:weatherdelay:invoke'] }),
+        serverTime: '2026-09-01T00:05:48Z',
+      })
+      await screen.findByText('Weather delay')
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument()
+      expect(screen.getAllByRole('button', { name: /^cancel night$/i })).toHaveLength(2)
+    })
+
+    it('shows the coordinator refusal verbatim, and the message-only expired-question response verbatim', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      answerWeatherDelayDecisionMock.mockRejectedValueOnce(new ApiError('This principal cannot answer a weather trigger question.', 403))
+      renderShell({ session: invokeSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+
+      fireEvent.click(screen.getByRole('button', { name: /^start weather delay$/i }))
+      await screen.findByText('This principal cannot answer a weather trigger question.')
+
+      answerWeatherDelayDecisionMock.mockResolvedValueOnce({
+        serverTime: '2026-09-01T00:05:52Z',
+        answer: 'delay',
+        message: 'This question already expired. Nothing was changed.',
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^start weather delay$/i }))
+      await screen.findByText('This question already expired. Nothing was changed.')
+    })
+
+    it('keeps the question up with a note when a later read fails, rather than hiding it', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      renderShell({ session: authenticatedSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+
+      getWeatherDelayStateMock.mockRejectedValue(new ApiError('Coordinator unreachable.', 503))
+      document.dispatchEvent(new window.Event('visibilitychange'))
+      await screen.findByText(/Could not refresh this question/)
+      expect(screen.getByText('A severe thunderstorm warning is in effect.')).toBeInTheDocument()
+    })
+
+    it('stops offering answers, and can be cleared, once the coordinator no longer reports the question', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      answerWeatherDelayDecisionMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:52Z',
+        answer: 'delay',
+        message: 'This question already expired. Nothing was changed.',
+      })
+      getWeatherDelayStateMock.mockResolvedValueOnce({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      renderShell({ session: invokeSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+
+      getWeatherDelayStateMock.mockResolvedValue({ serverTime: '2026-09-01T00:05:52Z', active: false, revision: 2 })
+      fireEvent.click(screen.getByRole('button', { name: /^start weather delay$/i }))
+      await screen.findByText('This question already expired. Nothing was changed.')
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^start weather delay$/i })).not.toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }))
+      await waitFor(() => expect(screen.queryByText('A severe thunderstorm warning is in effect.')).not.toBeInTheDocument())
+      expect(answerWeatherDelayDecisionMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not carry one question\u2019s refusal onto the next question', async () => {
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:05:48Z',
+        active: false,
+        revision: 1,
+        pendingDecision: PENDING_DELAY_QUESTION,
+      })
+      answerWeatherDelayDecisionMock.mockRejectedValue(new ApiError('This principal cannot answer a weather trigger question.', 403))
+      renderShell({ session: invokeSession(), serverTime: '2026-09-01T00:05:48Z' })
+      await screen.findByText('A severe thunderstorm warning is in effect.')
+
+      fireEvent.click(screen.getByRole('button', { name: /^start weather delay$/i }))
+      await screen.findByText('This principal cannot answer a weather trigger question.')
+
+      getWeatherDelayStateMock.mockResolvedValue({
+        serverTime: '2026-09-01T00:07:00Z',
+        active: false,
+        revision: 3,
+        pendingDecision: { ...PENDING_DELAY_QUESTION, id: 'q2', reason: 'Lightning was reported 6 miles away.' },
+      })
+      document.dispatchEvent(new window.Event('visibilitychange'))
+      await screen.findByText('Lightning was reported 6 miles away.')
+      expect(screen.queryByText('This principal cannot answer a weather trigger question.')).not.toBeInTheDocument()
+    })
+
+    it('says a pending question could not be verified when the very first read fails', async () => {
+      getWeatherDelayStateMock.mockRejectedValue(new ApiError('Coordinator unreachable.', 503))
+      renderShell({ session: authenticatedSession() })
+      await screen.findByText('Weather delay state unknown')
+      expect(screen.getByText(/whether a trigger question is pending/)).toBeInTheDocument()
     })
   })
 })

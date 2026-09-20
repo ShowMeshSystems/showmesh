@@ -13,6 +13,7 @@ import {
   ClockSkewStrip,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
+  WeatherDelayQuestionBanner,
   ConfirmDialog,
   ConnectionPill,
   DefinitionStrip,
@@ -410,6 +411,31 @@ export function Specimen() {
             <WeatherDelayHeldBanner
               messages={['FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.']}
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <WeatherDelayQuestionBanner
+              reason="A severe thunderstorm warning is in effect."
+              countdownLabel="0:22 left"
+              consequenceLabel="A weather delay starts when this runs out."
+              askedLabel="Asked at 20:41"
+              start={{ label: 'Start weather delay', onClick: () => {}, disabled: false, busy: false }}
+              dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <WeatherDelayQuestionBanner
+              reason="Too little of the night would remain after this warning expires."
+              countdownLabel="2:47 left"
+              consequenceLabel="The night is cancelled when this runs out."
+              askedLabel="Asked at 20:41"
+              expiresLabel="Warning ends at 21:10"
+              start={{ label: 'Start weather delay', onClick: () => {}, disabled: false, busy: false }}
+              cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+              dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
+              error="This question already expired. Nothing was changed."
+            />
+            <WeatherDelayQuestionBanner
+              reason="A severe thunderstorm warning is in effect."
+              askedLabel="Asked at 20:41"
+              dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
+              error="This question already expired. Nothing was changed."
             />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">

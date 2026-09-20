@@ -299,10 +299,12 @@ type SchemaEmergencyStopArmResponse = components['schemas']['EmergencyStopArmRes
 type SchemaEmergencyStopFireRequest = components['schemas']['EmergencyStopFireRequest']
 
 // ADR-053: weather delay (GET/POST /weather-delay* and its own
-// show.weatherdelay config kind, api/openapi.yaml's five routes).
+// show.weatherdelay config kind, api/openapi.yaml's six routes).
 type SchemaWeatherDelayStateResponse = components['schemas']['WeatherDelayStateResponse']
 type SchemaWeatherDelayActionRequest = components['schemas']['WeatherDelayActionRequest']
 type SchemaWeatherDelayActionResponse = components['schemas']['WeatherDelayActionResponse']
+type SchemaWeatherDelayDecisionRequest = components['schemas']['WeatherDelayDecisionRequest']
+type SchemaWeatherDelayDecisionResponse = components['schemas']['WeatherDelayDecisionResponse']
 type SchemaWeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
@@ -3584,6 +3586,27 @@ export class ApiStore {
         ACTION_INVOKE_REQUEST_TIMEOUT_MS,
       )
       return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/weather-delay/decision` (ADR-053 decision 12). Answers the
+   * coordinator's own pending automatic-trigger question. The response's
+   * `message` is set, with `result` absent, when the question had already
+   * expired; the caller shows that message rather than treating it as success.
+   */
+  async answerWeatherDelayDecision(id: string, answer: SchemaWeatherDelayDecisionRequest['answer']): Promise<SchemaWeatherDelayDecisionResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaWeatherDelayDecisionRequest = { id, answer }
+      return await this.client.postJson<SchemaWeatherDelayDecisionResponse>(
+        '/weather-delay/decision',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
     } finally {
       this.endSideCall(controller)
     }

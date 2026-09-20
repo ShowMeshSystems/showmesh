@@ -467,12 +467,17 @@ export type WeatherDelayTargetOutcome = components['schemas']['WeatherDelayTarge
 export type WeatherDelayPowerGroupStatus = components['schemas']['WeatherDelayPowerGroupStatus']
 export type WeatherDelayPowerGroupMember = components['schemas']['WeatherDelayPowerGroupMember']
 export type WeatherDelayHeldPlayer = components['schemas']['WeatherDelayHeldPlayer']
+export type WeatherDelayPendingDecision = components['schemas']['WeatherDelayPendingDecision']
+export type WeatherDelaySourceHealth = components['schemas']['WeatherDelaySourceHealth']
+export type WeatherDelayDecisionRequest = components['schemas']['WeatherDelayDecisionRequest']
+export type WeatherDelayDecisionResponse = components['schemas']['WeatherDelayDecisionResponse']
 export type WeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
 export type ConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 export type ConfigWeatherDelayAlertPayload = components['schemas']['ConfigWeatherDelayAlertPayload']
 export type ConfigWeatherDelayHeartbeatPayload = components['schemas']['ConfigWeatherDelayHeartbeatPayload']
 export type ConfigWeatherDelayPowerGroupPayload = components['schemas']['ConfigWeatherDelayPowerGroupPayload']
 export type ConfigWeatherDelayTriggersPayload = components['schemas']['ConfigWeatherDelayTriggersPayload']
+export type ConfigWeatherDelayNWSTriggerPayload = components['schemas']['ConfigWeatherDelayNWSTriggerPayload']
 
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
 // verdicts, aliased for the identical reason as every type above

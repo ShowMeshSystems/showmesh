@@ -7,12 +7,14 @@ import {
   listAssets,
   putRenderSettingsConfig,
   putWeatherDelayConfig,
+  type ConfigWeatherDelayNWSTriggerPayload,
   type ConfigWeatherDelayPowerGroupPayload,
   type RenderSettingsConfigResponse,
   type WeatherDelayConfigResponse,
 } from '../api'
 import { Button, ButtonRow, Choice, ChoiceGroup, Field, Input, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
@@ -355,6 +357,7 @@ function nextPowerGroupKey(): string {
  */
 function WeatherDelaySettingsSection() {
   const model = useModelContext()
+  const weatherDelay = useWeatherDelay()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<WeatherDelayLoadState>({ kind: 'loading' })
@@ -368,6 +371,13 @@ function WeatherDelaySettingsSection() {
   const [answerWindowSeconds, setAnswerWindowSeconds] = useState('')
   const [cancelAnswerWindowSeconds, setCancelAnswerWindowSeconds] = useState('')
   const [restartMinutes, setRestartMinutes] = useState('')
+  const [dismissQuietMinutes, setDismissQuietMinutes] = useState('')
+  const [nwsEnabled, setNwsEnabled] = useState(false)
+  const [nwsLatitude, setNwsLatitude] = useState('')
+  const [nwsLongitude, setNwsLongitude] = useState('')
+  const [nwsContact, setNwsContact] = useState('')
+  const [nwsPollSeconds, setNwsPollSeconds] = useState('')
+  const [nwsEventTypes, setNwsEventTypes] = useState('')
 
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -385,6 +395,16 @@ function WeatherDelaySettingsSection() {
       response.payload.triggers?.cancelAnswerWindowSeconds === undefined ? '' : String(response.payload.triggers.cancelAnswerWindowSeconds),
     )
     setRestartMinutes(response.payload.triggers?.restartMinutes === undefined ? '' : String(response.payload.triggers.restartMinutes))
+    setDismissQuietMinutes(
+      response.payload.triggers?.dismissQuietMinutes === undefined ? '' : String(response.payload.triggers.dismissQuietMinutes),
+    )
+    const nws = response.payload.triggers?.nws
+    setNwsEnabled(nws?.enabled ?? false)
+    setNwsLatitude(nws?.latitude === undefined ? '' : String(nws.latitude))
+    setNwsLongitude(nws?.longitude === undefined ? '' : String(nws.longitude))
+    setNwsContact(nws?.contact ?? '')
+    setNwsPollSeconds(nws?.pollSeconds === undefined ? '' : String(nws.pollSeconds))
+    setNwsEventTypes((nws?.eventTypes ?? []).join(', '))
     setDirty(false)
   }
 
@@ -469,6 +489,12 @@ function WeatherDelaySettingsSection() {
       setSaveError('Repeat count must be a non-negative number.')
       return
     }
+    if (nwsEnabled && nwsContact.trim() === '') {
+      setSaveError('A contact is required to enable the weather service poller.')
+      return
+    }
+    const nwsPayloadPresent =
+      nwsEnabled || nwsLatitude.trim() !== '' || nwsLongitude.trim() !== '' || nwsContact.trim() !== '' || nwsPollSeconds.trim() !== '' || nwsEventTypes.trim() !== ''
     setSaving(true)
     setSaveError(null)
     setStale(null)
@@ -488,6 +514,21 @@ function WeatherDelaySettingsSection() {
             ...(answerWindowSeconds.trim() === '' ? {} : { answerWindowSeconds: Number(answerWindowSeconds) }),
             ...(cancelAnswerWindowSeconds.trim() === '' ? {} : { cancelAnswerWindowSeconds: Number(cancelAnswerWindowSeconds) }),
             ...(restartMinutes.trim() === '' ? {} : { restartMinutes: Number(restartMinutes) }),
+            ...(dismissQuietMinutes.trim() === '' ? {} : { dismissQuietMinutes: Number(dismissQuietMinutes) }),
+            ...(nwsPayloadPresent
+              ? {
+                  nws: {
+                    enabled: nwsEnabled,
+                    ...(nwsLatitude.trim() === '' ? {} : { latitude: Number(nwsLatitude) }),
+                    ...(nwsLongitude.trim() === '' ? {} : { longitude: Number(nwsLongitude) }),
+                    ...(nwsContact.trim() === '' ? {} : { contact: nwsContact.trim() }),
+                    ...(nwsPollSeconds.trim() === '' ? {} : { pollSeconds: Number(nwsPollSeconds) }),
+                    ...(nwsEventTypes.trim() === ''
+                      ? {}
+                      : { eventTypes: nwsEventTypes.split(',').map((t) => t.trim()).filter((t) => t !== '') }),
+                  } satisfies ConfigWeatherDelayNWSTriggerPayload,
+                }
+              : {}),
           },
         }),
     })
@@ -689,7 +730,118 @@ function WeatherDelaySettingsSection() {
                     />
                   )}
                 </Field>
+                <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. 0 suppresses nothing. Defaults to 30.">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      type="number"
+                      min={0}
+                      value={dismissQuietMinutes}
+                      onChange={(e) => {
+                        setDismissQuietMinutes(e.target.value)
+                        setDirty(true)
+                      }}
+                    />
+                  )}
+                </Field>
               </div>
+            </Section>
+
+            <Section
+              id="st-weatherdelay-nws"
+              title="Weather service poller"
+              detail="Reads only event type, severity and expiry from the United States National Weather Service alerts API, never its warning text. Disabled by default."
+            >
+              <Choice
+                type="checkbox"
+                label="Enable the weather service poller"
+                checked={nwsEnabled}
+                onChange={(e) => {
+                  setNwsEnabled(e.target.checked)
+                  setDirty(true)
+                }}
+              />
+              <div className="sm-grid sm-grid--auto">
+                <Field label="Latitude">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      type="number"
+                      value={nwsLatitude}
+                      onChange={(e) => {
+                        setNwsLatitude(e.target.value)
+                        setDirty(true)
+                      }}
+                    />
+                  )}
+                </Field>
+                <Field label="Longitude">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      type="number"
+                      value={nwsLongitude}
+                      onChange={(e) => {
+                        setNwsLongitude(e.target.value)
+                        setDirty(true)
+                      }}
+                    />
+                  )}
+                </Field>
+                <Field label="Contact" help="Required to enable: that API's own policy requires a contact.">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      value={nwsContact}
+                      onChange={(e) => {
+                        setNwsContact(e.target.value)
+                        setDirty(true)
+                      }}
+                    />
+                  )}
+                </Field>
+                <Field label="Poll seconds" help="Defaults to 60.">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      type="number"
+                      min={1}
+                      value={nwsPollSeconds}
+                      onChange={(e) => {
+                        setNwsPollSeconds(e.target.value)
+                        setDirty(true)
+                      }}
+                    />
+                  )}
+                </Field>
+              </div>
+              <Field label="Event types" help="Comma-separated. Defaults to Tornado Warning, Severe Thunderstorm Warning.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={nwsEventTypes}
+                    onChange={(e) => {
+                      setNwsEventTypes(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              {weatherDelay.state.kind === 'loaded' && (weatherDelay.state.response.sources?.length ?? 0) > 0 && (
+                <div className="sm-stack-2">
+                  <p className="sm-small sm-faint">Trigger source health</p>
+                  {weatherDelay.state.response.sources?.map((source) => (
+                    <p key={source.source} className="sm-small">
+                      <span className="sm-data">{source.source}</span>{' '}
+                      {source.enabled ? 'Enabled.' : 'Disabled.'}
+                      {source.lastError !== undefined && ` ${source.lastError}`}
+                    </p>
+                  ))}
+                  {weatherDelay.state.response.sourcesMessage !== undefined && (
+                    <p className="sm-small sm-faint">{weatherDelay.state.response.sourcesMessage}</p>
+                  )}
+                </div>
+              )}
             </Section>
           </>
         )}
