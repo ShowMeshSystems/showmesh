@@ -431,6 +431,12 @@ export function Specimen() {
               dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
               error="This question already expired. Nothing was changed."
             />
+            <WeatherDelayQuestionBanner
+              reason="A severe thunderstorm warning is in effect."
+              askedLabel="Asked at 20:41"
+              dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
+              error="This question already expired. Nothing was changed."
+            />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>

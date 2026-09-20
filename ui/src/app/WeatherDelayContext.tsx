@@ -28,10 +28,11 @@ type ActionOutcome =
 
 type DecisionAnswer = WeatherDelayDecisionRequest['answer']
 
+// The id is carried so a message about one question is never shown under the next one.
 type DecisionOutcome =
   | { kind: 'idle' }
-  | { kind: 'result'; response: WeatherDelayDecisionResponse }
-  | { kind: 'error'; message: string; status: number | undefined }
+  | { kind: 'result'; id: string; response: WeatherDelayDecisionResponse }
+  | { kind: 'error'; id: string; message: string; status: number | undefined }
 
 interface WeatherDelayContextValue {
   state: LoadState
@@ -140,7 +141,7 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!authenticated) return
-    const active = state.kind !== 'loaded' || state.response.active
+    const active = state.kind !== 'loaded' || state.response.active || state.response.pendingDecision !== undefined
     const id = setInterval(refresh, active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
     return () => clearInterval(id)
   }, [authenticated, state, refresh])
@@ -173,15 +174,17 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
       setDecisionOutcome({ kind: 'idle' })
       answerWeatherDelayDecision(id, answer)
         .then((response) => {
-          setDecisionOutcome({ kind: 'result', response })
+          setDecisionOutcome({ kind: 'result', id, response })
           refresh()
         })
         .catch((err: unknown) => {
           setDecisionOutcome({
             kind: 'error',
+            id,
             message: describeApiError(err),
             status: err instanceof ApiError ? err.status : undefined,
           })
+          refresh()
         })
         .finally(() => setDecisionBusy(false))
     },

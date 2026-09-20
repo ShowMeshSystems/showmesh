@@ -730,12 +730,12 @@ function WeatherDelaySettingsSection() {
                     />
                   )}
                 </Field>
-                <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. Defaults to 30.">
+                <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. 0 suppresses nothing. Defaults to 30.">
                   {(props) => (
                     <Input
                       {...props}
                       type="number"
-                      min={1}
+                      min={0}
                       value={dismissQuietMinutes}
                       onChange={(e) => {
                         setDismissQuietMinutes(e.target.value)

@@ -117,6 +117,10 @@ export function WeatherDelayBanner({
  * step. Visually distinct from the active-delay and held-dark banners
  * (`sm-wdbanner--question`, an accent tone rather than bad or warn) so it
  * reads as "answer this" rather than "something is already wrong".
+ *
+ * A question the coordinator no longer reports is rendered by omitting
+ * countdownLabel, consequenceLabel and start: what happened stays on
+ * screen, but nothing is offered that would act on a question that is gone.
  */
 export function WeatherDelayQuestionBanner({
   reason,
@@ -130,11 +134,11 @@ export function WeatherDelayQuestionBanner({
   error,
 }: {
   reason: string
-  countdownLabel: string
-  consequenceLabel: string
+  countdownLabel?: string
+  consequenceLabel?: string
   askedLabel?: string
   expiresLabel?: string
-  start: WeatherDelayBannerAction
+  start?: WeatherDelayBannerAction
   cancelNight?: WeatherDelayBannerAction
   dismiss: WeatherDelayBannerAction
   error?: ReactNode
@@ -145,15 +149,17 @@ export function WeatherDelayQuestionBanner({
         <span className="sm-wdbanner__kind" role="alert">
           {reason}
         </span>
-        <span>{consequenceLabel}</span>
-        <span>{countdownLabel}</span>
+        {consequenceLabel !== undefined && <span>{consequenceLabel}</span>}
+        {countdownLabel !== undefined && <span>{countdownLabel}</span>}
         {askedLabel !== undefined && <span>{askedLabel}</span>}
         {expiresLabel !== undefined && <span>{expiresLabel}</span>}
       </div>
       <div className="sm-wdbanner__actions">
-        <Button variant="primary" size="gloved" onClick={start.onClick} disabled={start.disabled} title={start.title}>
-          {start.busy ? 'Starting…' : start.label}
-        </Button>
+        {start !== undefined && (
+          <Button variant="primary" size="gloved" onClick={start.onClick} disabled={start.disabled} title={start.title}>
+            {start.busy ? 'Starting…' : start.label}
+          </Button>
+        )}
         {cancelNight !== undefined && (
           <Button
             variant="danger"

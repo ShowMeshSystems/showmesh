@@ -115,21 +115,27 @@ function WeatherDelayQuestionShellBanner({
   const lastPendingDecision = useRef(pendingDecision)
   if (pendingDecision !== null) lastPendingDecision.current = pendingDecision
 
+  const outcome = weatherDelay.decisionOutcome
+  const outcomeId = outcome.kind === 'idle' ? null : outcome.id
   const decisionMessage =
-    weatherDelay.decisionOutcome.kind === 'error'
-      ? weatherDelay.decisionOutcome.message
-      : weatherDelay.decisionOutcome.kind === 'result' && weatherDelay.decisionOutcome.response.message !== undefined
-        ? weatherDelay.decisionOutcome.response.message
+    outcome.kind === 'error'
+      ? outcome.message
+      : outcome.kind === 'result' && outcome.response.message !== undefined
+        ? outcome.response.message
         : null
 
-  const decision = pendingDecision ?? (decisionMessage !== null ? lastPendingDecision.current : null)
+  // A message belongs to the question it was answered for, never to the next one.
+  const messageForShown = decisionMessage !== null && outcomeId === (pendingDecision?.id ?? lastPendingDecision.current?.id) ? decisionMessage : null
+  const decision = pendingDecision ?? (messageForShown !== null ? lastPendingDecision.current : null)
+  const answerable = pendingDecision !== null
 
   const [, setTick] = useState(0)
+  const deadline = decision?.deadline ?? null
   useEffect(() => {
-    if (decision === null) return
+    if (deadline === null || !answerable) return
     const id = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(id)
-  }, [decision])
+  }, [deadline, answerable])
 
   if (decision === null) return null
 
@@ -139,6 +145,18 @@ function WeatherDelayQuestionShellBanner({
   const askedLabel = formatClock(decision.askedAt)
   const expiresLabel = decision.expiresAt === undefined ? null : formatClock(decision.expiresAt)
   const showCancelNight = decision.question === 'delayOrCancel' || deliveringActive
+
+  // The question is gone: keep what happened on screen, offer nothing that would act on it.
+  if (!answerable) {
+    return (
+      <WeatherDelayQuestionBanner
+        reason={decision.reason}
+        {...(askedLabel === null ? {} : { askedLabel: `Asked at ${askedLabel}` })}
+        dismiss={{ label: 'Dismiss', onClick: weatherDelay.dismissDecisionOutcome, disabled: false, busy: false }}
+        {...(messageForShown === null ? {} : { error: messageForShown })}
+      />
+    )
+  }
 
   return (
     <WeatherDelayQuestionBanner
@@ -172,8 +190,8 @@ function WeatherDelayQuestionShellBanner({
         busy: weatherDelay.decisionBusy === 'dismiss',
         ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
       }}
-      {...(decisionMessage !== null
-        ? { error: decisionMessage }
+      {...(messageForShown !== null
+        ? { error: messageForShown }
         : readFailure !== null
           ? { error: `Could not refresh this question, so it may be out of date. ${readFailure}` }
           : {})}
