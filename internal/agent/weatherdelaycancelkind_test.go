@@ -204,7 +204,7 @@ func TestWeatherDelaySignedHTTPStartNeverDowngradesACancelledNight(t *testing.T)
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decode %s: %v", raw, err)
 	}
-	if got["kind"] != weatherdelay.KindCancelNight || got["message"] != weatherDelayAlreadyCancelledMessage {
+	if got["kind"] != weatherdelay.KindCancelNight || got["alertReason"] != weatherDelayPublicNightCancelled {
 		t.Fatalf("response = %s, want kind cancelNight and the already-cancelled sentence", raw)
 	}
 	if k := f.holder.Current().Kind; k != weatherdelay.KindCancelNight {

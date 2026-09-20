@@ -39,7 +39,8 @@ import (
 // proved the pieces are wired together against real processes.
 //
 // Scenario 6 exercises POST /api/v1/weather-delay/cancel-night and the
-// graceful night shutdown it schedules behind its own alert.
+// graceful night shutdown it schedules behind its own alert. Scenario 8
+// exercises a second delay in one night, which must play in full.
 
 // weatherDelayAlertSessionIDForTest mirrors internal/agent/weatherdelayops.go's
 // unexported weatherDelayAlertSessionIDForKind(weatherdelay.KindDelay)
@@ -1446,6 +1447,59 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 	waitFor(t, 60*time.Second, 500*time.Millisecond, func() bool {
 		return weatherDelayNightShutdownRan(t, f.coord, sinceSeq)
 	}, "the graceful night shutdown to run once the cancel alert has ended")
+
+	weatherDelayResumeAction(t, f.coord, f.token)
+}
+
+// --- Scenario 8: a second delay in one night ---
+
+// TestWeatherDelaySecondDelayOfTheNightPlaysInFull proves ADR-053 decision
+// 7 holds on the second delay of one night: delay, resume, delay again. The
+// second alert must start at item 0 and play its configured repeat count,
+// not carry on from the item index the first alert left on the session.
+func TestWeatherDelaySecondDelayOfTheNightPlaysInFull(t *testing.T) {
+	f := newWeatherDelayFixture(t, 0)
+
+	// Three repeats of a four second alert, about twelve seconds, long
+	// enough for the node to report each item playing at least once.
+	configureLongWeatherDelayAlert(t, f, "delay-alert-repeat", 4, 3)
+	audioSub := subscribeAudioReports(t, f.nodeID)
+
+	weatherDelayStartAction(t, f.coord, f.token)
+	waitForNodeAlertSession(t, audioSub, "playing")
+	firstRevision := alertPlaylistRevision(t, audioSub)
+
+	// The resume must land on an alert that has already advanced past item
+	// 0: that is the index a reused session would hand the second alert.
+	waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
+		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		return ok && p.State == "playing" && p.HasItem && p.ItemIndex >= 1
+	}, "the first delay alert to advance past its first item before the show resumes")
+
+	weatherDelayResumeAction(t, f.coord, f.token)
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		return !weatherDelayState(t, f.coord).Active
+	}, "the coordinator to report the delay no longer active after the resume")
+
+	weatherDelayStartAction(t, f.coord, f.token)
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		return ok && p.HasPlaylist && p.PlaylistRevision != firstRevision && p.State == "playing"
+	}, "the node to start a second delay alert, on a playlist of its own rather than the first alert's")
+	secondRevision := alertPlaylistRevision(t, audioSub)
+
+	playedFor, indexesSeen := observeAlertPlayback(t, audioSub, weatherDelayAlertSessionIDForTest, secondRevision, 40*time.Second)
+	// Item 0 first: an alert that inherited the first alert's item index
+	// starts mid-playlist and never reports item 0 at all, which no
+	// runner's timing can mask.
+	for _, idx := range []int64{0, 1, 2} {
+		if !indexesSeen[idx] {
+			t.Fatalf("the second delay alert of the night never reported item index %d playing; observed indexes: %v", idx, indexesSeen)
+		}
+	}
+	if playedFor < 8*time.Second {
+		t.Fatalf("the second delay alert of the night reported playing for only %s, want at least 8s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
+	}
 
 	weatherDelayResumeAction(t, f.coord, f.token)
 }

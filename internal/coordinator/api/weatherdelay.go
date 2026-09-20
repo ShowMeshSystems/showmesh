@@ -883,10 +883,11 @@ func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time
 		reason = mqttReason + "; no reported inbound listener for the direct HTTP path"
 	}
 
-	// mqttOK is preferred, matching deliveredVia's own tie-break, since the
-	// MQTT result carries the node's own evidence, not just a 2xx status.
+	// The MQTT result carries the node's own full detail, so it wins when
+	// it has any. The direct-HTTP body answers only a short fixed sentence,
+	// and is the fallback when MQTT reported nothing about the alert.
 	alertPlaying, alertReason := httpAlertPlaying, httpAlertReason
-	if mqttOK {
+	if mqttOK && (mqttAlertPlaying || mqttAlertReason != "") {
 		alertPlaying, alertReason = mqttAlertPlaying, mqttAlertReason
 	}
 

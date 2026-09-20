@@ -118,16 +118,17 @@ func (s *fppConnectServer) handleWeatherDelayStart(w http.ResponseWriter, r *htt
 	}
 
 	// Detached so a caller that hangs up cannot cancel the alert mid-start.
-	heldKind, alertPlaying, alertReason, unsilenced := s.weatherDelay.ops.startHeld(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
+	heldKind, alertPlaying, _, publicReason, _ := s.weatherDelay.ops.startHeld(context.WithoutCancel(r.Context()), signed.Request.Kind, now())
 
-	resp := map[string]any{
+	// A caller here may be replaying a captured request, so the body says
+	// only what the coordinator needs and names no file, session or path.
+	// The MQTT result keeps the node's full detail.
+	if heldKind != signed.Request.Kind {
+		publicReason = weatherDelayPublicNightCancelled
+	}
+	fppConnectWriteJSON(w, http.StatusOK, map[string]any{
 		"kind":         heldKind,
 		"alertPlaying": alertPlaying,
-		"alertReason":  alertReason,
-		"unsilenced":   unsilenced,
-	}
-	if heldKind != signed.Request.Kind {
-		resp["message"] = weatherDelayAlreadyCancelledMessage
-	}
-	fppConnectWriteJSON(w, http.StatusOK, resp)
+		"alertReason":  publicReason,
+	})
 }
