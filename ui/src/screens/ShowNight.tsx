@@ -110,7 +110,17 @@ function Rail({ title, steps }: { title: string; steps: readonly RailStep[] }) {
         <div key={step.key} className={`sm-rail-strip__step sm-rail-strip__step--${step.status}`}>
           <p className="sm-rail-strip__label">
             <span aria-hidden="true">
-              {step.status === 'done' ? '✓ ' : step.status === 'now' ? '● ' : step.status === 'notWired' ? '⚠ ' : ''}
+              {step.status === 'done'
+                ? '✓ '
+                : step.status === 'now'
+                  ? '● '
+                  : step.status === 'notWired' || step.status === 'stopped'
+                    ? '⚠ '
+                    : step.status === 'error'
+                      ? '✕ '
+                      : step.status === 'unknown'
+                        ? '? '
+                        : ''}
             </span>
             {step.label}
           </p>

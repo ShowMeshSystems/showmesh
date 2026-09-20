@@ -320,33 +320,77 @@ describe('Show Night', () => {
     expect(within(boundary).getByText(/^Next transition armed for \d{2}:\d{2}$/)).toBeInTheDocument()
   })
 
-  it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
-    const rail = nightRail(session({ cycle: 3, state: 'live' }))
+  it('renders each earlier cycle from its finished-cycle record, and the live one for the current cycle', () => {
+    const rail = nightRail(
+      session({
+        cycle: 3,
+        state: 'live',
+        finishedCycles: [
+          { cycle: 1, startedAt: '2026-08-28T18:00:00Z', endedAt: '2026-08-28T19:00:00Z', outcome: 'completed' },
+          { cycle: 2, startedAt: '2026-08-28T19:10:00Z', endedAt: '2026-08-28T19:40:00Z', outcome: 'stopped', reason: 'Operator ended the cycle.' },
+        ],
+      }),
+    )
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
     expect(cycleSteps.map((step) => step.key)).toEqual(['cycle-1', 'cycle-2', 'cycle-3'])
-    expect(cycleSteps[0]?.status).toBe('notWired')
-    expect(cycleSteps[0]?.detail).toBe('not reported')
-    expect(cycleSteps[1]?.status).toBe('notWired')
-    expect(cycleSteps[1]?.detail).toBe('not reported')
+    expect(cycleSteps[0]?.status).toBe('done')
+    expect(cycleSteps[0]?.detail).toBe('Complete')
+    expect(cycleSteps[1]?.status).toBe('stopped')
+    expect(cycleSteps[1]?.detail).toBe('Stopped: Operator ended the cycle.')
     expect(cycleSteps[2]?.status).toBe('now')
     expect(cycleSteps[2]?.detail).toBe('live')
   })
 
-  it('never puts a clock time on an earlier-cycle placeholder', () => {
-    const rail = nightRail(session({ cycle: 3, state: 'live' }))
-    const earlier = rail.filter((step) => step.status === 'notWired')
-    expect(earlier).not.toHaveLength(0)
-    for (const step of earlier) {
-      expect(step.detail).not.toMatch(/\d{1,2}:\d{2}/)
-    }
+  it('renders every finished-cycle outcome, including an earlier cycle with no record at all', () => {
+    const rail = nightRail(
+      session({
+        cycle: 5,
+        state: 'live',
+        finishedCycles: [
+          { cycle: 1, startedAt: '2026-08-28T18:00:00Z', endedAt: '2026-08-28T19:00:00Z', outcome: 'completed' },
+          { cycle: 2, startedAt: '2026-08-28T19:10:00Z', endedAt: '2026-08-28T19:40:00Z', outcome: 'stopped', reason: 'Operator ended the cycle.' },
+          {
+            cycle: 3,
+            startedAt: '2026-08-28T19:50:00Z',
+            endedAt: '2026-08-28T20:20:00Z',
+            outcome: 'interrupted',
+            reason: 'The player restarted mid-show and the night returned to resting.',
+          },
+          { cycle: 4, startedAt: '2026-08-28T20:30:00Z', endedAt: '2026-08-28T21:00:00Z', outcome: 'unknown', reason: 'The coordinator could not determine how this cycle ended.' },
+          // cycle 5 has no finished-cycle record: it is the session's currently open cycle.
+        ],
+      }),
+    )
+    const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
+    expect(cycleSteps[0]).toMatchObject({ status: 'done', detail: 'Complete' })
+    expect(cycleSteps[1]).toMatchObject({ status: 'stopped', detail: 'Stopped: Operator ended the cycle.' })
+    expect(cycleSteps[2]).toMatchObject({ status: 'error', detail: 'Error: The player restarted mid-show and the night returned to resting.' })
+    expect(cycleSteps[3]).toMatchObject({ status: 'unknown', detail: 'Not confirmed: The coordinator could not determine how this cycle ended.' })
+    expect(cycleSteps[4]).toMatchObject({ status: 'now' })
+  })
+
+  it('reads an earlier cycle absent from finishedCycles as not recorded, never as not wired', () => {
+    const rail = nightRail(session({ cycle: 3, state: 'live', finishedCycles: [] }))
+    const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
+    expect(cycleSteps[0]).toMatchObject({ status: 'unknown', detail: 'Not recorded' })
+    expect(cycleSteps[1]).toMatchObject({ status: 'unknown', detail: 'Not recorded' })
+    expect(rail.some((step) => step.status === 'notWired')).toBe(false)
   })
 
   it('renders the complete timeline without adding a banner that is absent from the approved layout', () => {
-    renderScreen({ nightSession: session({ cycle: 3, state: 'live' }) })
+    renderScreen({
+      nightSession: session({
+        cycle: 3,
+        state: 'live',
+        finishedCycles: [
+          { cycle: 1, startedAt: '2026-08-28T18:00:00Z', endedAt: '2026-08-28T19:00:00Z', outcome: 'completed' },
+        ],
+      }),
+    })
     expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
     expect(screen.getByText('Preshow')).toBeInTheDocument()
     expect(screen.getByText('Cycle 1')).toBeInTheDocument()
-    expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
+    expect(screen.getByText('Complete')).toBeInTheDocument()
   })
 
   const allowedSessionBase = {

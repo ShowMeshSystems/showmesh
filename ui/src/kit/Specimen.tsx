@@ -103,6 +103,13 @@ const ROWS = [
   { node: 'Pump house', signal: 'node.controlplane.state', tone: 'bad' as const, word: 'Offline', fresh: 'Last will received', stale: false, at: '20:41:07' },
 ]
 
+const RAIL_STEP_STATES = [
+  { status: 'done', glyph: '✓ ', label: 'Cycle 1', detail: 'Complete' },
+  { status: 'stopped', glyph: '⚠ ', label: 'Cycle 2', detail: 'Stopped: the operator ended it early' },
+  { status: 'error', glyph: '✕ ', label: 'Cycle 3', detail: 'Error: the player restarted mid-show' },
+  { status: 'unknown', glyph: '? ', label: 'Cycle 4', detail: 'Not confirmed: the coordinator could not determine how this cycle ended' },
+]
+
 const RAIL_STATES = [
   { cls: 'sm-spec-rail__row sm-spec-rail__row--current', name: 'Current', note: 'accent edge + wash + weight' },
   { cls: 'sm-spec-rail__row sm-spec-rail__row--hover', name: 'Hover', note: 'raised + neutral edge' },
@@ -359,6 +366,29 @@ export function Specimen() {
             headline={<>Too many attempts from this network right now. Wait <span className="sm-data">30s</span> and try again.</>}
             explanation="This is a rate limit on the network you are on, not a lockout on your account. Nothing is disabled."
           />
+
+          <div className="sm-strips__title sm-spec-plate-title">
+            <span className="sm-spec-mark">E</span>
+            <span className="sm-subhead">Lifecycle rail step</span>
+            <span className="sm-small sm-muted">Every status a finished cycle can render. A record with no evidence gets the dashed unknown edge, never the not-wired hatch.</span>
+          </div>
+          <div className="sm-rail-strip">
+            <p className="sm-rail-strip__title">Rail</p>
+            {RAIL_STEP_STATES.map((step) => (
+              <div key={step.status} className={`sm-rail-strip__step sm-rail-strip__step--${step.status}`}>
+                <p className="sm-rail-strip__label">
+                  <span aria-hidden="true">{step.glyph}</span>
+                  {step.label}
+                </p>
+                <p className="sm-rail-strip__detail">{step.detail}</p>
+              </div>
+            ))}
+          </div>
+          <Callout>
+            Stopped and error are settled facts, so both keep a solid edge; unknown is reserved for a cycle the
+            coordinator never reported anything about, so it keeps the dashed edge the same as any never-collected
+            evidence.
+          </Callout>
         </SpecSection>
 
         <SpecSection number="07 · Shell chrome" id="specimen-shell" title="Rail owns intent. The top bar owns the installation." detail="Mode, session, connection and principal belong in one persistent context bar, not stacked in a rail footer where nothing reads them.">

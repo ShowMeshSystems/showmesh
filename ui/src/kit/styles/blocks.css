@@ -664,6 +664,32 @@ a.sm-tile:hover {
   color: var(--warn-fg);
 }
 
+.sm-rail-strip__step--unknown {
+  border-left: 1px dashed var(--unk-border);
+}
+
+.sm-rail-strip__step--unknown .sm-rail-strip__label {
+  color: var(--unk-fg);
+}
+
+.sm-rail-strip__step--stopped {
+  border-left: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.sm-rail-strip__step--stopped .sm-rail-strip__label {
+  color: var(--warn-fg);
+}
+
+.sm-rail-strip__step--error {
+  border-left: 1px solid var(--bad-border);
+  background: var(--bad-bg);
+}
+
+.sm-rail-strip__step--error .sm-rail-strip__label {
+  color: var(--bad-fg);
+}
+
 .sm-rails > .sm-section__footnote {
   min-width: 1012px;
   margin: 0;
