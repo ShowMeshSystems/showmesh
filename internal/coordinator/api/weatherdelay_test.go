@@ -25,7 +25,7 @@ func newWeatherDelayTestAPI(t *testing.T) (*API, *store.Store, string, string) {
 	api := New(Dependencies{
 		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-		Identity: svc, Config: st, WeatherDelay: st,
+		Identity: svc, Config: st, WeatherDelay: st, WeatherDelayTrigger: st,
 	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger()})
 	return api, st, mustIssueToken(t, svc, admin.ID), mustIssueToken(t, svc, viewer.ID)
 }

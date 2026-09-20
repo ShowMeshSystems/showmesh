@@ -41,6 +41,79 @@ type WeatherDelayStateResponse struct {
 	PowerGroups     []WeatherDelayPowerGroupStatus `json:"powerGroups"`
 	HeldPlayers     []WeatherDelayHeldPlayer       `json:"heldPlayers"`
 	LastNotifyError string                         `json:"lastNotifyError,omitempty"`
+	// PendingDecision is ADR-053 decision 12's one outstanding automatic
+	// trigger question, nil when none is pending.
+	PendingDecision *WeatherDelayPendingDecision `json:"pendingDecision,omitempty"`
+	// Sources reports every configured trigger source's own health.
+	Sources []WeatherDelaySourceHealth `json:"sources"`
+	// SourcesMessage is set when a warning feed is the only enabled
+	// source: it does not cover ordinary lightning on its own.
+	SourcesMessage string `json:"sourcesMessage,omitempty"`
+}
+
+// WeatherDelayPendingDecision is the wire form of
+// weathertrigger.PendingDecision.
+type WeatherDelayPendingDecision struct {
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	Reason        string `json:"reason"`
+	Question      string `json:"question"`
+	DefaultAction string `json:"defaultAction"`
+	AskedAt       string `json:"askedAt"`
+	Deadline      string `json:"deadline"`
+	// ExpiresAt is the warning's own expiry as its source reported it,
+	// omitted when the source reported none.
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
+// WeatherDelaySourceHealth is one configured trigger source's own health.
+// LastError, LastErrorAt and LastSuccessAt are empty for a source with no
+// health history yet (an inbound source with no poll loop of its own, or
+// the NWS poller before its first poll).
+type WeatherDelaySourceHealth struct {
+	Source        string `json:"source"`
+	Enabled       bool   `json:"enabled"`
+	LastError     string `json:"lastError,omitempty"`
+	LastErrorAt   string `json:"lastErrorAt,omitempty"`
+	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
+}
+
+// WeatherDelayTriggerRequest is the body of POST
+// /weather-delay/triggers/{source}.
+type WeatherDelayTriggerRequest struct {
+	Kind          string   `json:"kind"`
+	EventType     string   `json:"eventType,omitempty"`
+	Severity      string   `json:"severity,omitempty"`
+	ExpiresAt     string   `json:"expiresAt,omitempty"`
+	DistanceKm    *float64 `json:"distanceKm,omitempty"`
+	SuggestCancel bool     `json:"suggestCancel,omitempty"`
+}
+
+// WeatherDelayTriggerResponse is the body of POST
+// /weather-delay/triggers/{source}.
+type WeatherDelayTriggerResponse struct {
+	ServerTime      string                       `json:"serverTime"`
+	Accepted        bool                         `json:"accepted"`
+	Message         string                       `json:"message"`
+	PendingDecision *WeatherDelayPendingDecision `json:"pendingDecision,omitempty"`
+}
+
+// WeatherDelayDecisionRequest is the body of POST /weather-delay/decision.
+type WeatherDelayDecisionRequest struct {
+	ID     string `json:"id"`
+	Answer string `json:"answer"`
+}
+
+// WeatherDelayDecisionResponse is the body of POST /weather-delay/decision.
+// Result is set when answer is "delay" or "cancelNight"; it is nil for
+// "dismiss".
+type WeatherDelayDecisionResponse struct {
+	ServerTime string                    `json:"serverTime"`
+	Answer     string                    `json:"answer"`
+	Result     *WeatherDelayActionResult `json:"result,omitempty"`
+	// Message is set when the answer ran nothing, so the operator is told
+	// why: a question that expired before anyone answered it.
+	Message string `json:"message,omitempty"`
 }
 
 // WeatherDelayHeldPlayer is a player whose gate reads closed while no delay
@@ -174,9 +247,22 @@ type ConfigWeatherDelayPowerGroupPayload struct {
 // ConfigWeatherDelayTriggersPayload is
 // [config.WeatherDelayTriggersPayload]'s wire projection.
 type ConfigWeatherDelayTriggersPayload struct {
-	AnswerWindowSeconds       int `json:"answerWindowSeconds"`
-	CancelAnswerWindowSeconds int `json:"cancelAnswerWindowSeconds"`
-	RestartMinutes            int `json:"restartMinutes"`
+	AnswerWindowSeconds       int                                 `json:"answerWindowSeconds"`
+	CancelAnswerWindowSeconds int                                 `json:"cancelAnswerWindowSeconds"`
+	RestartMinutes            int                                 `json:"restartMinutes"`
+	DismissQuietMinutes       int                                 `json:"dismissQuietMinutes"`
+	NWS                       ConfigWeatherDelayNWSTriggerPayload `json:"nws"`
+}
+
+// ConfigWeatherDelayNWSTriggerPayload is
+// [config.WeatherDelayNWSTriggerPayload]'s wire projection.
+type ConfigWeatherDelayNWSTriggerPayload struct {
+	Enabled     bool     `json:"enabled"`
+	Latitude    float64  `json:"latitude"`
+	Longitude   float64  `json:"longitude"`
+	Contact     string   `json:"contact"`
+	PollSeconds int      `json:"pollSeconds"`
+	EventTypes  []string `json:"eventTypes"`
 }
 
 // ConfigWeatherDelayNotifyPayload is [config.WeatherDelayNotifyPayload]'s

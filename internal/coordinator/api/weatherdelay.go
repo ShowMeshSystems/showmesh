@@ -18,6 +18,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/weathertrigger"
 	"github.com/showmeshsystems/showmesh/pkg/command"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -103,6 +104,7 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		ServerTime: formatTime(now), Active: rec.Active, Revision: rec.Revision,
 		Assets: []v1.WeatherDelayNodeAssets{}, PowerGroups: []v1.WeatherDelayPowerGroupStatus{},
 		LastNotifyError: h.deps.WeatherDelayGateCache.notifyError(),
+		Sources:         []v1.WeatherDelaySourceHealth{},
 	}
 	resp.HeldPlayers = h.weatherDelayHeldPlayers(ctx, now, rec.Active)
 	if rec.Active {
@@ -111,6 +113,7 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 		resp.StartedBy = rec.StartedBy
 		resp.StartedByName = rec.StartedByName
 	}
+	resp.PendingDecision = h.weatherDelayPendingDecisionView(ctx)
 
 	payload, _, _, _, err := resolveWeatherDelayConfig(ctx, h.deps.Config)
 	if err != nil {
@@ -118,8 +121,51 @@ func (h *handlers) handleGetWeatherDelayState(w http.ResponseWriter, r *http.Req
 	} else {
 		resp.Assets = h.weatherDelayAssetReadiness(ctx, payload)
 		resp.PowerGroups = h.weatherDelayPowerGroupStatuses(ctx, now, payload)
+		resp.Sources, resp.SourcesMessage = h.weatherDelaySourcesView(payload)
 	}
 	jsonWrite(w, resp)
+}
+
+// weatherDelayPendingDecisionView reports the pending decision, nil when
+// none is pending.
+func (h *handlers) weatherDelayPendingDecisionView(ctx context.Context) *v1.WeatherDelayPendingDecision {
+	pending, ok, err := h.deps.WeatherDelayTrigger.GetPendingWeatherDelayDecision(ctx)
+	if err != nil {
+		h.logWarn("weather delay: failed to read the pending decision", "error", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	wire := mapWeatherDelayPendingDecision(pending)
+	return &wire
+}
+
+// weatherDelaySourcesMessage is ADR-053 decision 12's own warning: an
+// official warning feed does not cover ordinary lightning. Reported only
+// when the built-in NWS poller is the only configured trigger source: an
+// inbound source is never declared in configuration, so it cannot be
+// counted here, and this build has no other declared source to weigh
+// against it.
+const weatherDelaySourcesMessage = "Weather warnings do not cover ordinary lightning. Add a lightning source or watch the sky yourself."
+
+// weatherDelaySourcesView reports the NWS poller's own health, the only
+// trigger source show.weatherdelay declares.
+func (h *handlers) weatherDelaySourcesView(payload config.WeatherDelayPayload) ([]v1.WeatherDelaySourceHealth, string) {
+	if !payload.Triggers.NWS.Enabled {
+		return []v1.WeatherDelaySourceHealth{}, ""
+	}
+	source := v1.WeatherDelaySourceHealth{Source: weathertrigger.NWSSource, Enabled: true}
+	if health, ok := h.deps.WeatherDelayNWS.Health(); ok {
+		source.LastError = health.LastError
+		if !health.LastErrorAt.IsZero() {
+			source.LastErrorAt = formatTime(health.LastErrorAt)
+		}
+		if !health.LastSuccessAt.IsZero() {
+			source.LastSuccessAt = formatTime(health.LastSuccessAt)
+		}
+	}
+	return []v1.WeatherDelaySourceHealth{source}, weatherDelaySourcesMessage
 }
 
 // weatherDelayHeldPlayers lists the players whose last fresh gate reading
@@ -292,6 +338,18 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	}
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
+
+	result := h.weatherDelayRunStartOrChange(ctx, now, desiredKind, auditAction, idempotencyKey, ac, clientAddr, afterDispatch)
+	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: result})
+}
+
+// weatherDelayRunStartOrChange is [handlers.weatherDelayStartOrChange]'s
+// body, with no http.ResponseWriter or *http.Request of its own, so
+// POST /weather-delay/decision and a trigger's default action can run
+// exactly the same start/cancel-night path (ADR-053 decision 12's "delay
+// and cancelNight run exactly the existing start and cancel-night paths")
+// under a synthetic authContext instead of a request's own.
+func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Time, desiredKind, auditAction, idempotencyKey string, ac authContext, clientAddr string, afterDispatch func(rec store.WeatherDelayStateRecord, planNodeIDs []string)) v1.WeatherDelayActionResult {
 	issuerID := ac.result.Principal.ID
 	if issuerID == "" {
 		issuerID = "unknown"
@@ -389,7 +447,7 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	}()
 	go func() {
 		defer wg.Done()
-		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", rec.Kind, idempotencyKey, planNodeIDs, ac, clientAddr, true)
+		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.start", rec.Kind, idempotencyKey, plan, planNodeIDs, ac, clientAddr, true)
 	}()
 	// The gate close runs beside the node dispatch; the alert never waits on it.
 	go func() {
@@ -439,11 +497,10 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	}
 	h.notifyStreamHub()
 
-	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: result})
-
 	if afterDispatch != nil {
 		afterDispatch(rec, planNodeIDs)
 	}
+	return result
 }
 
 // handleWeatherDelayResume always takes full effect, even when the stored
@@ -462,6 +519,10 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	}
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
+
+	// A resume answers an outstanding trigger question too: nothing starts
+	// from it afterwards.
+	h.weatherDelayDismissPendingDecisionOnResume(ctx, now, ac, clientAddr)
 
 	current, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 	if err != nil {
@@ -505,7 +566,7 @@ func (h *handlers) handleWeatherDelayResume(w http.ResponseWriter, r *http.Reque
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, nodeIDs, ac, clientAddr, false)
+		nodeOutcomes = h.weatherDelayDispatchToNodes(ctx, now, "weatherdelay.resume", "", idempotencyKey, mqttproto.WeatherDelayPlan{}, nodeIDs, ac, clientAddr, false)
 	}()
 	go func() {
 		defer wg.Done()
@@ -747,7 +808,7 @@ func (h *handlers) weatherDelaySilenceNonPlanNodes(ctx context.Context, now time
 // and, for start only, per ADR-053 decision 9, the direct signed HTTP
 // path in parallel with it, never as a fallback. A node reached by either
 // path counts as reached.
-func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Time, action, kind, idempotencyKey string, nodeIDs []string, ac authContext, clientAddr string, allowHTTP bool) []v1.WeatherDelayTargetOutcome {
+func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Time, action, kind, idempotencyKey string, plan mqttproto.WeatherDelayPlan, nodeIDs []string, ac authContext, clientAddr string, allowHTTP bool) []v1.WeatherDelayTargetOutcome {
 	if len(nodeIDs) == 0 {
 		return []v1.WeatherDelayTargetOutcome{}
 	}
@@ -757,7 +818,7 @@ func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Tim
 		wg.Add(1)
 		go func(i int, nodeID string) {
 			defer wg.Done()
-			out[i] = h.dispatchWeatherDelayNodeCommand(ctx, now, action, kind, idempotencyKey, nodeID, ac, clientAddr, allowHTTP)
+			out[i] = h.dispatchWeatherDelayNodeCommand(ctx, now, action, kind, idempotencyKey, plan, nodeID, ac, clientAddr, allowHTTP)
 		}(i, nodeID)
 	}
 	wg.Wait()
@@ -767,7 +828,7 @@ func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Tim
 // dispatchWeatherDelayNodeCommand runs one node's own MQTT command and
 // (when allowHTTP) direct signed HTTP request CONCURRENTLY with each
 // other, so neither ever waits on the other's confirmation or timeout.
-func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey, nodeID string, ac authContext, clientAddr string, allowHTTP bool) v1.WeatherDelayTargetOutcome {
+func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey string, plan mqttproto.WeatherDelayPlan, nodeID string, ac authContext, clientAddr string, allowHTTP bool) v1.WeatherDelayTargetOutcome {
 	var (
 		mqttOK, httpOK   bool
 		mqttReason       string
@@ -779,7 +840,7 @@ func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mqttOK, mqttReason, mqttDispatchedAt = h.weatherDelayMQTTNodeCommand(ctx, now, action, kind, idempotencyKey, nodeID, ac, clientAddr)
+		mqttOK, mqttReason, mqttDispatchedAt = h.weatherDelayMQTTNodeCommand(ctx, now, action, kind, idempotencyKey, plan, nodeID, ac, clientAddr)
 	}()
 
 	if allowHTTP {
@@ -820,11 +881,17 @@ func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time
 	}
 }
 
-func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey, nodeID string, ac authContext, clientAddr string) (ok bool, reason string, dispatchedAt *string) {
+func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey string, plan mqttproto.WeatherDelayPlan, nodeID string, ac authContext, clientAddr string) (ok bool, reason string, dispatchedAt *string) {
 	commandID := uuid.NewString()
 	params := map[string]any{}
 	if kind != "" {
 		params["kind"] = kind
+	}
+	// The plan travels in the command's own params too, not only on the
+	// retained state topic, so a node that never received that retained
+	// message still learns what to play.
+	if action == "weatherdelay.start" {
+		params["plan"] = plan
 	}
 
 	cmdTopic, err := mqttproto.CmdTopic(nodeID)

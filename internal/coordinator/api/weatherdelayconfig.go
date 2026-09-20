@@ -200,7 +200,11 @@ func mapWeatherDelayPayload(p config.WeatherDelayPayload) v1.ConfigWeatherDelayP
 		PowerGroups: groups,
 		Triggers: v1.ConfigWeatherDelayTriggersPayload{
 			AnswerWindowSeconds: p.Triggers.AnswerWindowSeconds, CancelAnswerWindowSeconds: p.Triggers.CancelAnswerWindowSeconds,
-			RestartMinutes: p.Triggers.RestartMinutes,
+			RestartMinutes: p.Triggers.RestartMinutes, DismissQuietMinutes: p.Triggers.DismissQuietMinutes,
+			NWS: v1.ConfigWeatherDelayNWSTriggerPayload{
+				Enabled: p.Triggers.NWS.Enabled, Latitude: p.Triggers.NWS.Latitude, Longitude: p.Triggers.NWS.Longitude,
+				Contact: p.Triggers.NWS.Contact, PollSeconds: p.Triggers.NWS.PollSeconds, EventTypes: nonNilStrings(p.Triggers.NWS.EventTypes),
+			},
 		},
 		Notify: v1.ConfigWeatherDelayNotifyPayload{WebhookURL: p.Notify.WebhookURL},
 	}

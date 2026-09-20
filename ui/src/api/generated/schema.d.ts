@@ -2155,9 +2155,49 @@ export interface paths {
         put?: never;
         /**
          * Resume from a weather delay (ADR-053)
-         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Persists not active, publishes retained, and sends weatherdelay.resume to the nodes over MQTT only, never HTTP.
+         * @description Behind `show:weatherdelay:resume`, its OWN scope, separate from `show:weatherdelay:invoke` (ADR-053 decision 8: "Resume is accepted only by the authenticated coordinator API"). Persists not active, publishes retained, and sends weatherdelay.resume to the nodes over MQTT only, never HTTP. It also clears any pending automatic-trigger decision as a dismiss: nothing starts from it afterwards, and the same source and warning stay quiet for the dismiss quiet period.
          */
         post: operations["resumeFromWeatherDelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/weather-delay/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer a pending automatic-trigger decision (ADR-053 decision 12)
+         * @description Behind `show:weatherdelay:invoke`. Answers the one pending decision an automatic trigger raised. `answer: "delay"` or `"cancelNight"` clears the pending decision and runs exactly `/weather-delay/start` or `/weather-delay/cancel-night`'s own path, `startedBy` the answering operator. `answer: "dismiss"` clears it and suppresses a new question from the same source about the same warning for a configurable quiet period. `id` must match the currently pending decision's own id; a stale or unknown id is refused with 409. A question whose warning has expired, or whose deadline passed more than ten minutes ago, runs nothing: it is cleared and answered with `message` instead of `result`.
+         */
+        post: operations["answerWeatherDelayDecision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/weather-delay/triggers/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report an automatic weather-delay trigger (ADR-053 decision 12)
+         * @description Behind `show:weatherdelay:invoke`. This is how an outside system (a lightning detector, a home-automation rule, or any other integration) reports a trigger; the built-in National Weather Service poller calls the same intake internally. ShowMesh reads only `kind`, `eventType`, `severity`, `expiresAt` and `distanceKm`; it never stores or relays a warning's own text. Never starts, ends, or changes a delay itself: it raises a pending decision (or leaves the existing one alone, or is suppressed, or is silently ignored while one is already pending or already active with nothing to suggest a cancel).
+         */
+        post: operations["postWeatherDelayTrigger"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5116,6 +5156,82 @@ export interface components {
             powerGroups?: components["schemas"]["WeatherDelayPowerGroupStatus"][];
             /** @description Players whose gate reads closed while no delay is active. The coordinator never opens a gate on its own; only POST /weather-delay/resume does. Empty while a delay is active. */
             heldPlayers?: components["schemas"]["WeatherDelayHeldPlayer"][];
+            pendingDecision?: components["schemas"]["WeatherDelayPendingDecision"];
+            /** @description Every configured automatic trigger source's own health (ADR-053 decision 12). Only the built-in NWS poller is ever configured here; an inbound POST /weather-delay/triggers/{source} source is accepted ad hoc and reports no health of its own. Empty when NWS is disabled, the default. */
+            sources?: components["schemas"]["WeatherDelaySourceHealth"][];
+            /** @description Set only when NWS is the only configured trigger source: an official warning feed does not cover ordinary lightning on its own. */
+            sourcesMessage?: string;
+        };
+        /** @description ADR-053 decision 12's one outstanding automatic-trigger question. No clock time appears in reason: every time travels as its own RFC 3339 field. */
+        WeatherDelayPendingDecision: {
+            id: string;
+            source: string;
+            /** @description An operator sentence built by ShowMesh, e.g. "A severe thunderstorm warning is in effect." or "Lightning was reported 6 miles away." Never the trigger source's own warning text. */
+            reason: string;
+            /** @enum {string} */
+            question: "delay" | "delayOrCancel";
+            /** @enum {string} */
+            defaultAction: "delay" | "cancelNight";
+            /** Format: date-time */
+            askedAt: string;
+            /** Format: date-time */
+            deadline: string;
+            /**
+             * Format: date-time
+             * @description The warning's own expiry as its source reported it, absent when the source reported none. Nothing acts on it yet; the deadline runs its default action whether or not the warning has expired.
+             */
+            expiresAt?: string;
+        };
+        WeatherDelaySourceHealth: {
+            source: string;
+            enabled: boolean;
+            /** @description The source's own most recent failure, if any. */
+            lastError?: string;
+            /** Format: date-time */
+            lastErrorAt?: string;
+            /** Format: date-time */
+            lastSuccessAt?: string;
+        };
+        /** @description The body of POST /weather-delay/triggers/{source}. */
+        WeatherDelayTriggerRequest: {
+            /** @enum {string} */
+            kind: "warning" | "lightning";
+            /** @description The warning's own type (e.g. "Severe Thunderstorm Warning"). Read, never relayed as free text beyond naming it. */
+            eventType?: string;
+            severity?: string;
+            /** Format: date-time */
+            expiresAt?: string;
+            /** @description A lightning report's own distance, kilometers. */
+            distanceKm?: number;
+            /** @description Set only by a source that itself knows tonight's schedule and judges too little of it would remain: the only way a trigger reaches the delayOrCancel question, since the coordinator has no calendar or time zone of its own (ADR-038 decision 1). */
+            suggestCancel?: boolean;
+        };
+        /** @description The body of POST /weather-delay/triggers/{source}. */
+        WeatherDelayTriggerResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @description False only for an invalid request or a suppressed warning. True for a trigger that raised, or left alone, a pending decision, and for one ignored because a delay is already active with nothing to suggest a cancel. */
+            accepted: boolean;
+            /** @description Empty when a decision was freshly raised. */
+            message: string;
+            pendingDecision?: components["schemas"]["WeatherDelayPendingDecision"];
+        };
+        /** @description The body of POST /weather-delay/decision. */
+        WeatherDelayDecisionRequest: {
+            /** @description Must match the currently pending decision's own id. */
+            id: string;
+            /** @enum {string} */
+            answer: "delay" | "cancelNight" | "dismiss";
+        };
+        /** @description The body of POST /weather-delay/decision. result is present only for answer delay or cancelNight, and is absent with message set when the question had already expired. */
+        WeatherDelayDecisionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            answer: "delay" | "cancelNight" | "dismiss";
+            result?: components["schemas"]["WeatherDelayActionResult"];
+            /** @description Set when the answer ran nothing, so the operator is told why: a question that expired before anyone answered it. */
+            message?: string;
         };
         WeatherDelayHeldPlayer: {
             instanceId: string;
@@ -5246,13 +5362,28 @@ export interface components {
             renderNodeIds?: string[];
             heartbeat?: components["schemas"]["ConfigWeatherDelayHeartbeatPayload"];
         };
-        /** @description ADR-053 decision 12's automatic-trigger timing. Every field is optional with a working default: answerWindowSeconds 30, cancelAnswerWindowSeconds 180, restartMinutes 15. */
+        /** @description ADR-053 decision 12's automatic-trigger timing. Every field is optional with a working default: answerWindowSeconds 30, cancelAnswerWindowSeconds 180, restartMinutes 15, dismissQuietMinutes 30. */
         ConfigWeatherDelayTriggersPayload: {
             answerWindowSeconds?: number;
             cancelAnswerWindowSeconds?: number;
             restartMinutes?: number;
+            /** @description How long a dismiss answer suppresses a new question about the same source and same warning. */
+            dismissQuietMinutes?: number;
+            nws?: components["schemas"]["ConfigWeatherDelayNWSTriggerPayload"];
         };
-        /** @description The optional webhook (ADR-053 decision 13). Empty webhookUrl means none is configured. When set, the coordinator POSTs a small JSON document on delay started, changed to cancel night, cancel night started, resumed, or cleared: best effort, a 3 second timeout, no redirects, and it never blocks or fails the operator's own request. A failure only shows up as GET /weather-delay's own lastNotifyError. */
+        /** @description The optional built-in poller of the United States National Weather Service alerts API. Disabled by default; enabling it without contact is refused. ShowMesh reads only event, severity, expires and the alert's own id from each feature - never headline, description or instruction text. */
+        ConfigWeatherDelayNWSTriggerPayload: {
+            enabled?: boolean;
+            latitude?: number;
+            longitude?: number;
+            /** @description Required when enabled: that API's own User-Agent policy requires a contact. */
+            contact?: string;
+            /** @description Default 60. */
+            pollSeconds?: number;
+            /** @description Default ["Tornado Warning", "Severe Thunderstorm Warning"]. */
+            eventTypes?: string[];
+        };
+        /** @description The optional webhook (ADR-053 decision 13). Empty webhookUrl means none is configured. When set, the coordinator POSTs a small JSON document on delay started, changed to cancel night, cancel night started, resumed, cleared, decisionNeeded (an automatic trigger raised a pending decision: id, source, reason, question, defaultAction, deadline), or decisionResolved (that decision was answered or defaulted): best effort, a 3 second timeout, no redirects, and it never blocks or fails the operator's own request. A failure only shows up as GET /weather-delay's own lastNotifyError. */
         ConfigWeatherDelayNotifyPayload: {
             /** @description An absolute http or https URL with no embedded username or password, at most 2048 characters. */
             webhookUrl?: string;
@@ -11818,6 +11949,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WeatherDelayActionResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    answerWeatherDelayDecision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeatherDelayDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeatherDelayDecisionResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    postWeatherDelayTrigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A short id for this trigger source, same syntax as an MQTT node ID. */
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeatherDelayTriggerRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeatherDelayTriggerResponse"];
                 };
             };
             400: components["responses"]["InvalidParameter"];

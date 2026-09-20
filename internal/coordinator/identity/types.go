@@ -550,4 +550,10 @@ const (
 	AuditActionShowWeatherDelayResume      = "show.weatherdelay.resume"
 	AuditActionShowWeatherDelayEnforce     = "show.weatherdelay.enforce"
 	AuditActionShowWeatherDelayPresign     = "show.weatherdelay.presign"
+	// AuditActionShowWeatherDelayTrigger records an automatic trigger
+	// received from a source (ADR-053 decision 12).
+	AuditActionShowWeatherDelayTrigger = "show.weatherdelay.trigger"
+	// AuditActionShowWeatherDelayDecision records a trigger's question
+	// answered by an operator, or defaulted at its deadline.
+	AuditActionShowWeatherDelayDecision = "show.weatherdelay.decision"
 )
