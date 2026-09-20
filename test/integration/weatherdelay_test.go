@@ -738,7 +738,7 @@ func waitForNodeAlertSession(t *testing.T, sub *audioReportSubscriber, wantState
 func waitForNodeAlertSessionID(t *testing.T, sub *audioReportSubscriber, sessionID, wantState string) {
 	t.Helper()
 	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
-		p, ok := sub.latestFor(sessionID)
+		p, ok := sub.currentFor(sessionID)
 		return ok && p.State == wantState && p.HasSourceRole && p.SourceRole == "announcement"
 	}, fmt.Sprintf("the weather delay alert session (%s) to report state %q with the announcement role", sessionID, wantState))
 }
@@ -1046,9 +1046,11 @@ func TestWeatherDelayRepeatAndResume(t *testing.T) {
 	}
 	weatherDelayResumeAction(t, f.coord, f.token)
 
+	// Resume clears the alert session, so it leaves the node's report
+	// entirely rather than reporting itself stopped. Absent is stopped.
 	waitFor(t, 10*time.Second, 200*time.Millisecond, func() bool {
-		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
-		return ok && p.State != "playing"
+		p, ok := audioSub.currentFor(weatherDelayAlertSessionIDForTest)
+		return !ok || p.State != "playing"
 	}, "the alert to stop promptly on resume rather than finishing its own repeat count")
 
 	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {

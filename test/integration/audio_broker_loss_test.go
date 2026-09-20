@@ -129,6 +129,7 @@ func startSessionCmd(nodeID, commandID, sessionID string) mqttproto.CmdPayload {
 type audioReportSubscriber struct {
 	mu      sync.Mutex
 	latest  map[string]mqttproto.AudioSessionReport
+	current map[string]mqttproto.AudioSessionReport
 	history map[string][]audioReportObservation
 }
 
@@ -146,6 +147,7 @@ type audioReportObservation struct {
 func newAudioReportSubscriber() *audioReportSubscriber {
 	return &audioReportSubscriber{
 		latest:  make(map[string]mqttproto.AudioSessionReport),
+		current: make(map[string]mqttproto.AudioSessionReport),
 		history: make(map[string][]audioReportObservation),
 	}
 }
@@ -165,8 +167,10 @@ func (w *audioReportSubscriber) onPublish(pr paho.PublishReceived) (bool, error)
 	now := time.Now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.current = make(map[string]mqttproto.AudioSessionReport, len(p.Sessions))
 	for _, s := range p.Sessions {
 		w.latest[s.SessionID] = s
+		w.current[s.SessionID] = s
 		w.history[s.SessionID] = append(w.history[s.SessionID], audioReportObservation{at: now, report: s})
 	}
 	return true, nil
@@ -176,6 +180,17 @@ func (w *audioReportSubscriber) latestFor(sessionID string) (mqttproto.AudioSess
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	s, ok := w.latest[sessionID]
+	return s, ok
+}
+
+// currentFor returns sessionID's report from the node's MOST RECENT audio
+// payload, and false when that payload does not list it. Unlike latestFor
+// it never answers from a session the node has since cleared, which leaves
+// the payload entirely rather than reporting itself stopped.
+func (w *audioReportSubscriber) currentFor(sessionID string) (mqttproto.AudioSessionReport, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, ok := w.current[sessionID]
 	return s, ok
 }
 
