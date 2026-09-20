@@ -111,6 +111,74 @@ export function WeatherDelayBanner({
 }
 
 /**
+ * The shell-level banner shown on every screen while an automatic trigger's
+ * question is pending (ADR-053 decision 12): the reason sentence, a
+ * countdown to the deadline, and one-press buttons with no confirmation
+ * step. Visually distinct from the active-delay and held-dark banners
+ * (`sm-wdbanner--question`, an accent tone rather than bad or warn) so it
+ * reads as "answer this" rather than "something is already wrong".
+ */
+export function WeatherDelayQuestionBanner({
+  reason,
+  countdownLabel,
+  consequenceLabel,
+  askedLabel,
+  expiresLabel,
+  start,
+  cancelNight,
+  dismiss,
+  error,
+}: {
+  reason: string
+  countdownLabel: string
+  consequenceLabel: string
+  askedLabel?: string
+  expiresLabel?: string
+  start: WeatherDelayBannerAction
+  cancelNight?: WeatherDelayBannerAction
+  dismiss: WeatherDelayBannerAction
+  error?: ReactNode
+}) {
+  return (
+    <div className="sm-wdbanner sm-wdbanner--question" role="region" aria-label="Weather trigger question">
+      <div className="sm-wdbanner__fact">
+        <span className="sm-wdbanner__kind" role="alert">
+          {reason}
+        </span>
+        <span>{consequenceLabel}</span>
+        <span>{countdownLabel}</span>
+        {askedLabel !== undefined && <span>{askedLabel}</span>}
+        {expiresLabel !== undefined && <span>{expiresLabel}</span>}
+      </div>
+      <div className="sm-wdbanner__actions">
+        <Button variant="primary" size="gloved" onClick={start.onClick} disabled={start.disabled} title={start.title}>
+          {start.busy ? 'Starting…' : start.label}
+        </Button>
+        {cancelNight !== undefined && (
+          <Button
+            variant="danger"
+            size="gloved"
+            onClick={cancelNight.onClick}
+            disabled={cancelNight.disabled}
+            title={cancelNight.title}
+          >
+            {cancelNight.busy ? 'Cancelling night…' : cancelNight.label}
+          </Button>
+        )}
+        <Button variant="quiet" size="gloved" onClick={dismiss.onClick} disabled={dismiss.disabled} title={dismiss.title}>
+          {dismiss.busy ? 'Dismissing…' : dismiss.label}
+        </Button>
+      </div>
+      {error !== undefined && (
+        <p className="sm-wdbanner__error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
  * The shell-level banner shown on every screen while players are held dark with
  * no delay active. It never claims a delay is active; Resume opens the gates.
  */

@@ -78,6 +78,8 @@ import type {
   ServiceDescriptor,
   WeatherDelayActionResult,
   WeatherDelayStateResponse,
+  WeatherDelayDecisionRequest,
+  WeatherDelayDecisionResponse,
   WeatherDelayConfigResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
@@ -513,6 +515,10 @@ export function cancelNightForWeather(): Promise<WeatherDelayActionResult> {
 
 export function resumeFromWeatherDelay(): Promise<WeatherDelayActionResult> {
   return store.resumeFromWeatherDelay()
+}
+
+export function answerWeatherDelayDecision(id: string, answer: WeatherDelayDecisionRequest['answer']): Promise<WeatherDelayDecisionResponse> {
+  return store.answerWeatherDelayDecision(id, answer)
 }
 
 export function getWeatherDelayConfig(): Promise<WeatherDelayConfigResponse> {

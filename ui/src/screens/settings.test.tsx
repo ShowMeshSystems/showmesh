@@ -5,6 +5,7 @@ import { ApiError, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { makeNode } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
+import { WeatherDelayProvider } from '../app/WeatherDelayContext'
 
 const stubs = vi.hoisted(() => ({
   getFPPEndpointsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -26,6 +27,7 @@ const stubs = vi.hoisted(() => ({
   getWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getWeatherDelayConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getWeatherDelayState: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -66,6 +68,7 @@ vi.mock('../api', async () => {
     getWeatherDelayConfig: (...args: never[]) => stubs.getWeatherDelayConfig(...args),
     putWeatherDelayConfig: (...args: never[]) => stubs.putWeatherDelayConfig(...args),
     getWeatherDelayConfigRevisions: (...args: never[]) => stubs.getWeatherDelayConfigRevisions(...args),
+    getWeatherDelayState: (...args: never[]) => stubs.getWeatherDelayState(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
     putAudioSettingsConfig: (...args: never[]) => stubs.putAudioSettingsConfig(...args),
     getAudioSettingsConfigRevisions: (...args: never[]) => stubs.getAudioSettingsConfigRevisions(...args),
@@ -109,20 +112,22 @@ function signedIn(scopes: string[]): SessionResponse {
 function renderAt(path: string, model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), session: signedIn(['config:write']), ...model }}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/settings" element={<Settings />}>
-            <Route path="connections" element={<SettingsConnections />} />
-            <Route path="delivery" element={<SettingsDelivery />} />
-            <Route path="recovery" element={<SettingsRecovery />} />
-            <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
-            <Route path="node-routing" element={<SettingsNodeRouting />} />
-            <Route path="mode" element={<SettingsMode />} />
-            <Route path="appearance" element={<SettingsAppearance />} />
-          </Route>
-          <Route path="/access" element={<div>access page</div>} />
-        </Routes>
-      </MemoryRouter>
+      <WeatherDelayProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/settings" element={<Settings />}>
+              <Route path="connections" element={<SettingsConnections />} />
+              <Route path="delivery" element={<SettingsDelivery />} />
+              <Route path="recovery" element={<SettingsRecovery />} />
+              <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
+              <Route path="node-routing" element={<SettingsNodeRouting />} />
+              <Route path="mode" element={<SettingsMode />} />
+              <Route path="appearance" element={<SettingsAppearance />} />
+            </Route>
+            <Route path="/access" element={<div>access page</div>} />
+          </Routes>
+        </MemoryRouter>
+      </WeatherDelayProvider>
     </ModelContext.Provider>,
   )
 }

@@ -1,11 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ApiError,
+  answerWeatherDelayDecision,
   cancelNightForWeather,
   getWeatherDelayState,
   resumeFromWeatherDelay,
   startWeatherDelay,
   type WeatherDelayActionResult,
+  type WeatherDelayDecisionRequest,
+  type WeatherDelayDecisionResponse,
   type WeatherDelayStateResponse,
 } from '../api'
 import { describeApiError } from '../domain/session'
@@ -23,6 +26,13 @@ type ActionOutcome =
   | { kind: 'result'; action: WeatherDelayActionName; result: WeatherDelayActionResult }
   | { kind: 'error'; action: WeatherDelayActionName; message: string; status: number | undefined }
 
+type DecisionAnswer = WeatherDelayDecisionRequest['answer']
+
+type DecisionOutcome =
+  | { kind: 'idle' }
+  | { kind: 'result'; response: WeatherDelayDecisionResponse }
+  | { kind: 'error'; message: string; status: number | undefined }
+
 interface WeatherDelayContextValue {
   state: LoadState
   busy: WeatherDelayActionName | false
@@ -31,6 +41,10 @@ interface WeatherDelayContextValue {
   cancelNight: () => void
   resume: () => void
   dismissOutcome: () => void
+  decisionBusy: DecisionAnswer | false
+  decisionOutcome: DecisionOutcome
+  answerDecision: (id: string, answer: DecisionAnswer) => void
+  dismissDecisionOutcome: () => void
 }
 
 const WeatherDelayContext = createContext<WeatherDelayContextValue | null>(null)
@@ -60,6 +74,8 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [busy, setBusy] = useState<WeatherDelayActionName | false>(false)
   const [outcome, setOutcome] = useState<ActionOutcome>({ kind: 'idle' })
+  const [decisionBusy, setDecisionBusy] = useState<DecisionAnswer | false>(false)
+  const [decisionOutcome, setDecisionOutcome] = useState<DecisionOutcome>({ kind: 'idle' })
 
   // Only the newest request may set state, so a slow poll cannot overwrite a newer resume.
   const requestSeq = useRef(0)
@@ -151,6 +167,27 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
     [refresh],
   )
 
+  const answerDecision = useCallback(
+    (id: string, answer: DecisionAnswer) => {
+      setDecisionBusy(answer)
+      setDecisionOutcome({ kind: 'idle' })
+      answerWeatherDelayDecision(id, answer)
+        .then((response) => {
+          setDecisionOutcome({ kind: 'result', response })
+          refresh()
+        })
+        .catch((err: unknown) => {
+          setDecisionOutcome({
+            kind: 'error',
+            message: describeApiError(err),
+            status: err instanceof ApiError ? err.status : undefined,
+          })
+        })
+        .finally(() => setDecisionBusy(false))
+    },
+    [refresh],
+  )
+
   const value: WeatherDelayContextValue = {
     state,
     busy,
@@ -159,6 +196,10 @@ export function WeatherDelayProvider({ children }: { children: ReactNode }) {
     cancelNight: () => run('cancelNight', cancelNightForWeather),
     resume: () => run('resume', resumeFromWeatherDelay),
     dismissOutcome: () => setOutcome({ kind: 'idle' }),
+    decisionBusy,
+    decisionOutcome,
+    answerDecision,
+    dismissDecisionOutcome: () => setDecisionOutcome({ kind: 'idle' }),
   }
 
   return <WeatherDelayContext.Provider value={value}>{children}</WeatherDelayContext.Provider>
