@@ -5,6 +5,7 @@ import { ApiError, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { makeNode } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
+import { WeatherDelayProvider } from '../app/WeatherDelayContext'
 
 const stubs = vi.hoisted(() => ({
   getFPPEndpointsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -26,6 +27,7 @@ const stubs = vi.hoisted(() => ({
   getWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putWeatherDelayConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getWeatherDelayConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getWeatherDelayState: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -66,6 +68,7 @@ vi.mock('../api', async () => {
     getWeatherDelayConfig: (...args: never[]) => stubs.getWeatherDelayConfig(...args),
     putWeatherDelayConfig: (...args: never[]) => stubs.putWeatherDelayConfig(...args),
     getWeatherDelayConfigRevisions: (...args: never[]) => stubs.getWeatherDelayConfigRevisions(...args),
+    getWeatherDelayState: (...args: never[]) => stubs.getWeatherDelayState(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
     putAudioSettingsConfig: (...args: never[]) => stubs.putAudioSettingsConfig(...args),
     getAudioSettingsConfigRevisions: (...args: never[]) => stubs.getAudioSettingsConfigRevisions(...args),
@@ -109,20 +112,22 @@ function signedIn(scopes: string[]): SessionResponse {
 function renderAt(path: string, model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), session: signedIn(['config:write']), ...model }}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/settings" element={<Settings />}>
-            <Route path="connections" element={<SettingsConnections />} />
-            <Route path="delivery" element={<SettingsDelivery />} />
-            <Route path="recovery" element={<SettingsRecovery />} />
-            <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
-            <Route path="node-routing" element={<SettingsNodeRouting />} />
-            <Route path="mode" element={<SettingsMode />} />
-            <Route path="appearance" element={<SettingsAppearance />} />
-          </Route>
-          <Route path="/access" element={<div>access page</div>} />
-        </Routes>
-      </MemoryRouter>
+      <WeatherDelayProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/settings" element={<Settings />}>
+              <Route path="connections" element={<SettingsConnections />} />
+              <Route path="delivery" element={<SettingsDelivery />} />
+              <Route path="recovery" element={<SettingsRecovery />} />
+              <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
+              <Route path="node-routing" element={<SettingsNodeRouting />} />
+              <Route path="mode" element={<SettingsMode />} />
+              <Route path="appearance" element={<SettingsAppearance />} />
+            </Route>
+            <Route path="/access" element={<div>access page</div>} />
+          </Routes>
+        </MemoryRouter>
+      </WeatherDelayProvider>
     </ModelContext.Provider>,
   )
 }
@@ -485,6 +490,78 @@ describe('Settings › Weather delay', () => {
     await screen.findByText('Weather delay')
     expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
     expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
+  })
+
+  it('saves the weather service poller fields, keeping a negative coordinate and treating empty as unset', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.putWeatherDelayConfig = vi.fn((payload: unknown) =>
+      Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
+    )
+
+    renderAt('/settings/recovery')
+    await screen.findByText('Weather delay')
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
+    fireEvent.change(screen.getByLabelText('Latitude'), { target: { value: '43.07' } })
+    fireEvent.change(screen.getByLabelText('Longitude'), { target: { value: '-89.4' } })
+    fireEvent.change(screen.getByLabelText('Contact'), { target: { value: 'ops@example.test' } })
+    fireEvent.change(screen.getByLabelText('Event types'), { target: { value: 'Tornado Warning, ,Severe Thunderstorm Warning' } })
+    fireEvent.change(screen.getByLabelText('Dismiss quiet minutes'), { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
+
+    await waitFor(() => expect(stubs.putWeatherDelayConfig).toHaveBeenCalledTimes(1))
+    expect(stubs.putWeatherDelayConfig).toHaveBeenCalledWith({
+      alert: {},
+      powerGroups: [],
+      triggers: {
+        dismissQuietMinutes: 0,
+        nws: {
+          enabled: true,
+          latitude: 43.07,
+          longitude: -89.4,
+          contact: 'ops@example.test',
+          eventTypes: ['Tornado Warning', 'Severe Thunderstorm Warning'],
+        },
+      },
+    })
+  })
+
+  it('says a contact is needed before enabling the poller, and sends nothing', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.putWeatherDelayConfig = vi.fn(() => Promise.resolve(weatherDelayConfig({}, 2)))
+
+    renderAt('/settings/recovery')
+    await screen.findByText('Weather delay')
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
+
+    expect(await screen.findByText('A contact is required to enable the weather service poller.')).toBeInTheDocument()
+    expect(stubs.putWeatherDelayConfig).not.toHaveBeenCalled()
+  })
+
+  it('shows each trigger source’s health and the coordinator’s own lightning sentence verbatim', async () => {
+    stubs.getRenderSettingsConfig = () => new Promise(() => {})
+    stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({ triggers: { nws: { enabled: true, contact: 'ops@example.test' } } }))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
+    stubs.getWeatherDelayState = () =>
+      Promise.resolve({
+        serverTime: '2026-09-19T21:00:00Z',
+        active: false,
+        revision: 3,
+        sources: [{ source: 'nws', enabled: true, lastError: 'The alerts API did not answer.' }],
+        sourcesMessage: 'An official warning feed does not cover ordinary lightning on its own.',
+      })
+
+    renderAt('/settings/recovery')
+    await screen.findByText('Weather delay')
+
+    expect(await screen.findByText(/The alerts API did not answer\./)).toBeInTheDocument()
+    expect(screen.getByText('An official warning feed does not cover ordinary lightning on its own.')).toBeInTheDocument()
   })
 
   it('refuses a save while a delay is active and shows the coordinator’s own message verbatim', async () => {

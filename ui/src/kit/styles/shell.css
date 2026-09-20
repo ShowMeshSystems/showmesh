@@ -346,6 +346,19 @@
   color: var(--warn-fg);
 }
 
+/* A pending automatic-trigger question: an accent tone, never bad or warn,
+   so it reads as "answer this" and stays unmistakable next to an active
+   delay's bad-tone banner in every theme including high contrast. */
+.sm-wdbanner--question {
+  background: var(--accent-bg);
+  border-bottom: 2px solid var(--accent-border);
+  color: var(--text);
+}
+
+.sm-wdbanner--question .sm-wdbanner__kind {
+  color: var(--accent);
+}
+
 .sm-wdbanner__fact {
   display: flex;
   align-items: baseline;

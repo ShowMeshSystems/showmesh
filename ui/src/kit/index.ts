@@ -2,7 +2,13 @@ export { AttentionRow, StatTile, Tiles } from './Attention'
 export { Button, ButtonRow, ButtonRule, ReorderButtons } from './Button'
 export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition } from './Blocks'
 export { ClockSkewStrip } from './ClockSkewStrip'
-export { WeatherDelayBanner, WeatherDelayHeldBanner, type WeatherDelayBannerAction, type WeatherDelayGroupView } from './WeatherDelayBanner'
+export {
+  WeatherDelayBanner,
+  WeatherDelayHeldBanner,
+  WeatherDelayQuestionBanner,
+  type WeatherDelayBannerAction,
+  type WeatherDelayGroupView,
+} from './WeatherDelayBanner'
 export { Choice, ChoiceGroup, ChoiceRow, Field, FieldGrid, Input, Select, Textarea, type ChoiceGroupOption } from './Field'
 export { Freshness, SelectableRow, Table, TableWrap } from './Table'
 export { LifecycleCommands, type LifecycleCommandGroup, type LifecycleCommandSpec } from './LifecycleCommands'

@@ -16,6 +16,7 @@ import {
   ShellBody,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
+  WeatherDelayQuestionBanner,
   type Connection,
   type WeatherDelayGroupView,
 } from '../kit'
@@ -37,7 +38,7 @@ import {
   type ShowModeConfigResponse,
   type WeatherDelayPowerGroupStatus,
 } from '../api'
-import { ageMs, CLOCK_SKEW_WARNING_THRESHOLD_MS, effectiveServerTimeIso, formatDuration } from '../domain/time'
+import { ageMs, CLOCK_SKEW_WARNING_THRESHOLD_MS, effectiveServerTimeIso, formatClock, formatCountdown, formatDuration, parseIsoMs } from '../domain/time'
 import { describeApiError, describeSignInState, evaluateScope, type SignInState } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from '../screens/StaleWrite'
@@ -84,6 +85,120 @@ function weatherDelayGroupView(group: WeatherDelayPowerGroupStatus, nowIso: stri
   }
 }
 
+const WEATHER_DELAY_CONSEQUENCE_LABEL: Record<'delay' | 'cancelNight', string> = {
+  delay: 'A weather delay starts when this runs out.',
+  cancelNight: 'The night is cancelled when this runs out.',
+}
+
+/**
+ * ADR-053 decision 12: the pending automatic-trigger question, shown on
+ * every screen alongside whatever the active/held banner below renders
+ * (decision 1's own "a delay can be changed to a cancel while active" is
+ * why Cancel night appears here even for a plain "delay" question once a
+ * delay is already active). A failed read never hides a question that was
+ * last known to be pending; it keeps showing the frozen question with a
+ * note that the read failed, rather than silently dropping it.
+ */
+function WeatherDelayQuestionShellBanner({
+  model,
+  invokeGate,
+  deliveringActive,
+}: {
+  model: Model
+  invokeGate: ReturnType<typeof evaluateScope>
+  deliveringActive: boolean
+}) {
+  const weatherDelay = useWeatherDelay()
+  const shown = weatherDelay.state.kind === 'loaded' ? weatherDelay.state.response : weatherDelay.state.kind === 'failed' ? weatherDelay.state.lastKnown : null
+  const readFailure = weatherDelay.state.kind === 'failed' ? weatherDelay.state.reason : null
+  const pendingDecision = shown?.pendingDecision ?? null
+  const lastPendingDecision = useRef(pendingDecision)
+  if (pendingDecision !== null) lastPendingDecision.current = pendingDecision
+
+  const outcome = weatherDelay.decisionOutcome
+  const outcomeId = outcome.kind === 'idle' ? null : outcome.id
+  const decisionMessage =
+    outcome.kind === 'error'
+      ? outcome.message
+      : outcome.kind === 'result' && outcome.response.message !== undefined
+        ? outcome.response.message
+        : null
+
+  // A message belongs to the question it was answered for, never to the next one.
+  const messageForShown = decisionMessage !== null && outcomeId === (pendingDecision?.id ?? lastPendingDecision.current?.id) ? decisionMessage : null
+  const decision = pendingDecision ?? (messageForShown !== null ? lastPendingDecision.current : null)
+  const answerable = pendingDecision !== null
+
+  const [, setTick] = useState(0)
+  const deadline = decision?.deadline ?? null
+  useEffect(() => {
+    if (deadline === null || !answerable) return
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [deadline, answerable])
+
+  if (decision === null) return null
+
+  const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
+  const nowMs = parseIsoMs(nowIso) ?? Date.now()
+  const deadlineMs = parseIsoMs(decision.deadline) ?? nowMs
+  const askedLabel = formatClock(decision.askedAt)
+  const expiresLabel = decision.expiresAt === undefined ? null : formatClock(decision.expiresAt)
+  const showCancelNight = decision.question === 'delayOrCancel' || deliveringActive
+
+  // The question is gone: keep what happened on screen, offer nothing that would act on it.
+  if (!answerable) {
+    return (
+      <WeatherDelayQuestionBanner
+        reason={decision.reason}
+        {...(askedLabel === null ? {} : { askedLabel: `Asked at ${askedLabel}` })}
+        dismiss={{ label: 'Dismiss', onClick: weatherDelay.dismissDecisionOutcome, disabled: false, busy: false }}
+        {...(messageForShown === null ? {} : { error: messageForShown })}
+      />
+    )
+  }
+
+  return (
+    <WeatherDelayQuestionBanner
+      reason={decision.reason}
+      countdownLabel={`${formatCountdown(deadlineMs - nowMs)} left`}
+      consequenceLabel={WEATHER_DELAY_CONSEQUENCE_LABEL[decision.defaultAction]}
+      {...(askedLabel === null ? {} : { askedLabel: `Asked at ${askedLabel}` })}
+      {...(expiresLabel === null ? {} : { expiresLabel: `Warning ends at ${expiresLabel}` })}
+      start={{
+        label: 'Start weather delay',
+        onClick: () => weatherDelay.answerDecision(decision.id, 'delay'),
+        disabled: !invokeGate.allowed || weatherDelay.decisionBusy !== false,
+        busy: weatherDelay.decisionBusy === 'delay',
+        ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
+      }}
+      {...(showCancelNight
+        ? {
+            cancelNight: {
+              label: 'Cancel night',
+              onClick: () => weatherDelay.answerDecision(decision.id, 'cancelNight'),
+              disabled: !invokeGate.allowed || weatherDelay.decisionBusy !== false,
+              busy: weatherDelay.decisionBusy === 'cancelNight',
+              ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
+            },
+          }
+        : {})}
+      dismiss={{
+        label: 'Dismiss',
+        onClick: () => weatherDelay.answerDecision(decision.id, 'dismiss'),
+        disabled: !invokeGate.allowed || weatherDelay.decisionBusy !== false,
+        busy: weatherDelay.decisionBusy === 'dismiss',
+        ...(invokeGate.allowed ? {} : { title: invokeGate.reason }),
+      }}
+      {...(messageForShown !== null
+        ? { error: messageForShown }
+        : readFailure !== null
+          ? { error: `Could not refresh this question, so it may be out of date. ${readFailure}` }
+          : {})}
+    />
+  )
+}
+
 /**
  * ADR-053: the non-dismissible banner on every screen while a delay, a cancel-night
  * or held players are reported. A failed read never hides it or shows a group as dark.
@@ -105,35 +220,44 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
   const heldPlayers = shown?.active === false ? (shown.heldPlayers ?? []) : []
 
   if (!authenticated) return null
+
+  const questionBanner = <WeatherDelayQuestionShellBanner model={model} invokeGate={invokeGate} deliveringActive={shown?.active === true} />
+
   if (readFailure !== null && (shown === null || (!shown.active && heldPlayers.length === 0))) {
     return (
-      <WeatherDelayBanner
-        unknown
-        kindLabel="Weather delay state unknown"
-        elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
-        error={readFailure}
-      />
+      <>
+        {questionBanner}
+        <WeatherDelayBanner
+          unknown
+          kindLabel="Weather delay state unknown"
+          elapsedLabel="Could not read whether a weather delay is active, and whether a trigger question is pending. Check the connection before running the display."
+          error={readFailure}
+        />
+      </>
     )
   }
   if (shown === null || !shown.active) {
-    if (heldPlayers.length === 0) return null
+    if (heldPlayers.length === 0) return questionBanner
     const resumeErrorMessage = weatherDelay.outcome.kind === 'error' && weatherDelay.outcome.action === 'resume' ? weatherDelay.outcome.message : undefined
     const heldErrors = [
       resumeErrorMessage,
       readFailure === null ? undefined : `Could not refresh this banner, so it may be out of date. ${readFailure}`,
     ].filter((message): message is string => message !== undefined)
     return (
-      <WeatherDelayHeldBanner
-        messages={heldPlayers.map((player) => player.message)}
-        resume={{
-          label: 'Resume',
-          onClick: weatherDelay.resume,
-          disabled: !resumeGate.allowed || weatherDelay.busy !== false,
-          busy: weatherDelay.busy === 'resume',
-          ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
-        }}
-        {...(heldErrors.length === 0 ? {} : { error: heldErrors.join(' ') })}
-      />
+      <>
+        {questionBanner}
+        <WeatherDelayHeldBanner
+          messages={heldPlayers.map((player) => player.message)}
+          resume={{
+            label: 'Resume',
+            onClick: weatherDelay.resume,
+            disabled: !resumeGate.allowed || weatherDelay.busy !== false,
+            busy: weatherDelay.busy === 'resume',
+            ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
+          }}
+          {...(heldErrors.length === 0 ? {} : { error: heldErrors.join(' ') })}
+        />
+      </>
     )
   }
   const response = shown
@@ -174,22 +298,25 @@ function WeatherDelayShellBanner({ model, authenticated }: { model: Model; authe
   const groups = (response.powerGroups ?? []).map((group) => weatherDelayGroupView(group, nowIso, readFailure !== null))
 
   return (
-    <WeatherDelayBanner
-      kindLabel={WEATHER_DELAY_KIND_LABEL[kind]}
-      elapsedLabel={elapsedLabel}
-      startedByLabel={startedByLabel}
-      {...(savedLabel === undefined ? {} : { savedLabel })}
-      {...(groups.length === 0 ? {} : { groups })}
-      resume={{
-        label: kind === 'cancelNight' ? 'Clear cancellation' : 'Resume',
-        onClick: weatherDelay.resume,
-        disabled: !resumeGate.allowed || weatherDelay.busy !== false,
-        busy: weatherDelay.busy === 'resume',
-        ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
-      }}
-      {...(cancelNightAction === undefined ? {} : { cancelNight: cancelNightAction })}
-      {...(errors.length > 0 ? { error: errors.join(' ') } : {})}
-    />
+    <>
+      {questionBanner}
+      <WeatherDelayBanner
+        kindLabel={WEATHER_DELAY_KIND_LABEL[kind]}
+        elapsedLabel={elapsedLabel}
+        startedByLabel={startedByLabel}
+        {...(savedLabel === undefined ? {} : { savedLabel })}
+        {...(groups.length === 0 ? {} : { groups })}
+        resume={{
+          label: kind === 'cancelNight' ? 'Clear cancellation' : 'Resume',
+          onClick: weatherDelay.resume,
+          disabled: !resumeGate.allowed || weatherDelay.busy !== false,
+          busy: weatherDelay.busy === 'resume',
+          ...(resumeGate.allowed ? {} : { title: resumeGate.reason }),
+        }}
+        {...(cancelNightAction === undefined ? {} : { cancelNight: cancelNightAction })}
+        {...(errors.length > 0 ? { error: errors.join(' ') } : {})}
+      />
+    </>
   )
 }
 
