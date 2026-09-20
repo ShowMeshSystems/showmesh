@@ -318,7 +318,12 @@ func normalizeRepeatCount(repeatCount int) int {
 // power group's list fields, the wire validation requires explicit values
 // in range, with no "0 means the production default" leniency.
 func weatherDelayDefaultTriggers() v1.ConfigWeatherDelayTriggersPayload {
-	return v1.ConfigWeatherDelayTriggersPayload{AnswerWindowSeconds: 30, CancelAnswerWindowSeconds: 180, RestartMinutes: 15}
+	return v1.ConfigWeatherDelayTriggersPayload{
+		AnswerWindowSeconds: 30, CancelAnswerWindowSeconds: 180, RestartMinutes: 15, DismissQuietMinutes: 30,
+		NWS: v1.ConfigWeatherDelayNWSTriggerPayload{
+			PollSeconds: 60, EventTypes: []string{"Tornado Warning", "Severe Thunderstorm Warning"},
+		},
+	}
 }
 
 // weatherDelayPowerGroupPayload builds one valid power group payload
