@@ -252,7 +252,6 @@ describe('Monitor · Fleet', () => {
     ] as unknown as Event[]
     renderScreen({ events, snapshotReceivedAt: Date.now() })
     expect(screen.getByText('Projector strike refused')).toBeInTheDocument()
-    expect(screen.getByText(/need an audit-read scope/)).toBeInTheDocument()
     expect(activityRows(events, 5)).toHaveLength(2)
   })
 

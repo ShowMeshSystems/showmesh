@@ -124,10 +124,6 @@ export function SettingsDelivery() {
     <>
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Content delivery</p>
       <h2 className="sm-section__title">Where asset bytes live and when they move</h2>
-      <p className="sm-page__lede">
-        Metadata lives in the coordinator's database; bytes never do. Nodes play from their own disk, so nothing here
-        is in the playback path.
-      </p>
 
       <NotWiredBanner
         what="Store backend and path"
@@ -160,7 +156,6 @@ export function SettingsDelivery() {
           absence="unobserved"
           label="Disk"
           fact="The coordinator does not report store size or capacity."
-          detail="No byte total and no percentage is shown, because none is reported."
         />
         <p className="sm-small sm-muted">
           {assetCountFailed
@@ -178,7 +173,7 @@ export function SettingsDelivery() {
       ) : (
         <Section id="st-sync" title="Distribution">
           <div className="sm-grid sm-form-column">
-            <Field label="Content base URL" help="Empty is a real, deliberate state: the asset sync service does not run, and nothing ever reaches a node over the network.">
+            <Field label="Content base URL">
               {(props) => (
                 <Input
                   {...props}
@@ -234,10 +229,6 @@ export function SettingsDelivery() {
               )}
             </Field>
           </div>
-          <p className="sm-section__footnote">
-            Sync never runs because a show started. A node missing an asset is a readiness fault found before a show,
-            not discovered during one.
-          </p>
         </Section>
       )}
 

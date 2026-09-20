@@ -125,7 +125,7 @@ export function fleetSummary(rows: readonly FleetRow[]): string {
     `${fpp} FPP ${fpp === 1 ? 'player' : 'players'}`,
     `${resolume} Resolume ${resolume === 1 ? 'instance' : 'instances'}`,
   ]
-  return `${rows.length} resources · ${parts.join(', ')}. Health is each resource's own report; binding and import problems are separate signals.`
+  return `${rows.length} resources · ${parts.join(', ')}.`
 }
 
 const SEVERITY_TONE: Record<Event['severity'], Tone> = {

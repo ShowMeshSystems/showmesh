@@ -448,7 +448,7 @@ export function ShowNight() {
         title="Lifecycle commands"
         aside={
           <span className="sm-small sm-muted">
-            Accepted, never confirmed here. <Link to="/control">Full transport in Live Control →</Link>
+            <Link to="/control">Full transport in Live Control →</Link>
           </span>
         }
       >
@@ -582,8 +582,7 @@ export function ShowNight() {
               </Table>
             </TableWrap>
             <p className="sm-section__footnote">
-              {steps.length} steps this cycle · {armed} armed for the next transition. A step marked unconfirmable expects no
-              response and reports that on every run.
+              {steps.length} steps this cycle · {armed} armed for the next transition.
             </p>
           </>
         )}

@@ -16,7 +16,7 @@ export function MonitorCapabilities() {
       <Section
         id="mo-capabilities"
         title="Capabilities"
-        detail="What each node has actually advertised, grouped by node. A capability a node has never advertised is nothing to observe, not a failure."
+        detail="What every node can do."
       >
         {groups.length === 0 ? (
           <RuledStrip
