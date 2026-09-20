@@ -32,7 +32,9 @@ The **Current state** block at the top of this file is overwritten each session:
 > **`main` is at `a20512d`** (2026-09-09 01:57 CDT). Sixty-eight pull requests
 > merged between the 2026-09-05 tip `6dfecdd` and this commit, in one recorded
 > session: the two-day build of 2026-09-08 and 2026-09-09 (`144c247` through
-> `a20512d`). The newest dated entry below is that record. Every count and
+> `a20512d`). This block otherwise describes `main` as of that commit and has
+> not been brought forward; the newest dated entry below is the 2026-09-19
+> weather delay session, which took `main` to `1f56fdb`. Every count and
 > commit identifier in this block is read from `git log` on `main`; every gate
 > statement is read from a pull request's own verification record or a GitHub
 > run identifier, never from a builder's unsupported summary. All merges are
@@ -129,7 +131,221 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
-## 2026-09-08 to 2026-09-09 (two-day build: show and instance participation, the FPP definition republish, brightness transition gain, the 09-08 rig session's audio defects, schema v31 to v33, CI aggregation and gate hardening; `main` `6dfecdd` to `a20512d`)
+## 2026-09-19 (weather delay build: ADR-053 accepted and implemented end to end, coordinator enforcement, node hold and alert, cancel night, automatic triggers, an end-to-end integration test; `main` `1f56fdb`, register schema v41 through v43)
+
+**Goal:** build [ADR-053](../decisions/ADR-053-weather-delay.md), the weather
+delay safety feature: one operator action that makes an outdoor display dark,
+keeps it dark, and plays a repeating alert delivered over more than one path.
+
+**Completed:** seventeen pull requests merged to `main`.
+
+- #547 (`2f8b6ae`) adds ADR-053 itself, indexes it in `docs/decisions/README.md`,
+  and points `RESTING-MODE.md` section 8 at it in place of "a separate future
+  safety design".
+- #548 (`7471d49`) reserves the identifiers the build needs in
+  `docs/build/IDENTIFIER-REGISTER.md` before any branch writes them: config
+  kind `show.weatherdelay`, two identity scopes, two agent operations, four
+  audit actions, two MQTT topics, schema v41, a change stream kind, and the
+  `/api/v1/weather-delay` path prefix.
+- #549 (`eaae72d`) adds the shared vocabulary with no running behavior yet: the
+  `State` and signed start-request types, the MQTT topics, the
+  `show.weatherdelay` config kind, the store table, the two scopes and audit
+  actions, and a `GET /weather-delay` and config route; the three trigger
+  routes always answer 501 for now.
+- #550 (`1c90a25`) makes the node agent enforce the hold: while a delay is
+  active it starts no cue activation, MultiSync-driven cue audio, render, or
+  boot resume, and it can play an alert on command from MQTT, the retained
+  state, or a signed direct HTTP request. A delay clears only on
+  `weatherdelay.resume` or a retained "not active" message carrying a greater
+  revision.
+- #551 (`070cbac`) adds start, hold, and resume on the coordinator: a start
+  persists and publishes the state, then stops FPP, blacks out Resolume, clears
+  render surfaces, and starts the node alert over MQTT and signed HTTP in
+  parallel; resume always takes effect and returns the night session to the
+  start of its transition into the show. A failed state write no longer stops
+  the stops.
+- #552 (`8d15a45`) marks the first three branches' identifiers shipped in the
+  register and reserves the audit action the enforcement branch needs.
+- #553 (`279dbe0`) adds the Operator UI: Weather delay and Cancel night buttons
+  beside emergency stop on Live Control, a non-dismissible banner on every
+  screen while a delay or cancel is active, and a Settings form for the alert,
+  power groups, and triggers.
+- #554 (`4047695`) adds the coordinator enforcement loop (decision 4): every 5
+  seconds it sends Stop Now to any FPP instance not observed idle and re-closes
+  its brightness gate; it never opens a gate on its own, only resume does, and
+  it reports per power group whether every tracked device is confirmed dark,
+  with an MQTT heartbeat an external power controller can follow.
+- #555 (`aeb8153`) marks the enforcement identifiers shipped and reserves the
+  two audit actions the triggers branch needs.
+- #556 (`8aed1e3`) adds power group dark confirmation and held-player reporting
+  to the Operator UI banner, including a distinct banner for players held dark
+  with no delay active.
+- #557 (`06a7ab8`) adds cancel night: the same one-press mechanism as a delay,
+  after which the coordinator waits for the cancel alert to end on
+  every reachable node, then runs the normal graceful night power-down; a start
+  can never downgrade a cancel. Also adds a pre-signed start with up to a
+  400-day expiry and an optional ordered webhook, as schema v42.
+- #558 (`e23c44d`) adds an end-to-end integration test against a real
+  coordinator, a real node agent, a real Mosquitto broker using the committed
+  ACL, and an HTTP stand-in for an FPP player, covering seven scenarios
+  including cancel night. It found and fixed a real deployment defect:
+  `deploy/mosquitto/generate-credentials.sh` never granted node agents read on
+  `showmesh/events/weather_delay`, so no node could learn which alert to play.
+- #559 (`e25eafa`) fixes two weather delay settings tests that looked up the
+  repeat count field before the configuration had loaded, which failed
+  intermittently under load.
+- #560 (`962969e`) reserves schema v43 for the pending trigger decision and
+  marks the cancel night identifiers shipped.
+- #561 (`477661f`) adds automatic triggers: a lightning detector, a
+  home-automation rule, or the built-in United States National Weather Service
+  poller can start a weather delay, but the trigger always asks the operator
+  first; only the operator's own answer, or an unanswered question at its
+  deadline, starts a delay or cancels the night, and a stale question starts
+  nothing.
+- #563 (`db66dfa`) adds the question form of the Operator UI banner: a
+  trigger's question can be answered from any screen, with a countdown to its
+  deadline and a plain statement of what happens when it runs out.
+- #562 (`1f56fdb`) fixes a defect the end-to-end test found: a cancel alert
+  that replaced a loaded delay alert was nearly silent. Each alert kind now has
+  its own audio session, every alert starts on a session that has never played,
+  and the per-node start outcome reports whether the alert played.
+
+**Decisions made:**
+
+- ADR-053 itself (owner, 2026-09-19): weather delay as a system-wide, coordinator-persisted
+  state with two operator actions, a coordinator enforcement loop, an FPP
+  plugin output gate, and a start deliverable over more than one path.
+- A failed state read or write never stops the stops: every dispatch target is
+  still contacted even when the coordinator cannot read or persist the delay
+  state (#551).
+- The hold never delays fade-out or power-down: during a delay the night loop
+  still fades out, powers down, and completes emergency stop's night steps,
+  because only transitions that start output wait for resume (#551).
+- The plugin weather gate carries a coordinator-issued revision: a peer's
+  closed gate is adopted only at a greater revision, and a peer's open gate is
+  never adopted (#550, #554).
+- A node clears a delay only on the resume operation or a retained "not
+  active" message carrying a greater revision than the one it holds (#550).
+- A node reports its own inbound listener address in its hello, so the
+  coordinator's direct signed HTTP start has somewhere to send to (#550).
+- The coordinator never opens a plugin gate on its own; it reports held
+  players instead and leaves opening it to resume alone (#554).
+- A node with no cancel alert configured stops a delay alert that has become
+  false rather than playing nothing forever (#557).
+- A start never downgrades a cancelled night: the coordinator re-sends the
+  cancel and the node keeps its cancel alert (#557).
+- Webhook events are delivered in order, by one worker draining a bounded
+  queue that drops the oldest event when full (#557).
+- Operator sentences carry no clock times, because
+  [ADR-038](../decisions/ADR-038-fpp-owns-schedule-authority.md) decision 1
+  leaves the coordinator with no calendar or time zone; every time travels as
+  its own RFC 3339 field instead, and the delay-or-cancel question is reachable
+  only when an inbound trigger's own `suggestCancel` flag reaches it, never
+  from the coordinator judging how much night remains (#561).
+
+**Questions raised with the owner:** none of these were put to the owner during
+the session; they are recorded here as OPEN and unresolved.
+
+- Whether a node should fail open or closed when its persisted weather delay
+  state, or the plugin's persisted gate, cannot be read at boot.
+- Whether automation should get a start-only role or token, narrower than the
+  scopes a full operator holds.
+- Whether the coordinator should adopt a delay that only a node knows about,
+  for the case where the node's own retained-state read raced a coordinator
+  restart.
+- Where the weather delay settings form's permanent home is in the Operator UI
+  (it currently sits under Settings > Render recovery for lack of an emergency
+  stop settings screen) and whether the shell banner should stay pinned while
+  the page scrolls.
+- What supplies the end of tonight's schedule so the cancel-or-delay question
+  in decision 12 can be judged automatically instead of only ever answering
+  because an inbound trigger suggested a cancel.
+
+**Deferred:**
+
+- The FPP plugin's own weather gate is built and reviewed in the separate
+  `showmesh-fpp-plugin` repository but is not merged there; its CI could not
+  start. Until a plugin build carrying the gate is installed on a real player,
+  the coordinator reports each player as not holdable through the plugin route
+  and relies on "Stop Now" from the enforcement loop alone.
+- The audio manager's own defect where applying a new playlist over an
+  already-loaded, already-advanced session skips most of that playlist's items
+  is not fixed. It no longer affects weather delay, because #562 gives each
+  alert kind its own session and clears it after every alert, but it may still
+  affect other callers. #562 records it as a skipped failing unit test in
+  `internal/agent/audio`.
+- A broker already deployed from before #558 needs its Mosquitto ACL
+  regenerated with `deploy/mosquitto/generate-credentials.sh`, or its node
+  agents cannot read the weather delay topic.
+- Nothing from this build has been deployed anywhere, and nothing has run
+  against real hardware.
+
+**Verification gates:** only what each pull request's own body records.
+
+- #547, #548: documentation-only; no local gate run; register/link checks by
+  hand.
+- #552, #555, #560: `go test ./internal/repohygiene/`: passed; full gate not
+  run (register-only changes).
+- #549: `make check` under the repository's laptop gate lock: EXIT=0.
+- #550: `go test -race -count=2 ./internal/agent/audio/ ./internal/agent/`:
+  passed; `make lint`: 0 issues; full `make check` recorded against the
+  previous commit, not rerun at the final commit.
+- #551: `make check` under the laptop gate lock: passed; a narrow `-race` run
+  scoped to weather delay, emergency stop, resume and hold in
+  `internal/coordinator/api/`: passed.
+- #553: `make check`: EXIT=0, 1128/1128 UI tests; a browser check against a
+  disposable coordinator with a repository Playwright Chromium session at a
+  390x844 mobile viewport, across `/control`, `/`, `/monitor/fleet`, and
+  `/settings/recovery` in dark and contrast themes.
+- #554: `make check`: EXIT=0; `-race` over
+  `internal/coordinator/api/`, `internal/coordinator/api/v1/`, and
+  `cmd/showmeshctl/`: ok.
+- #556: `make check`: EXIT=0, 1134 UI tests; a headless-Chromium browser check
+  against a disposable coordinator with API responses rewritten in the browser
+  to synthesize four power groups and two held players.
+- #557: `make check`: EXIT=0; `-race` over `internal/agent/`,
+  `internal/coordinator/api/`, `internal/coordinator/`, and
+  `cmd/showmeshctl/`: passed with no data race; the webhook tests also passed
+  at `-race -count=20`.
+- #558: `make check`: EXIT=0, 1134 UI tests; `make test-integration-weatherdelay`:
+  passed, five consecutive runs, 7/7 scenarios each; all 12 GitHub checks
+  passed, including the new `integration-weatherdelay` job (6m45s);
+  `make pr-ready-check` reported PASS, merge state CLEAN.
+- #559: `npx vitest run src/screens/settings.test.tsx`: 57 passed; full gate
+  not run (one test file changed).
+- #561: `make check`: EXIT=0; `-race` over
+  `internal/coordinator/api/...`, `internal/coordinator/weathertrigger/...`,
+  and `cmd/showmeshctl/...`: ok, no data race;
+  `make test-integration-weatherdelay`: ok, all seven tests passed;
+  `make pr-ready-check` was refused because required checks had not yet
+  reported.
+- #563: `make check`: EXIT=0 at `0e360fc`, 1147 UI tests; the builder's
+  browser check against a disposable coordinator saw the question on three
+  screens in all three themes, a dismiss clearing it, and an unanswered
+  question giving way to the delay banner. GitHub checks on the final head
+  were not observed before the record was written.
+- #562: `make check`: EXIT=0 at `f37ba3f`; `-race` over `internal/agent/`,
+  `internal/agent/audio/`, `internal/coordinator/api/`, and
+  `cmd/showmeshctl/`: no data race; `make test-integration-weatherdelay`:
+  three consecutive runs, eight scenarios each; the new scenario was shown to
+  fail on the previous head. The final commit `62ba56c` only unskips one node
+  test; it was run alone under `-race -count=5` and linted, and the full gate
+  was not rerun on it.
+
+No hardware, deployed-fleet, browser-against-a-deployed-environment, or
+live-weather-service evidence exists for any part of this build. Every browser
+check recorded above ran against a disposable, repository-local coordinator,
+never rehearsal or a deployed coordinator.
+
+Two findings from this session are worth recording for method, not just
+outcome: the end-to-end integration test in #558, run against a real broker
+with the generated ACL, found that no node could read the weather delay topic
+at all, a defect that five earlier pull requests reviewed against fakes had
+all missed; and #558's own mutation review found four of its assertions could
+not fail no matter what was mutated, because another delivery path or another
+part of the same test covered the mutated behavior regardless.
+
+
 
 **Goal:** work the defects found in the 2026-09-08 rig session, land the owner
 rulings made across both days, and harden the CI gate that had been reddening
