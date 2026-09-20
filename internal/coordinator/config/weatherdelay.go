@@ -34,6 +34,9 @@ const (
 	weatherDelayDefaultAnswerWindowSeconds       = 30
 	weatherDelayDefaultCancelAnswerWindowSeconds = 180
 	weatherDelayDefaultRestartMinutes            = 15
+	// weatherDelayDefaultDismissQuietMinutes is the task's own default
+	// (30 minutes); an unmeasured choice like the other trigger windows.
+	weatherDelayDefaultDismissQuietMinutes = 30
 )
 
 // weatherDelayDefaultHeartbeatIntervalSeconds is an unmeasured choice; the
@@ -48,6 +51,24 @@ const (
 	weatherDelayMinHeartbeatSeconds    = 1
 	weatherDelayMaxHeartbeatSeconds    = 3600
 )
+
+// The NWS poller defaults and bounds. pollSeconds' 60s default and 30s floor
+// and the two default event types are unmeasured choices the task left to
+// this build; the API's own alert id dedupe is what keeps a short interval
+// from asking twice about the same alert.
+const (
+	weatherDelayDefaultNWSPollSeconds = 60
+	weatherDelayMinNWSPollSeconds     = 30
+	weatherDelayMaxNWSPollSeconds     = 3600
+	weatherDelayNWSContactMaxLength   = 256
+)
+
+// weatherDelayDefaultNWSEventTypes is copied fresh by
+// [decodeWeatherDelayNWS] and [WeatherDelayDefaultPayload]'s initializer so
+// no caller can mutate the shared default slice.
+func weatherDelayDefaultNWSEventTypes() []string {
+	return []string{"Tornado Warning", "Severe Thunderstorm Warning"}
+}
 
 // WeatherDelayAlertPayload is the optional alert (ADR-053 decision 7). An
 // empty asset id means no alert for that kind; empty NodeIDs means every
@@ -77,11 +98,28 @@ type WeatherDelayPowerGroupPayload struct {
 }
 
 // WeatherDelayTriggersPayload is the automatic trigger timing (ADR-053
-// decision 12).
+// decision 12) plus the optional built-in NWS poller.
 type WeatherDelayTriggersPayload struct {
 	AnswerWindowSeconds       int `json:"answerWindowSeconds"`
 	CancelAnswerWindowSeconds int `json:"cancelAnswerWindowSeconds"`
 	RestartMinutes            int `json:"restartMinutes"`
+	// DismissQuietMinutes is how long a dismiss answer suppresses a new
+	// question about the same source and same warning.
+	DismissQuietMinutes int                           `json:"dismissQuietMinutes"`
+	NWS                 WeatherDelayNWSTriggerPayload `json:"nws"`
+}
+
+// WeatherDelayNWSTriggerPayload configures the optional built-in poller of
+// the United States National Weather Service alerts API. Disabled by
+// default; enabling it without Contact is refused, since that API's own
+// User-Agent policy requires one.
+type WeatherDelayNWSTriggerPayload struct {
+	Enabled     bool     `json:"enabled"`
+	Latitude    float64  `json:"latitude"`
+	Longitude   float64  `json:"longitude"`
+	Contact     string   `json:"contact"`
+	PollSeconds int      `json:"pollSeconds"`
+	EventTypes  []string `json:"eventTypes"`
 }
 
 // WeatherDelayNotifyPayload is the optional webhook (ADR-053 decision 13's
@@ -112,6 +150,11 @@ var WeatherDelayDefaultPayload = WeatherDelayPayload{
 		AnswerWindowSeconds:       weatherDelayDefaultAnswerWindowSeconds,
 		CancelAnswerWindowSeconds: weatherDelayDefaultCancelAnswerWindowSeconds,
 		RestartMinutes:            weatherDelayDefaultRestartMinutes,
+		DismissQuietMinutes:       weatherDelayDefaultDismissQuietMinutes,
+		NWS: WeatherDelayNWSTriggerPayload{
+			PollSeconds: weatherDelayDefaultNWSPollSeconds,
+			EventTypes:  weatherDelayDefaultNWSEventTypes(),
+		},
 	},
 }
 
@@ -120,7 +163,8 @@ var (
 	weatherDelayAlertKeys      = map[string]bool{"delayAssetId": true, "cancelNightAssetId": true, "repeatCount": true, "nodeIds": true}
 	weatherDelayPowerGroupKeys = map[string]bool{"id": true, "label": true, "fppInstanceIds": true, "resolumeInstanceIds": true, "renderNodeIds": true, "heartbeat": true}
 	weatherDelayHeartbeatKeys  = map[string]bool{"enabled": true, "intervalSeconds": true}
-	weatherDelayTriggersKeys   = map[string]bool{"answerWindowSeconds": true, "cancelAnswerWindowSeconds": true, "restartMinutes": true}
+	weatherDelayTriggersKeys   = map[string]bool{"answerWindowSeconds": true, "cancelAnswerWindowSeconds": true, "restartMinutes": true, "dismissQuietMinutes": true, "nws": true}
+	weatherDelayNWSKeys        = map[string]bool{"enabled": true, "latitude": true, "longitude": true, "contact": true, "pollSeconds": true, "eventTypes": true}
 	weatherDelayNotifyKeys     = map[string]bool{"webhookUrl": true}
 )
 
@@ -131,6 +175,9 @@ func EncodeWeatherDelayPayload(p WeatherDelayPayload) (string, error) {
 	}
 	if p.Alert.NodeIDs == nil {
 		p.Alert.NodeIDs = []string{}
+	}
+	if p.Triggers.NWS.EventTypes == nil {
+		p.Triggers.NWS.EventTypes = []string{}
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -387,8 +434,104 @@ func decodeWeatherDelayTriggers(top map[string]json.RawMessage) (WeatherDelayTri
 	if verr != nil {
 		return WeatherDelayTriggersPayload{}, verr
 	}
+	dismissQuietMinutes, verr := decodeDefaultedIntRange(fields, "dismissQuietMinutes", "triggers.dismissQuietMinutes", weatherDelayDefaultDismissQuietMinutes, weatherDelayMinRestartMinutes, weatherDelayMaxRestartMinutes)
+	if verr != nil {
+		return WeatherDelayTriggersPayload{}, verr
+	}
+	nws, verr := decodeWeatherDelayNWS(fields)
+	if verr != nil {
+		return WeatherDelayTriggersPayload{}, verr
+	}
 
-	return WeatherDelayTriggersPayload{AnswerWindowSeconds: answerWindowSeconds, CancelAnswerWindowSeconds: cancelAnswerWindowSeconds, RestartMinutes: restartMinutes}, nil
+	return WeatherDelayTriggersPayload{
+		AnswerWindowSeconds: answerWindowSeconds, CancelAnswerWindowSeconds: cancelAnswerWindowSeconds,
+		RestartMinutes: restartMinutes, DismissQuietMinutes: dismissQuietMinutes, NWS: nws,
+	}, nil
+}
+
+// decodeWeatherDelayNWS reads the optional built-in NWS poller. Absent or
+// {} decodes to disabled with the default poll interval and event types.
+// Enabled without a contact is refused: that API's User-Agent policy
+// requires one.
+func decodeWeatherDelayNWS(top map[string]json.RawMessage) (WeatherDelayNWSTriggerPayload, *ValidationError) {
+	def := WeatherDelayNWSTriggerPayload{PollSeconds: weatherDelayDefaultNWSPollSeconds, EventTypes: weatherDelayDefaultNWSEventTypes()}
+	raw, present := top["nws"]
+	if !present {
+		return def, nil
+	}
+	if isJSONNull(raw) {
+		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldNull, Field: "triggers.nws", Detail: "triggers.nws must not be null; omit it to use the default"}
+	}
+	fields, verr := decodeRequiredObjectFromRaw(raw, "triggers.nws")
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	if verr := rejectUnknownKeysUnder(fields, weatherDelayNWSKeys, "triggers.nws"); verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+
+	enabled, verr := decodeDefaultedBool(fields, "enabled", "triggers.nws.enabled", def.Enabled)
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	latitude, verr := decodeDefaultedFloatRange(fields, "latitude", "triggers.nws.latitude", 0, -90, 90)
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	longitude, verr := decodeDefaultedFloatRange(fields, "longitude", "triggers.nws.longitude", 0, -180, 180)
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	contact, verr := decodeOptionalString(fields, "contact", "triggers.nws.contact")
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	if len(contact) > weatherDelayNWSContactMaxLength {
+		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.contact", Detail: fmt.Sprintf("triggers.nws.contact must be at most %d characters", weatherDelayNWSContactMaxLength)}
+	}
+	pollSeconds, verr := decodeDefaultedIntRange(fields, "pollSeconds", "triggers.nws.pollSeconds", weatherDelayDefaultNWSPollSeconds, weatherDelayMinNWSPollSeconds, weatherDelayMaxNWSPollSeconds)
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	eventTypesPtr, verr := decodeOptionalStringList(fields, "eventTypes", "triggers.nws.eventTypes")
+	if verr != nil {
+		return WeatherDelayNWSTriggerPayload{}, verr
+	}
+	eventTypes := def.EventTypes
+	if eventTypesPtr != nil {
+		eventTypes = *eventTypesPtr
+	}
+	if enabled && contact == "" {
+		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.contact", Detail: "triggers.nws.contact is required when triggers.nws.enabled is true; the National Weather Service alerts API requires a contact in the User-Agent header"}
+	}
+	if enabled && len(eventTypes) == 0 {
+		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.eventTypes", Detail: "triggers.nws.eventTypes must not be empty when triggers.nws.enabled is true"}
+	}
+
+	return WeatherDelayNWSTriggerPayload{
+		Enabled: enabled, Latitude: latitude, Longitude: longitude, Contact: contact,
+		PollSeconds: pollSeconds, EventTypes: eventTypes,
+	}, nil
+}
+
+// decodeDefaultedFloatRange reads an optional number in [min, max]. Absent
+// takes def; null is refused.
+func decodeDefaultedFloatRange(top map[string]json.RawMessage, key, field string, def, min, max float64) (float64, *ValidationError) {
+	raw, present := top[key]
+	if !present {
+		return def, nil
+	}
+	if isJSONNull(raw) {
+		return 0, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null; omit it to use the default (%v)", field, def)}
+	}
+	var v float64
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON number", field)}
+	}
+	if v < min || v > max {
+		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be between %v and %v", field, min, max)}
+	}
+	return v, nil
 }
 
 // decodeWeatherDelayIDList reads an optional list of unique ids in node id

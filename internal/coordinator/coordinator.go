@@ -658,6 +658,10 @@ func Run() int {
 	// GET /api/v1/weather-delay sees the enforcer's gate readings.
 	weatherDelayGateCache := api.NewWeatherDelayGateCache()
 	weatherDelayNotifier := api.NewWeatherDelayNotifier(weatherDelayGateCache, logger)
+	// weatherDelayNWSStatus is the stable handle GET /weather-delay reads
+	// through while WeatherDelayTriggerLoop swaps the running poller
+	// underneath it, see that type's own doc comment.
+	weatherDelayNWSStatus := api.NewWeatherDelayNWSStatus()
 	apiDeps := api.Dependencies{
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
@@ -938,6 +942,13 @@ func Run() int {
 		// WeatherDelay reads and writes the stored state through the
 		// keeper above instead of api.noWeatherDelayStore's no-op default.
 		WeatherDelay: weatherDelayState,
+		// WeatherDelayTrigger: *store.Store already satisfies
+		// api.WeatherDelayTriggerStore with no adapter, matching
+		// NightSessions/Discovery/AlignmentRuns' identical wiring above.
+		WeatherDelayTrigger: st,
+		// WeatherDelayNWS is the same stable handle the trigger loop
+		// started below writes into.
+		WeatherDelayNWS: weatherDelayNWSStatus,
 		// WeatherDelayPublisher: the SAME bm already satisfies
 		// api.WeatherDelayPublisher (Publish plus AwaitResponse) with no
 		// adapter, matching AudioPublisher's identical wiring above.
@@ -1323,6 +1334,13 @@ func Run() int {
 	weatherDelayEnforcer := api.NewWeatherDelayEnforcer(apiDeps, apiOpts)
 	spawnBackground(func() {
 		weatherDelayEnforcer.Run(ctx)
+	})
+	// weatherDelayTriggerLoop always runs: an unconfigured triggers.nws
+	// (the default) leaves it applying only pending-decision deadlines,
+	// of which there is never one until an inbound trigger raises one.
+	weatherDelayTriggerLoop := api.NewWeatherDelayTriggerLoop(apiDeps, apiOpts, weatherDelayNWSStatus)
+	spawnBackground(func() {
+		weatherDelayTriggerLoop.Run(ctx)
 	})
 	api.ResumeWeatherDelayCancelNightShutdown(ctx, apiDeps, apiOpts)
 	spawnBackground(func() {

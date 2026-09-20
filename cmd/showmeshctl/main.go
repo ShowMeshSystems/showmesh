@@ -315,6 +315,10 @@ Commands:
                                        asset readiness
   weather-delay presign               mint a pre-signed start an outside system can hold and send
                                        to a node directly (write, requires config:write)
+  weather-delay decision              answer the one pending automatic-trigger decision (write,
+                                       requires show:weatherdelay:invoke)
+  weather-delay trigger               report an automatic trigger from an outside system (write,
+                                       requires show:weatherdelay:invoke, never resumes)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports

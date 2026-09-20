@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestDecodeWeatherDelayPayloadEmptyBodyIsFullDefault(t *testing.T) {
 	if len(p.PowerGroups) != 0 {
 		t.Fatalf("PowerGroups = %+v, want empty", p.PowerGroups)
 	}
-	if p.Triggers != WeatherDelayDefaultPayload.Triggers {
+	if !reflect.DeepEqual(p.Triggers, WeatherDelayDefaultPayload.Triggers) {
 		t.Fatalf("Triggers = %+v, want %+v", p.Triggers, WeatherDelayDefaultPayload.Triggers)
 	}
 }
@@ -34,7 +35,10 @@ func TestEncodeDecodeWeatherDelayPayloadRoundTrips(t *testing.T) {
 				Heartbeat: WeatherDelayHeartbeatPayload{Enabled: true, IntervalSeconds: 15},
 			},
 		},
-		Triggers: WeatherDelayTriggersPayload{AnswerWindowSeconds: 45, CancelAnswerWindowSeconds: 200, RestartMinutes: 20},
+		Triggers: WeatherDelayTriggersPayload{
+			AnswerWindowSeconds: 45, CancelAnswerWindowSeconds: 200, RestartMinutes: 20,
+			NWS: WeatherDelayNWSTriggerPayload{PollSeconds: 45, EventTypes: []string{"Tornado Warning"}},
+		},
 	}
 	raw, err := EncodeWeatherDelayPayload(want)
 	if err != nil {
@@ -50,7 +54,7 @@ func TestEncodeDecodeWeatherDelayPayloadRoundTrips(t *testing.T) {
 	if len(got.PowerGroups) != 1 || got.PowerGroups[0].ID != "lighting" || !got.PowerGroups[0].Heartbeat.Enabled {
 		t.Fatalf("PowerGroups = %+v", got.PowerGroups)
 	}
-	if got.Triggers != want.Triggers {
+	if !reflect.DeepEqual(got.Triggers, want.Triggers) {
 		t.Fatalf("Triggers = %+v, want %+v", got.Triggers, want.Triggers)
 	}
 }
@@ -160,5 +164,58 @@ func TestDecodeWeatherDelayPayloadHeartbeatDefaults(t *testing.T) {
 	hb := p.PowerGroups[0].Heartbeat
 	if hb.Enabled || hb.IntervalSeconds != weatherDelayDefaultHeartbeatIntervalSeconds {
 		t.Fatalf("Heartbeat default = %+v", hb)
+	}
+}
+
+func TestDecodeWeatherDelayPayloadNWSDefaults(t *testing.T) {
+	p, verr := DecodeWeatherDelayPayload(`{}`)
+	if verr != nil {
+		t.Fatalf("DecodeWeatherDelayPayload(\"{}\") = %v", verr)
+	}
+	nws := p.Triggers.NWS
+	if nws.Enabled || nws.PollSeconds != weatherDelayDefaultNWSPollSeconds {
+		t.Fatalf("NWS default = %+v", nws)
+	}
+	if !reflect.DeepEqual(nws.EventTypes, weatherDelayDefaultNWSEventTypes()) {
+		t.Fatalf("NWS.EventTypes default = %+v, want %+v", nws.EventTypes, weatherDelayDefaultNWSEventTypes())
+	}
+}
+
+func TestDecodeWeatherDelayPayloadNWSRefusesEnabledWithoutContact(t *testing.T) {
+	raw := `{"triggers":{"nws":{"enabled":true,"latitude":39.0,"longitude":-77.0}}}`
+	if _, verr := DecodeWeatherDelayPayload(raw); verr == nil {
+		t.Fatal("DecodeWeatherDelayPayload accepted triggers.nws.enabled without a contact")
+	}
+}
+
+func TestDecodeWeatherDelayPayloadNWSAcceptsEnabledWithContact(t *testing.T) {
+	raw := `{"triggers":{"nws":{"enabled":true,"latitude":39.0,"longitude":-77.0,"contact":"ops@example.com"}}}`
+	p, verr := DecodeWeatherDelayPayload(raw)
+	if verr != nil {
+		t.Fatalf("DecodeWeatherDelayPayload: %v", verr)
+	}
+	nws := p.Triggers.NWS
+	if !nws.Enabled || nws.Contact != "ops@example.com" || nws.Latitude != 39.0 || nws.Longitude != -77.0 {
+		t.Fatalf("NWS = %+v", nws)
+	}
+	if nws.PollSeconds != weatherDelayDefaultNWSPollSeconds {
+		t.Fatalf("NWS.PollSeconds = %d, want default %d", nws.PollSeconds, weatherDelayDefaultNWSPollSeconds)
+	}
+}
+
+func TestDecodeWeatherDelayPayloadNWSRejectsOutOfRange(t *testing.T) {
+	cases := []string{
+		`{"triggers":{"nws":{"latitude":91}}}`,
+		`{"triggers":{"nws":{"longitude":-181}}}`,
+		`{"triggers":{"nws":{"pollSeconds":29}}}`,
+		`{"triggers":{"nws":{"pollSeconds":3601}}}`,
+		`{"triggers":{"nws":{"bogus":1}}}`,
+		`{"triggers":{"nws":null}}`,
+		`{"triggers":{"nws":{"enabled":true,"contact":"ops@example.com","eventTypes":[]}}}`,
+	}
+	for _, raw := range cases {
+		if _, verr := DecodeWeatherDelayPayload(raw); verr == nil {
+			t.Errorf("DecodeWeatherDelayPayload(%s) accepted an invalid triggers.nws", raw)
+		}
 	}
 }

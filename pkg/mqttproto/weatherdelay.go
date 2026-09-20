@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,7 +86,10 @@ type WeatherDelayAlertAssetRef struct {
 // [WeatherDelayAlertAssetRef.Validate] returns.
 var ErrInvalidWeatherDelayAlertAssetRef = errors.New("mqttproto: invalid weather delay alert asset ref")
 
-// Validate reports whether r's three fields are all present.
+// Validate reports whether r's three fields are all present and whether
+// Filename is a plain file name. A node joins Filename to its own asset
+// directory, so a name carrying a path separator or a parent reference
+// would name a file outside it.
 func (r WeatherDelayAlertAssetRef) Validate() error {
 	switch {
 	case r.AssetID == "":
@@ -93,6 +98,9 @@ func (r WeatherDelayAlertAssetRef) Validate() error {
 		return fmt.Errorf("%w: contentHash is empty", ErrInvalidWeatherDelayAlertAssetRef)
 	case r.Filename == "":
 		return fmt.Errorf("%w: filename is empty", ErrInvalidWeatherDelayAlertAssetRef)
+	case r.Filename != filepath.Base(r.Filename) || r.Filename == "." || r.Filename == ".." ||
+		strings.ContainsAny(r.Filename, `/\`):
+		return fmt.Errorf("%w: filename %q must be a plain file name", ErrInvalidWeatherDelayAlertAssetRef, r.Filename)
 	}
 	return nil
 }

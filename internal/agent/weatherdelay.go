@@ -274,6 +274,17 @@ func (h *WeatherDelayHolder) setActiveLocal(kind string, startedAt time.Time, st
 	return h.rec.Kind, h.persistLocked()
 }
 
+// SetPlanLocal persists plan as this node's own alert plan, independent of
+// the retained state topic: the weatherdelay.start command carries the
+// plan in its own params so a node that never received that retained
+// message still knows what to play.
+func (h *WeatherDelayHolder) SetPlanLocal(plan mqttproto.WeatherDelayPlan) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rec.Plan = plan
+	return h.persistLocked()
+}
+
 // ClearLocal marks the delay not active from weatherdelay.resume, whatever
 // revision is held. The alert plan is kept.
 func (h *WeatherDelayHolder) ClearLocal() error {

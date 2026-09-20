@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
@@ -41,11 +43,11 @@ const weatherDelayAlertSessionPrefix = "weatherdelay:alert:"
 // weatherDelayAlertSessionIDForKind is the one audio session kind's alert
 // plays on, so a second start of the same kind finds the alert rather than
 // stacking one. Each kind gets its own, because an Apply over a playlist
-// the manager already has loaded keeps the stale item index (internal/agent
-// /audio's own skipped test records that defect): starting one kind mutes
-// and stops the other kind's session, never replaces it. The same defect
-// still truncates a second alert of the same kind after a resume, recorded
-// by TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero.
+// the manager already has loaded keeps the stale item index, the defect the
+// audio package's own skipped test records: starting one kind mutes and
+// stops the other kind's session, never replaces it. That defect still
+// truncates a second alert of the same kind after a resume, recorded by
+// TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero.
 func weatherDelayAlertSessionIDForKind(kind string) pkgaudio.SessionID {
 	return pkgaudio.SessionID(weatherDelayAlertSessionPrefix + kind)
 }
@@ -57,7 +59,7 @@ const weatherDelayDefaultRepeatCount = 10
 // be muted. A session not muted by then is reported and still stopped.
 var weatherDelayMuteBound = 500 * time.Millisecond
 
-var weatherDelayStartKnownKeys = map[string]bool{"kind": true}
+var weatherDelayStartKnownKeys = map[string]bool{"kind": true, "plan": true}
 var weatherDelayResumeKnownKeys = map[string]bool{}
 
 // weatherDelayBackground counts the stop passes still running after a start
@@ -100,6 +102,23 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 	if !weatherdelay.ValidKind(kind) {
 		return OperationResult{}, fmt.Errorf("weatherdelay.start: params.kind %q must be %q or %q", kind, weatherdelay.KindDelay, weatherdelay.KindCancelNight)
 	}
+	// The plan travels in this command's own params too, not only on the
+	// retained state topic, so this node still knows what to play even if
+	// it never received that retained message.
+	if raw, ok := params["plan"]; ok {
+		plan, err := decodeWeatherDelayPlanParam(raw)
+		if err != nil {
+			return OperationResult{}, fmt.Errorf("weatherdelay.start: params.plan: %w", err)
+		}
+		// An empty plan means the coordinator could not build one, not
+		// that there is no alert: overwriting with it would throw away a
+		// plan this node already had and silence the alert.
+		if plan.Delay != nil || plan.CancelNight != nil {
+			if err := o.holder.SetPlanLocal(plan); err != nil {
+				o.holder.log().Warn("weatherdelay.start: failed to persist the plan carried in the command", "error", err)
+			}
+		}
+	}
 
 	executedAt := now()
 	heldKind, alertPlaying, alertReason, unsilenced := o.startHeld(ctx, kind, executedAt)
@@ -126,6 +145,24 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 // weatherDelayAlreadyCancelledMessage is reported when a delay start finds
 // the night already cancelled; the cancel alert keeps playing.
 const weatherDelayAlreadyCancelledMessage = "The night is already cancelled, so the cancel alert keeps playing. Resume the show to clear it."
+
+// decodeWeatherDelayPlanParam round-trips params.plan (already decoded by
+// the command envelope into a generic map[string]any) through JSON into a
+// validated [mqttproto.WeatherDelayPlan].
+func decodeWeatherDelayPlanParam(raw any) (mqttproto.WeatherDelayPlan, error) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return mqttproto.WeatherDelayPlan{}, fmt.Errorf("encode: %w", err)
+	}
+	var plan mqttproto.WeatherDelayPlan
+	if err := json.Unmarshal(b, &plan); err != nil {
+		return mqttproto.WeatherDelayPlan{}, fmt.Errorf("decode: %w", err)
+	}
+	if err := plan.Validate(); err != nil {
+		return mqttproto.WeatherDelayPlan{}, err
+	}
+	return plan, nil
+}
 
 // doStart marks the holder active and runs the start sequence.
 func (o *weatherDelayOperations) doStart(ctx context.Context, kind string, executedAt time.Time) (alertPlaying bool, alertReason string, unsilenced []string) {
