@@ -664,16 +664,10 @@ func TestWeatherDelayRepeatedStartAfterAnEmergencySilenceReportsNotPlaying(t *te
 	}
 }
 
-// TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero records a
-// defect this pull request does not fix: the audio manager's Apply over an
-// already-advanced session keeps the stale item index (internal/agent/audio
-// holds the manager-level repro), and an alert session is reused across a
-// resume, so a second delay of the same night plays only the repeats left
-// after the first one's index. ADR-053 decision 7 requires the configured
-// repeat count every time.
+// TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero proves a second
+// delay in one night plays its full repeat count: each alert starts on a
+// session that has never played.
 func TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero(t *testing.T) {
-	t.Skip("known defect: the second alert of the same kind in one night starts at the first alert's last item index instead of item 0, so it plays fewer than the configured repeats; the cause is the audio manager's Apply over an advanced session, recorded in internal/agent/audio")
-
 	dir := t.TempDir()
 	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
