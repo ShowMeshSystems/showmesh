@@ -14761,7 +14761,12 @@ components:
         command itself, whose deliveredVia is one of mqtt, http, both, or
         none (ADR-053 decision 8: a node reached by either path counts as
         reached), or weather-gate for the gate close (on start) or open
-        (on resume) sent to one configured FPP instance.
+        (on resume) sent to one configured FPP instance. alertPlaying and
+        alertReason are the node's own report of whether ITS alert is
+        playing, set only for node-command on a start/cancel-night
+        dispatch (never resume, which has no alert to report): a node
+        reached with no alert playing is still outcome "confirmed", never
+        "failed", with alertReason carrying why nothing plays.
       required: [instanceId, targetKind, outcome, outcomeReason]
       properties:
         instanceId:
@@ -14780,6 +14785,10 @@ components:
           type: string
           format: date-time
           nullable: true
+        alertPlaying:
+          type: boolean
+        alertReason:
+          type: string
     WeatherDelayActionResult:
       type: object
       required: [kind, idempotencyKey, active, revision, targets]

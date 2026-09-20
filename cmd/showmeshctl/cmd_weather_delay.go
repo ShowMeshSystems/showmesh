@@ -85,6 +85,8 @@ type weatherDelayTargetOutcome struct {
 	OutcomeReason string  `json:"outcomeReason"`
 	DeliveredVia  string  `json:"deliveredVia"`
 	DispatchedAt  *string `json:"dispatchedAt"`
+	AlertPlaying  bool    `json:"alertPlaying"`
+	AlertReason   string  `json:"alertReason"`
 }
 
 type weatherDelayActionResult struct {
@@ -218,6 +220,11 @@ func reportWeatherDelayActionResult(stdout io.Writer, result weatherDelayActionR
 			via = fmt.Sprintf(" via %s", t.DeliveredVia)
 		}
 		_, _ = fmt.Fprintf(stdout, "  %s %s: %s%s (%s)\n", t.TargetKind, t.InstanceID, t.Outcome, via, t.OutcomeReason)
+		if t.TargetKind == "node-command" && t.AlertPlaying {
+			_, _ = fmt.Fprintln(stdout, "    alert playing: true")
+		} else if t.TargetKind == "node-command" && t.AlertReason != "" {
+			_, _ = fmt.Fprintf(stdout, "    alert playing: false (%s)\n", t.AlertReason)
+		}
 	}
 	return exitCodeForWeatherDelayResult(result)
 }

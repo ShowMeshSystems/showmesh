@@ -18,8 +18,11 @@ import (
 // every reachable plan node. The immediate stop already ran in the start.
 
 // weatherDelayCancelAlertSessionID mirrors internal/agent's
-// weatherDelayAlertSessionID; this package never imports internal/agent.
-const weatherDelayCancelAlertSessionID = "weatherdelay:alert"
+// weatherDelayAlertSessionIDForKind(weatherdelay.KindCancelNight); this
+// package never imports internal/agent. The cancel alert has its own
+// session, distinct from the delay alert's, so this wait can never be
+// satisfied by the delay alert's session stopping or being replaced.
+const weatherDelayCancelAlertSessionID = "weatherdelay:alert:" + weatherdelay.KindCancelNight
 
 // weatherDelayCancelShutdownCeiling is the longest the shutdown waits for
 // the alert. The coordinator never knows an asset's decoded duration, so

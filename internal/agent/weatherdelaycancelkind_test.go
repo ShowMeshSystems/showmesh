@@ -17,20 +17,43 @@ import (
 // Covers the node's cancel-night rules: a wrong alert never keeps playing,
 // and a delay start never downgrades a cancelled night.
 
-func alertSessionPlaying(t *testing.T, ops *weatherDelayOperations) bool {
+func alertSessionPlaying(t *testing.T, ops *weatherDelayOperations, kind string) bool {
 	t.Helper()
+	own := weatherDelayAlertSessionIDForKind(kind)
 	for _, s := range ops.audioMgr.Snapshot(context.Background()) {
-		if s.ID == weatherDelayAlertSessionID && s.State == pkgaudio.StatePlaying {
+		if s.ID == own && s.State == pkgaudio.StatePlaying {
 			return true
 		}
 	}
 	return false
 }
 
+// waitForAlertSessionPlaying polls until kind's own alert session reports
+// playing == want, bounded to 5s: the OTHER kind's session is stopped by
+// runStartSequence's background goroutine, never synchronously with the
+// start call that displaced it.
+func waitForAlertSessionPlaying(t *testing.T, ops *weatherDelayOperations, kind string, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if alertSessionPlaying(t, ops, kind) == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s alert session playing = %v after 5s, want %v", kind, !want, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func newCancelKindTestOps(t *testing.T, withCancelRef, withCancelFile bool) (*weatherDelayOperations, *weatherDelayRecordingEngine) {
 	t.Helper()
-	t.Cleanup(weatherDelayBackground.Wait)
 	dir := t.TempDir()
+	// Registered after TempDir's own cleanup, so cleanups run in the
+	// opposite order (LIFO): this Wait fires before the directory removal,
+	// never racing runStartSequence's background stop of the other kind's
+	// session against the temp dir going away.
+	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
 	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
 	delayHash := writeAssetFixture(t, dir, "delay.wav", []byte("delay alert audio"))
@@ -64,7 +87,7 @@ func TestWeatherDelayChangeToCancelWithNoCancelAlertStopsTheDelayAlert(t *testin
 			if played, reason, _ := ops.doStart(context.Background(), weatherdelay.KindDelay, time.Now()); !played {
 				t.Fatalf("delay start did not play: %s", reason)
 			}
-			if !alertSessionPlaying(t, ops) {
+			if !alertSessionPlaying(t, ops, weatherdelay.KindDelay) {
 				t.Fatal("delay alert is not playing before the change")
 			}
 
@@ -75,9 +98,7 @@ func TestWeatherDelayChangeToCancelWithNoCancelAlertStopsTheDelayAlert(t *testin
 			if reason != tc.wantReason {
 				t.Fatalf("reason = %q, want %q", reason, tc.wantReason)
 			}
-			if alertSessionPlaying(t, ops) {
-				t.Fatal("the delay alert is still playing after the night was cancelled")
-			}
+			waitForAlertSessionPlaying(t, ops, weatherdelay.KindDelay, false)
 			if got := ops.holder.Current().Kind; got != weatherdelay.KindCancelNight {
 				t.Fatalf("holder kind = %q, want cancelNight", got)
 			}
@@ -95,7 +116,7 @@ func TestWeatherDelayStateMessageChangeToCancelWithNoCancelAlertStopsTheDelayAle
 		t.Fatalf("NewWeatherDelayMessage(delay): %v", err)
 	}
 	ops.react(context.Background(), ops.holder.SetFromMessage(delayMsg), weatherdelay.KindDelay)
-	if !alertSessionPlaying(t, ops) {
+	if !alertSessionPlaying(t, ops, weatherdelay.KindDelay) {
 		t.Fatal("delay alert is not playing before the change")
 	}
 
@@ -108,9 +129,7 @@ func TestWeatherDelayStateMessageChangeToCancelWithNoCancelAlertStopsTheDelayAle
 		t.Fatalf("transition = %v, want weatherDelayKindChanged", transition)
 	}
 	ops.react(context.Background(), transition, weatherdelay.KindCancelNight)
-	if alertSessionPlaying(t, ops) {
-		t.Fatal("the delay alert is still playing after the night was cancelled")
-	}
+	waitForAlertSessionPlaying(t, ops, weatherdelay.KindDelay, false)
 }
 
 // startCount counts engine Start calls, one per alert actually started.
@@ -192,7 +211,7 @@ func TestWeatherDelaySignedHTTPStartNeverDowngradesACancelledNight(t *testing.T)
 	if k := f.holder.Current().Kind; k != weatherdelay.KindCancelNight {
 		t.Fatalf("holder kind = %q, want cancelNight", k)
 	}
-	if !alertSessionPlaying(t, ops) {
+	if !alertSessionPlaying(t, ops, weatherdelay.KindCancelNight) {
 		t.Fatal("the cancel alert stopped after a delay start")
 	}
 }
@@ -220,7 +239,7 @@ func TestWeatherDelayStateMessageDowngradesOnlyOnANewerStateNumber(t *testing.T)
 			t.Fatalf("delay message at %d: holder kind = %q, want cancelNight", rev, k)
 		}
 	}
-	if after := startCount(engine); after != before || !alertSessionPlaying(t, ops) {
+	if after := startCount(engine); after != before || !alertSessionPlaying(t, ops, weatherdelay.KindCancelNight) {
 		t.Fatalf("the cancel alert was disturbed by an older delay message (starts %d to %d)", before, after)
 	}
 

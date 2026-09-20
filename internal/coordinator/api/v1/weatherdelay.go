@@ -98,7 +98,12 @@ type WeatherDelayActionRequest struct {
 // [EmergencyStopTargetKindRender], or "node-command" for the
 // weatherdelay.start/resume node command itself. DeliveredVia is set only
 // for "node-command": "mqtt", "http", "both", or "none", ADR-053 decision
-// 8's "a node reached by either path counts as reached."
+// 8's "a node reached by either path counts as reached." AlertPlaying and
+// AlertReason are the node's own report of whether ITS alert is playing,
+// set only for "node-command" on a start/cancel-night dispatch (never
+// resume, which has no alert to report): a node reached with no alert
+// playing is still Outcome "confirmed", never "failed", with AlertReason
+// carrying why nothing plays.
 type WeatherDelayTargetOutcome struct {
 	InstanceID    string  `json:"instanceId"`
 	TargetKind    string  `json:"targetKind"`
@@ -106,6 +111,8 @@ type WeatherDelayTargetOutcome struct {
 	OutcomeReason string  `json:"outcomeReason"`
 	DeliveredVia  string  `json:"deliveredVia,omitempty"`
 	DispatchedAt  *string `json:"dispatchedAt"`
+	AlertPlaying  bool    `json:"alertPlaying,omitempty"`
+	AlertReason   string  `json:"alertReason,omitempty"`
 }
 
 // WeatherDelayTargetKindNodeCommand is the weatherdelay.start/resume node

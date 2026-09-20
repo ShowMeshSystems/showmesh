@@ -127,12 +127,27 @@ func startSessionCmd(nodeID, commandID, sessionID string) mqttproto.CmdPayload {
 // [mqttproto.AudioSessionReport] per session id — the surface this test
 // reads to tell whether a transition happened locally during the outage.
 type audioReportSubscriber struct {
-	mu     sync.Mutex
-	latest map[string]mqttproto.AudioSessionReport
+	mu      sync.Mutex
+	latest  map[string]mqttproto.AudioSessionReport
+	history map[string][]audioReportObservation
+}
+
+// audioReportObservation is one historical report, timestamped when this
+// subscriber's own background MQTT callback received it (never when a
+// test later happens to read it): the callback runs on the client's own
+// goroutine regardless of what the test's foreground code is doing, so
+// this timeline stays accurate even while the test is blocked elsewhere,
+// e.g. inside a slow HTTP call.
+type audioReportObservation struct {
+	at     time.Time
+	report mqttproto.AudioSessionReport
 }
 
 func newAudioReportSubscriber() *audioReportSubscriber {
-	return &audioReportSubscriber{latest: make(map[string]mqttproto.AudioSessionReport)}
+	return &audioReportSubscriber{
+		latest:  make(map[string]mqttproto.AudioSessionReport),
+		history: make(map[string][]audioReportObservation),
+	}
 }
 
 func (w *audioReportSubscriber) onPublish(pr paho.PublishReceived) (bool, error) {
@@ -147,10 +162,12 @@ func (w *audioReportSubscriber) onPublish(pr paho.PublishReceived) (bool, error)
 	if err != nil {
 		return true, nil
 	}
+	now := time.Now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, s := range p.Sessions {
 		w.latest[s.SessionID] = s
+		w.history[s.SessionID] = append(w.history[s.SessionID], audioReportObservation{at: now, report: s})
 	}
 	return true, nil
 }
@@ -160,6 +177,16 @@ func (w *audioReportSubscriber) latestFor(sessionID string) (mqttproto.AudioSess
 	defer w.mu.Unlock()
 	s, ok := w.latest[sessionID]
 	return s, ok
+}
+
+// historyFor returns every report this subscriber has received for
+// sessionID, in receipt order.
+func (w *audioReportSubscriber) historyFor(sessionID string) []audioReportObservation {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]audioReportObservation, len(w.history[sessionID]))
+	copy(out, w.history[sessionID])
+	return out
 }
 
 // subscribeAudioReports connects a raw client as "coordinator" (the same

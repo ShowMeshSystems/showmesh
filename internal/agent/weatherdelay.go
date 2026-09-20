@@ -133,10 +133,24 @@ type WeatherDelayHolder struct {
 	logger *slog.Logger
 
 	// alertStartMu serializes alert starts and stops from every delivery
-	// path; alertMu guards alertKind, the kind of the alert last started.
+	// path, across both kinds' sessions, and guards startedAlertKind.
 	alertStartMu sync.Mutex
-	alertMu      sync.Mutex
-	alertKind    string
+
+	// startedAlertKind is the kind whose session this node's own Start
+	// call last succeeded on, and has not since been stopped: the
+	// synchronous, in-memory idempotency signal a second start of the
+	// same kind is checked against, never reset by anything but a stop.
+	// ADR-053 decision 8 delivers a start over the MQTT command and the
+	// retained state topic in parallel, so two calls for the same kind can
+	// genuinely race each other in; a check against the audio manager's
+	// own Snapshot instead would depend on the engine having already
+	// confirmed Playing, which a real engine does not do synchronously
+	// with Start returning, and losing that race would Apply the same
+	// kind's playlist over its own already-loaded session (the very
+	// defect internal/agent/audio's own skipped test records). Never
+	// persisted: a fresh process always starts at "", matching the
+	// existing boot rule that an alert session is never resumable.
+	startedAlertKind string
 }
 
 // NewWeatherDelayHolder loads what this node last persisted and must run

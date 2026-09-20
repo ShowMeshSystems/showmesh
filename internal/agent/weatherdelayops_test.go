@@ -371,11 +371,13 @@ func TestWeatherDelaySecondStartDoesNotStackTheAlert(t *testing.T) {
 }
 
 // TestWeatherDelayChangeInPlaceReplacesTheAlert proves ADR-053 decision 1:
-// while a delay's alert is playing, a start for cancelNight replaces it
-// with the cancel alert on the same session, rather than stacking or being
-// ignored as "already active."
+// while a delay's alert is playing, a start for cancelNight starts the
+// cancel alert on its own session and stops the delay alert's session like
+// any other audio, rather than stacking or being ignored as "already
+// active."
 func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
 	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
 
@@ -421,9 +423,23 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	live, err := engine.LiveHandles(context.Background())
-	if err != nil {
-		t.Fatalf("LiveHandles: %v", err)
+	// The delay alert's session is stopped by a background goroutine, not
+	// synchronously with the cancelNight start that displaced it.
+	var live []audio.EngineHandle
+	releaseDeadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		live, err = engine.LiveHandles(context.Background())
+		if err != nil {
+			t.Fatalf("LiveHandles: %v", err)
+		}
+		if len(live) == 1 {
+			break
+		}
+		if time.Now().After(releaseDeadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if len(live) != 1 || !strings.HasSuffix(string(live[0]), "cancelNight-0") {
 		t.Fatalf("live engine handles = %v, want only the cancel alert (the delay alert released)", live)
@@ -436,6 +452,7 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 // stays the delay's original start, and the alert switches.
 func TestWeatherDelayStateMessageKindChangeReplacesTheAlert(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
 	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
 

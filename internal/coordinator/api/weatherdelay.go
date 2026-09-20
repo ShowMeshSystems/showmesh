@@ -33,6 +33,12 @@ var (
 
 const maxWeatherDelayActionRequestBodyBytes = 1024
 
+// maxWeatherDelayHTTPNodeStartResponseBytes bounds how much of a node's
+// direct-HTTP start response this reads, mirroring the node's own
+// weatherDelayHTTPMaxBodyBytes (internal/agent/weatherdelayhttp.go); this
+// package never imports internal/agent.
+const maxWeatherDelayHTTPNodeStartResponseBytes = 4 * 1024
+
 // weatherDelayNodeCommandConfirmDeadline bounds how long the
 // weatherdelay.start/resume node command waits for evidence on its
 // result topic, mirroring audioCommandConfirmDeadline's identical role
@@ -769,17 +775,19 @@ func (h *handlers) weatherDelayDispatchToNodes(ctx context.Context, now time.Tim
 // other, so neither ever waits on the other's confirmation or timeout.
 func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey, nodeID string, ac authContext, clientAddr string, allowHTTP bool) v1.WeatherDelayTargetOutcome {
 	var (
-		mqttOK, httpOK   bool
-		mqttReason       string
-		mqttDispatchedAt *string
-		httpAttempted    bool
+		mqttOK, httpOK                     bool
+		mqttReason                         string
+		mqttDispatchedAt                   *string
+		mqttAlertPlaying, httpAlertPlaying bool
+		mqttAlertReason, httpAlertReason   string
+		httpAttempted                      bool
 	)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mqttOK, mqttReason, mqttDispatchedAt = h.weatherDelayMQTTNodeCommand(ctx, now, action, kind, idempotencyKey, nodeID, ac, clientAddr)
+		mqttOK, mqttReason, mqttDispatchedAt, mqttAlertPlaying, mqttAlertReason = h.weatherDelayMQTTNodeCommand(ctx, now, action, kind, idempotencyKey, nodeID, ac, clientAddr)
 	}()
 
 	if allowHTTP {
@@ -788,7 +796,7 @@ func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				httpOK = h.weatherDelayHTTPNodeStart(ctx, kind, addr)
+				httpOK, httpAlertPlaying, httpAlertReason = h.weatherDelayHTTPNodeStart(ctx, kind, addr)
 			}()
 		}
 	}
@@ -814,13 +822,41 @@ func (h *handlers) dispatchWeatherDelayNodeCommand(ctx context.Context, now time
 		reason = mqttReason + "; no reported inbound listener for the direct HTTP path"
 	}
 
+	// mqttOK is preferred, matching deliveredVia's own tie-break, since the
+	// MQTT result carries the node's own evidence, not just a 2xx status.
+	alertPlaying, alertReason := httpAlertPlaying, httpAlertReason
+	if mqttOK {
+		alertPlaying, alertReason = mqttAlertPlaying, mqttAlertReason
+	}
+
 	return v1.WeatherDelayTargetOutcome{
 		InstanceID: nodeID, TargetKind: v1.WeatherDelayTargetKindNodeCommand,
 		Outcome: outcome, OutcomeReason: reason, DeliveredVia: deliveredVia, DispatchedAt: mqttDispatchedAt,
+		AlertPlaying: alertPlaying, AlertReason: alertReason,
 	}
 }
 
-func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey, nodeID string, ac authContext, clientAddr string) (ok bool, reason string, dispatchedAt *string) {
+// weatherDelayAlertOutcomeFromValue reads the alertPlaying/alertReason
+// fields an agent's weatherdelay.start operation reports on read-back
+// (internal/agent/weatherdelayops.go's OperationResult.Value, carried onto
+// the wire as mqttproto.ResultEvidence.Value); a value with neither key
+// (weatherdelay.resume's, which has no alert to report) or a nil evidence
+// answers false, "".
+func weatherDelayAlertOutcomeFromValue(value any) (playing bool, reason string) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false, ""
+	}
+	if v, ok := m["alertPlaying"].(bool); ok {
+		playing = v
+	}
+	if v, ok := m["alertReason"].(string); ok {
+		reason = v
+	}
+	return playing, reason
+}
+
+func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Time, action, kind, idempotencyKey, nodeID string, ac authContext, clientAddr string) (ok bool, reason string, dispatchedAt *string, alertPlaying bool, alertReason string) {
 	commandID := uuid.NewString()
 	params := map[string]any{}
 	if kind != "" {
@@ -829,11 +865,11 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 
 	cmdTopic, err := mqttproto.CmdTopic(nodeID)
 	if err != nil {
-		return false, fmt.Sprintf("build cmd topic: %v", err), nil
+		return false, fmt.Sprintf("build cmd topic: %v", err), nil, false, ""
 	}
 	resultTopic, err := mqttproto.ResultTopic(nodeID, commandID)
 	if err != nil {
-		return false, fmt.Sprintf("build result topic: %v", err), nil
+		return false, fmt.Sprintf("build result topic: %v", err), nil, false, ""
 	}
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: idempotencyKey, Action: action,
@@ -843,11 +879,11 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {
-		return false, fmt.Sprintf("build cmd envelope: %v", err), nil
+		return false, fmt.Sprintf("build cmd envelope: %v", err), nil, false, ""
 	}
 	rawEnv, err := json.Marshal(env)
 	if err != nil {
-		return false, fmt.Sprintf("marshal cmd envelope: %v", err), nil
+		return false, fmt.Sprintf("marshal cmd envelope: %v", err), nil, false, ""
 	}
 
 	dispatchedAtStr := formatTime(now)
@@ -864,7 +900,7 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 	})
 	if err != nil {
 		if errors.Is(err, broker.ErrResponseFailedBeforePublish) {
-			return false, fmt.Sprintf("publish failed: %v", err), nil
+			return false, fmt.Sprintf("publish failed: %v", err), nil, false, ""
 		}
 		// The command WAS published, see [broker.ResponseRequest]'s doc
 		// comment: AwaitResponse subscribes then publishes, so a deadline
@@ -872,17 +908,20 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 		// broker. That is enough to count this node as reached over MQTT:
 		// the plan's ordinary confirmation path (this same result topic)
 		// is separate best-effort evidence, not this outcome's own gate.
-		return true, fmt.Sprintf("published, but no result was confirmed before the deadline: %v", err), &dispatchedAtStr
+		return true, fmt.Sprintf("published, but no result was confirmed before the deadline: %v", err), &dispatchedAtStr, false, ""
 	}
 	env2, err := mqttproto.DecodeEnvelope(msg.Payload)
 	if err != nil {
-		return true, "published; result payload did not decode", &dispatchedAtStr
+		return true, "published; result payload did not decode", &dispatchedAtStr, false, ""
 	}
 	res, err := mqttproto.DecodeResultPayload(env2)
 	if err != nil {
-		return true, "published; result payload did not decode", &dispatchedAtStr
+		return true, "published; result payload did not decode", &dispatchedAtStr, false, ""
 	}
-	return true, res.Reason, &dispatchedAtStr
+	if res.Evidence != nil {
+		alertPlaying, alertReason = weatherDelayAlertOutcomeFromValue(res.Evidence.Value)
+	}
+	return true, res.Reason, &dispatchedAtStr, alertPlaying, alertReason
 }
 
 // weatherDelayHTTPNodeStart POSTs a signed start directly to addr's
@@ -890,37 +929,49 @@ func (h *handlers) weatherDelayMQTTNodeCommand(ctx context.Context, now time.Tim
 // as its fallback (ADR-053 decision 8). false on any failure to sign,
 // build, or send the request, or a non-2xx response, this path is
 // evidence, not a requirement; MQTT alone can still deliver the start.
-func (h *handlers) weatherDelayHTTPNodeStart(ctx context.Context, kind, addr string) bool {
+// alertPlaying/alertReason carry the node's own response body fields
+// (handleWeatherDelayStart's own "alertPlaying"/"alertReason"), decoded
+// best-effort: a response that fails to decode still counts the node
+// reached, just with nothing to report about its alert.
+func (h *handlers) weatherDelayHTTPNodeStart(ctx context.Context, kind, addr string) (ok bool, alertPlaying bool, alertReason string) {
 	req := weatherdelay.StartRequest{Kind: kind, IssuedAt: h.now(), Nonce: uuid.NewString()}
 	signed, err := weatherdelay.Sign(req, h.deps.WeatherDelaySigner)
 	if err != nil {
 		h.logWarn("weather delay start: failed to sign the direct-HTTP start request", "addr", addr, "error", err)
-		return false
+		return false, false, ""
 	}
 	body, err := json.Marshal(signed)
 	if err != nil {
 		h.logWarn("weather delay start: failed to encode the direct-HTTP start request", "addr", addr, "error", err)
-		return false
+		return false, false, ""
 	}
 	url := "http://" + addr + "/showmesh/v1/weather-delay/start"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		h.logWarn("weather delay start: failed to build the direct-HTTP start request", "addr", addr, "error", err)
-		return false
+		return false, false, ""
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := weatherDelayHTTPClient.Do(httpReq)
 	if err != nil {
 		h.logWarn("weather delay start: direct-HTTP start request failed", "addr", addr, "error", err)
-		return false
+		return false, false, ""
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		h.logWarn("weather delay start: direct-HTTP start request refused", "addr", addr, "status", resp.StatusCode)
-		return false
+		return false, false, ""
 	}
-	return true
+	var decoded struct {
+		AlertPlaying bool   `json:"alertPlaying"`
+		AlertReason  string `json:"alertReason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxWeatherDelayHTTPNodeStartResponseBytes)).Decode(&decoded); err != nil {
+		h.logWarn("weather delay start: direct-HTTP start response did not decode; the node was still reached", "addr", addr, "error", err)
+		return true, false, ""
+	}
+	return true, decoded.AlertPlaying, decoded.AlertReason
 }
 
 // weatherDelayWireOutcomes maps [v1.EmergencyStopInstanceOutcome] (this

@@ -42,11 +42,22 @@ import (
 // graceful night shutdown it schedules behind its own alert.
 
 // weatherDelayAlertSessionIDForTest mirrors internal/agent/weatherdelayops.go's
-// unexported weatherDelayAlertSessionID constant ("weatherdelay:alert").
-// It cannot be imported (package agent, not exported), so this is the
-// literal string a test observes on the wire via the node's own
-// observed/audio report.
-const weatherDelayAlertSessionIDForTest = "weatherdelay:alert"
+// unexported weatherDelayAlertSessionIDForKind(weatherdelay.KindDelay)
+// ("weatherdelay:alert:delay"). It cannot be imported (package agent, not
+// exported), so this is the literal string a test observes on the wire via
+// the node's own observed/audio report. Every scenario but 6 (cancel
+// night) only ever exercises the delay kind, so this name stays the
+// default; scenario 6 also uses weatherDelayCancelAlertSessionIDForTest for
+// the cancel kind's own, separate session.
+const weatherDelayAlertSessionIDForTest = "weatherdelay:alert:delay"
+
+// weatherDelayCancelAlertSessionIDForTest mirrors
+// weatherDelayAlertSessionIDForKind(weatherdelay.KindCancelNight)
+// ("weatherdelay:alert:cancelNight"), the cancel-night alert's own session,
+// distinct from the delay alert's: ADR-053 decision 1's delay-to-cancel
+// change in place must never replace a playlist already loaded and playing
+// on the delay alert's session.
+const weatherDelayCancelAlertSessionIDForTest = "weatherdelay:alert:cancelNight"
 
 // --- weatherDelayFPPStub: a stand-in FPP player plus its ShowMesh plugin ---
 
@@ -710,14 +721,20 @@ func waitForCountToSettle(t *testing.T, count func() int, deadline, settle time.
 }
 
 // waitForNodeAlertSession polls the node's own observed/audio report for
-// the weather delay alert session reaching wantState with the announcement
-// role.
+// the delay alert's session reaching wantState with the announcement role.
 func waitForNodeAlertSession(t *testing.T, sub *audioReportSubscriber, wantState string) {
 	t.Helper()
+	waitForNodeAlertSessionID(t, sub, weatherDelayAlertSessionIDForTest, wantState)
+}
+
+// waitForNodeAlertSessionID is waitForNodeAlertSession against a specific
+// alert session id, for scenario 6, which exercises both kinds' sessions.
+func waitForNodeAlertSessionID(t *testing.T, sub *audioReportSubscriber, sessionID, wantState string) {
+	t.Helper()
 	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
-		p, ok := sub.latestFor(weatherDelayAlertSessionIDForTest)
+		p, ok := sub.latestFor(sessionID)
 		return ok && p.State == wantState && p.HasSourceRole && p.SourceRole == "announcement"
-	}, fmt.Sprintf("the weather delay alert session (%s) to report state %q with the announcement role", weatherDelayAlertSessionIDForTest, wantState))
+	}, fmt.Sprintf("the weather delay alert session (%s) to report state %q with the announcement role", sessionID, wantState))
 }
 
 // --- Scenario 1: one press ---
@@ -1227,26 +1244,70 @@ func weatherDelayNightShutdownRan(t *testing.T, coord *testCoordinator, since ui
 // the one it had.
 func alertPlaylistRevision(t *testing.T, sub *audioReportSubscriber) uint64 {
 	t.Helper()
-	p, ok := sub.latestFor(weatherDelayAlertSessionIDForTest)
+	return alertPlaylistRevisionForSession(t, sub, weatherDelayAlertSessionIDForTest)
+}
+
+func alertPlaylistRevisionForSession(t *testing.T, sub *audioReportSubscriber, sessionID string) uint64 {
+	t.Helper()
+	p, ok := sub.latestFor(sessionID)
 	if !ok || !p.HasPlaylist {
-		t.Fatalf("no alert session playlist reported for %s", weatherDelayAlertSessionIDForTest)
+		t.Fatalf("no alert session playlist reported for %s", sessionID)
 	}
 	return p.PlaylistRevision
 }
 
+// observeAlertPlayback waits until sessionID's own reports at wantRevision
+// leave the playing state (or deadline elapses since the call), then reads
+// sub's FULL history for that session — never a live poll loop's own
+// timing — and returns how long it was reported playing (first playing
+// observation to last) plus the set of item indexes it saw playing.
+// sub's background MQTT callback timestamps each report the instant its
+// own goroutine receives it, so this stays accurate even when the test's
+// own foreground code was blocked elsewhere for a while (a cancel-night
+// POST can itself take several seconds to return; nothing about that
+// coordinator-side latency may be mistaken for the alert's own truncation).
+// Used to prove an alert played in full rather than trusting a single
+// point-in-time read, against the case where it replaced a DIFFERENT
+// alert already loaded and playing on another session (ADR-053 decision
+// 7): before the fix, the audio manager's own Apply-over-a-loaded-
+// playlist defect (recorded, skipped, in internal/agent/audio) meant
+// weather delay's shared alert session reported a played-through defect,
+// not an absent one.
+func observeAlertPlayback(t *testing.T, sub *audioReportSubscriber, sessionID string, wantRevision uint64, deadline time.Duration) (playedFor time.Duration, indexesSeen map[int64]bool) {
+	t.Helper()
+	waitFor(t, deadline, 200*time.Millisecond, func() bool {
+		p, ok := sub.latestFor(sessionID)
+		return ok && p.HasPlaylist && p.PlaylistRevision == wantRevision && p.State != "playing"
+	}, fmt.Sprintf("the alert session %s at playlist revision %d to leave the playing state", sessionID, wantRevision))
+
+	indexesSeen = map[int64]bool{}
+	var first, last time.Time
+	for _, obs := range sub.historyFor(sessionID) {
+		if !obs.report.HasPlaylist || obs.report.PlaylistRevision != wantRevision || obs.report.State != "playing" {
+			continue
+		}
+		if first.IsZero() {
+			first = obs.at
+		}
+		last = obs.at
+		if obs.report.HasItem {
+			indexesSeen[obs.report.ItemIndex] = true
+		}
+	}
+	if first.IsZero() {
+		return 0, indexesSeen
+	}
+	return last.Sub(first), indexesSeen
+}
+
 // TestWeatherDelayCancelNight proves ADR-053 decisions 1 and 11's
 // cancel-night path against the real coordinator: a delay changes to a
-// cancel in place with its start time kept, the node switches to the cancel
-// alert, a night start is refused with the cancelled sentence, a delay start
-// does not downgrade the cancellation, clearing it starts nothing, and the
-// graceful night shutdown runs only once the cancel alert has ended.
-//
-// The shutdown's wait is proved against a cancel pressed with no alert
-// already loaded on the node. A cancel that REPLACES an alert the node has
-// already loaded runs most of its own alert's items through without playing
-// them, so against that press the wait would be unobservable rather than
-// absent. That is a product defect, recorded in the pull request's
-// acceptance gaps, not a property this test asserts.
+// cancel in place with its start time kept, the cancel alert plays in full
+// on its OWN session even though it replaces a delay alert already loaded
+// and playing on a different one, a night start is refused with the
+// cancelled sentence, a delay start does not downgrade the cancellation,
+// clearing it starts nothing, and the graceful night shutdown runs only
+// once the cancel alert has ended.
 func TestWeatherDelayCancelNight(t *testing.T) {
 	f := newWeatherDelayFixture(t, 0)
 
@@ -1291,12 +1352,38 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 		t.Fatalf("cancel-night revision = %d, want greater than the delay's %d so nodes act on it", cancelResp.Result.Revision, startResp.Result.Revision)
 	}
 
-	// The node loads the cancel alert on the same session: a new playlist
-	// revision carrying cancelNight items, not the delay alert still there.
+	// The node starts the cancel alert on its OWN session, never the delay
+	// alert's: a delay-to-cancel change in place must not Apply the cancel
+	// alert's playlist onto a session the delay alert already has loaded
+	// and playing.
 	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
-		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
-		return ok && p.HasPlaylist && p.PlaylistRevision > delayAlertRevision && strings.HasPrefix(p.ItemID, "cancelNight-")
-	}, "the node to switch to the cancel-night alert rather than keep the delay alert loaded")
+		p, ok := audioSub.latestFor(weatherDelayCancelAlertSessionIDForTest)
+		return ok && p.HasPlaylist && strings.HasPrefix(p.ItemID, "cancelNight-")
+	}, "the node to start the cancel-night alert on its own session rather than the delay alert's")
+	cancelPlaylistRevision := alertPlaylistRevisionForSession(t, audioSub, weatherDelayCancelAlertSessionIDForTest)
+	if p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest); ok && p.HasPlaylist && p.PlaylistRevision != delayAlertRevision {
+		t.Fatalf("the delay alert's own session playlist revision changed from %d to %d after the night was cancelled; the cancel alert must never Apply its playlist onto the delay alert's session", delayAlertRevision, p.PlaylistRevision)
+	}
+
+	// The cancel alert, replacing a delay alert already loaded and playing
+	// on a different session, must still play in full: repeatCount 3
+	// against a 4s asset is about 12s. Before the fix, a delay-to-cancel
+	// change in place Applied the cancel alert's playlist onto the delay
+	// alert's OWN loaded session, and the audio manager's Apply-over-a-
+	// loaded-playlist defect truncated it to well under a second.
+	sinceCancelSeq := weatherDelayLatestEventSeq(t, f.coord)
+	playedFor, indexesSeen := observeAlertPlayback(t, audioSub, weatherDelayCancelAlertSessionIDForTest, cancelPlaylistRevision, 20*time.Second)
+	if playedFor < 10*time.Second {
+		t.Fatalf("the cancel alert reported playing state for only %s after replacing a loaded delay alert, want at least 10s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
+	}
+	for _, idx := range []int64{0, 1, 2} {
+		if !indexesSeen[idx] {
+			t.Fatalf("the cancel alert never reported item index %d playing after replacing a loaded delay alert; observed indexes: %v", idx, indexesSeen)
+		}
+	}
+	if weatherDelayNightShutdownRan(t, f.coord, sinceCancelSeq) {
+		t.Fatalf("the graceful night shutdown ran before the cancel alert, replacing a loaded delay alert, finished playing")
+	}
 
 	status, body := postRawWithToken(t, f.coord, "/api/v1/night/commands/start-night", f.token, map[string]string{"idempotencyKey": "wd-" + uniqueSuffix()})
 	if status != http.StatusConflict {
@@ -1335,18 +1422,19 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 	}
 
 	// The graceful night shutdown waits for the cancel alert. The clear above
-	// stopped the alert session, so this cancel's own alert plays in full.
+	// stopped the alert session, so this cancel's own alert plays in full,
+	// starting fresh on its own session (nothing was loaded on it before).
 	sinceSeq := weatherDelayLatestEventSeq(t, f.coord)
 	weatherDelayAction(t, f.coord, f.token, "/api/v1/weather-delay/cancel-night")
-	waitForNodeAlertSession(t, audioSub, "playing")
+	waitForNodeAlertSessionID(t, audioSub, weatherDelayCancelAlertSessionIDForTest, "playing")
 	if weatherDelayNightShutdownRan(t, f.coord, sinceSeq) {
 		t.Fatalf("the graceful night shutdown ran while the cancel alert was still playing; ADR-053 decision 11 runs it only after the alert ends")
 	}
-	if p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest); !ok || p.State != "playing" {
+	if p, ok := audioSub.latestFor(weatherDelayCancelAlertSessionIDForTest); !ok || p.State != "playing" {
 		t.Fatalf("the cancel alert was no longer playing (report present: %v, state %q) when the shutdown was checked, so that check proved nothing", ok, p.State)
 	}
 	waitFor(t, 60*time.Second, 200*time.Millisecond, func() bool {
-		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		p, ok := audioSub.latestFor(weatherDelayCancelAlertSessionIDForTest)
 		return ok && p.State != "playing"
 	}, "the cancel-night alert to finish its own repeat count")
 	waitFor(t, 60*time.Second, 500*time.Millisecond, func() bool {

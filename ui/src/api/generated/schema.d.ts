@@ -5155,7 +5155,7 @@ export interface components {
         WeatherDelayActionRequest: {
             idempotencyKey: string;
         };
-        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached), or weather-gate for the gate close (on start) or open (on resume) sent to one configured FPP instance. */
+        /** @description One target's own start/resume dispatch outcome. targetKind is fpp, node, resolume, or render (the same four kinds emergency stop reports), node-command for the weatherdelay.start/resume node command itself, whose deliveredVia is one of mqtt, http, both, or none (ADR-053 decision 8: a node reached by either path counts as reached), or weather-gate for the gate close (on start) or open (on resume) sent to one configured FPP instance. alertPlaying and alertReason are the node's own report of whether ITS alert is playing, set only for node-command on a start/cancel-night dispatch (never resume, which has no alert to report): a node reached with no alert playing is still outcome "confirmed", never "failed", with alertReason carrying why nothing plays. */
         WeatherDelayTargetOutcome: {
             instanceId: string;
             /** @enum {string} */
@@ -5166,6 +5166,8 @@ export interface components {
             deliveredVia?: "mqtt" | "http" | "both" | "none";
             /** Format: date-time */
             dispatchedAt?: string | null;
+            alertPlaying?: boolean;
+            alertReason?: string;
         };
         WeatherDelayActionResult: {
             kind: string;
