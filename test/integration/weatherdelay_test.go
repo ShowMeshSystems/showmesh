@@ -1326,6 +1326,16 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 	waitForNodeAlertSession(t, audioSub, "playing")
 	delayAlertRevision := alertPlaylistRevision(t, audioSub)
 
+	// The cancel must land on a delay alert that has already advanced past
+	// its first item. That is the case a shared alert session got wrong: an
+	// Apply over an advanced session keeps the stale item index, so the
+	// cancel alert started mid-playlist. On a session of its own it always
+	// starts at item 0.
+	waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
+		p, ok := audioSub.latestFor(weatherDelayAlertSessionIDForTest)
+		return ok && p.State == "playing" && p.HasItem && p.ItemIndex >= 1
+	}, "the delay alert to advance past its first item before the night is cancelled")
+
 	cancelResp := weatherDelayAction(t, f.coord, f.token, "/api/v1/weather-delay/cancel-night")
 	if cancelResp.Result.Kind != "cancelNight" {
 		t.Fatalf("cancel-night: Kind = %q, want %q", cancelResp.Result.Kind, "cancelNight")
@@ -1357,18 +1367,20 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 	// The cancel alert, replacing a delay alert already loaded and playing
 	// on a different session, must still play in full: repeatCount 3
 	// against a 4s asset is about 12s, and the floor below leaves a report
-	// interval of slack at each end. Before the fix, a delay-to-cancel
-	// change in place Applied the cancel alert's playlist onto the delay
-	// alert's own loaded session and truncated it to under a second.
+	// interval of slack at each end. Against a shared alert session this
+	// measured 7.97s over items 1 and 2 only, the delay alert's own index.
 	sinceCancelSeq := weatherDelayLatestEventSeq(t, f.coord)
 	playedFor, indexesSeen := observeAlertPlayback(t, audioSub, weatherDelayCancelAlertSessionIDForTest, cancelPlaylistRevision, 20*time.Second)
-	if playedFor < 8*time.Second {
-		t.Fatalf("the cancel alert reported playing state for only %s after replacing a loaded delay alert, want at least 8s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
-	}
+	// Item 0 first: a cancel alert that inherited the delay alert's item
+	// index starts mid-playlist and never reports item 0 at all, which no
+	// runner's timing can mask.
 	for _, idx := range []int64{0, 1, 2} {
 		if !indexesSeen[idx] {
 			t.Fatalf("the cancel alert never reported item index %d playing after replacing a loaded delay alert; observed indexes: %v", idx, indexesSeen)
 		}
+	}
+	if playedFor < 8*time.Second {
+		t.Fatalf("the cancel alert reported playing state for only %s after replacing a loaded delay alert, want at least 8s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
 	}
 	if weatherDelayNightShutdownRan(t, f.coord, sinceCancelSeq) {
 		t.Fatalf("the graceful night shutdown ran before the cancel alert, replacing a loaded delay alert, finished playing")
