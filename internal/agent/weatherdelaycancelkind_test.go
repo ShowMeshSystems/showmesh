@@ -29,9 +29,8 @@ func alertSessionPlaying(t *testing.T, ops *weatherDelayOperations, kind string)
 }
 
 // waitForAlertSessionPlaying polls until kind's own alert session reports
-// playing == want, bounded to 5s: the OTHER kind's session is stopped by
-// runStartSequence's background goroutine, never synchronously with the
-// start call that displaced it.
+// playing == want, bounded to 5s, so a stop that reaches the engine just
+// after the start call returned still counts.
 func waitForAlertSessionPlaying(t *testing.T, ops *weatherDelayOperations, kind string, want bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

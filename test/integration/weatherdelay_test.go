@@ -1256,23 +1256,12 @@ func alertPlaylistRevisionForSession(t *testing.T, sub *audioReportSubscriber, s
 	return p.PlaylistRevision
 }
 
-// observeAlertPlayback waits until sessionID's own reports at wantRevision
-// leave the playing state (or deadline elapses since the call), then reads
-// sub's FULL history for that session — never a live poll loop's own
-// timing — and returns how long it was reported playing (first playing
-// observation to last) plus the set of item indexes it saw playing.
-// sub's background MQTT callback timestamps each report the instant its
-// own goroutine receives it, so this stays accurate even when the test's
-// own foreground code was blocked elsewhere for a while (a cancel-night
-// POST can itself take several seconds to return; nothing about that
-// coordinator-side latency may be mistaken for the alert's own truncation).
-// Used to prove an alert played in full rather than trusting a single
-// point-in-time read, against the case where it replaced a DIFFERENT
-// alert already loaded and playing on another session (ADR-053 decision
-// 7): before the fix, the audio manager's own Apply-over-a-loaded-
-// playlist defect (recorded, skipped, in internal/agent/audio) meant
-// weather delay's shared alert session reported a played-through defect,
-// not an absent one.
+// observeAlertPlayback waits until sessionID's reports at wantRevision
+// leave the playing state, then reads sub's whole history for that session
+// and returns how long it was reported playing (first playing observation
+// to last) plus the item indexes it saw playing. The history is timestamped
+// by sub's own MQTT callback, so a slow foreground call (a cancel-night
+// POST can take seconds) is never mistaken for a truncated alert.
 func observeAlertPlayback(t *testing.T, sub *audioReportSubscriber, sessionID string, wantRevision uint64, deadline time.Duration) (playedFor time.Duration, indexesSeen map[int64]bool) {
 	t.Helper()
 	waitFor(t, deadline, 200*time.Millisecond, func() bool {
@@ -1367,14 +1356,14 @@ func TestWeatherDelayCancelNight(t *testing.T) {
 
 	// The cancel alert, replacing a delay alert already loaded and playing
 	// on a different session, must still play in full: repeatCount 3
-	// against a 4s asset is about 12s. Before the fix, a delay-to-cancel
+	// against a 4s asset is about 12s, and the floor below leaves a report
+	// interval of slack at each end. Before the fix, a delay-to-cancel
 	// change in place Applied the cancel alert's playlist onto the delay
-	// alert's OWN loaded session, and the audio manager's Apply-over-a-
-	// loaded-playlist defect truncated it to well under a second.
+	// alert's own loaded session and truncated it to under a second.
 	sinceCancelSeq := weatherDelayLatestEventSeq(t, f.coord)
 	playedFor, indexesSeen := observeAlertPlayback(t, audioSub, weatherDelayCancelAlertSessionIDForTest, cancelPlaylistRevision, 20*time.Second)
-	if playedFor < 10*time.Second {
-		t.Fatalf("the cancel alert reported playing state for only %s after replacing a loaded delay alert, want at least 10s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
+	if playedFor < 8*time.Second {
+		t.Fatalf("the cancel alert reported playing state for only %s after replacing a loaded delay alert, want at least 8s (repeatCount 3 x a 4s asset); ADR-053 decision 7 requires it to play in full", playedFor)
 	}
 	for _, idx := range []int64{0, 1, 2} {
 		if !indexesSeen[idx] {

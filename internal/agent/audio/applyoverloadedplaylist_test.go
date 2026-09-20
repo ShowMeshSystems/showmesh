@@ -10,22 +10,15 @@ import (
 )
 
 // TestApplyOverALoadedPlaylistDoesNotRestartFromItemZero is a minimal
-// repro of a known defect: [Manager.Apply]'s own "s.currentIndex < 0"
-// check (manager.go) only assigns a fresh item index to a session that has
-// never played anything. A session whose playlist has already advanced
-// past item 0 keeps that STALE index across an Apply that replaces the
-// playlist entirely, so the replacement starts mid-playlist (or even past
-// its own end) instead of at its own item 0. Only Clear resets the index;
-// Apply does not.
+// repro of a known defect: [Manager.Apply]'s "s.currentIndex < 0" check
+// assigns a fresh item index only to a session that never played, so a
+// session already advanced past item 0 keeps that stale index across an
+// Apply that replaces the playlist entirely. Only Clear resets it.
 //
-// Found against ADR-053's cancel alert replacing a delay alert already
-// playing on the same session (internal/agent's own fix is to never Apply
-// one kind's alert onto the other kind's session, so this manager-level
-// defect is no longer exercised by weather delay, but may still affect any
-// other caller that replaces a loaded, already-advanced session's
-// playlist). Skipped until the audio manager itself is fixed; this test's
-// own failure is the record of the gap, not something this pull request
-// fixes.
+// Found against ADR-053's cancel alert, which no longer Applies over the
+// other kind's loaded session; any other caller that replaces a loaded,
+// advanced session's playlist still hits it. Skipped until the audio
+// manager is fixed: this test's own failure is the record of that gap.
 func TestApplyOverALoadedPlaylistDoesNotRestartFromItemZero(t *testing.T) {
 	t.Skip("known defect: Manager.Apply over a session whose playlist has already advanced past item 0 keeps the stale index instead of starting the replacement fresh at item 0; see this test's own doc comment")
 

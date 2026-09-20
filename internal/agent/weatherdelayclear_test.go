@@ -331,3 +331,26 @@ func TestRenderTimelineIgnoresMultiSyncDuringADelay(t *testing.T) {
 		t.Fatalf("state after the delay = %q, want playing", got)
 	}
 }
+
+// TestBootNeverRestoresAnOlderAgentsAlertSessionAsPlaying covers an
+// in-place agent upgrade: an agent older than the per-kind alert sessions
+// persisted its alert on the single id "weatherdelay:alert", which the
+// per-kind prefix does not match. A node that died during that alert and
+// came back on this build must still not restore it as playing.
+func TestBootNeverRestoresAnOlderAgentsAlertSessionAsPlaying(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	older, _ := newWeatherDelayTestManager(t, dir, clock)
+
+	ref := writeTestWAV(t, dir, "legacy-alert.wav", "legacy-alert-asset")
+	if r := older.Apply(context.Background(), weatherDelayLegacyAlertSessionID, "apply-legacy", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply the older agent's alert session: %+v", r)
+	}
+	if r := older.Start(context.Background(), weatherDelayLegacyAlertSessionID, "start-legacy", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start the older agent's alert session: %+v", r)
+	}
+
+	rebooted, _ := newWeatherDelayTestManager(t, dir, clock)
+	restoreAudioSessionsAtBoot(context.Background(), rebooted, false, discardLogger())
+	assertNotPlayingAfterRestore(t, rebooted, weatherDelayLegacyAlertSessionID)
+}

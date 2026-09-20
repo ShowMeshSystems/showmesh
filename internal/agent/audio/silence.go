@@ -30,13 +30,15 @@ type SessionSilenceOutcome struct {
 // not stall the sessions waiting behind it or the result this operation
 // reports.
 func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
-	return m.silenceSessions(ctx, m.liveSessionsExcept(""))
+	return m.silenceSessions(ctx, m.liveSessionsExcept())
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
-// excludeID, so a weather delay alert keeps playing.
-func (m *Manager) SilenceAllExcept(ctx context.Context, excludeID pkgaudio.SessionID) []SessionSilenceOutcome {
-	return m.silenceSessions(ctx, m.liveSessionsExcept(excludeID))
+// excludeIDs, so a weather delay alert keeps playing. More than one id is
+// excluded when a caller must leave every alert session alone, not just
+// the one it started.
+func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) []SessionSilenceOutcome {
+	return m.silenceSessions(ctx, m.liveSessionsExcept(excludeIDs...))
 }
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,
@@ -50,14 +52,20 @@ func (m *Manager) SilenceSession(ctx context.Context, id pkgaudio.SessionID) (Se
 }
 
 // liveSessionsExcept snapshots this Manager's live sessions, omitting
-// excludeID (an empty id matches nothing, so [SilenceAll] excludes
-// none).
-func (m *Manager) liveSessionsExcept(excludeID pkgaudio.SessionID) []*Session {
+// every id in excludeIDs (an empty id matches nothing, so [SilenceAll]
+// excludes none).
+func (m *Manager) liveSessionsExcept(excludeIDs ...pkgaudio.SessionID) []*Session {
+	excluded := make(map[pkgaudio.SessionID]struct{}, len(excludeIDs))
+	for _, id := range excludeIDs {
+		if id != "" {
+			excluded[id] = struct{}{}
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sessions := make([]*Session, 0, len(m.sessions))
 	for id, s := range m.sessions {
-		if excludeID != "" && id == excludeID {
+		if _, skip := excluded[id]; skip {
 			continue
 		}
 		sessions = append(sessions, s)

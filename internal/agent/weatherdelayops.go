@@ -27,6 +27,11 @@ import (
 // own doc comment for why that matters).
 const weatherDelayAlertSessionID = pkgaudio.SessionID(weatherDelayAlertSessionPrefix + weatherdelay.KindDelay)
 
+// weatherDelayLegacyAlertSessionID is the single alert session id an agent
+// older than the per-kind sessions persisted. Matched at boot as well as
+// the per-kind prefix, so an in-place upgrade never restores it playing.
+const weatherDelayLegacyAlertSessionID = pkgaudio.SessionID("weatherdelay:alert")
+
 // weatherDelayAlertSessionPrefix is the common prefix every weather delay
 // alert session id shares, so a caller that only needs to recognize "some
 // weather delay alert session" (never one kind specifically) can match on
@@ -35,14 +40,12 @@ const weatherDelayAlertSessionPrefix = "weatherdelay:alert:"
 
 // weatherDelayAlertSessionIDForKind is the one audio session kind's alert
 // plays on, so a second start of the same kind finds the alert rather than
-// stacking one. Delay and cancelNight each get their own session: the audio
-// manager's Apply has no defect over a session with nothing loaded, only
-// over one whose playlist is already loaded and playing (that defect is
-// unfixed here, see internal/agent/audio's own skipped test), so starting
-// kind K must never Apply K's playlist onto the OTHER kind's session.
-// Starting kind K instead runs the normal start sequence with K's own
-// (fresh, or already-K's) session excluded: the other kind's session is
-// muted and stopped like any other audio, never replaced in place.
+// stacking one. Each kind gets its own, because an Apply over a playlist
+// the manager already has loaded keeps the stale item index (internal/agent
+// /audio's own skipped test records that defect): starting one kind mutes
+// and stops the other kind's session, never replaces it. The same defect
+// still truncates a second alert of the same kind after a resume, recorded
+// by TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero.
 func weatherDelayAlertSessionIDForKind(kind string) pkgaudio.SessionID {
 	return pkgaudio.SessionID(weatherDelayAlertSessionPrefix + kind)
 }
@@ -138,27 +141,46 @@ func (o *weatherDelayOperations) startHeld(ctx context.Context, kind string, exe
 	return heldKind, alertPlaying, alertReason, unsilenced
 }
 
+// weatherDelayOtherKind is the alert kind that is not kind.
+func weatherDelayOtherKind(kind string) string {
+	if kind == weatherdelay.KindCancelNight {
+		return weatherdelay.KindDelay
+	}
+	return weatherdelay.KindCancelNight
+}
+
 // runStartSequence mutes every other session within weatherDelayMuteBound,
-// starts the alert, then stops every other session in the background. Only
-// kind's own session is excluded, so a delay-to-cancel (or cancel-to-delay)
-// change in place mutes and stops the OTHER kind's alert session exactly
-// like any other audio, never Applies its own playlist onto it. The
-// returned messages name sessions that were not muted before the alert.
+// starts the alert, stops the other kind's alert, then stops every
+// remaining session in the background.
+//
+// The whole sequence is serialized and re-reads the kind the node holds, so
+// two deliveries of different kinds racing each other both end on the newer
+// kind's alert. The background pass leaves BOTH alert sessions alone,
+// because it outlives the lock and must never be able to stop an alert a
+// newer start has since begun.
 func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind string) (alertPlaying bool, alertReason string, unsilenced []string) {
+	o.holder.alertStartMu.Lock()
+	defer o.holder.alertStartMu.Unlock()
+
+	if held := o.holder.Current().Kind; held != "" {
+		kind = held
+	}
 	own := weatherDelayAlertSessionIDForKind(kind)
+	other := weatherDelayAlertSessionIDForKind(weatherDelayOtherKind(kind))
 	if o.audioMgr != nil {
 		for _, id := range o.audioMgr.ZeroGainExcept(ctx, own, weatherDelayMuteBound) {
 			unsilenced = append(unsilenced, fmt.Sprintf("Audio session %s could not be silenced before the alert started.", id))
 		}
 	}
 
-	alertPlaying, alertReason = o.startAlert(ctx, kind)
+	alertPlaying, alertReason = o.startAlertLocked(ctx, kind)
 
 	if o.audioMgr != nil {
+		o.audioMgr.SilenceSession(ctx, other)
 		weatherDelayBackground.Add(1)
 		go func() {
 			defer weatherDelayBackground.Done()
-			o.audioMgr.SilenceAllExcept(context.Background(), own)
+			o.audioMgr.SilenceAllExcept(context.Background(), own, other)
 		}()
 	}
 	return alertPlaying, alertReason, unsilenced
@@ -176,19 +198,15 @@ func (o *weatherDelayOperations) react(ctx context.Context, transition weatherDe
 	}
 }
 
-// startAlert starts kind's own alert session, or reports why nothing plays.
-// It does nothing when kind's alert is already playing or the delay has
-// cleared. The other kind's session, if any, is left to runStartSequence's
-// own mute-then-stop of everything but kind's session; this function only
-// ever touches kind's own.
-func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (played bool, reason string) {
+// startAlertLocked starts kind's own alert session, or reports why nothing
+// plays. It does nothing when kind's alert is already playing or the delay
+// has cleared. The other kind's session, if any, is left to
+// runStartSequence, which holds alertStartMu for this call.
+func (o *weatherDelayOperations) startAlertLocked(ctx context.Context, kind string) (played bool, reason string) {
 	if o.audioMgr == nil {
 		return false, "This node has no audio engine. Configure one to play the weather alert."
 	}
 	own := weatherDelayAlertSessionIDForKind(kind)
-
-	o.holder.alertStartMu.Lock()
-	defer o.holder.alertStartMu.Unlock()
 
 	plan := o.holder.Current().Plan
 	ref := weatherDelayAlertAssetForKind(plan, kind)
@@ -209,7 +227,10 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 		return false, "The weather delay ended before the alert started. Start it again to play the alert."
 	}
 	if o.holder.startedAlertKind == kind {
-		return true, ""
+		// Read from the session, never from the kind alone: an emergency
+		// stop can have silenced this alert since it started, and a repeat
+		// of the same start must report that rather than restart it.
+		return o.alertSessionPlayingLocked(ctx, own), ""
 	}
 	media := pkgaudio.MediaRef{AssetID: ref.AssetID, ContentHash: ref.ContentHash, SizeBytes: info.Size(), RuntimeFilename: ref.Filename}
 
@@ -256,6 +277,17 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 	}
 	o.holder.startedAlertKind = kind
 	return true, ""
+}
+
+// alertSessionPlayingLocked reports whether id is playing right now. The
+// caller holds alertStartMu.
+func (o *weatherDelayOperations) alertSessionPlayingLocked(ctx context.Context, id pkgaudio.SessionID) bool {
+	for _, snap := range o.audioMgr.Snapshot(ctx) {
+		if snap.ID == id {
+			return snap.State == pkgaudio.StatePlaying
+		}
+	}
+	return false
 }
 
 // resume is weatherdelay.resume: clear the delay and stop the alert. It
@@ -316,10 +348,13 @@ func refuseWhileWeatherDelayActive(holder *WeatherDelayHolder, reason string, op
 }
 
 // restoreAudioSessionsAtBoot restores persisted audio sessions, first marking
-// either kind's alert stopped on disk, and every session during a delay, so
-// nothing from before the delay plays now or on a later boot.
+// either kind's alert (and an older agent's single alert session) stopped on
+// disk, and every session during a delay, so nothing from before the delay
+// plays now or on a later boot.
 func restoreAudioSessionsAtBoot(ctx context.Context, mgr *audio.Manager, delayActive bool, logger *slog.Logger) {
-	match := func(id pkgaudio.SessionID) bool { return strings.HasPrefix(string(id), weatherDelayAlertSessionPrefix) }
+	match := func(id pkgaudio.SessionID) bool {
+		return id == weatherDelayLegacyAlertSessionID || strings.HasPrefix(string(id), weatherDelayAlertSessionPrefix)
+	}
 	if delayActive {
 		match = func(pkgaudio.SessionID) bool { return true }
 	}

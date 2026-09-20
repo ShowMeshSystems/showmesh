@@ -423,8 +423,8 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// The delay alert's session is stopped by a background goroutine, not
-	// synchronously with the cancelNight start that displaced it.
+	// Polled, so a release that reaches the engine just after the
+	// cancelNight start returned still counts.
 	var live []audio.EngineHandle
 	releaseDeadline := time.Now().Add(5 * time.Second)
 	for {
@@ -633,5 +633,96 @@ func TestWeatherDelayConcurrentStartsPlayTheAlertOnce(t *testing.T) {
 	}
 	if startCount != 1 {
 		t.Fatalf("engine Start calls = %d, want 1", startCount)
+	}
+}
+
+// TestWeatherDelayRepeatedStartAfterAnEmergencySilenceReportsNotPlaying
+// proves the reported alertPlaying comes from the session and not from the
+// kind alone: an emergency stop silences the alert during a delay, and a
+// repeated start of the same kind reports the truth rather than claiming
+// the alert it will not restart is still playing.
+func TestWeatherDelayRepeatedStartAfterAnEmergencySilenceReportsNotPlaying(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 10)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("delay start did not play: %s", reason)
+	}
+	mgr.SilenceAll(context.Background())
+
+	played, _, _ := ops.doStart(context.Background(), "delay", clock.now())
+	if played {
+		t.Fatal("a repeated start reported the alert playing after an emergency stop had silenced it")
+	}
+}
+
+// TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero records a
+// defect this pull request does not fix: the audio manager's Apply over an
+// already-advanced session keeps the stale item index (internal/agent/audio
+// holds the manager-level repro), and an alert session is reused across a
+// resume, so a second delay of the same night plays only the repeats left
+// after the first one's index. ADR-053 decision 7 requires the configured
+// repeat count every time.
+func TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero(t *testing.T) {
+	t.Skip("known defect: the second alert of the same kind in one night starts at the first alert's last item index instead of item 0, so it plays fewer than the configured repeats; the cause is the audio manager's Apply over an advanced session, recorded in internal/agent/audio")
+
+	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManagerWithDecoder(t, dir, clock, weatherDelayDurationDecoder{})
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 5)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("first delay start did not play: %s", reason)
+	}
+
+	itemIndex := func() int {
+		for _, s := range mgr.Snapshot(context.Background()) {
+			if s.ID == weatherDelayAlertSessionID {
+				return s.ItemIndex
+			}
+		}
+		return -1
+	}
+	advanceAlertToItem(t, mgr, clock, itemIndex, 2)
+
+	ops.doResume(context.Background())
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("second delay start did not play: %s", reason)
+	}
+	if got := itemIndex(); got != 0 {
+		t.Fatalf("the second delay alert of the night starts at item %d, want 0 (it must play all 5 repeats, not the %d left over)", got, 5-got)
+	}
+}
+
+// advanceAlertToItem drives the item watcher until index reports want.
+func advanceAlertToItem(t *testing.T, mgr *audio.Manager, clock *fakeClock, index func() int, want int) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() { defer close(done); mgr.RunWatcher(ctx, ticks) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for index() < want && time.Now().Before(deadline) {
+		clock.advance(weatherDelayTestItemDuration + time.Second)
+		select {
+		case ticks <- clock.now():
+		case <-time.After(time.Second):
+		}
+	}
+	cancel()
+	<-done
+	if got := index(); got < want {
+		t.Fatalf("the alert never reached item %d (last %d)", want, got)
 	}
 }
