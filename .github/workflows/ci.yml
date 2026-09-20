@@ -51,6 +51,27 @@ jobs:
     # their own `if: always()` comments) so a broken detector fails toward
     # running the full suite, never toward silently skipping it.
     #
+    # `ui_only` is the same mechanism for an Operator-UI-only pull request:
+    # the owner's standing decision is that a `.tsx`/`.css` change under
+    # `ui/` should not burn the full Go, integration, and docker suite when
+    # the only check that covers it is the `ui` job. It is true only when
+    # every changed path is under `ui/`. That single prefix test is by
+    # construction a faithful proxy for "touches no Go source,
+    # api/openapi.yaml, GitHub workflow, script, generated artifact, or
+    # deploy config", because all of those live outside `ui/`; a change to
+    # any of them puts a non-`ui/` path in the diff and flips this false.
+    # The `ui` job itself is deliberately NOT gated on `ui_only`: a UI-only
+    # pull request must still run its typecheck, lint, vitest, build, and
+    # the generated-API-types drift check, which is exactly where a `.tsx`
+    # or generated-schema change is verified. Like `docs_only`, a
+    # classification error reports `ui_only=false` so the detector fails
+    # toward running the full suite, never toward silently skipping it.
+    #
+    # `ui_only` and `docs_only` are computed the same way and are not
+    # mutually exclusive (a lone `ui/README.md` change is both); the jobs
+    # below combine them as `docs_only != 'true' && ui_only != 'true'`, so
+    # either being true is enough to skip the expensive work.
+    #
     # No documentation link checker or Markdown linter exists in this
     # workflow or the Makefile today, so a docs-only PR loses no check it
     # would otherwise have had. If one is ever added, it must run outside
@@ -61,33 +82,43 @@ jobs:
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      ui_only: ${{ steps.classify.outputs.ui_only }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Classify this pull request as documentation-only or not
+      - name: Classify this pull request as documentation-only, UI-only, or neither
         id: classify
         run: |
           docs_only=false
+          ui_only=false
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
             if files="$(git diff --no-renames --name-only "$base...$head" 2>&1)"; then
               docs_only=true
+              ui_only=true
               while IFS= read -r f; do
                 case "$f" in
                   "") ;;
                   *.md) ;;
                   *) docs_only=false ;;
                 esac
+                case "$f" in
+                  "") ;;
+                  ui/*) ;;
+                  *) ui_only=false ;;
+                esac
               done <<< "$files"
             else
-              echo "could not compute the changed-file list, treating as not documentation-only: $files" >&2
+              echo "could not compute the changed-file list, treating as neither documentation-only nor UI-only: $files" >&2
               docs_only=false
+              ui_only=false
             fi
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "ui_only=$ui_only" >> "$GITHUB_OUTPUT"
 
   test:
     runs-on: ubuntu-latest
@@ -133,7 +164,7 @@ jobs:
       # instead. Debian 13 is also the platform the audio engine was measured
       # green on; Debian 12's GLib 2.74 does not build it at all.
       - name: Install the toolchain and the agent's C dependencies
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -175,7 +206,7 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # A precondition, not an evidence step: nothing after this step
         # means anything if it fails, so retry a bounded number of times
         # instead of aggregating past it the way the steps below do.
@@ -195,7 +226,7 @@ jobs:
 
       - name: Vet
         id: vet
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -203,7 +234,7 @@ jobs:
 
       - name: Test the audio engine (race detector)
         id: test_engine
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -230,7 +261,7 @@ jobs:
 
       - name: Test (race detector)
         id: test_rest
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -253,7 +284,7 @@ jobs:
 
       - name: Build with cgo (ADR-042 real agent backend)
         id: build_cgo
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -267,7 +298,7 @@ jobs:
 
       - name: Build CGo-free (ADR-012)
         id: build_cgofree
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -279,7 +310,7 @@ jobs:
 
       - name: Check formatting
         id: check_fmt
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -397,6 +428,16 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # This job predates the docs-only escape hatch and was never gated on
+    # docs_only, so a documentation-only pull request still runs it today.
+    # This change leaves that behavior untouched and adds only the UI-only
+    # skip below, gating on ui_only alone rather than the combined
+    # `docs_only && ui_only` the required jobs above use. `needs:` plus
+    # `if: always()` mirror those jobs: this job always runs and reports,
+    # and `ui_only` reads as empty (not 'true') when `changed-files` failed,
+    # so a classifier error runs the full suite rather than skipping it.
+    if: always()
     # SIGKILL-based liveness checks poll with generous, worst-case bounds
     # (see test/integration/kill_test.go), so this job legitimately needs
     # more headroom than the unit-test job; kept as its own job (rather than
@@ -413,6 +454,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
+        if: needs.changed-files.outputs.ui_only != 'true'
         # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26, so the
         # suite runs inside Debian 13 rather than on the runner. It cannot
         # be a `container:` job: scripts/test-integration.sh starts the real
@@ -458,6 +500,12 @@ jobs:
 
   integration-fppmqtt:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `integration` job: never gated on docs_only, so this change
+    # gates only on ui_only and leaves the docs-only path untouched.
+    # `if: always()` keeps it running and reporting even if `changed-files`
+    # failed, in which case ui_only reads empty and the suite runs.
+    if: always()
     # This is the only place the retained-versus-live observation-time rule
     # (contract section 4.2) is exercised against a real broker connection
     # rather than a directly-injected publish handler call, and that rule
@@ -489,10 +537,17 @@ jobs:
       # job's broker if GitHub Actions were ever to run them on the same
       # runner.
       - name: Integration tests (FPP MQTT collector against a real broker)
+        if: needs.changed-files.outputs.ui_only != 'true'
         run: make test-integration-fppmqtt
 
   integration-broker:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `integration` job: never gated on docs_only, so this change
+    # gates only on ui_only and leaves the docs-only path untouched.
+    # `if: always()` keeps it running and reporting even if `changed-files`
+    # failed, in which case ui_only reads empty and the suite runs.
+    if: always()
     # internal/coordinator/broker's own retained-message trap and its
     # reconnect-resubscribe behavior (see
     # internal/coordinator/broker/response_integration_test.go) are proved
@@ -518,6 +573,7 @@ jobs:
       # throwaway Mosquitto container(s) per test rather than the script
       # starting one up front — see scripts/test-integration-broker.sh.
       - name: Integration tests (broker package against real Mosquitto, including a mid-wait restart)
+        if: needs.changed-files.outputs.ui_only != 'true'
         run: make test-integration-broker
 
   integration-weatherdelay:
@@ -579,7 +635,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -601,7 +657,7 @@ jobs:
           cache: true
 
       - uses: golangci/golangci-lint-action@v9
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         with:
           # Version pinned so lint results don't drift with an unrelated
           # golangci-lint release; bump deliberately alongside .golangci.yml.
@@ -774,7 +830,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -827,11 +883,11 @@ jobs:
       # "fix" a red run here by relaxing it to reporting-only; fix the
       # finding or move the pin above.
       - name: Install govulncheck
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Scan for reachable vulnerabilities
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         run: govulncheck ./...
 
   docker:
@@ -855,7 +911,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Build multi-arch image (no push)
-        if: needs.changed-files.outputs.docs_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -889,6 +945,14 @@ jobs:
     # softprops/action-gh-release) with `dist/fpp-plugin/*` as its
     # assets — not a rewrite of this job.
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `integration` job: never gated on docs_only, so this change
+    # gates only on ui_only and leaves the docs-only path untouched. This
+    # job cross-compiles the Go plugin, which a UI-only change cannot
+    # affect. `if: always()` keeps it running and reporting even if
+    # `changed-files` failed, in which case ui_only reads empty and the
+    # build runs.
+    if: always()
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -905,6 +969,7 @@ jobs:
       # (no VERSION override, defaulting to the top-level VERSION var)
       # does for a bench-local build.
       - name: Build and self-verify the FPP plugin release artifacts
+        if: needs.changed-files.outputs.ui_only != 'true'
         run: make release-fpp-plugin FPP_PLUGIN_VERSION=0.0.0-ci.${{ github.sha }}
 
       # A second, independent build of the same commit, compared
@@ -913,6 +978,7 @@ jobs:
       # own (that only proves the manifest matches what THIS run
       # produced, not that a second run would produce the same thing).
       - name: Verify the release build is reproducible
+        if: needs.changed-files.outputs.ui_only != 'true'
         run: make verify-fpp-plugin-reproducible FPP_PLUGIN_VERSION=0.0.0-ci.${{ github.sha }}
 
       # No actions/upload-artifact step here on purpose: this repository
