@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ type weatherDelayHTTPTestFixture struct {
 	priv   ed25519.PrivateKey
 	holder *WeatherDelayHolder
 	mgr    *audio.Manager
+	ops    *weatherDelayOperations
 	dir    string
 }
 
@@ -44,7 +47,7 @@ func newWeatherDelayHTTPTestFixture(t *testing.T, enabled bool) *weatherDelayHTT
 	view := fakeFPPConnectView{enabled: enabled}
 	srv := startFPPConnectTestServerWithWeatherDelay(t, view, "node-1", nil, weatherDelayHTTPConfig{ops: ops, publicKey: pub})
 
-	return &weatherDelayHTTPTestFixture{srvURL: srv.URL, pub: pub, priv: priv, holder: holder, mgr: mgr, dir: dir}
+	return &weatherDelayHTTPTestFixture{srvURL: srv.URL, pub: pub, priv: priv, holder: holder, mgr: mgr, ops: ops, dir: dir}
 }
 
 // sign builds a valid SignedStartRequest for kind, issued at issuedAt, with
@@ -391,5 +394,103 @@ func TestWeatherDelayHTTPAlertSurvivesTheCallerHangingUp(t *testing.T) {
 	}
 	if !got.AlertPlaying {
 		t.Fatalf("alert did not play after the caller hung up: %s", got.AlertReason)
+	}
+}
+
+// TestWeatherDelayHTTPRefusalBodyNamesNoFileOrSession proves the signed
+// start route says only what the coordinator needs. A caller here may be
+// replaying a captured request, so each refusal answers one fixed sentence
+// and the body names no file, asset, session id or path, and no longer
+// lists the sessions that could not be muted.
+func TestWeatherDelayHTTPRefusalBodyNamesNoFileOrSession(t *testing.T) {
+	cases := []struct {
+		name    string
+		setUp   func(t *testing.T, f *weatherDelayHTTPTestFixture)
+		kind    string
+		want    string
+		playing bool
+	}{
+		{
+			name:  "no alert sound set for this kind",
+			setUp: func(*testing.T, *weatherDelayHTTPTestFixture) {},
+			kind:  weatherdelay.KindDelay,
+			want:  weatherDelayPublicNoAlertSet,
+		},
+		{
+			name: "the alert sound is not on this node",
+			setUp: func(t *testing.T, f *weatherDelayHTTPTestFixture) {
+				f.holder.rec.Plan = weatherDelayTestPlan(weatherdelay.KindDelay, "alert-asset", "sha256:deadbeef", "alert.wav", 3)
+			},
+			kind: weatherdelay.KindDelay,
+			want: weatherDelayPublicAlertNotHere,
+		},
+		{
+			name: "this node has no audio engine",
+			setUp: func(t *testing.T, f *weatherDelayHTTPTestFixture) {
+				hash := writeAssetFixture(t, f.dir, "alert.wav", []byte("alert audio content"))
+				f.holder.rec.Plan = weatherDelayTestPlan(weatherdelay.KindDelay, "alert-asset", hash, "alert.wav", 3)
+				f.ops.audioMgr = nil
+			},
+			kind: weatherdelay.KindDelay,
+			want: weatherDelayPublicNoAudioEngine,
+		},
+		{
+			name: "the night is already cancelled",
+			setUp: func(t *testing.T, f *weatherDelayHTTPTestFixture) {
+				hash := writeAssetFixture(t, f.dir, "alert.wav", []byte("alert audio content"))
+				f.holder.rec.Plan = weatherDelayTestPlan(weatherdelay.KindCancelNight, "alert-asset", hash, "alert.wav", 3)
+				if err := f.holder.SetActiveLocal(weatherdelay.KindCancelNight, time.Now(), "test"); err != nil {
+					t.Fatalf("SetActiveLocal: %v", err)
+				}
+			},
+			kind:    weatherdelay.KindDelay,
+			want:    weatherDelayPublicNightCancelled,
+			playing: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWeatherDelayHTTPTestFixture(t, true)
+			t.Cleanup(weatherDelayBackground.Wait)
+			tc.setUp(t, f)
+
+			body, err := json.Marshal(f.sign(t, tc.kind, time.Now()))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			resp := postStart(t, f.srvURL, body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			raw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+
+			var decoded map[string]any
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("decode %q: %v", raw, err)
+			}
+			for _, key := range []string{"kind", "alertPlaying", "alertReason"} {
+				if _, ok := decoded[key]; !ok {
+					t.Fatalf("body %s is missing %q", raw, key)
+				}
+			}
+			if len(decoded) != 3 {
+				t.Fatalf("body %s carries %d fields, want exactly kind, alertPlaying and alertReason", raw, len(decoded))
+			}
+			if got := decoded["alertReason"]; got != tc.want {
+				t.Fatalf("alertReason = %q, want %q", got, tc.want)
+			}
+			if got := decoded["alertPlaying"]; got != tc.playing {
+				t.Fatalf("alertPlaying = %v, want %v", got, tc.playing)
+			}
+			for _, secret := range []string{"alert.wav", "alert-asset", "weatherdelay:alert", f.dir} {
+				if strings.Contains(string(raw), secret) {
+					t.Fatalf("the response body %s names %q; a replaying caller must learn no file, asset, session id or path", raw, secret)
+				}
+			}
+		})
 	}
 }

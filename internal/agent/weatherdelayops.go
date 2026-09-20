@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,9 +21,46 @@ import (
 // weatherdelay.start and weatherdelay.resume. The MQTT command, the retained
 // state and the signed HTTP start all run the start sequence here.
 
-// weatherDelayAlertSessionID is the one audio session a weather delay alert
-// plays on, so a second start finds the alert rather than stacking one.
-const weatherDelayAlertSessionID = pkgaudio.SessionID("weatherdelay:alert")
+// weatherDelayAlertSessionID is delay's own audio session, kept as the
+// pre-existing name since most tests exercise only that kind; cancelNight
+// gets its own session from weatherDelayAlertSessionIDForKind so an Apply
+// for one kind never replaces a playlist the audio manager already has
+// loaded and playing for the other (see weatherDelayAlertSessionIDForKind's
+// own doc comment for why that matters).
+const weatherDelayAlertSessionID = pkgaudio.SessionID(weatherDelayAlertSessionPrefix + weatherdelay.KindDelay)
+
+// weatherDelayLegacyAlertSessionID is the single alert session id an agent
+// older than the per-kind sessions persisted. Matched at boot as well as
+// the per-kind prefix, so an in-place upgrade never restores it playing.
+const weatherDelayLegacyAlertSessionID = pkgaudio.SessionID("weatherdelay:alert")
+
+// weatherDelayAlertSessionPrefix is the common prefix every weather delay
+// alert session id shares, so a caller that only needs to recognize "some
+// weather delay alert session" (never one kind specifically) can match on
+// it, e.g. a background engine call log filtered by handle prefix.
+const weatherDelayAlertSessionPrefix = "weatherdelay:alert:"
+
+// weatherDelayAlertSessionIDForKind is the one audio session kind's alert
+// plays on, so a second start of the same kind finds the alert rather than
+// stacking one. Each kind gets its own, because an Apply over a playlist
+// the manager already has loaded keeps the stale item index, the defect the
+// audio package's own skipped test records: starting one kind mutes and
+// stops the other kind's session, never replaces it. A second alert of the
+// same kind never meets that defect either, because clearAlertSession
+// removes the session before a new alert of that kind starts.
+func weatherDelayAlertSessionIDForKind(kind string) pkgaudio.SessionID {
+	return pkgaudio.SessionID(weatherDelayAlertSessionPrefix + kind)
+}
+
+// The sentences the signed HTTP start route is allowed to answer with. A
+// caller there may be replaying a captured request, so none of them names
+// a file, an asset, a session or a path.
+const (
+	weatherDelayPublicNoAlertSet     = "No alert sound is set for this kind. Set one to play an alert."
+	weatherDelayPublicAlertNotHere   = "The alert sound is not on this node. Send it to this node to play it."
+	weatherDelayPublicNoAudioEngine  = "This node has no audio engine. Configure one to play the weather alert."
+	weatherDelayPublicNightCancelled = "The night is already cancelled for weather."
+)
 
 // weatherDelayDefaultRepeatCount applies when the plan leaves RepeatCount unset.
 const weatherDelayDefaultRepeatCount = 10
@@ -93,7 +131,7 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 	}
 
 	executedAt := now()
-	heldKind, alertPlaying, alertReason, unsilenced := o.startHeld(ctx, kind, executedAt)
+	heldKind, alertPlaying, alertReason, _, unsilenced := o.startHeld(ctx, kind, executedAt)
 	observedAt := now()
 
 	value := map[string]any{
@@ -138,38 +176,62 @@ func decodeWeatherDelayPlanParam(raw any) (mqttproto.WeatherDelayPlan, error) {
 
 // doStart marks the holder active and runs the start sequence.
 func (o *weatherDelayOperations) doStart(ctx context.Context, kind string, executedAt time.Time) (alertPlaying bool, alertReason string, unsilenced []string) {
-	_, alertPlaying, alertReason, unsilenced = o.startHeld(ctx, kind, executedAt)
+	_, alertPlaying, alertReason, _, unsilenced = o.startHeld(ctx, kind, executedAt)
 	return alertPlaying, alertReason, unsilenced
 }
 
 // startHeld is doStart that also returns the kind the node now holds, which
-// stays cancelNight when a delay start arrives on a cancelled night.
-func (o *weatherDelayOperations) startHeld(ctx context.Context, kind string, executedAt time.Time) (heldKind string, alertPlaying bool, alertReason string, unsilenced []string) {
+// stays cancelNight when a delay start arrives on a cancelled night, and
+// publicReason, the sanitized sentence the signed HTTP route answers with.
+func (o *weatherDelayOperations) startHeld(ctx context.Context, kind string, executedAt time.Time) (heldKind string, alertPlaying bool, alertReason, publicReason string, unsilenced []string) {
 	heldKind, _ = o.holder.setActiveLocal(kind, executedAt, "node-local")
-	alertPlaying, alertReason, unsilenced = o.runStartSequence(ctx, heldKind)
-	return heldKind, alertPlaying, alertReason, unsilenced
+	alertPlaying, alertReason, publicReason, unsilenced = o.runStartSequence(ctx, heldKind)
+	return heldKind, alertPlaying, alertReason, publicReason, unsilenced
+}
+
+// weatherDelayOtherKind is the alert kind that is not kind.
+func weatherDelayOtherKind(kind string) string {
+	if kind == weatherdelay.KindCancelNight {
+		return weatherdelay.KindDelay
+	}
+	return weatherdelay.KindCancelNight
 }
 
 // runStartSequence mutes every other session within weatherDelayMuteBound,
-// starts the alert, then stops every other session in the background. The
-// returned messages name sessions that were not muted before the alert.
-func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind string) (alertPlaying bool, alertReason string, unsilenced []string) {
+// starts the alert, stops the other kind's alert, then stops every
+// remaining session in the background.
+//
+// The whole sequence is serialized and re-reads the kind the node holds, so
+// two deliveries of different kinds racing each other both end on the newer
+// kind's alert. The background pass leaves BOTH alert sessions alone,
+// because it outlives the lock and must never be able to stop an alert a
+// newer start has since begun.
+func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind string) (alertPlaying bool, alertReason, publicReason string, unsilenced []string) {
+	o.holder.alertStartMu.Lock()
+	defer o.holder.alertStartMu.Unlock()
+
+	if held := o.holder.Current().Kind; held != "" {
+		kind = held
+	}
+	own := weatherDelayAlertSessionIDForKind(kind)
+	other := weatherDelayAlertSessionIDForKind(weatherDelayOtherKind(kind))
 	if o.audioMgr != nil {
-		for _, id := range o.audioMgr.ZeroGainExcept(ctx, weatherDelayAlertSessionID, weatherDelayMuteBound) {
+		for _, id := range o.audioMgr.ZeroGainExcept(ctx, own, weatherDelayMuteBound) {
 			unsilenced = append(unsilenced, fmt.Sprintf("Audio session %s could not be silenced before the alert started.", id))
 		}
 	}
 
-	alertPlaying, alertReason = o.startAlert(ctx, kind)
+	alertPlaying, alertReason, publicReason = o.startAlertLocked(ctx, kind)
 
 	if o.audioMgr != nil {
+		o.clearAlertSession(ctx, other)
 		weatherDelayBackground.Add(1)
 		go func() {
 			defer weatherDelayBackground.Done()
-			o.audioMgr.SilenceAllExcept(context.Background(), weatherDelayAlertSessionID)
+			o.audioMgr.SilenceAllExcept(context.Background(), own, other)
 		}()
 	}
-	return alertPlaying, alertReason, unsilenced
+	return alertPlaying, alertReason, publicReason, unsilenced
 }
 
 // react runs the audio side of a state message: a start runs the start
@@ -177,47 +239,52 @@ func (o *weatherDelayOperations) runStartSequence(ctx context.Context, kind stri
 func (o *weatherDelayOperations) react(ctx context.Context, transition weatherDelayTransition, kind string) {
 	switch transition {
 	case weatherDelayStarted, weatherDelayKindChanged:
-		playing, reason, unsilenced := o.runStartSequence(ctx, kind)
+		playing, reason, _, unsilenced := o.runStartSequence(ctx, kind)
 		o.holder.log().Warn("weather delay started from the coordinator state topic", "kind", kind, "alert_playing", playing, "alert_reason", reason, "unsilenced", unsilenced)
 	case weatherDelayCleared:
 		o.stopAlert(ctx)
 	}
 }
 
-// startAlert starts the alert session, or reports why nothing plays. It does
-// nothing when this kind's alert is already playing or the delay has cleared.
-func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (played bool, reason string) {
+// startAlertLocked starts kind's own alert session, or reports why nothing
+// plays. It does nothing when kind's alert is already playing or the delay
+// has cleared. The other kind's session, if any, is left to
+// runStartSequence, which holds alertStartMu for this call.
+func (o *weatherDelayOperations) startAlertLocked(ctx context.Context, kind string) (played bool, reason, publicReason string) {
 	if o.audioMgr == nil {
-		return false, "This node has no audio engine. Configure one to play the weather alert."
+		return false, weatherDelayPublicNoAudioEngine, weatherDelayPublicNoAudioEngine
 	}
-
-	o.holder.alertStartMu.Lock()
-	defer o.holder.alertStartMu.Unlock()
+	own := weatherDelayAlertSessionIDForKind(kind)
 
 	plan := o.holder.Current().Plan
 	ref := weatherDelayAlertAssetForKind(plan, kind)
 	if ref == nil {
-		o.stopOtherKindAlertLocked(ctx, kind)
-		return false, fmt.Sprintf("No alert sound is set for %s. Set one to play an alert.", kind)
+		return false, fmt.Sprintf("No alert sound is set for %s. Set one to play an alert.", kind), weatherDelayPublicNoAlertSet
 	}
 	if ref.Filename == "" {
-		o.stopOtherKindAlertLocked(ctx, kind)
-		return false, fmt.Sprintf("The alert sound for %s has no file name. Set the alert sound again.", kind)
+		return false, fmt.Sprintf("The alert sound for %s has no file name. Set the alert sound again.", kind), weatherDelayPublicNoAlertSet
 	}
 
 	path := filepath.Join(o.assetDir, ref.Filename)
 	info, err := os.Stat(path)
 	if err != nil {
-		o.stopOtherKindAlertLocked(ctx, kind)
-		return false, fmt.Sprintf("The alert sound %s is not on this node. Send it to this node to play it.", ref.Filename)
+		return false, fmt.Sprintf("The alert sound %s is not on this node. Send it to this node to play it.", ref.Filename), weatherDelayPublicAlertNotHere
 	}
 
 	if !o.holder.Current().Active {
-		return false, "The weather delay ended before the alert started. Start it again to play the alert."
+		return false, "The weather delay ended before the alert started. Start it again to play the alert.", ""
 	}
-	if o.alertAlreadyPlaying(ctx, kind) {
-		return true, ""
+	if o.holder.startedAlertKind == kind {
+		// Read from the session, never from the kind alone: an emergency
+		// stop can have silenced this alert since it started, and a repeat
+		// of the same start must report that rather than restart it.
+		return o.alertSessionPlayingLocked(ctx, own), "", ""
 	}
+
+	// Anything left of an earlier alert of this kind keeps its playlist
+	// index, and an Apply over it would start past item 0.
+	o.clearAlertSession(ctx, own)
+
 	media := pkgaudio.MediaRef{AssetID: ref.AssetID, ContentHash: ref.ContentHash, SizeBytes: info.Size(), RuntimeFilename: ref.Filename}
 
 	repeatCount := plan.RepeatCount
@@ -245,54 +312,32 @@ func (o *weatherDelayOperations) startAlert(ctx context.Context, kind string) (p
 	}
 
 	applyInv, applyRev := step("apply")
-	applyOutcome := o.audioMgr.Apply(ctx, weatherDelayAlertSessionID, applyInv, applyRev, applyReq)
+	applyOutcome := o.audioMgr.Apply(ctx, own, applyInv, applyRev, applyReq)
 	if audioOutcomeFailed(applyOutcome) {
-		return false, fmt.Sprintf("The alert could not be set up. Check this node's audio: %s", applyOutcome.Reason)
+		return false, fmt.Sprintf("The alert could not be set up. Check this node's audio: %s", applyOutcome.Reason), ""
 	}
 
 	prepInv, prepRev := step("prepare")
-	prepOutcome := o.audioMgr.Prepare(ctx, weatherDelayAlertSessionID, prepInv, prepRev)
+	prepOutcome := o.audioMgr.Prepare(ctx, own, prepInv, prepRev)
 	if audioOutcomeFailed(prepOutcome) {
-		return false, fmt.Sprintf("The alert could not be loaded. Check this node's audio: %s", prepOutcome.Reason)
+		return false, fmt.Sprintf("The alert could not be loaded. Check this node's audio: %s", prepOutcome.Reason), ""
 	}
 
 	startInv, startRev := step("start")
-	startOutcome := o.audioMgr.Start(ctx, weatherDelayAlertSessionID, startInv, startRev)
+	startOutcome := o.audioMgr.Start(ctx, own, startInv, startRev)
 	if audioOutcomeFailed(startOutcome) {
-		return false, fmt.Sprintf("The alert did not start. Check this node's audio: %s", startOutcome.Reason)
+		return false, fmt.Sprintf("The alert did not start. Check this node's audio: %s", startOutcome.Reason), ""
 	}
-
-	o.holder.alertMu.Lock()
-	o.holder.alertKind = kind
-	o.holder.alertMu.Unlock()
-	return true, ""
+	o.holder.startedAlertKind = kind
+	return true, "", ""
 }
 
-// stopOtherKindAlertLocked stops an alert left from another kind, since a
-// wrong alert is worse than none. The caller holds alertStartMu.
-func (o *weatherDelayOperations) stopOtherKindAlertLocked(ctx context.Context, kind string) {
-	o.holder.alertMu.Lock()
-	other := o.holder.alertKind != kind
-	if other {
-		o.holder.alertKind = ""
-	}
-	o.holder.alertMu.Unlock()
-	if other {
-		o.audioMgr.SilenceSession(ctx, weatherDelayAlertSessionID)
-	}
-}
-
-// alertAlreadyPlaying reports whether kind's alert is loaded and playing.
-func (o *weatherDelayOperations) alertAlreadyPlaying(ctx context.Context, kind string) bool {
-	o.holder.alertMu.Lock()
-	current := o.holder.alertKind
-	o.holder.alertMu.Unlock()
-	if current != kind {
-		return false
-	}
+// alertSessionPlayingLocked reports whether id is playing right now. The
+// caller holds alertStartMu.
+func (o *weatherDelayOperations) alertSessionPlayingLocked(ctx context.Context, id pkgaudio.SessionID) bool {
 	for _, snap := range o.audioMgr.Snapshot(ctx) {
-		if snap.ID == weatherDelayAlertSessionID && snap.State == pkgaudio.StatePlaying {
-			return true
+		if snap.ID == id {
+			return snap.State == pkgaudio.StatePlaying
 		}
 	}
 	return false
@@ -325,17 +370,28 @@ func (o *weatherDelayOperations) doResume(ctx context.Context) {
 	o.stopAlert(ctx)
 }
 
-// stopAlert stops the alert session whatever state it is in, and does
-// nothing when there is none.
+// stopAlert stops both kinds' alert sessions whatever state each is in, and
+// does nothing for a session that has none.
 func (o *weatherDelayOperations) stopAlert(ctx context.Context) {
 	o.holder.alertStartMu.Lock()
 	defer o.holder.alertStartMu.Unlock()
-	o.holder.alertMu.Lock()
-	o.holder.alertKind = ""
-	o.holder.alertMu.Unlock()
+	o.holder.startedAlertKind = ""
 	if o.audioMgr != nil {
-		o.audioMgr.SilenceSession(ctx, weatherDelayAlertSessionID)
+		o.clearAlertSession(ctx, weatherDelayAlertSessionIDForKind(weatherdelay.KindDelay))
+		o.clearAlertSession(ctx, weatherDelayAlertSessionIDForKind(weatherdelay.KindCancelNight))
 	}
+}
+
+// clearAlertSession stops id and then removes it, persisted record
+// included, so a later alert of the same kind starts at item 0. Stopping
+// first drops the duck and interrupt holds Clear alone would resume.
+func (o *weatherDelayOperations) clearAlertSession(ctx context.Context, id pkgaudio.SessionID) {
+	if o.audioMgr == nil {
+		return
+	}
+	o.audioMgr.SilenceSession(ctx, id)
+	stamp := time.Now().UnixNano()
+	o.audioMgr.Clear(ctx, id, pkgaudio.InvocationID(fmt.Sprintf("weatherdelay:%s:clear:%d", id, stamp)), pkgaudio.Revision(stamp))
 }
 
 // weatherDelayRefusedOperations are the coordinator commands that can
@@ -357,10 +413,13 @@ func refuseWhileWeatherDelayActive(holder *WeatherDelayHolder, reason string, op
 }
 
 // restoreAudioSessionsAtBoot restores persisted audio sessions, first marking
-// the alert stopped on disk, and every session during a delay, so nothing from
-// before the delay plays now or on a later boot.
+// either kind's alert (and an older agent's single alert session) stopped on
+// disk, and every session during a delay, so nothing from before the delay
+// plays now or on a later boot.
 func restoreAudioSessionsAtBoot(ctx context.Context, mgr *audio.Manager, delayActive bool, logger *slog.Logger) {
-	match := func(id pkgaudio.SessionID) bool { return id == weatherDelayAlertSessionID }
+	match := func(id pkgaudio.SessionID) bool {
+		return id == weatherDelayLegacyAlertSessionID || strings.HasPrefix(string(id), weatherDelayAlertSessionPrefix)
+	}
 	if delayActive {
 		match = func(pkgaudio.SessionID) bool { return true }
 	}

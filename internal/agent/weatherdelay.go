@@ -133,10 +133,18 @@ type WeatherDelayHolder struct {
 	logger *slog.Logger
 
 	// alertStartMu serializes alert starts and stops from every delivery
-	// path; alertMu guards alertKind, the kind of the alert last started.
+	// path, across both kinds' sessions, and guards startedAlertKind.
 	alertStartMu sync.Mutex
-	alertMu      sync.Mutex
-	alertKind    string
+
+	// startedAlertKind is the kind whose session this node's own Start last
+	// succeeded on and has not since stopped. It is the idempotency signal
+	// a second start of the same kind is checked against, chosen over the
+	// audio manager's Snapshot because a real engine does not confirm
+	// Playing synchronously with Start returning, and parallel deliveries
+	// of one kind would then each Apply over their own loaded session.
+	// Never persisted: a fresh process starts at "", matching the boot
+	// rule that no alert session is resumable.
+	startedAlertKind string
 }
 
 // NewWeatherDelayHolder loads what this node last persisted and must run

@@ -123,7 +123,7 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-# Generous but bounded: seven scenarios, each polling a real 5s enforcement
+# Generous but bounded: eight scenarios, each polling a real 5s enforcement
 # tick and a real signing/HTTP/audio round trip at least once.
 echo "test-integration-weatherdelay: running against $SHOWMESH_TEST_MQTT_BROKER (container $CONTAINER_NAME)"
 if ! go test -tags=integration -race -count=1 -timeout=20m -v -run '^TestWeatherDelay' ./test/integration/...; then

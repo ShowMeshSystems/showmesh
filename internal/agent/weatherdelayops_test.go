@@ -372,11 +372,13 @@ func TestWeatherDelaySecondStartDoesNotStackTheAlert(t *testing.T) {
 }
 
 // TestWeatherDelayChangeInPlaceReplacesTheAlert proves ADR-053 decision 1:
-// while a delay's alert is playing, a start for cancelNight replaces it
-// with the cancel alert on the same session, rather than stacking or being
-// ignored as "already active."
+// while a delay's alert is playing, a start for cancelNight starts the
+// cancel alert on its own session and stops the delay alert's session like
+// any other audio, rather than stacking or being ignored as "already
+// active."
 func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
 	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
 
@@ -422,9 +424,23 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	live, err := engine.LiveHandles(context.Background())
-	if err != nil {
-		t.Fatalf("LiveHandles: %v", err)
+	// Polled, so a release that reaches the engine just after the
+	// cancelNight start returned still counts.
+	var live []audio.EngineHandle
+	releaseDeadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		live, err = engine.LiveHandles(context.Background())
+		if err != nil {
+			t.Fatalf("LiveHandles: %v", err)
+		}
+		if len(live) == 1 {
+			break
+		}
+		if time.Now().After(releaseDeadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if len(live) != 1 || !strings.HasSuffix(string(live[0]), "cancelNight-0") {
 		t.Fatalf("live engine handles = %v, want only the cancel alert (the delay alert released)", live)
@@ -437,6 +453,7 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 // stays the delay's original start, and the alert switches.
 func TestWeatherDelayStateMessageKindChangeReplacesTheAlert(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
 	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
 	mgr, engine := newWeatherDelayTestManager(t, dir, clock)
 
@@ -617,6 +634,91 @@ func TestWeatherDelayConcurrentStartsPlayTheAlertOnce(t *testing.T) {
 	}
 	if startCount != 1 {
 		t.Fatalf("engine Start calls = %d, want 1", startCount)
+	}
+}
+
+// TestWeatherDelayRepeatedStartAfterAnEmergencySilenceReportsNotPlaying
+// proves the reported alertPlaying comes from the session and not from the
+// kind alone: an emergency stop silences the alert during a delay, and a
+// repeated start of the same kind reports the truth rather than claiming
+// the alert it will not restart is still playing.
+func TestWeatherDelayRepeatedStartAfterAnEmergencySilenceReportsNotPlaying(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 10)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("delay start did not play: %s", reason)
+	}
+	mgr.SilenceAll(context.Background())
+
+	played, _, _ := ops.doStart(context.Background(), "delay", clock.now())
+	if played {
+		t.Fatal("a repeated start reported the alert playing after an emergency stop had silenced it")
+	}
+}
+
+// TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero proves a second
+// delay in one night plays its full repeat count: each alert starts on a
+// session that has never played.
+func TestWeatherDelaySecondAlertOfTheNightRestartsFromItemZero(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(weatherDelayBackground.Wait)
+	clock := &fakeClock{t: time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newWeatherDelayTestManagerWithDecoder(t, dir, clock, weatherDelayDurationDecoder{})
+
+	hash := writeAssetFixture(t, dir, "alert.wav", []byte("alert audio content"))
+	holder := &WeatherDelayHolder{store: newWeatherDelayStore(dir)}
+	holder.rec.Plan = weatherDelayTestPlan("delay", "alert-asset", hash, "alert.wav", 5)
+	ops := &weatherDelayOperations{holder: holder, audioMgr: mgr, assetDir: dir}
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("first delay start did not play: %s", reason)
+	}
+
+	itemIndex := func() int {
+		for _, s := range mgr.Snapshot(context.Background()) {
+			if s.ID == weatherDelayAlertSessionID {
+				return s.ItemIndex
+			}
+		}
+		return -1
+	}
+	advanceAlertToItem(t, mgr, clock, itemIndex, 2)
+
+	ops.doResume(context.Background())
+	if played, reason, _ := ops.doStart(context.Background(), "delay", clock.now()); !played {
+		t.Fatalf("second delay start did not play: %s", reason)
+	}
+	if got := itemIndex(); got != 0 {
+		t.Fatalf("the second delay alert of the night starts at item %d, want 0 (it must play all 5 repeats, not the %d left over)", got, 5-got)
+	}
+}
+
+// advanceAlertToItem drives the item watcher until index reports want.
+func advanceAlertToItem(t *testing.T, mgr *audio.Manager, clock *fakeClock, index func() int, want int) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() { defer close(done); mgr.RunWatcher(ctx, ticks) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for index() < want && time.Now().Before(deadline) {
+		clock.advance(weatherDelayTestItemDuration + time.Second)
+		select {
+		case ticks <- clock.now():
+		case <-time.After(time.Second):
+		}
+	}
+	cancel()
+	<-done
+	if got := index(); got < want {
+		t.Fatalf("the alert never reached item %d (last %d)", want, got)
 	}
 }
 
