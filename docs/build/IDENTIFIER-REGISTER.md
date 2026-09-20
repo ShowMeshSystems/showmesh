@@ -639,8 +639,8 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
-| `show.weatherdelay.trigger` | reserved | ADR-053 weather delay: an automatic trigger was received from a source |
-| `show.weatherdelay.decision` | reserved | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
+| `show.weatherdelay.trigger` | shipped | ADR-053 weather delay: an automatic trigger was received from a source |
+| `show.weatherdelay.decision` | shipped | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 
