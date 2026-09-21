@@ -284,3 +284,37 @@ func TestTrackerReasonRequiredWheneverNotLocked(t *testing.T) {
 		})
 	}
 }
+
+// TestTrackerFrequencyPPMPassesThroughRegardlessOfLockState proves
+// FrequencyPPM/FrequencyPPMKnown are carried straight from the raw
+// reading, unlike OffsetKnown: a servo can still be steering the clock
+// while acquiring or in holdover, so this must not be gated on
+// StateLocked.
+func TestTrackerFrequencyPPMPassesThroughRegardlessOfLockState(t *testing.T) {
+	raw := unlockedRaw("not yet locked")
+	raw.FrequencyPPM, raw.FrequencyPPMKnown = 15.286, true
+
+	p := &fakeProvider{kind: ProviderExternal, iface: "eth0", raws: []RawStatus{raw}}
+	tr := NewTracker(p, TrackerConfig{}, func() time.Time { return time.Unix(0, 0) })
+	s := tr.Poll(context.Background())
+
+	if !s.FrequencyPPMKnown {
+		t.Fatalf("FrequencyPPMKnown = false, want true (raw reported it, state is not gated)")
+	}
+	if s.FrequencyPPM != 15.286 {
+		t.Errorf("FrequencyPPM = %v, want 15.286", s.FrequencyPPM)
+	}
+}
+
+// TestTrackerFrequencyPPMUnknownWhenRawDidNotReportIt proves the "unknown
+// means absent, never a fabricated zero" rule: an unset raw reading must
+// not surface as FrequencyPPM=0 with Known=true.
+func TestTrackerFrequencyPPMUnknownWhenRawDidNotReportIt(t *testing.T) {
+	p := &fakeProvider{kind: ProviderExternal, iface: "eth0", raws: []RawStatus{lockedRaw("gm-1", 100)}}
+	tr := NewTracker(p, TrackerConfig{}, func() time.Time { return time.Unix(0, 0) })
+	s := tr.Poll(context.Background())
+
+	if s.FrequencyPPMKnown {
+		t.Fatalf("FrequencyPPMKnown = true, want false: raw never reported a frequency")
+	}
+}

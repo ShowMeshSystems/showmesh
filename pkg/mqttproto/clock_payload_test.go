@@ -1,6 +1,7 @@
 package mqttproto
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -133,5 +134,33 @@ func TestDecodeClockPayloadRejectsWrongSchema(t *testing.T) {
 	}
 	if _, err := DecodeClockPayload(env); err == nil {
 		t.Fatalf("expected an UnsupportedSchemaError")
+	}
+}
+
+// TestDecodeClockPayloadFromAnOlderAgentWithNoFrequencyField proves an
+// agent older than this change, whose payload carries no frequencyPpm/
+// frequencyPpmKnown keys at all, still decodes: FrequencyPPMKnown comes
+// back false, never a decode error.
+func TestDecodeClockPayloadFromAnOlderAgentWithNoFrequencyField(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	raw := `{
+		"state": "locked", "provider": "external",
+		"timescale": "ptp",
+		"offsetNs": -42, "offsetKnown": true,
+		"observedAt": "2026-08-28T12:00:00Z"
+	}`
+	env := Envelope{
+		Schema: SchemaNodeClockV1, MessageID: "msg-1", NodeID: "node-1",
+		SentAt: now, Payload: json.RawMessage(raw),
+	}
+	got, err := DecodeClockPayload(env)
+	if err != nil {
+		t.Fatalf("DecodeClockPayload: %v", err)
+	}
+	if got.FrequencyPPMKnown {
+		t.Fatalf("FrequencyPPMKnown = true, want false: this payload never carried the field")
+	}
+	if got.FrequencyPPM != 0 {
+		t.Errorf("FrequencyPPM = %v, want 0", got.FrequencyPPM)
 	}
 }

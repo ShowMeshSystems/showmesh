@@ -86,6 +86,43 @@ var (
 	readPHC              = ReadPHC
 )
 
+// phcFrequencyPPM and realtimeFrequencyPPM indirect [PHCFrequencyPPM] and
+// [RealtimeFrequencyPPM], matching phcIndexForInterface/readPHC's own
+// fakeability rule.
+var (
+	phcFrequencyPPM      = PHCFrequencyPPM
+	realtimeFrequencyPPM = RealtimeFrequencyPPM
+	scaledFreqToPPM      = func(freq int64) float64 { return float64(freq) / 65536 }
+)
+
+// frequencyPPMForMode reads the frequency adjustment of the clock a
+// provider on iface actually steers under mode: the interface's PHC
+// under hardware timestamping, CLOCK_REALTIME under software. ok is
+// false whenever that reading cannot be trusted -- no PHC on iface, or
+// the read itself failed -- never a fabricated zero.
+func frequencyPPMForMode(iface string, mode Timestamping) (ppm float64, ok bool) {
+	switch mode {
+	case TimestampingHardware:
+		index, hasPHC, err := phcIndexForInterface(iface)
+		if err != nil || !hasPHC {
+			return 0, false
+		}
+		v, err := phcFrequencyPPM(index)
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	case TimestampingSoftware:
+		v, err := realtimeFrequencyPPM()
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 // Timescale is the media clock's own epoch vocabulary (RES-019: "the media
 // clock is a PTP-domain clock, never wall time; its timescale may be
 // arbitrary"). TimescaleUnknown means genuinely undetermined, never a
@@ -140,6 +177,15 @@ type RawStatus struct {
 
 	OffsetNs    int64
 	OffsetKnown bool
+
+	// FrequencyPPM is how far this provider's steered clock (its
+	// interface's PHC under hardware timestamping, CLOCK_REALTIME under
+	// software) is currently being adjusted from its free-running rate,
+	// in parts per million, read via clock_adjtime's own Freq (scaled by
+	// 65536 -- RES-019 §1's own observed constant). Never node.audio.sync.
+	// rate_ppm's audio-interface rate.
+	FrequencyPPM      float64
+	FrequencyPPMKnown bool
 
 	ClockClass      int
 	ClockClassKnown bool
@@ -248,6 +294,13 @@ type Status struct {
 
 	OffsetNs    int64
 	OffsetKnown bool
+
+	// FrequencyPPM carries [RawStatus.FrequencyPPM] straight through:
+	// how hard this node's steered clock is being pulled, independent of
+	// lock state (a servo can still be applying a correction while
+	// acquiring or in holdover).
+	FrequencyPPM      float64
+	FrequencyPPMKnown bool
 
 	ClockClass      int
 	ClockClassKnown bool

@@ -84,6 +84,37 @@ func (r *PHCReader) Close() error {
 	return r.f.Close()
 }
 
+// readFreqPPM reads clockID's current frequency adjustment via
+// clock_adjtime with a zeroed Timex (modes=0 is a pure read, adjusting
+// nothing) and converts its Freq to parts per million -- observed on a
+// real node's /dev/ptp0 2026-09-21: freq 1001812 is +15.286 ppm, the
+// kernel's own scaled-by-65536 convention (RES-019 §1).
+func readFreqPPM(clockID int32) (float64, error) {
+	var tx unix.Timex
+	if _, err := unix.ClockAdjtime(clockID, &tx); err != nil {
+		return 0, fmt.Errorf("clock: clock_adjtime: %w", err)
+	}
+	return scaledFreqToPPM(tx.Freq), nil
+}
+
+// PHCFrequencyPPM opens /dev/ptp<index> and reads its current frequency
+// adjustment in parts per million -- see [readFreqPPM].
+func PHCFrequencyPPM(index int) (float64, error) {
+	r, err := OpenPHC(index)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = r.Close() }()
+	return readFreqPPM(r.clockID)
+}
+
+// RealtimeFrequencyPPM reads CLOCK_REALTIME's current frequency
+// adjustment in parts per million -- what a software-timestamped ptp4l
+// disciplines directly (RES-019 §1).
+func RealtimeFrequencyPPM() (float64, error) {
+	return readFreqPPM(unix.CLOCK_REALTIME)
+}
+
 // ReadPHC opens index, reads it once, and closes it — a convenience for a
 // provider whose PHC index can change across polls (a config reload) and
 // therefore does not keep a [PHCReader] open across calls. A supervising

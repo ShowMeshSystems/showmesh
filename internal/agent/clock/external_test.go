@@ -198,3 +198,61 @@ func TestExternalProviderNowRefusesUnparsablePHCDevice(t *testing.T) {
 		t.Errorf("Reason = %q, want it to name the unparsable value", mt.Reason)
 	}
 }
+
+// TestExternalProviderFrequencyPPMNoPHCReadsRealtime mirrors
+// [TestExternalProviderNowNoPHCUsesRealtimeRegardlessOfDeclaration]:
+// software timestamping is CLOCK_REALTIME's own frequency, not a PHC's.
+func TestExternalProviderFrequencyPPMNoPHCReadsRealtime(t *testing.T) {
+	fakePHCLookup(t, 0, false, nil, nil)
+	fakeFrequencyReaders(t, 999, nil, 14.767, nil)
+	p := NewExternalProvider(ExternalConfig{Interface: "eth0"})
+
+	ppm, ok := p.frequencyPPM()
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if ppm != 14.767 {
+		t.Errorf("ppm = %v, want the realtime reading 14.767", ppm)
+	}
+}
+
+// TestExternalProviderFrequencyPPMUndeclaredPHCReportsUnknown mirrors
+// [TestExternalProviderNowRefusesPHCPresentWithNoDeclaration]: without an
+// operator attestation this provider cannot tell whether the PHC is
+// actually what is being disciplined.
+func TestExternalProviderFrequencyPPMUndeclaredPHCReportsUnknown(t *testing.T) {
+	fakePHCLookup(t, 0, true, nil, nil)
+	p := NewExternalProvider(ExternalConfig{Interface: "eno2"})
+
+	if _, ok := p.frequencyPPM(); ok {
+		t.Fatalf("ok = true, want false: no phcDevice declared")
+	}
+}
+
+// TestExternalProviderFrequencyPPMDeclaredMatchingPHCReadsDevice mirrors
+// [TestExternalProviderNowReadsDeclaredMatchingPHCDevice]: a declared
+// device matching the interface's own PHC index is read.
+func TestExternalProviderFrequencyPPMDeclaredMatchingPHCReadsDevice(t *testing.T) {
+	fakePHCLookup(t, 0, true, nil, nil)
+	fakeFrequencyReaders(t, 15.286, nil, 999, nil)
+	p := NewExternalProvider(ExternalConfig{Interface: "eno2", PHCDevice: "/dev/ptp0"})
+
+	ppm, ok := p.frequencyPPM()
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if ppm != 15.286 {
+		t.Errorf("ppm = %v, want the PHC reading 15.286", ppm)
+	}
+}
+
+// TestExternalProviderFrequencyPPMMismatchedPHCReportsUnknown mirrors
+// [TestExternalProviderNowRefusesMismatchedPHCDevice].
+func TestExternalProviderFrequencyPPMMismatchedPHCReportsUnknown(t *testing.T) {
+	fakePHCLookup(t, 0, true, nil, nil)
+	p := NewExternalProvider(ExternalConfig{Interface: "eno2", PHCDevice: "/dev/ptp1"})
+
+	if _, ok := p.frequencyPPM(); ok {
+		t.Fatalf("ok = true, want false: declared /dev/ptp1 does not match the interface's own PHC index 0")
+	}
+}

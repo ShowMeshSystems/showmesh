@@ -110,6 +110,38 @@ func (p *ExternalProvider) Now(context.Context) MediaTime {
 	}
 }
 
+// frequencyPPM mirrors [ExternalProvider.Now]'s own trust decision: no
+// PHC on the interface means CLOCK_REALTIME is what is actually being
+// steered; a PHC exists only when [ExternalConfig.PHCDevice] is declared
+// and matches it, the same operator attestation Now() relies on since
+// this provider's read-only socket cannot confirm timestamping mode
+// itself. ok is false whenever that decision cannot be made confidently.
+func (p *ExternalProvider) frequencyPPM() (float64, bool) {
+	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
+	if err != nil {
+		return 0, false
+	}
+	if !hasPHC {
+		v, err := realtimeFrequencyPPM()
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	}
+	if p.cfg.PHCDevice == "" {
+		return 0, false
+	}
+	declaredIndex, ok := phcDeviceIndex(p.cfg.PHCDevice)
+	if !ok || declaredIndex != index {
+		return 0, false
+	}
+	v, err := phcFrequencyPPM(index)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // phcDeviceIndex parses "/dev/ptpN" into N; ok is false for anything else.
 // Re-checks rather than trusting the wire: a malformed value must be an
 // honest refusal, never a panic or a wrong index.
@@ -135,7 +167,13 @@ func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 	if _, err := os.Stat(p.cfg.UDSAddress); err != nil {
 		return RawStatus{Reachable: false, Reason: fmt.Sprintf("Cannot reach the clock socket %s: %v.", p.cfg.UDSAddress, err)}
 	}
-	return pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
+	raw := pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
+	if raw.Reachable {
+		if ppm, ok := p.frequencyPPM(); ok {
+			raw.FrequencyPPM, raw.FrequencyPPMKnown = ppm, true
+		}
+	}
+	return raw
 }
 
 // pollViaUDS is [ExternalProvider.Poll]'s and [ManagedProvider.Poll]'s

@@ -39,3 +39,16 @@ func (r *PHCReader) Now() (time.Time, error) {
 
 // Close is a no-op: this platform never held a PHC device open.
 func (r *PHCReader) Close() error { return nil }
+
+// PHCFrequencyPPM always fails on a non-Linux build: clock_adjtime is a
+// Linux syscall, so no platform-specific frequency reading can be
+// truthfully returned here.
+func PHCFrequencyPPM(index int) (float64, error) {
+	return 0, fmt.Errorf("clock: reading /dev/ptp%d's frequency is unavailable on this platform (Linux only)", index)
+}
+
+// RealtimeFrequencyPPM always fails on a non-Linux build: see
+// [PHCFrequencyPPM].
+func RealtimeFrequencyPPM() (float64, error) {
+	return 0, fmt.Errorf("clock: reading CLOCK_REALTIME's frequency is unavailable on this platform (Linux only)")
+}
