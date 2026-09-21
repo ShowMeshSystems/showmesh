@@ -1228,6 +1228,20 @@ export class ApiStore {
     }
   }
 
+  /**
+   * `DELETE /api/v1/config/audio.node/{id}` (ADR-018). `config:write` only.
+   * Always sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteAudioNode(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/audio.node/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/audio.node/{id}/revisions` (ADR-018): revision history, newest first, metadata only. */
   async getAudioNodeConfigRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -2958,6 +2972,21 @@ export class ApiStore {
         payload,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/config/night.session/{id}` (Track F seam F1).
+   * `config:write` only. Always sends `{"confirm":true}`, the server's own
+   * required body.
+   */
+  async deleteNightSessionConfig(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/night.session/${encodeURIComponent(id)}`, body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
