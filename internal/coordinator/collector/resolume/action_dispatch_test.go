@@ -983,6 +983,101 @@ func TestDispatchBlackoutAlreadyEmptyIsUnconfirmable(t *testing.T) {
 	}
 }
 
+// newTestActionDispatcherNoComposition is [newTestActionDispatcher] over a
+// [Collector] whose [CompositionStore] has never been loaded, so
+// [CompositionStore.Current] reports [ErrCompositionNotUploaded] to every
+// action that resolves against it.
+func newTestActionDispatcherNoComposition(t *testing.T, arena *fakeArena, now *time.Time, snap SurveySnapshot) *ActionDispatcher {
+	t.Helper()
+	srv := httptest.NewServer(arena)
+	t.Cleanup(srv.Close)
+
+	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(now)})
+	c.recordSurveySnapshot(snap)
+
+	return NewActionDispatcher(c, ActionDispatcherOptions{
+		Now: fixedClock(now), Sleep: fakeSleep(now), PollInterval: 10 * time.Millisecond,
+	})
+}
+
+// testActionParamsFor is a minimal by-action [ActionParams], good enough to
+// reach past param resolution to whatever gate a table test over
+// [actionRegistry] is checking.
+func testActionParamsFor(name ActionName) ActionParams {
+	switch name {
+	case ActionLaunchClip:
+		return ActionParams{ClipID: testClipA}
+	case ActionClearLayer, ActionSetLayerBypass, ActionSetLayerMaster:
+		return ActionParams{LayerID: testLayerOne, Bypassed: true, Master: 0.5}
+	case ActionLaunchColumn:
+		return ActionParams{ColumnID: testColumnOne}
+	case ActionSelectDeck:
+		return ActionParams{DeckID: testDeckOne}
+	default:
+		return ActionParams{}
+	}
+}
+
+// TestDispatchBlackoutSendsWhenNoCompositionIsUploaded is the owner ruling
+// that an emergency stop always stops: with nothing uploaded there is no
+// layer list to baseline or confirm against, so blackout still sends
+// disconnect-all and reports unconfirmable with a plain reason, never
+// refused.
+func TestDispatchBlackoutSendsWhenNoCompositionIsUploaded(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+
+	d := newTestActionDispatcherNoComposition(t, arena, &now, identifiedSnapshot(now))
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmable {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+	if out.Reason == "" {
+		t.Error("Reason is empty, want a plain operator-readable reason")
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	found := false
+	for _, req := range arena.requests {
+		if req == "POST /api/v1/composition/disconnect-all" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("disconnect-all was never dispatched; requests = %v", arena.requests)
+	}
+}
+
+// TestNonBlackoutActionsStillRefuseWhenNoCompositionIsUploaded is a table
+// test over [actionRegistry] itself, so an action registered later is
+// covered without editing this test: every action other than the emergency
+// blackout must still refuse outright when nothing has been uploaded — only
+// blackout is exempt from needing a layer list to dispatch.
+func TestNonBlackoutActionsStillRefuseWhenNoCompositionIsUploaded(t *testing.T) {
+	for _, e := range actionRegistry {
+		if e.Name == ActionBlackout {
+			continue
+		}
+		t.Run(string(e.Name), func(t *testing.T) {
+			now := time.Now()
+			arena := newFakeArena(&now)
+
+			d := newTestActionDispatcherNoComposition(t, arena, &now, identifiedSnapshot(now))
+			out, err := d.Dispatch(context.Background(), e.Name, testActionParamsFor(e.Name))
+			if err != nil {
+				t.Fatalf("Dispatch error = %v", err)
+			}
+			if out.State != ActionRefused {
+				t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+			}
+		})
+	}
+}
+
 // --- launchColumn -----------------------------------------------------
 
 func TestDispatchLaunchColumnConfirms(t *testing.T) {

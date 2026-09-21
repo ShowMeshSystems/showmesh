@@ -331,7 +331,14 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindo
 
 	tc, err := d.collector.compositionStore.Current()
 	if err != nil {
-		return refusedOutcome(name, "no composition has been uploaded to this coordinator yet")
+		// No composition means no layer list, so there is nothing to baseline
+		// or confirm against. Send the blackout anyway rather than refuse it.
+		dispatchedAt, bad := d.writePhase(ctx, w, name, "blackout", d.collector.client.DisconnectAll)
+		if bad != nil {
+			return *bad
+		}
+		return unconfirmableOutcome(name, dispatchedAt,
+			"No composition is uploaded to this coordinator, so the blackout could not be checked. It was sent anyway.")
 	}
 	layers := tc.Layers()
 	if len(layers) == 0 {

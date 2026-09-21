@@ -360,7 +360,11 @@ unreachable by both shipped clients.
    with the transition at 0.1 s confirms faster, **demonstrating the deadline is
    derived rather than constant**.
 5. A deadline expiry produces `unconfirmed` with a reason, never `failed`.
-6. **No action dispatches while composition identity is unknown or false.**
+6. **No action dispatches while composition identity is unknown or false, except
+   the emergency `blackout`** (§3.6's 2026-09-21 amendment). **`blackout` also still
+   dispatches when no composition has been uploaded at all**, since it needs no
+   layer list to send; it reports `unconfirmable`, since with no layer list there
+   is nothing to confirm against.
 7. Every action requires `resolume:action`; a principal without it gets `403` and no
    HTTP request reaches Resolume.
 8. **Every registry entry declares a safety class**, and the build fails if one does
