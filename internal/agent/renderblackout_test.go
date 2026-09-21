@@ -335,14 +335,18 @@ func TestBlackoutSurfaceSetsFlagInMemoryEvenWhenPersistenceFails(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatalf("chmod dir read-only: %v", err)
+	// A regular file where the held-black state directory belongs makes
+	// every later write to it fail (os.MkdirAll refuses to turn a file
+	// into a directory) regardless of the process's own privilege level —
+	// unlike a chmod-based permission denial, which a build running as
+	// root (as this project's CI does) ignores.
+	if err := os.WriteFile(dir+"/.render-state", []byte("block"), 0o644); err != nil {
+		t.Fatalf("write blocking file: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
 	_, err := renderOps.blackoutSurface(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
 	if err == nil {
-		t.Fatalf("blackoutSurface against an unwritable state directory unexpectedly succeeded")
+		t.Fatalf("blackoutSurface against a blocked state directory unexpectedly succeeded")
 	}
 	if !renderOps.isHeldBlack("surface-1") {
 		t.Fatalf("isHeldBlack = false after a persistence failure, want true: the in-memory flag must be set before persistence is even attempted, so a stop never fails lit")
