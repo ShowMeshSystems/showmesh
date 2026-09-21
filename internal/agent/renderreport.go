@@ -16,6 +16,16 @@ import (
 // tick or trigger.
 const renderReportPublishTimeout = 5 * time.Second
 
+// heldBlackLister exposes just enough of *renderOperations for
+// publishOneRenderReport to add a synthetic report row for a surface this
+// node is holding black with no active FrameWriter to report it through —
+// see [renderOperations.knownHeldBlackSurfaceIDs]'s own doc comment for
+// why that gap exists. A narrow interface, not *renderOperations itself,
+// so this file's tests can supply a fake rather than a whole render stack.
+type heldBlackLister interface {
+	knownHeldBlackSurfaceIDs() []string
+}
+
 // runRenderReport publishes this node's render pipeline health to nodeID's
 // observed/render topic on every tick received from ticks, and immediately
 // (out of cadence) on every signal received from triggered — mirroring
@@ -32,7 +42,7 @@ const renderReportPublishTimeout = 5 * time.Second
 // runRenderReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runHeartbeat's and
 // runAssetInventory's identical contract.
-func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
+func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, heldBlack heldBlackLister, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "render")
 	if err != nil {
 		// nodeID is validated at config load, matching runHeartbeat's and
@@ -50,13 +60,13 @@ func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pip
 			if !ok {
 				return
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, msStatus, fcStatus, fcHeld, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, heldBlack, msStatus, fcStatus, fcHeld, now, logger)
 		case _, ok := <-triggered:
 			if !ok {
 				triggered = nil
 				continue
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, msStatus, fcStatus, fcHeld, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, heldBlack, msStatus, fcStatus, fcHeld, now, logger)
 		}
 	}
 }
@@ -66,7 +76,7 @@ func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pip
 // current MultiSync bind evidence (finding 7), fcStatus's current FPP
 // Connect HTTP listener evidence (ADR-044), and fcHeld's currently held
 // files and bounded evidence log, and publishes a single render report.
-func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) {
+func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, heldBlack heldBlackLister, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, renderReportPublishTimeout)
 	defer cancel()
 
@@ -96,12 +106,48 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	// "surfaces": [], never omits the key — matching AssetInventoryPayload.
 	// Assets's identical no-omitempty rule.
 	surfaces := make([]mqttproto.RenderSurfaceReport, 0, len(snapshots))
+	reported := make(map[string]struct{}, len(snapshots))
 	for _, s := range snapshots {
 		rep := toRenderSurfaceReport(s)
 		if a, ok := assignments[s.SurfaceID]; ok {
 			applyContentIdentity(&rep, a, now(), logger)
 		}
 		surfaces = append(surfaces, rep)
+		reported[s.SurfaceID] = struct{}{}
+	}
+
+	// A surface render.surface.blackout held black with no current
+	// assignment (build item 1) never starts a FrameWriter, so it has no
+	// snapshot above to report it through at all — "nothing is drawing on
+	// this surface" is true of it precisely BECAUSE nothing runs there, not
+	// despite it, so it gets a synthetic row here using the same
+	// RenderDrawingBlackout value a running writer already reports for a
+	// held-black surface, never a new one. Without this, this surface is
+	// silently absent from the report instead of stating the blackout that
+	// is actually in effect, and a weather delay power group containing it
+	// can never confirm dark (surface.output.mode never carries any
+	// evidence for it to read at all).
+	if heldBlack != nil {
+		for _, id := range heldBlack.knownHeldBlackSurfaceIDs() {
+			if _, ok := reported[id]; ok {
+				continue
+			}
+			nowAt := now()
+			surfaces = append(surfaces, mqttproto.RenderSurfaceReport{
+				SurfaceID:     id,
+				PipelineState: mqttproto.RenderPipelineStateStopped,
+				Reason:        "this surface is held black with no frame writer currently running",
+				Drawing:       mqttproto.RenderDrawingBlackout,
+				ObservedAt:    nowAt,
+				// The draw-state group (collector.go's surfaceDrawStateObservations)
+				// judges Drawing's own freshness against FramesObservedAt, never
+				// ObservedAt — see that function's doc comment. Without this, the
+				// coordinator reads this row as StateUnknownAge forever, which a
+				// weather delay power group's dark check treats the same as no
+				// evidence at all.
+				FramesObservedAt: nowAt,
+			})
+		}
 	}
 
 	// heldRecords is the true total; held is what actually rides the wire,

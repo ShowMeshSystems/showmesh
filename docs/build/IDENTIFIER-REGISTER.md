@@ -1172,7 +1172,7 @@ this signal says which fallback that failure actually put on the wire:
 `alert` in Program Mode, `black` in Show Mode. It is `not_collected` with a
 stated reason for every other drawing state.
 
-**`surface.output.mode` gains a fourth value, `blackout`, shipped in this
+**`surface.output.mode` gains a fifth value, `blackout`, shipped in this
 PR** (ADR-053 decision 6, amended 2026-09-21): what a surface reports while
 render.surface.blackout's own held-black flag is set, or while a weather
 delay is active, and forced black outranks the surface's configured idle

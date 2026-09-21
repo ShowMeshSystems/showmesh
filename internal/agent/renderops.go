@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -272,6 +273,16 @@ type renderOperations struct {
 	// clearHeldBlack); never reset as a whole.
 	holdBlackDefaultAll bool
 
+	// holdBlackDefaultMaterialized is true once
+	// materializeHeldBlackDefaultOnFirstWrite has already run, so a later
+	// write does not repeat persisting every currently assigned surface's
+	// default truth. Meaningless (and left false) when holdBlackDefaultAll
+	// is false. Deliberately separate from holdBlackDefaultAll itself:
+	// materializing is a one-time disk backfill, never a reason to lift
+	// the in-memory default for a surface this node still has no explicit
+	// entry for — see holdBlackDefaultAll's own "never reset as a whole".
+	holdBlackDefaultMaterialized bool
+
 	// timelineStepOwner and timelineStepMS record which surface last set
 	// o.timeline's shared step time, and to what value — see
 	// applyTimelineStepTime's own doc comment for why a shared Timeline
@@ -334,6 +345,28 @@ func (o *renderOperations) isHeldBlack(surfaceID string) bool {
 	return o.holdBlackDefaultAll
 }
 
+// knownHeldBlackSurfaceIDs returns every surface id this node currently
+// holds an explicit held-black entry for (blackoutSurface has run against
+// it), sorted. It does not include a surface only defaulted black by
+// holdBlackDefaultAll with no explicit entry yet, or already lit
+// (explicit false): a surface with an explicit true entry is exactly the
+// set publishOneRenderReport (renderreport.go) needs to synthesize a
+// "blacked out" report row for when that surface has no FrameWriter to
+// report it through — render.surface.blackout on a surface with no
+// current assignment (build item 1) never starts one.
+func (o *renderOperations) knownHeldBlackSurfaceIDs() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make([]string, 0, len(o.holdBlack))
+	for id, held := range o.holdBlack {
+		if held {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // setHeldBlack updates surfaceID's in-memory held-black flag. Callers
 // persist through holdBlackStore themselves first (blackoutSurface,
 // clearHeldBlack) so disk and memory never disagree about which surface
@@ -344,10 +377,63 @@ func (o *renderOperations) setHeldBlack(surfaceID string, held bool) {
 	o.mu.Unlock()
 }
 
+// materializeHeldBlackDefaultOnFirstWrite persists this node's actual
+// held-black truth for every surface it knows about, the first time
+// anything writes to holdBlackStore after a corrupt or unreadable file
+// forced holdBlackDefaultAll at construction: every surface named in the
+// assignment store is written held black, except one that already has an
+// explicit in-memory entry (set true by an earlier blackoutSurface this
+// session, or cleared false by an earlier clearHeldBlack). Without this,
+// the FIRST write after a corrupt file (a single-surface Set call) is the
+// only chance to record every OTHER surface's default-black truth:
+// holdBlackStore.Set's own recovery starts from an EMPTY set on a load
+// failure, so that first write would otherwise persist a file naming only
+// the one surface just touched, silently losing every other surface's
+// black default the moment the corrupt file is overwritten. A no-op once
+// holdBlackDefaultAll is false (the file loaded cleanly at construction)
+// or holdBlackDefaultMaterialized is already true (this already ran once
+// this process's lifetime) — it never clears holdBlackDefaultAll itself,
+// only backfills the disk record while that default stays in force for
+// any surface this node still has no explicit entry for.
+func (o *renderOperations) materializeHeldBlackDefaultOnFirstWrite() error {
+	o.mu.Lock()
+	if !o.holdBlackDefaultAll || o.holdBlackDefaultMaterialized {
+		o.mu.Unlock()
+		return nil
+	}
+	alreadyExplicit := make(map[string]bool, len(o.holdBlack))
+	for id := range o.holdBlack {
+		alreadyExplicit[id] = true
+	}
+	o.mu.Unlock()
+
+	assignments, err := o.store.Load()
+	if err != nil {
+		return fmt.Errorf("materializing held-black default: loading assignments: %w", err)
+	}
+	for _, a := range assignments {
+		if alreadyExplicit[a.SurfaceID] {
+			continue
+		}
+		o.setHeldBlack(a.SurfaceID, true)
+		if err := o.holdBlackStore.Set(a.SurfaceID, true); err != nil {
+			return fmt.Errorf("materializing held-black default for surface %q: %w", a.SurfaceID, err)
+		}
+	}
+
+	o.mu.Lock()
+	o.holdBlackDefaultMaterialized = true
+	o.mu.Unlock()
+	return nil
+}
+
 // clearHeldBlack persists and records surfaceID as no longer held black —
 // build item 2's two clearing paths (an authorized cue.activate swap or
 // confirmation, and render.surface.apply) both call this.
 func (o *renderOperations) clearHeldBlack(surfaceID string) error {
+	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
+		return fmt.Errorf("clearing held-black flag for surface %q: %w", surfaceID, err)
+	}
 	if err := o.holdBlackStore.Set(surfaceID, false); err != nil {
 		return err
 	}
@@ -1022,6 +1108,15 @@ func (o *renderOperations) blackoutSurface(ctx context.Context, params map[strin
 	// that fails lit because its own bookkeeping write failed is the exact
 	// hazard this ordering closes.
 	o.setHeldBlack(surfaceID, true)
+	// materializeHeldBlackDefaultOnFirstWrite runs AFTER the target
+	// surface's own in-memory flag is already set (never fails lit), but
+	// BEFORE persisting it: it is the one chance to persist every OTHER
+	// surface's corrupt-file default truth before that default is lost —
+	// see its own doc comment. This surface is already in o.holdBlack by
+	// now, so it skips re-persisting it here; the call below still does.
+	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
+		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be fully persisted: %w", action, err)
+	}
 	if err := o.holdBlackStore.Set(surfaceID, true); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be persisted: %w", action, err)
 	}

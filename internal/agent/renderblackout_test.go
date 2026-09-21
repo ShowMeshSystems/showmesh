@@ -10,6 +10,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -84,6 +85,51 @@ func TestBlackoutSurfaceWithNoAssignmentSucceeds(t *testing.T) {
 	}
 	if !held["never-applied"] {
 		t.Fatalf("held-black state on disk = %v, want surface recorded", held)
+	}
+}
+
+// TestBlackoutSurfaceWithNoAssignmentReportsBlackoutOutputMode proves the
+// node's render report carries a synthetic row for a surface held black
+// with no current assignment: blackoutSurface never starts a FrameWriter
+// for one, so it has no supervisor snapshot to report it through at all.
+// Before this fix, such a surface was silently absent from every render
+// report, so the coordinator's collector never had any evidence for it —
+// not even a not_collected one — and a weather delay power group
+// containing it could never confirm dark.
+func TestBlackoutSurfaceWithNoAssignmentReportsBlackoutOutputMode(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	if _, err := renderOps.blackoutSurface(context.Background(), map[string]any{"surfaceId": "never-applied"}, clock.now); err != nil {
+		t.Fatalf("blackoutSurface: %v", err)
+	}
+
+	pub := newFakePublisher()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	publishOneRenderReport(ctx, pub, "showmesh/nodes/test-node/observed/render", "test-node", sup, store, renderOps,
+		newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), clock.now, discardLogger())
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	payload := decodeRenderReport(t, calls[0].payload)
+
+	var found *mqttproto.RenderSurfaceReport
+	for i := range payload.Surfaces {
+		if payload.Surfaces[i].SurfaceID == "never-applied" {
+			found = &payload.Surfaces[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("surfaces = %+v, want an entry for the held-black surface with no assignment", payload.Surfaces)
+	}
+	if found.Drawing != mqttproto.RenderDrawingBlackout {
+		t.Fatalf("Drawing = %q, want %q", found.Drawing, mqttproto.RenderDrawingBlackout)
 	}
 }
 
@@ -172,14 +218,16 @@ func TestBlackoutSurfaceThenCueActivateResumesSameGenerationAndClearsFlag(t *tes
 	}
 }
 
-// TestBlackoutSurfaceThenCueActivateWithMissingFSEQStaysBlackAndFlagStaysSet
-// proves build item 2's fix: a cue.activate that fails validating the NEW
-// file (here, an FSEQ that was never uploaded) must never clear
-// render.surface.blackout's held-black flag first and fail afterward — the
-// surface stays black, drawing evidence included, and the flag stays set,
-// exactly as it must after an emergency stop followed by a failed
-// activation.
-func TestBlackoutSurfaceThenCueActivateWithMissingFSEQStaysBlackAndFlagStaysSet(t *testing.T) {
+// TestBlackoutSurfaceThenCueActivateRefusedForMissingAssetStaysBlack proves
+// that a cue.activate naming an FSEQ this node never received (here,
+// "missing.fseq") is refused by cueauth.CheckLazy's own assetsPresent gate
+// (cueactivationops.go) before renderOperations.activateRender is ever
+// called, and that refusal leaves a blacked-out surface exactly as it was:
+// black, with the held-black flag still set. It does not exercise
+// activateRender's own validate-before-clear ordering — see
+// TestActivateRenderWithUnopenableFSEQStaysBlackAndFlagStaysSet below for a
+// test that reaches that path.
+func TestBlackoutSurfaceThenCueActivateRefusedForMissingAssetStaysBlack(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
 	sup := newRenderTestSupervisor(t, clock)
@@ -223,6 +271,63 @@ func TestBlackoutSurfaceThenCueActivateWithMissingFSEQStaysBlackAndFlagStaysSet(
 	}
 	if !held["surface-1"] {
 		t.Fatalf("held-black state on disk lost surface-1 after a failed cue.activate")
+	}
+	waitForSnapshotDrawing(t, sup, "surface-1", pipeline.DrawingBlackout)
+}
+
+// TestActivateRenderWithUnopenableFSEQStaysBlackAndFlagStaysSet proves build
+// item 2's actual ordering fix: renderOperations.activateRender validates
+// the NEW file (buildAssignedSpec) before it ever clears
+// render.surface.blackout's held-black flag, so a failure discovered only
+// there — the file's content matches its declared hash but is not a valid
+// FSEQ — leaves the surface black and the flag set. This calls
+// activateRender directly rather than through cueActivationOperation.activate,
+// because cueauth.CheckLazy's assetsPresent gate (cueactivationops.go) reads
+// this same hash and would already refuse a missing file or a hash
+// mismatch before activateRender is ever reached; opening the file is the
+// one check buildAssignedSpec alone makes past that gate.
+func TestActivateRenderWithUnopenableFSEQStaysBlackAndFlagStaysSet(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	assignmentStore := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, assignmentStore, dir, clock)
+	setupActivatedSurface(t, renderOps, dir, "old.fseq", clock)
+
+	if _, err := renderOps.blackoutSurface(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now); err != nil {
+		t.Fatalf("blackoutSurface: %v", err)
+	}
+	waitForSnapshotDrawing(t, sup, "surface-1", pipeline.DrawingBlackout)
+
+	badPath := dir + "/bad.fseq"
+	// Not a valid FSEQ (no "PSEQ" header, too short for one): fseq.Open
+	// fails on it even though its declared hash below is honest, so this
+	// reaches buildAssignedSpec's open failure rather than its hash check.
+	badContent := []byte("not a valid fseq file")
+	if err := os.WriteFile(badPath, badContent, 0o644); err != nil {
+		t.Fatalf("write bad.fseq: %v", err)
+	}
+	badHash, err := hashFile(badPath)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	act := testActivation("act-render-unopenable", "cue-3", 1, "halloween-2026", 3, "rev-a", 0)
+	out := cuecatalog.RenderOutput{Sequence: "seq-bad", Filename: "bad.fseq", AssetHashes: []string{badHash}}
+
+	if err := renderOps.activateRender(act, out, clock.now); err == nil {
+		t.Fatalf("activateRender against an unopenable fseq unexpectedly succeeded")
+	}
+
+	if !renderOps.isHeldBlack("surface-1") {
+		t.Fatalf("isHeldBlack = false after activateRender failed to open the new file, want true: a failed activation must never relight a blacked-out surface")
+	}
+	held, err := pipeline.NewHoldBlackStore(dir).Load()
+	if err != nil {
+		t.Fatalf("loading held-black state: %v", err)
+	}
+	if !held["surface-1"] {
+		t.Fatalf("held-black state on disk lost surface-1 after activateRender failed to open the new file")
 	}
 	waitForSnapshotDrawing(t, sup, "surface-1", pipeline.DrawingBlackout)
 }
@@ -388,6 +493,68 @@ func TestNewRenderOperationsHoldsEveryUntouchedSurfaceBlackOnACorruptFile(t *tes
 	}
 	if !renderOps.isHeldBlack("surface-still-defaulted") {
 		t.Fatalf("isHeldBlack = false, want true: clearing ONE surface must never lift the default for another untouched surface")
+	}
+}
+
+// TestCorruptHeldBlackFileDefaultSurvivesTheFirstClearAndARestart proves
+// build item 3's corrupt-file default is not lost at the first write: two
+// surfaces (A and B) are both assigned and both default black on a corrupt
+// held-black file, clearHeldBlack(A) must persist B's black default too —
+// not just A's own clear — and that must still hold after a further
+// simulated restart, a fresh renderOperations over the same asset
+// directory. Before this fix, clearHeldBlack(A) rewrote the held-black
+// file as containing only A (cleared), losing B's default entirely, so a
+// fresh renderOperations came up with B reading lit.
+func TestCorruptHeldBlackFileDefaultSurvivesTheFirstClearAndARestart(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+
+	// "Session 1": assign both surfaces, no blackout yet.
+	sup1 := newRenderTestSupervisor(t, clock)
+	assignmentStore := pipeline.NewAssignmentStore(dir)
+	renderOps1 := newTestRenderOperations(sup1, assignmentStore, dir, clock)
+	if _, err := renderOps1.applySurface(context.Background(), minimalRenderApplyParams("surface-a"), clock.now); err != nil {
+		t.Fatalf("applySurface surface-a: %v", err)
+	}
+	if _, err := renderOps1.applySurface(context.Background(), minimalRenderApplyParams("surface-b"), clock.now); err != nil {
+		t.Fatalf("applySurface surface-b: %v", err)
+	}
+
+	// Corrupt the held-black file AFTER both applies (which themselves
+	// write a valid one via their own clearHeldBlack call) — this is the
+	// unreadable file "session 2" below must recover from.
+	stateDir := dir + "/.render-state"
+	if err := os.WriteFile(stateDir+"/held-black.json", []byte("not valid json"), 0o644); err != nil {
+		t.Fatalf("write corrupt held-black file: %v", err)
+	}
+
+	// "Session 2": a fresh renderOperations loads the corrupt file, so both
+	// A and B default black. Clearing A alone must not lose B's default.
+	sup2 := newRenderTestSupervisor(t, clock)
+	renderOps2 := newTestRenderOperations(sup2, assignmentStore, dir, clock)
+	if !renderOps2.isHeldBlack("surface-a") || !renderOps2.isHeldBlack("surface-b") {
+		t.Fatalf("both surfaces must default black on a corrupt held-black file before either is touched")
+	}
+	if err := renderOps2.clearHeldBlack("surface-a"); err != nil {
+		t.Fatalf("clearHeldBlack surface-a: %v", err)
+	}
+	if renderOps2.isHeldBlack("surface-a") {
+		t.Fatalf("isHeldBlack(surface-a) = true right after clearing it, want false")
+	}
+	if !renderOps2.isHeldBlack("surface-b") {
+		t.Fatalf("isHeldBlack(surface-b) = false right after clearing ONLY surface-a, want true: the corrupt-file default for an untouched surface must survive the other surface's clear")
+	}
+
+	// "Session 3": simulate a restart. B's black default must have
+	// actually been persisted by session 2's clear, not merely held true
+	// in that now-discarded process's memory.
+	sup3 := newRenderTestSupervisor(t, clock)
+	renderOps3 := newTestRenderOperations(sup3, assignmentStore, dir, clock)
+	if renderOps3.isHeldBlack("surface-a") {
+		t.Fatalf("isHeldBlack(surface-a) = true after a restart, want false: the clear must have persisted")
+	}
+	if !renderOps3.isHeldBlack("surface-b") {
+		t.Fatalf("isHeldBlack(surface-b) = false after a restart, want true: the corrupt-file default for surface-b must have been persisted by surface-a's clear, not lost")
 	}
 }
 

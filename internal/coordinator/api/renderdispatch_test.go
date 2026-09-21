@@ -2056,3 +2056,164 @@ func TestRenderSurfaceBlackoutFallsBackToPollWhenRunning(t *testing.T) {
 		t.Fatalf("outcome = %q, want unconfirmed: a running writer's blackout still needs a real surface.output.mode reading", outcome.Outcome)
 	}
 }
+
+// TestRenderSurfaceBlackoutFailsLoudlyWithNoRenderPublisherConfigured proves
+// a render.surface.blackout dispatch against [noRenderPublisher] (api.go's
+// own nil-safe default for a coordinator with no render publisher wired
+// in) fails loudly with an error, exactly as render.surface.apply and
+// render.surface.clear already do through their own Publish call — never
+// recorded as a dispatched, unconfirmed command, which is what
+// noRenderPublisher's own doc comment promises and the AwaitResponse-only
+// fast path used to silently break.
+func TestRenderSurfaceBlackoutFailsLoudlyWithNoRenderPublisherConfigured(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	deps := setup.deps()
+	deps.RenderPublisher = noRenderPublisher{}
+	h := &handlers{deps: deps, clock: fixedClock(testNow), logger: testLogger()}
+
+	_, _, err := h.executeRenderDispatch(context.Background(), testNow, renderDispatchInput{
+		Action: "render.surface.blackout", NodeID: "media-01", SurfaceID: "wall-1",
+		Params:         map[string]any{"surfaceId": "wall-1"},
+		IdempotencyKey: "key-noconfig", DesiredState: "blackout",
+		IssuerID: "operator-1", IssuerName: "operator",
+	})
+	if err == nil {
+		t.Fatalf("executeRenderDispatch with no render publisher configured returned no error, want one naming the missing wiring")
+	}
+	if !strings.Contains(err.Error(), errRenderPublisherNotConfigured.Error()) {
+		t.Fatalf("error = %q, want it to name the missing render publisher wiring", err)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count on the UNRELATED fake publisher = %d, want 0: this dispatch never touched it", setup.pub.count())
+	}
+}
+
+// TestRenderSurfaceBlackoutReportsUnconfirmedPromptlyWhenNodeDoesNotAnswer
+// proves build item 5: when the node never answers the direct-result await
+// at all (setup.pub's default AwaitResponse behavior, matching
+// broker.ErrResponseDeadlineExceeded), and no surface.output.mode reading
+// exists either, this reports unconfirmed from a single fresh check, well
+// under renderCommandConfirmDeadline, rather than waiting out the full poll
+// for a report a node that could not even answer one round trip is not
+// about to produce. The command is still published exactly once either way.
+func TestRenderSurfaceBlackoutReportsUnconfirmedPromptlyWhenNodeDoesNotAnswer(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	// Deliberately no awaitResult/awaitErr and no surface.output.mode
+	// observation at all: the node neither answers the direct result nor
+	// has ever reported this surface's output mode.
+
+	h := &handlers{deps: setup.deps(), clock: fixedClock(testNow), logger: testLogger()}
+
+	start := time.Now()
+	outcome, problem, err := h.executeRenderDispatch(context.Background(), testNow, renderDispatchInput{
+		Action: "render.surface.blackout", NodeID: "media-01", SurfaceID: "wall-1",
+		Params:         map[string]any{"surfaceId": "wall-1"},
+		IdempotencyKey: "key-noanswer", DesiredState: "blackout",
+		IssuerID: "operator-1", IssuerName: "operator",
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("executeRenderDispatch: %v", err)
+	}
+	if problem != nil {
+		t.Fatalf("problem: %+v", problem)
+	}
+	if outcome.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed", outcome.Outcome)
+	}
+	if !strings.Contains(outcome.OutcomeReason, "did not respond") {
+		t.Fatalf("outcomeReason = %q, want a plain sentence naming the node's non-response", outcome.OutcomeReason)
+	}
+	if elapsed >= renderCommandConfirmDeadline {
+		t.Fatalf("executeRenderDispatch took %s, want well under renderCommandConfirmDeadline (%s): an unanswered await must not then poll the full deadline", elapsed, renderCommandConfirmDeadline)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1: the blackout is still published even though it could not be confirmed", setup.pub.count())
+	}
+}
+
+// TestRenderSurfaceBlackoutConfirmsFromAnAlreadyCurrentReportAfterUnansweredAwait
+// proves build item 5's own carve-out: an unanswered direct-result await
+// still confirms immediately from a surface.output.mode reading that is
+// ALREADY current when checked (here, one that arrived independently of
+// this dispatch) — the fast exit only skips WAITING for evidence that has
+// not arrived yet, never a real one already on hand.
+func TestRenderSurfaceBlackoutConfirmsFromAnAlreadyCurrentReportAfterUnansweredAwait(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	setup.obs.setObs([]observation.Observation{renderSurfaceOutputModeObservation("wall-1", mqttproto.RenderDrawingBlackout, testNow)})
+
+	h := &handlers{deps: setup.deps(), clock: fixedClock(testNow), logger: testLogger()}
+
+	outcome, problem, err := h.executeRenderDispatch(context.Background(), testNow, renderDispatchInput{
+		Action: "render.surface.blackout", NodeID: "media-01", SurfaceID: "wall-1",
+		Params:         map[string]any{"surfaceId": "wall-1"},
+		IdempotencyKey: "key-already-current", DesiredState: "blackout",
+		IssuerID: "operator-1", IssuerName: "operator",
+	})
+	if err != nil {
+		t.Fatalf("executeRenderDispatch: %v", err)
+	}
+	if problem != nil {
+		t.Fatalf("problem: %+v", problem)
+	}
+	if outcome.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed: a surface.output.mode reading already on hand must still confirm", outcome.Outcome)
+	}
+}
+
+// agentShapedRenderResultPayload builds and marshals a
+// showmesh.node.result/v1 envelope exactly the way internal/agent/
+// command.go's publishResult actually builds one (CommandID/IdempotencyKey/
+// Action carried straight from the decoded command, mqttproto.
+// NewResultEnvelope stamping NodeID) — see that file's confirmedResult
+// (around line 697) and publishResult (around line 800) — so a test against
+// it exercises renderResultCorrelates against the real wire shape, not a
+// hand-picked stand-in.
+func agentShapedRenderResultPayload(t *testing.T, nodeID, commandID, idempotencyKey, action string) []byte {
+	t.Helper()
+	now := time.Now().UTC()
+	result := mqttproto.ResultPayload{
+		CommandID: commandID, IdempotencyKey: idempotencyKey, Action: action,
+		Outcome: mqttproto.OutcomeConfirmed, ReceivedAt: now, RespondedAt: now,
+	}
+	env, err := mqttproto.NewResultEnvelope(func() time.Time { return now }, nodeID, result)
+	if err != nil {
+		t.Fatalf("build result envelope: %v", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal result envelope: %v", err)
+	}
+	return raw
+}
+
+// TestRenderResultCorrelatesAgainstARealAgentShapedResult exercises the
+// real matcher (never the fake publisher, which ignores req.Match
+// entirely) against a result built exactly the way a real agent publishes
+// one. Before this test existed, renderResultCorrelates itself was never
+// run against anything but the test fake's own hardcoded CommandID
+// "test-command", which the real matcher would reject outright — a bug
+// here would silently disable build item 4's fast path (restoring the full
+// confirmation poll) with no test catching it.
+func TestRenderResultCorrelatesAgainstARealAgentShapedResult(t *testing.T) {
+	payload := agentShapedRenderResultPayload(t, "media-01", "cmd-abc123", "idem-key-1", "render.surface.blackout")
+
+	if !renderResultCorrelates(payload, "media-01", "cmd-abc123", "idem-key-1", "render.surface.blackout") {
+		t.Fatal("renderResultCorrelates = false for a result matching node, command id, idempotency key, and action, want true")
+	}
+	if renderResultCorrelates(payload, "media-02", "cmd-abc123", "idem-key-1", "render.surface.blackout") {
+		t.Fatal("renderResultCorrelates = true for a mismatched node id, want false")
+	}
+	if renderResultCorrelates(payload, "media-01", "cmd-other", "idem-key-1", "render.surface.blackout") {
+		t.Fatal("renderResultCorrelates = true for a mismatched command id, want false")
+	}
+	if renderResultCorrelates(payload, "media-01", "cmd-abc123", "idem-key-other", "render.surface.blackout") {
+		t.Fatal("renderResultCorrelates = true for a mismatched idempotency key, want false")
+	}
+	if renderResultCorrelates(payload, "media-01", "cmd-abc123", "idem-key-1", "render.surface.clear") {
+		t.Fatal("renderResultCorrelates = true for a mismatched action, want false")
+	}
+	if renderResultCorrelates([]byte("not json"), "media-01", "cmd-abc123", "idem-key-1", "render.surface.blackout") {
+		t.Fatal("renderResultCorrelates = true for an undecodable payload, want false")
+	}
+}
