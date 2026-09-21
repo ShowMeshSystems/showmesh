@@ -34,42 +34,42 @@ func samplePayload() mqttproto.AudioPayload {
 	}
 }
 
-// fakeClockDomainSource is a minimal [ClockDomainSource] a test can
+// fakeLocalClockSource is a minimal [LocalClockSource] a test can
 // configure to answer "declared", "never activated", or "store error".
-type fakeClockDomainSource struct {
+type fakeLocalClockSource struct {
 	obj    store.ConfigObjectRecord
 	objErr error
 	rev    store.ConfigRevisionRecord
 	revErr error
 }
 
-func (f fakeClockDomainSource) GetConfigObject(context.Context, string, string) (store.ConfigObjectRecord, error) {
+func (f fakeLocalClockSource) GetConfigObject(context.Context, string, string) (store.ConfigObjectRecord, error) {
 	if f.objErr != nil {
 		return store.ConfigObjectRecord{}, f.objErr
 	}
 	return f.obj, nil
 }
 
-func (f fakeClockDomainSource) GetConfigRevision(context.Context, string, string, int64) (store.ConfigRevisionRecord, error) {
+func (f fakeLocalClockSource) GetConfigRevision(context.Context, string, string, int64) (store.ConfigRevisionRecord, error) {
 	if f.revErr != nil {
 		return store.ConfigRevisionRecord{}, f.revErr
 	}
 	return f.rev, nil
 }
 
-// declaredClockDomainSource builds a fakeClockDomainSource reporting an
-// active audio.node revision declaring domain/provenance, activated at
-// declaredAt.
-func declaredClockDomainSource(t *testing.T, domain, provenance string, declaredAt time.Time) fakeClockDomainSource {
+// configuredAudioNodeSource builds a fakeLocalClockSource reporting an
+// active audio.node revision with programRoute and an optional
+// localClockOverride, activated at declaredAt.
+func configuredAudioNodeSource(t *testing.T, programRoute, override string, declaredAt time.Time) fakeLocalClockSource {
 	t.Helper()
 	payloadJSON, err := json.Marshal(config.AudioNodePayload{
-		ProgramRoute: "hw:CARD=PCH,DEV=0", LTCRoute: "hw:CARD=PCH,DEV=0",
-		ClockDomain: domain, ClockDomainProvenance: provenance,
+		ProgramRoute: programRoute, LTCRoute: programRoute,
+		LocalClockOverride: override,
 	})
 	if err != nil {
 		t.Fatalf("marshal audio.node payload: %v", err)
 	}
-	return fakeClockDomainSource{
+	return fakeLocalClockSource{
 		obj: store.ConfigObjectRecord{Kind: config.AudioNodeConfigKind, ID: "audio-01", CurrentRevision: 1},
 		rev: store.ConfigRevisionRecord{
 			Kind: config.AudioNodeConfigKind, ObjectID: "audio-01", Revision: 1,
@@ -553,98 +553,107 @@ func TestLTCStateMapping(t *testing.T) {
 	}
 }
 
-// TestPollReportsClockDomainFromConfigNotFromTheNode proves finding 2: the
-// clock domain observation comes from the coordinator's own audio.node
-// configuration, never from anything the node itself reported (the sample
-// payload carries no clock domain field at all any more).
-func TestPollReportsClockDomainFromConfigNotFromTheNode(t *testing.T) {
+// TestPollReportsLocalClockFromConfigNotFromTheNode proves the local clock
+// observation comes from the coordinator's own audio.node configuration,
+// never from anything the node itself reported, and that an unset override
+// means it is derived from the program route (ADR-052 decision 2).
+func TestPollReportsLocalClockFromConfigNotFromTheNode(t *testing.T) {
 	declaredAt := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
-	src := declaredClockDomainSource(t, "single-interface", "one interface, both routes on it", declaredAt)
-	st := NewStore(WithClockDomainSource(src))
+	src := configuredAudioNodeSource(t, "hw:CARD=PCH,DEV=0", "", declaredAt)
+	st := NewStore(WithLocalClockSource(src))
 	st.Put("audio-01", samplePayload(), time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	domain := findObs(t, obs, SignalClockDomain)
-	if domain.Value != "single-interface" {
-		t.Errorf("clock domain = %v, want %q", domain.Value, "single-interface")
+	local := findObs(t, obs, SignalClockLocal)
+	if local.Value != "hw:CARD=PCH,DEV=0" {
+		t.Errorf("local clock = %v, want the configured program route", local.Value)
 	}
-	if domain.ObservedAt == nil || !domain.ObservedAt.Equal(declaredAt) {
-		t.Errorf("clock domain ObservedAt = %v, want the declaration's own CreatedAt %v", domain.ObservedAt, declaredAt)
+	if local.ObservedAt == nil || !local.ObservedAt.Equal(declaredAt) {
+		t.Errorf("local clock ObservedAt = %v, want the declaration's own CreatedAt %v", local.ObservedAt, declaredAt)
 	}
-	provenance := findObs(t, obs, SignalClockProvenance)
-	if provenance.Value != "one interface, both routes on it" {
-		t.Errorf("clock provenance = %v, want the declared provenance", provenance.Value)
+	if got := findObs(t, obs, SignalClockLocalSource); got.Value != LocalClockSourceDerived {
+		t.Errorf("local clock source = %v, want %q", got.Value, LocalClockSourceDerived)
 	}
 }
 
-// TestPollClockDomainStaysCurrentLongAfterItWasDeclared proves the owner
+// TestPollReportsLocalClockOverride proves an operator's override replaces
+// the derived answer and says so (ADR-052 decision 3).
+func TestPollReportsLocalClockOverride(t *testing.T) {
+	declaredAt := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+	src := configuredAudioNodeSource(t, "hw:CARD=PCH,DEV=0", "house word clock", declaredAt)
+	st := NewStore(WithLocalClockSource(src))
+	st.Put("audio-01", samplePayload(), time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	if got := findObs(t, obs, SignalClockLocal); got.Value != "house word clock" {
+		t.Errorf("local clock = %v, want the operator's override", got.Value)
+	}
+	if got := findObs(t, obs, SignalClockLocalSource); got.Value != LocalClockSourceOverride {
+		t.Errorf("local clock source = %v, want %q", got.Value, LocalClockSourceOverride)
+	}
+}
+
+// TestPollLocalClockStaysCurrentLongAfterItWasDeclared proves the owner
 // ruling "static does not mean stale": a configured fact does not age by
 // [DefaultValidFor] the way a polled reading does. ValidFor stays zero
 // (pkg/observation's "does not expire on its own" case) so StateAt reports
 // StateCurrent no matter how long ago declaredAt was, while ObservedAt
 // still shows the declaration's own time.
-func TestPollClockDomainStaysCurrentLongAfterItWasDeclared(t *testing.T) {
+func TestPollLocalClockStaysCurrentLongAfterItWasDeclared(t *testing.T) {
 	declaredAt := time.Now().Add(-72 * time.Hour)
-	src := declaredClockDomainSource(t, "single-interface", "one interface, both routes on it", declaredAt)
-	st := NewStore(WithClockDomainSource(src))
+	src := configuredAudioNodeSource(t, "hw:CARD=PCH,DEV=0", "", declaredAt)
+	st := NewStore(WithLocalClockSource(src))
 	st.Put("audio-01", samplePayload(), time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	domain := findObs(t, obs, SignalClockDomain)
-	if domain.ValidFor != 0 {
-		t.Errorf("clock domain ValidFor = %s, want 0 (never expires)", domain.ValidFor)
-	}
-	if got := domain.StateAt(time.Now()); got != observation.StateCurrent {
-		t.Errorf("clock domain StateAt(now) = %q, want %q even though it was declared %s ago", got, observation.StateCurrent, time.Since(declaredAt))
-	}
-
-	provenance := findObs(t, obs, SignalClockProvenance)
-	if provenance.ValidFor != 0 {
-		t.Errorf("clock provenance ValidFor = %s, want 0 (never expires)", provenance.ValidFor)
-	}
-	if got := provenance.StateAt(time.Now()); got != observation.StateCurrent {
-		t.Errorf("clock provenance StateAt(now) = %q, want %q even though it was declared %s ago", got, observation.StateCurrent, time.Since(declaredAt))
+	for _, sig := range []observation.SignalID{SignalClockLocal, SignalClockLocalSource} {
+		got := findObs(t, obs, sig)
+		if got.ValidFor != 0 {
+			t.Errorf("%s ValidFor = %s, want 0 (never expires)", sig, got.ValidFor)
+		}
+		if state := got.StateAt(time.Now()); state != observation.StateCurrent {
+			t.Errorf("%s StateAt(now) = %q, want %q even though it was declared %s ago", sig, state, observation.StateCurrent, time.Since(declaredAt))
+		}
 	}
 }
 
-// TestPollClockDomainNoSourceWiredIsNotCollected proves the nil-clockSrc
-// default (no WithClockDomainSource option) reports not_collected, never a
-// fabricated "undeclared" reading.
-func TestPollClockDomainNoSourceWiredIsNotCollected(t *testing.T) {
+// TestPollLocalClockNoSourceWiredIsNotCollected proves the nil-clockSrc
+// default (no WithLocalClockSource option) reports not_collected, never a
+// fabricated reading.
+func TestPollLocalClockNoSourceWiredIsNotCollected(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayload(), time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	domain := findObs(t, obs, SignalClockDomain)
-	if domain.Absence != observation.StateCollectionFailed {
-		t.Errorf("clock domain absence = %+v, want StateNotCollected", domain.Absence)
+	local := findObs(t, obs, SignalClockLocal)
+	if local.Absence != observation.StateCollectionFailed {
+		t.Errorf("local clock absence = %+v, want StateCollectionFailed", local.Absence)
 	}
 }
 
-// TestPollClockDomainNeverActivatedIsNotCollected proves a node with no
+// TestPollLocalClockNeverActivatedIsNotCollected proves a node with no
 // audio.node configuration ever activated reports not_collected, not a
-// zero-valued "" domain masquerading as a reading.
-func TestPollClockDomainNeverActivatedIsNotCollected(t *testing.T) {
-	src := fakeClockDomainSource{objErr: store.ErrConfigObjectNotFound}
-	st := NewStore(WithClockDomainSource(src))
+// zero-valued "" route masquerading as a reading.
+func TestPollLocalClockNeverActivatedIsNotCollected(t *testing.T) {
+	src := fakeLocalClockSource{objErr: store.ErrConfigObjectNotFound}
+	st := NewStore(WithLocalClockSource(src))
 	st.Put("audio-01", samplePayload(), time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	domain := findObs(t, obs, SignalClockDomain)
-	if domain.Absence != observation.StateCollectionFailed {
-		t.Errorf("clock domain absence = %q, want StateCollectionFailed", domain.Absence)
-	}
-	provenance := findObs(t, obs, SignalClockProvenance)
-	if provenance.Absence != observation.StateCollectionFailed {
-		t.Errorf("clock provenance absence = %q, want StateCollectionFailed", provenance.Absence)
+	for _, sig := range []observation.SignalID{SignalClockLocal, SignalClockLocalSource} {
+		if got := findObs(t, obs, sig); got.Absence != observation.StateCollectionFailed {
+			t.Errorf("%s absence = %q, want StateCollectionFailed", sig, got.Absence)
+		}
 	}
 }
 
@@ -1124,8 +1133,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 41 {
-		t.Errorf("AllSignalIDs has %d entries, want 41", len(AllSignalIDs))
+	if len(AllSignalIDs) != 45 {
+		t.Errorf("AllSignalIDs has %d entries, want 45", len(AllSignalIDs))
 	}
 }
 

@@ -70,14 +70,17 @@ type audioSettingsConfigResponse struct {
 // present but empty. Omitting the pair is how "this node emits no LTC"
 // is expressed on the wire.
 type configAudioNode struct {
-	ProgramRoute          string  `json:"programRoute"`
-	LTCRoute              string  `json:"ltcRoute,omitempty"`
-	ProgramChannels       []int   `json:"programChannels"`
-	LTCChannel            int     `json:"ltcChannel,omitempty"`
-	ClockDomain           string  `json:"clockDomain"`
-	ClockDomainProvenance string  `json:"clockDomainProvenance"`
-	Role                  string  `json:"role,omitempty"`
-	Zone                  *string `json:"zone,omitempty"`
+	ProgramRoute    string `json:"programRoute"`
+	LTCRoute        string `json:"ltcRoute,omitempty"`
+	ProgramChannels []int  `json:"programChannels"`
+	LTCChannel      int    `json:"ltcChannel,omitempty"`
+
+	// LocalClockOverride mirrors v1.ConfigAudioNode.LocalClockOverride
+	// (ADR-052): absent means this node's local clock is derived from its
+	// program route.
+	LocalClockOverride string  `json:"localClockOverride,omitempty"`
+	Role               string  `json:"role,omitempty"`
+	Zone               *string `json:"zone,omitempty"`
 
 	// SinkBackend mirrors v1.ConfigAudioNode.SinkBackend: "alsasink" or
 	// "pipewiresink" (ADR-046). Optional on the wire; absent decodes to
@@ -640,14 +643,13 @@ func cmdAudioNodeGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node set", stderr)
-	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance, role, zone, sinkBackend, pipewireTargetNode string
+	var programRoute, ltcRoute, programChannels, localClockOverride, role, zone, sinkBackend, pipewireTargetNode string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
 	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
 	fs.StringVar(&programChannels, "program-channels", "", "comma-separated, ordered, distinct 1-based channel indices carrying program audio, e.g. 1,2 (required)")
 	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
-	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
-	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
+	fs.StringVar(&localClockOverride, "local-clock-override", "", "name this node's local clock explicitly, for two interfaces sharing external word clock; omitted, carried forward from the node's current definition, and derived from --program-route when it has none")
 	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone; omitted, defaults to program+ltc")
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
 	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink; omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
@@ -665,8 +667,8 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --sink-backend, --pipewire-target-node,")
-		_, _ = fmt.Fprintln(stderr, "and --output-latency-* are each carried forward from a read of the")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --local-clock-override, --sink-backend,")
+		_, _ = fmt.Fprintln(stderr, "--pipewire-target-node and --output-latency-* are each carried forward from a read of the")
 		_, _ = fmt.Fprintln(stderr, "node's current definition when their flags are omitted, so changing a")
 		_, _ = fmt.Fprintln(stderr, "route never resets a PipeWire-routed node back to alsasink or drops a")
 		_, _ = fmt.Fprintln(stderr, "stored output-latency calibration. Every other flag reflects only what")
@@ -678,7 +680,11 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "optional TOGETHER: omit both to declare a program-only node that emits")
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
-		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
+		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent.")
+		_, _ = fmt.Fprintln(stderr, "\n--local-clock-override names this node's local clock for an arrangement the")
+		_, _ = fmt.Fprintln(stderr, "node cannot see, such as two interfaces sharing external word clock. Omitted,")
+		_, _ = fmt.Fprintln(stderr, "the local clock is the interface --program-route names. Pass it empty to clear")
+		_, _ = fmt.Fprintln(stderr, "a stored value.")
 		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* is this node's calibrated static")
 		_, _ = fmt.Fprintln(stderr, "output-chain delay. Every field is required together with a measured")
 		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared). Omitting every")
@@ -689,7 +695,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "\n--force only skips If-Match; it still attempts the same read the")
 		_, _ = fmt.Fprintln(stderr, "carry-forward above needs. If that read also fails, the write proceeds")
 		_, _ = fmt.Fprintln(stderr, "anyway (that is what --force is for), and this command prints a warning")
-		_, _ = fmt.Fprintln(stderr, "naming each of sinkBackend, pipewireTargetNode, and outputLatency that")
+		_, _ = fmt.Fprintln(stderr, "naming each of localClockOverride, sinkBackend, pipewireTargetNode, and outputLatency that")
 		_, _ = fmt.Fprintln(stderr, "will therefore be reset instead of carried forward.")
 		fs.PrintDefaults()
 	}
@@ -712,10 +718,13 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
 	ltcChannelSet, zoneSet, sinkBackendSet, pipewireTargetNodeSet, outputLatencySet := false, false, false, false, false
+	localClockOverrideSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "ltc-channel":
 			ltcChannelSet = true
+		case "local-clock-override":
+			localClockOverrideSet = true
 		case "zone":
 			zoneSet = true
 		case "sink-backend":
@@ -727,8 +736,8 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 			outputLatencySet = true
 		}
 	})
-	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --program-channels, --clock-domain, and --clock-domain-provenance are all required")
+	if programRoute == "" || programChannels == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route and --program-channels are both required")
 		return exitUsage
 	}
 	// --ltc-route and --ltc-channel are optional TOGETHER: omitting both
@@ -792,14 +801,32 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	body := configAudioNode{
 		ProgramRoute:    programRoute,
 		ProgramChannels: channels,
-		ClockDomain:     clockDomain, ClockDomainProvenance: clockDomainProvenance,
-		Role: role,
+		Role:            role,
 	}
 	if wantLTC {
 		body.LTCRoute, body.LTCChannel = ltcRoute, ltcChannel
 	}
 	if zoneSet {
 		body.Zone = &zone
+	}
+	// Carried forward for the same reason as sinkBackend below: a route
+	// change must not silently drop an operator's local clock. Passing the
+	// flag empty clears it.
+	if localClockOverrideSet {
+		body.LocalClockOverride = localClockOverride
+	} else {
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				if !forceFlag() {
+					return reportError(stderr, "audio node set", err)
+				}
+				_, _ = fmt.Fprintf(stderr, "showmeshctl audio node set: --force: could not read this node's current localClockOverride (%v); this write will reset localClockOverride\n", err)
+			}
+		} else {
+			body.LocalClockOverride = cur.Payload.LocalClockOverride
+		}
 	}
 	if sinkBackendSet {
 		body.SinkBackend = sinkBackend
@@ -1043,8 +1070,11 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 		_, _ = fmt.Fprintf(w, "LTC route:              %s\n", p.LTCRoute)
 		_, _ = fmt.Fprintf(w, "LTC channel:            %d\n", p.LTCChannel)
 	}
-	_, _ = fmt.Fprintf(w, "Clock domain:           %s\n", p.ClockDomain)
-	_, _ = fmt.Fprintf(w, "Clock domain provenance: %s\n", p.ClockDomainProvenance)
+	if p.LocalClockOverride == "" {
+		_, _ = fmt.Fprintf(w, "Local clock:            derived from %s\n", p.ProgramRoute)
+	} else {
+		_, _ = fmt.Fprintf(w, "Local clock:            %s (named by an operator)\n", p.LocalClockOverride)
+	}
 	role := p.Role
 	if role == "" {
 		role = "program+ltc (default)"

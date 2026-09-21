@@ -160,7 +160,7 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface"},
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -170,7 +170,6 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -182,7 +181,6 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"programRoute":"hw:0,0"`, `"ltcRoute":"hw:0,0"`, `"programChannels":[1,2]`, `"ltcChannel":3`,
-		`"clockDomain":"single-interface"`, `"clockDomainProvenance":"one interface"`,
 	} {
 		if !strings.Contains(string(gotBody), want) {
 			t.Errorf("PUT body missing %q; body: %s", want, gotBody)
@@ -204,7 +202,7 @@ func TestCmdAudioNodeSetSendsSinkBackendFlags(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -214,7 +212,6 @@ func TestCmdAudioNodeSetSendsSinkBackendFlags(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
 		"--sink-backend", "pipewiresink", "--pipewire-target-node", "alsa_output.usb-Focusrite",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
@@ -252,7 +249,7 @@ func TestCmdAudioNodeSetPreservesSinkBackendWhenOmitted(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -264,7 +261,6 @@ func TestCmdAudioNodeSetPreservesSinkBackendWhenOmitted(t *testing.T) {
 		// --pipewire-target-node at all.
 		"--program-route", "hw:0,1",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
 	}, &stdout, &stderr, time.Now)
@@ -296,7 +292,7 @@ func TestCmdAudioNodeSetSwitchesBackToAlsasink(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -306,7 +302,6 @@ func TestCmdAudioNodeSetSwitchesBackToAlsasink(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
 		"--sink-backend", "alsasink",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
@@ -339,7 +334,7 @@ func TestCmdAudioNodeSetForceCarriesSinkBackendForwardWhenReadSucceeds(t *testin
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
 			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -349,7 +344,6 @@ func TestCmdAudioNodeSetForceCarriesSinkBackendForwardWhenReadSucceeds(t *testin
 		"node", "set", "--force",
 		"--program-route", "hw:0,0",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
 	}, &stdout, &stderr, time.Now)
@@ -374,7 +368,7 @@ func TestCmdAudioNodeSetSendsOutputLatencyFlags(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,
 			"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z","reference":"MOTU M4 loopback capture","confidence":"high","configuration":"PipeWire quantum 1024, 48000 Hz"}},
 			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
@@ -385,7 +379,6 @@ func TestCmdAudioNodeSetSendsOutputLatencyFlags(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--output-latency-us", "55997", "--output-latency-method", "loopback",
 		"--output-latency-measured-at", "2026-09-11T02:00:00Z",
 		"--output-latency-reference", "MOTU M4 loopback capture",
@@ -422,7 +415,7 @@ func TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,
 			"outputLatency":{"method":"unmeasured"}},
 			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
@@ -433,7 +426,6 @@ func TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -461,7 +453,7 @@ func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,
 			"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z","reference":"MOTU M4 loopback capture","confidence":"high","configuration":"PipeWire quantum 1024, 48000 Hz"}},
 			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
@@ -472,7 +464,6 @@ func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T)
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "4",
-		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -508,7 +499,7 @@ func TestCmdAudioNodeSetForceWarnsAndProceedsWhenReadFails(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,
 			"outputLatency":{"method":"unmeasured"}},
 			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
@@ -519,7 +510,6 @@ func TestCmdAudioNodeSetForceWarnsAndProceedsWhenReadFails(t *testing.T) {
 		"node", "set", "--force",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -558,7 +548,6 @@ func TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--ltc-channel", "3",
-		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -594,7 +583,6 @@ func TestCmdAudioNodeSetLTCChannelZeroReachesServer(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "0",
-		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -617,7 +605,7 @@ func TestCmdAudioNodeSetProgramOnlyOmitsBothLTCKeys(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"two-output interface"},
+			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2]},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -627,7 +615,6 @@ func TestCmdAudioNodeSetProgramOnlyOmitsBothLTCKeys(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:CARD=USB,DEV=0",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "two-output interface",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
 	}, &stdout, &stderr, time.Now)
@@ -652,7 +639,7 @@ func TestCmdAudioNodeSetPrintsProgramOnlyPlainly(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
-			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"two-output interface"},
+			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2]},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -662,7 +649,6 @@ func TestCmdAudioNodeSetPrintsProgramOnlyPlainly(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:CARD=USB,DEV=0",
 		"--program-channels", "1,2",
-		"--clock-domain", "solo", "--clock-domain-provenance", "two-output interface",
 		"--server", ts.URL, "--token", "t",
 		"pi-audio-01",
 	}, &stdout, &stderr, time.Now)
@@ -701,7 +687,6 @@ func TestCmdAudioNodeSetRefusesHalfAnLTCPair(t *testing.T) {
 				"node", "set",
 				"--program-route", "hw:0,0",
 				"--program-channels", "1,2",
-				"--clock-domain", "d", "--clock-domain-provenance", "p",
 			}, tc.args...)
 			args = append(args, "--server", ts.URL, "--token", "t", "render-01")
 
@@ -735,7 +720,6 @@ func TestCmdAudioNodeSetRejectsUnparseableProgramChannels(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,two", "--ltc-channel", "3",
-		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -794,7 +778,6 @@ func TestCmdAudioNodeSetSurfacesRefusalMessage(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -824,7 +807,6 @@ func TestCmdAudioNodeSetSurfacesRouteMismatchRefusal(t *testing.T) {
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:1,0",
 		"--program-channels", "1,2", "--ltc-channel", "3",
-		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
 	}, &stdout, &stderr, time.Now)
@@ -858,5 +840,80 @@ func TestCmdAudioListNodesTable(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[1 2]") || !strings.Contains(stdout.String(), "3") {
 		t.Fatalf("output missing program channels [1 2] or ltc channel 3:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAudioNodeSetSendsLocalClockOverride proves --local-clock-override
+// reaches the PUT body and the printed detail, and that omitting it carries
+// the node's stored value forward instead of dropping it.
+func TestCmdAudioNodeSetSendsLocalClockOverride(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			raw, _ := io.ReadAll(r.Body)
+			bodies = append(bodies, string(raw))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-21T00:00:00Z","kind":"audio.node","id":"audio-01","revision":2,
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"localClockOverride":"house word clock"},
+			"updatedAt":"2026-09-21T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--program-channels", "1,2",
+		"--local-clock-override", "house word clock",
+		"--server", ts.URL, "--token", "t", "audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"localClockOverride":"house word clock"`) {
+		t.Fatalf("PUT body missing the override; bodies: %v", bodies)
+	}
+	if !strings.Contains(stdout.String(), "Local clock:            house word clock") {
+		t.Errorf("printed detail does not name the override:\n%s", stdout.String())
+	}
+
+	bodies = nil
+	stdout.Reset()
+	code = cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--program-channels", "1,2",
+		"--server", ts.URL, "--token", "t", "audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"localClockOverride":"house word clock"`) {
+		t.Fatalf("an unrelated edit dropped the stored override; bodies: %v", bodies)
+	}
+}
+
+// TestCmdAudioNodeGetReadsAnObjectCarryingRetiredClockFields proves a node
+// stored before ADR-052, whose response still carries clockDomain and
+// clockDomainProvenance, still reads: the two fields are ignored and the
+// local clock is shown as derived from the program route.
+func TestCmdAudioNodeGetReadsAnObjectCarryingRetiredClockFields(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-21T00:00:00Z","kind":"audio.node","id":"audio-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,
+			"clockDomain":"single-interface","clockDomainProvenance":"one interface"},
+			"updatedAt":"2026-09-21T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{"node", "get", "--server", ts.URL, "--token", "t", "audio-01"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Local clock:            derived from hw:0,0") {
+		t.Errorf("printed detail does not report a derived local clock:\n%s", stdout.String())
 	}
 }

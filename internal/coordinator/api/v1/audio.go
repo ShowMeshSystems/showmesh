@@ -70,12 +70,14 @@ type AudioSettingsConfigResponse struct {
 // the one optional pair: both absent declares a program-only node that
 // emits no LTC, which is how a two-output interface is declared at all.
 type ConfigAudioNode struct {
-	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute,omitempty"`
-	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel,omitempty"`
-	ClockDomain           string `json:"clockDomain"`
-	ClockDomainProvenance string `json:"clockDomainProvenance"`
+	ProgramRoute    string `json:"programRoute"`
+	LTCRoute        string `json:"ltcRoute,omitempty"`
+	ProgramChannels []int  `json:"programChannels"`
+	LTCChannel      int    `json:"ltcChannel,omitempty"`
+	// LocalClockOverride names this node's local clock explicitly
+	// (ADR-052). Optional; absent means it is derived from
+	// ProgramRoute.
+	LocalClockOverride string `json:"localClockOverride,omitempty"`
 
 	// Role is ADR-045's audio.node role: "program", "program+ltc", or
 	// "zone". Optional on the wire; absent decodes to "program+ltc" so a

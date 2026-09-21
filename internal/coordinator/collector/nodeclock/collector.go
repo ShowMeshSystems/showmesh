@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -53,6 +55,18 @@ func (s *Store) NodeClockObservations(nodeID string) []observation.Observation {
 		return nil
 	}
 	return nodeObservations(nodeID, rep)
+}
+
+// NodeClockStatus returns nodeID's most recently received clock report,
+// or ok=false if none has ever arrived. nodeaudio.ClockStatusSource: the
+// audio collector says what a node's local clock follows from this same
+// reading rather than measuring it a second time.
+func (s *Store) NodeClockStatus(nodeID string) (mqttproto.ClockPayload, bool) {
+	rep, ok := s.get(nodeID)
+	if !ok {
+		return mqttproto.ClockPayload{}, false
+	}
+	return rep.payload, true
 }
 
 func nodeObservations(nodeID string, rep report) []observation.Observation {

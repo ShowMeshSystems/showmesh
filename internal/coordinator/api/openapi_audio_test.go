@@ -114,7 +114,6 @@ func TestOpenAPIAudioNodeOutputLatencyRoundTrips(t *testing.T) {
 	authHeader := map[string]string{"Authorization": "Bearer " + token}
 
 	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it",` +
 		`"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
 		`"reference":"MOTU M4 loopback capture","confidence":"high: three runs agreed within 50us",` +
 		`"configuration":"PipeWire quantum 1024, 48000 Hz"}}`

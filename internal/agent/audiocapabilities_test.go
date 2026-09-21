@@ -161,8 +161,8 @@ func TestDetectAudioCapabilitiesLTCRequiresThreeChannels(t *testing.T) {
 	if ltc.Attributes["physicalDiscretenessVerified"] != false {
 		t.Errorf("physicalDiscretenessVerified = %v, want false (that check is C0b, not discovery)", ltc.Attributes["physicalDiscretenessVerified"])
 	}
-	if _, present := ltc.Attributes["clockDomain"]; present {
-		t.Error(`audio.output.ltc attributes carry "clockDomain", want absent: a node never claims its own clock domain`)
+	if _, present := ltc.Attributes["localClockOverride"]; present {
+		t.Error(`audio.output.ltc attributes carry "localClockOverride", want absent: a node never claims that two of its outputs share one clock`)
 	}
 }
 

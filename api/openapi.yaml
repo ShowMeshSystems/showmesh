@@ -4699,9 +4699,9 @@ paths:
         at decode time before evidence is even consulted. `programChannels`
         (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based,
         never a member of `programChannels`) are checked structurally, not
-        against evidence. `clockDomain` and `clockDomainProvenance` are
-        operator-declared and never inferred: no software call on this
-        platform proves two outputs share a hardware clock. Optionally
+        against evidence. `localClockOverride` is optional and names this
+        node's local clock explicitly; absent, the local clock is the
+        interface `programRoute` names. Optionally
         carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
         refused with `409` when the precondition names a revision that is
         no longer current.
@@ -15787,9 +15787,16 @@ components:
         costing timecode and never the audience's program audio.
 
 
-        `clockDomain` and `clockDomainProvenance` are the operator's own
-        declaration of which hardware clock the routes run on, never
-        inferred, and are required on a program-only node too. `role`
+        `localClockOverride` names this node's local clock, the sample
+        clock of the interface its program audio leaves through. It is
+        optional: absent, the local clock is derived from `programRoute`,
+        which is the answer on every single-interface node. Name it only
+        for an arrangement the node cannot see, such as two interfaces
+        sharing external word clock. `clockDomain` and
+        `clockDomainProvenance` were this field's required predecessors;
+        a stored object or a write that still carries them is accepted,
+        both are ignored, and they are gone from the object on its next
+        write. `role`
         (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional
         on the wire, and absent decodes to `program+ltc` - the role every
         pre-ADR-045 audio.node object already implicitly held, since an
@@ -15827,8 +15834,7 @@ components:
         "unmeasured", which applies zero. A GET response always includes
         it (never omitted, so its provenance, or the "unmeasured"
         default, is never silently dropped).
-      required:
-        [programRoute, programChannels, clockDomain, clockDomainProvenance]
+      required: [programRoute, programChannels]
       dependentRequired:
         ltcRoute: [ltcChannel]
         ltcChannel: [ltcRoute]
@@ -15846,10 +15852,11 @@ components:
         ltcChannel:
           type: integer
           minimum: 1
-        clockDomain:
+        localClockOverride:
           type: string
-        clockDomainProvenance:
-          type: string
+          description: >-
+            Optional. Names this node's local clock explicitly; absent,
+            it is derived from programRoute (ADR-052).
         role:
           type: string
           enum: [program, "program+ltc", zone]

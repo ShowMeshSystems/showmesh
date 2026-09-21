@@ -17,40 +17,63 @@ type report struct {
 	receivedAt time.Time
 }
 
-// ClockDomainSource reads nodeID's operator-declared audio.node clock
-// domain configuration (ADR-039, config.AudioNodeConfigKind) — the ONLY
-// source [Store] ever reports node.audio.clock.domain/provenance from. A
-// node cannot supply its own clock domain: no software call proves two
-// outputs share a hardware clock, so a node reporting one would be
+// LocalClockSource reads nodeID's active audio.node configuration
+// (ADR-039, config.AudioNodeConfigKind): the ONLY source [Store] ever
+// reports node.audio.clock.local and its source from. The local clock is
+// the interface that configuration's program route names, or the
+// operator's own localClockOverride: a node cannot see two interfaces
+// sharing external word clock, so a node reporting an override would be
 // reporting a guess as if it were a reading. *store.Store already
 // satisfies this directly, no adapter needed, matching
 // [internal/coordinator/api.ConfigStore]'s identical precedent.
-type ClockDomainSource interface {
+type LocalClockSource interface {
 	GetConfigObject(ctx context.Context, kind, id string) (store.ConfigObjectRecord, error)
 	GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error)
 }
 
+// ClockStatusSource reads nodeID's most recent PTP clock report, the
+// node's own evidence behind node.clock.ptp.*, through
+// nodeclock.Store's NodeClockStatus. [Store] reads it to say what this
+// node's local clock follows and how far off it is, so node.audio.sync.*
+// is built from the node's own reading rather than from a second
+// measurement of the same thing. ok is false for a node that has never
+// published a clock report.
+type ClockStatusSource interface {
+	NodeClockStatus(nodeID string) (payload mqttproto.ClockPayload, ok bool)
+}
+
 // Store holds, for each node that has ever published an audio report, the
 // most recently received one. The zero value is not usable; construct with
-// [NewStore]. Mirrors noderender.Store, plus the clock-domain source
-// [ClockDomainSource] every observation this package builds reads live.
+// [NewStore]. Mirrors noderender.Store, plus the two live sources every
+// observation this package builds reads: [LocalClockSource] and
+// [ClockStatusSource].
 type Store struct {
-	mu       sync.Mutex
-	data     map[string]report
-	clockSrc ClockDomainSource
+	mu        sync.Mutex
+	data      map[string]report
+	clockSrc  LocalClockSource
+	clockStat ClockStatusSource
 }
 
 // StoreOption configures [NewStore].
 type StoreOption func(*Store)
 
-// WithClockDomainSource wires clockSrc as the coordinator config store
-// [Store] reads node.audio.clock.domain/provenance from, live, on every
-// Poll and every [Store.NodeAudioObservations] call. Omitting this option
-// leaves clockSrc nil, under which every node reports
+// WithLocalClockSource wires clockSrc as the coordinator config store
+// [Store] reads node.audio.clock.local and its source from, live, on
+// every Poll and every [Store.NodeAudioObservations] call. Omitting this
+// option leaves clockSrc nil, under which every node reports
 // [observation.StateNotCollected] for both signals, naming the missing
-// wiring — never "undeclared" presented as a reading.
-func WithClockDomainSource(src ClockDomainSource) StoreOption {
+// wiring, never an unconfigured node presented as a reading.
+func WithLocalClockSource(src LocalClockSource) StoreOption {
 	return func(s *Store) { s.clockSrc = src }
+}
+
+// WithClockStatusSource wires src as the PTP clock report cache [Store]
+// reads node.audio.sync.* from, live, on the same calls. Omitting it
+// leaves src nil, under which every node reports
+// [observation.StateNotCollected] for all four sync signals rather than
+// a free-running claim this coordinator never checked.
+func WithClockStatusSource(src ClockStatusSource) StoreOption {
+	return func(s *Store) { s.clockStat = src }
 }
 
 // NewStore builds an empty Store.

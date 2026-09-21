@@ -549,11 +549,11 @@ func TestClockAlignmentOlderAgentYieldsFallbackReason(t *testing.T) {
 	}
 }
 
-// driftThresholdSource builds a fakeClockDomainSource whose active
+// driftThresholdSource builds a fakeLocalClockSource whose active
 // revision decodes as an audio.settings payload carrying
 // driftIgnoreThresholdMs=thresholdMs, every other field a value
 // [config.DecodeAudioSettingsPayload] accepts.
-func driftThresholdSource(t *testing.T, thresholdMs int) fakeClockDomainSource {
+func driftThresholdSource(t *testing.T, thresholdMs int) fakeLocalClockSource {
 	t.Helper()
 	payload := config.AudioSettingsDefaultPayload
 	payload.DriftIgnoreThresholdMs = thresholdMs
@@ -561,7 +561,7 @@ func driftThresholdSource(t *testing.T, thresholdMs int) fakeClockDomainSource {
 	if err != nil {
 		t.Fatalf("marshal audio.settings payload: %v", err)
 	}
-	return fakeClockDomainSource{
+	return fakeLocalClockSource{
 		obj: store.ConfigObjectRecord{Kind: config.AudioSettingsConfigKind, ID: config.AudioSettingsConfigObjectID, CurrentRevision: 1},
 		rev: store.ConfigRevisionRecord{
 			Kind: config.AudioSettingsConfigKind, ObjectID: config.AudioSettingsConfigObjectID, Revision: 1,
@@ -574,7 +574,7 @@ func driftThresholdSource(t *testing.T, thresholdMs int) fakeClockDomainSource {
 // a measured 60ms offset against a 40ms threshold reports
 // beyond_threshold, stamped with the alignment sample's own sample time.
 func TestClockAlignmentStateBeyondThresholdWhenMeasuredOffsetExceedsIt(t *testing.T) {
-	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	st := NewStore(WithLocalClockSource(driftThresholdSource(t, 40)))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
 	p.AlignmentMeasured = true
@@ -599,7 +599,7 @@ func TestClockAlignmentStateBeyondThresholdWhenMeasuredOffsetExceedsIt(t *testin
 // (40ms, config.AudioSettingsDefaultPayload, no audio.settings object
 // ever configured) reports within_threshold.
 func TestClockAlignmentStateWithinDefaultThresholdWhenMeasuredOffsetIsSmall(t *testing.T) {
-	st := NewStore(WithClockDomainSource(fakeClockDomainSource{objErr: store.ErrConfigObjectNotFound}))
+	st := NewStore(WithLocalClockSource(fakeLocalClockSource{objErr: store.ErrConfigObjectNotFound}))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
 	p.AlignmentMeasured = true
@@ -620,7 +620,7 @@ func TestClockAlignmentStateWithinDefaultThresholdWhenMeasuredOffsetIsSmall(t *t
 // negative offset (LTC behind program audio) compares on magnitude, not
 // sign: -60ms against a 40ms threshold is beyond it exactly as +60ms is.
 func TestClockAlignmentStateBeyondThresholdUsesAbsoluteOffset(t *testing.T) {
-	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	st := NewStore(WithLocalClockSource(driftThresholdSource(t, 40)))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
 	p.AlignmentMeasured = true
@@ -643,7 +643,7 @@ func TestClockAlignmentStateBeyondThresholdUsesAbsoluteOffset(t *testing.T) {
 // alignment sample was never measured -- never a threshold verdict its
 // own evidence does not support.
 func TestClockAlignmentStateNotCollectedWhenAlignmentItselfIsNotCollected(t *testing.T) {
-	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	st := NewStore(WithLocalClockSource(driftThresholdSource(t, 40)))
 	p := samplePayload()
 	p.AlignmentMeasured = false
 	p.AlignmentReason = "program branch has not rendered up to its presented position; underrun suspected"
@@ -665,10 +665,10 @@ func TestClockAlignmentStateNotCollectedWhenAlignmentItselfIsNotCollected(t *tes
 // proves a measured alignment sample whose threshold cannot be read (a
 // config store failure, not merely unconfigured) reports
 // collection_failed rather than guessing a threshold or silently
-// omitting the signal, matching lookupClockDomain's identical failure
+// omitting the signal, matching lookupLocalClock's identical failure
 // handling on the sibling config kind.
 func TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable(t *testing.T) {
-	st := NewStore(WithClockDomainSource(fakeClockDomainSource{objErr: errors.New("store unavailable")}))
+	st := NewStore(WithLocalClockSource(fakeLocalClockSource{objErr: errors.New("store unavailable")}))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
 	p.AlignmentMeasured = true
@@ -690,7 +690,7 @@ func TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable(t *testi
 // the agent's own "no usable threshold" handling, rather than reporting
 // beyond_threshold on every nonzero offset forever.
 func TestClockAlignmentStateNotCollectedWhenThresholdIsZero(t *testing.T) {
-	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 0)))
+	st := NewStore(WithLocalClockSource(driftThresholdSource(t, 0)))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
 	p.AlignmentMeasured = true

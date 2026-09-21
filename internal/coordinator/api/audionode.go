@@ -392,8 +392,8 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 		Payload: v1.ConfigAudioNode{
 			ProgramRoute: p.ProgramRoute, LTCRoute: p.LTCRoute,
 			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
-			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
-			Role: p.Role, Zone: p.Zone,
+			LocalClockOverride: p.LocalClockOverride,
+			Role:               p.Role, Zone: p.Zone,
 			SinkBackend:        p.SinkBackend,
 			PipewireTargetNode: p.PipewireTargetNode,
 			OutputLatency: v1.ConfigAudioOutputLatency{

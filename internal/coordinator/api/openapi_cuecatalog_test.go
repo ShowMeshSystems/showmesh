@@ -121,9 +121,7 @@ func mustPutAudioNodeDirect(t *testing.T, st *store.Store, nodeID string) {
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "one physical interface, both routes on it",
-		Role:                  config.AudioNodeRoleProgramLTC,
+		Role: config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)

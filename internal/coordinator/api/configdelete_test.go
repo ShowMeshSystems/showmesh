@@ -21,7 +21,7 @@ import (
 // role at a time. A test that PUTs two nodes needs the second one to carry
 // a role that does not collide with the first.
 const validAudioNodeBodySecondNode = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-	`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it","role":"program"}`
+	`"role":"program"}`
 
 func mustDeleteAudioNode(t *testing.T, api *API, token, id string, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()

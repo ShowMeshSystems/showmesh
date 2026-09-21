@@ -11,8 +11,7 @@ import (
 )
 
 func validAudioNodePayloadJSON() string {
-	return `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+	return `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3}`
 }
 
 // TestDecodeAudioNodePayloadAccepts decodes validAudioNodePayloadJSON, the
@@ -29,7 +28,6 @@ func TestDecodeAudioNodePayloadAccepts(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "single-interface", ClockDomainProvenance: "one physical interface, both routes on it",
 		Role:          AudioNodeRoleProgramLTC,
 		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
@@ -42,8 +40,7 @@ func TestDecodeAudioNodePayloadAccepts(t *testing.T) {
 // TestDecodeAudioNodePayloadAcceptsMonoProgram proves programChannels is
 // not hardcoded to stereo: a single-element list is a valid mono layout.
 func TestDecodeAudioNodePayloadAcceptsMonoProgram(t *testing.T) {
-	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2}`
 	p, verr := DecodeAudioNodePayload(raw)
 	if verr != nil {
 		t.Fatalf("unexpected error: %v", verr)
@@ -57,7 +54,6 @@ func TestEncodeDecodeAudioNodePayloadRoundTrips(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:1,0", LTCRoute: "hw:1,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
 		Role:          AudioNodeRoleProgram,
 		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
@@ -82,7 +78,6 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsZone(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:2,0", LTCRoute: "hw:2,0",
 		ProgramChannels: []int{1}, LTCChannel: 2,
-		ClockDomain: "domain-b", ClockDomainProvenance: "datasheet",
 		Role: AudioNodeRoleZone, Zone: &zone,
 		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
@@ -117,7 +112,7 @@ func TestDecodeAudioNodePayloadRoleDefaultsProgramLTC(t *testing.T) {
 // with its zone name.
 func TestDecodeAudioNodePayloadRoleZone(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","role":"zone","zone":"porch"}`
+		`"role":"zone","zone":"porch"}`
 	p, verr := DecodeAudioNodePayload(raw)
 	if verr != nil {
 		t.Fatalf("unexpected error: %v", verr)
@@ -131,7 +126,7 @@ func TestDecodeAudioNodePayloadRoleZone(t *testing.T) {
 // enum.
 func TestDecodeAudioNodePayloadRejectsUnknownRole(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","role":"surround"}`
+		`"role":"surround"}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "role" {
 		t.Fatalf("verr = %v, want field-invalid on role", verr)
@@ -144,7 +139,7 @@ func TestDecodeAudioNodePayloadRejectsUnknownRole(t *testing.T) {
 // precedent.
 func TestDecodeAudioNodePayloadRejectsZoneOutsideZoneRole(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","role":"program","zone":"porch"}`
+		`"role":"program","zone":"porch"}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "zone" {
 		t.Fatalf("verr = %v, want field-invalid on zone", verr)
@@ -203,7 +198,7 @@ func TestValidateAudioNodeRoleUniquenessAllowsMultipleZones(t *testing.T) {
 
 func TestDecodeAudioNodePayloadRejectsUnknownTopLevelKey(t *testing.T) {
 	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","extra":true}`
+		`"extra":true}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("verr = %v, want ValidationCodeFieldUnknownKey", verr)
@@ -216,7 +211,7 @@ func TestDecodeAudioNodePayloadRejectsUnknownTopLevelKey(t *testing.T) {
 // ADR-018 needs a channel discrete from the program pair to carry LTC
 // and such a device has none to spare.
 func TestDecodeAudioNodePayloadAcceptsProgramOnly(t *testing.T) {
-	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"single interface"}`
+	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2]}`
 	p, verr := DecodeAudioNodePayload(raw)
 	if verr != nil {
 		t.Fatalf("verr = %v, want nil", verr)
@@ -238,7 +233,6 @@ func TestDecodeAudioNodePayloadAcceptsProgramOnly(t *testing.T) {
 func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
-		ClockDomain: "solo", ClockDomainProvenance: "single interface",
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	encoded, err := EncodeAudioNodePayload(want)
@@ -252,7 +246,7 @@ func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
 	if got.LTCRoute != "" || got.LTCChannel != 0 {
 		t.Errorf("round trip invented LTC: %+v", got)
 	}
-	if got.ProgramRoute != want.ProgramRoute || got.ClockDomain != want.ClockDomain {
+	if got.ProgramRoute != want.ProgramRoute {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
@@ -267,8 +261,8 @@ func TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC(t *testing.T) {
 		raw       string
 		wantField string
 	}{
-		{"route without channel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcChannel"},
-		{"channel without route", `{"programRoute":"a","ltcChannel":2,"programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcRoute"},
+		{"route without channel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1]}`, "ltcChannel"},
+		{"channel without route", `{"programRoute":"a","ltcChannel":2,"programChannels":[1]}`, "ltcRoute"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,7 +282,6 @@ func TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC(t *testing.T) {
 func TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice(t *testing.T) {
 	p := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
-		ClockDomain: "solo", ClockDomainProvenance: "single interface",
 	}
 	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0", "hw:CARD=Headphones,DEV=0"}, nil); err != nil {
 		t.Fatalf("placement = %v, want accepted", err)
@@ -303,7 +296,6 @@ func TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice(t *testin
 func TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly(t *testing.T) {
 	p := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
-		ClockDomain: "solo", ClockDomainProvenance: "single interface",
 	}
 	err := ValidateAudioNodePlacement(p, nil, nil)
 	if !errors.Is(err, ErrAudioNodeNoEvidence) {
@@ -317,7 +309,6 @@ func TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly(t *testing
 func TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute(t *testing.T) {
 	p := AudioNodePayload{
 		ProgramRoute: "hw:CARD=TYPO,DEV=0", ProgramChannels: []int{1, 2},
-		ClockDomain: "solo", ClockDomainProvenance: "single interface",
 	}
 	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
 		t.Fatal("placement accepted an unevidenced program route on a program-only node")
@@ -332,7 +323,6 @@ func TestValidateAudioNodePlacementStillRejectsUnevidencedLTCRoute(t *testing.T)
 	p := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", LTCRoute: "hw:CARD=USB,DEV=0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "solo", ClockDomainProvenance: "single interface",
 	}
 	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
 		t.Fatal("placement accepted an LTC route the node never advertised as LTC-capable")
@@ -350,10 +340,8 @@ func TestDecodeAudioNodePayloadRejectsAbsentField(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"programRoute", `{"ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"programChannels", `{"programRoute":"a","ltcRoute":"a","ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomainProvenance":"p"}`},
-		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d"}`},
+		{"programRoute", `{"ltcRoute":"a","programChannels":[1],"ltcChannel":2}`},
+		{"programChannels", `{"programRoute":"a","ltcRoute":"a","ltcChannel":2}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -372,18 +360,16 @@ func TestDecodeAudioNodePayloadRejectsNullField(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"programRoute", `{"programRoute":null,"ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"programChannels", `{"programRoute":"a","ltcRoute":"a","programChannels":null,"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":null,"clockDomainProvenance":"p"}`},
-		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":null}`},
+		{"programRoute", `{"programRoute":null,"ltcRoute":"a","programChannels":[1],"ltcChannel":2}`},
+		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":2}`},
+		{"programChannels", `{"programRoute":"a","ltcRoute":"a","programChannels":null,"ltcChannel":2}`},
+		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":null}`},
 		// Both LTC keys present but null. The pair is "present" as far as
 		// the optional-together check is concerned, so this must reach
 		// the null refusal rather than being read as a program-only
 		// declaration: an operator who typed null meant to say something,
 		// and silently treating it as "no LTC" would hide the mistake.
-		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
+		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":null}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,10 +389,8 @@ func TestDecodeAudioNodePayloadRejectsEmptyField(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"programRoute", `{"programRoute":"","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcRoute", `{"programRoute":"a","ltcRoute":"","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"","clockDomainProvenance":"p"}`},
-		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":""}`},
+		{"programRoute", `{"programRoute":"","ltcRoute":"a","programChannels":[1],"ltcChannel":2}`},
+		{"ltcRoute", `{"programRoute":"a","ltcRoute":"","programChannels":[1],"ltcChannel":2}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -421,7 +405,7 @@ func TestDecodeAudioNodePayloadRejectsEmptyField(t *testing.T) {
 // TestDecodeAudioNodePayloadRejectsEmptyProgramChannels proves an
 // explicitly empty array is a third, distinct refusal from absent/null.
 func TestDecodeAudioNodePayloadRejectsEmptyProgramChannels(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[],"ltcChannel":2}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "programChannels" {
 		t.Fatalf("verr = %v, want field-empty on programChannels", verr)
@@ -431,7 +415,7 @@ func TestDecodeAudioNodePayloadRejectsEmptyProgramChannels(t *testing.T) {
 // TestDecodeAudioNodePayloadRejectsZeroProgramChannel proves a zero index
 // is refused, not treated as a valid (if unusual) channel.
 func TestDecodeAudioNodePayloadRejectsZeroProgramChannel(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[0,1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[0,1],"ltcChannel":2}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "programChannels[0]" {
 		t.Fatalf("verr = %v, want field-invalid on programChannels[0]", verr)
@@ -441,7 +425,7 @@ func TestDecodeAudioNodePayloadRejectsZeroProgramChannel(t *testing.T) {
 // TestDecodeAudioNodePayloadRejectsNegativeProgramChannel proves a
 // negative index is refused.
 func TestDecodeAudioNodePayloadRejectsNegativeProgramChannel(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,-2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,-2],"ltcChannel":3}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "programChannels[1]" {
 		t.Fatalf("verr = %v, want field-invalid on programChannels[1]", verr)
@@ -451,7 +435,7 @@ func TestDecodeAudioNodePayloadRejectsNegativeProgramChannel(t *testing.T) {
 // TestDecodeAudioNodePayloadRejectsDuplicateProgramChannel proves a
 // repeated index within programChannels is refused with its own code.
 func TestDecodeAudioNodePayloadRejectsDuplicateProgramChannel(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,1],"ltcChannel":2}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeAudioNodeChannelDuplicate {
 		t.Fatalf("verr = %v, want ValidationCodeAudioNodeChannelDuplicate", verr)
@@ -461,7 +445,7 @@ func TestDecodeAudioNodePayloadRejectsDuplicateProgramChannel(t *testing.T) {
 // TestDecodeAudioNodePayloadRejectsZeroLTCChannel proves ltcChannel is
 // bound by the same positive-index rule as programChannels.
 func TestDecodeAudioNodePayloadRejectsZeroLTCChannel(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,2],"ltcChannel":0,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,2],"ltcChannel":0}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "ltcChannel" {
 		t.Fatalf("verr = %v, want field-invalid on ltcChannel", verr)
@@ -472,7 +456,7 @@ func TestDecodeAudioNodePayloadRejectsZeroLTCChannel(t *testing.T) {
 // ltcChannel appearing in programChannels is refused with its own code,
 // distinguishable from an ordinary bad value.
 func TestDecodeAudioNodePayloadRejectsLTCChannelOverlappingProgram(t *testing.T) {
-	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,2],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"a","ltcRoute":"a","programChannels":[1,2],"ltcChannel":2}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeAudioNodeChannelOverlap || verr.Field != "ltcChannel" {
 		t.Fatalf("verr = %v, want ValidationCodeAudioNodeChannelOverlap on ltcChannel", verr)
@@ -483,7 +467,7 @@ func TestDecodeAudioNodePayloadRejectsLTCChannelOverlappingProgram(t *testing.T)
 // ltcRoute naming different routes is refused with its own code: program
 // and LTC leave through one interface in one clock domain.
 func TestDecodeAudioNodePayloadRejectsRouteMismatch(t *testing.T) {
-	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeAudioNodeRouteMismatch || verr.Field != "ltcRoute" {
 		t.Fatalf("verr = %v, want ValidationCodeAudioNodeRouteMismatch on ltcRoute", verr)
@@ -497,11 +481,11 @@ func TestDecodeAudioNodePayloadRejectsRouteMismatch(t *testing.T) {
 // author reading the contract would have built exactly inverted validation.
 func TestRouteMismatchDescriptionMatchesTheRuleEnforced(t *testing.T) {
 	// The rule, restated from the code below it rather than from prose.
-	same := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	same := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3}`
 	if _, verr := DecodeAudioNodePayload(same); verr != nil {
 		t.Fatalf("two routes naming the SAME device must be accepted, got %v", verr)
 	}
-	differing := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	differing := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3}`
 	if _, verr := DecodeAudioNodePayload(differing); verr == nil || verr.Code != ValidationCodeAudioNodeRouteMismatch {
 		t.Fatalf("two routes naming DIFFERENT devices must be refused, got %v", verr)
 	}
@@ -581,7 +565,7 @@ func TestDecodeAudioNodePayloadSinkBackendDefaultsALSA(t *testing.T) {
 // RES-019 section 7.2 candidate A backend choice decodes.
 func TestDecodeAudioNodePayloadAcceptsPipeWireSinkBackend(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","sinkBackend":"pipewiresink"}`
+		`"sinkBackend":"pipewiresink"}`
 	p, verr := DecodeAudioNodePayload(raw)
 	if verr != nil {
 		t.Fatalf("unexpected error: %v", verr)
@@ -595,7 +579,7 @@ func TestDecodeAudioNodePayloadAcceptsPipeWireSinkBackend(t *testing.T) {
 // "sinkBackend" is a closed enum.
 func TestDecodeAudioNodePayloadRejectsUnknownSinkBackend(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
-		`"clockDomain":"d","clockDomainProvenance":"p","sinkBackend":"pulsesink"}`
+		`"sinkBackend":"pulsesink"}`
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "sinkBackend" {
 		t.Fatalf("verr = %v, want field-invalid on sinkBackend", verr)
@@ -621,7 +605,6 @@ func TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured(t *testing.T) {
 // provenanced loopback measurement decodes intact.
 func TestDecodeAudioNodeOutputLatencyAcceptsMeasured(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"valueUs":56000,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
 		`"reference":"MOTU M4 loopback capture","confidence":"high: three runs agreed within 50us",` +
 		`"configuration":"PipeWire quantum 1024, 48000 Hz"}}`
@@ -645,7 +628,6 @@ func TestDecodeAudioNodeOutputLatencyAcceptsMeasured(t *testing.T) {
 // applied: RES-019 section 8 forbids a fabricated measurement.
 func TestDecodeAudioNodeOutputLatencyRejectsProvenanceOnUnmeasured(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"method":"unmeasured","valueUs":56000}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
 		t.Fatal("expected error: valueUs beside method \"unmeasured\" must be refused")
@@ -657,7 +639,6 @@ func TestDecodeAudioNodeOutputLatencyRejectsProvenanceOnUnmeasured(t *testing.T)
 // silently accepted with an empty string.
 func TestDecodeAudioNodeOutputLatencyRequiresProvenanceOnMeasured(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"valueUs":56000,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
 		`"reference":"MOTU M4 loopback capture","confidence":"high"}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
@@ -670,7 +651,6 @@ func TestDecodeAudioNodeOutputLatencyRequiresProvenanceOnMeasured(t *testing.T) 
 // microseconds were asked for) is refused rather than silently applied.
 func TestDecodeAudioNodeOutputLatencyRejectsOutOfBoundValue(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"valueUs":56000000000,"method":"declared","measuredAt":"2026-09-11T02:00:00Z",` +
 		`"reference":"datasheet","confidence":"low","configuration":"n/a"}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
@@ -684,7 +664,6 @@ func TestDecodeAudioNodeOutputLatencyRejectsOutOfBoundValue(t *testing.T) {
 // an empty field.
 func TestDecodeAudioNodeOutputLatencyRejectsZeroValue(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"valueUs":0,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
 		`"reference":"MOTU M4 loopback capture","confidence":"high","configuration":"n/a"}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
@@ -698,7 +677,6 @@ func TestDecodeAudioNodeOutputLatencyRejectsZeroValue(t *testing.T) {
 // "outputLatency":{} with no method, and it must stay readable.
 func TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{}}`
 	p, verr := DecodeAudioNodePayload(raw)
 	if verr != nil {
@@ -714,7 +692,6 @@ func TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured(t *testing.T)
 // that actually sends measurement fields: those still require method.
 func TestDecodeAudioNodeOutputLatencyAbsentMethodStillRejectsMeasuredFields(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{"valueUs":56000}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
 		t.Fatal("expected error: valueUs beside an absent (unmeasured) method must be refused")
@@ -729,7 +706,6 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsOutputLatency(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:1,0", LTCRoute: "hw:1,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
 		Role:        AudioNodeRoleProgram,
 		SinkBackend: AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{
@@ -748,5 +724,74 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsOutputLatency(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip = %+v, want %+v", got, want)
+	}
+}
+
+// TestDecodeAudioNodePayloadAcceptsAndDropsRetiredClockFields proves
+// ADR-052 decision 5: a stored object that still carries clockDomain and
+// clockDomainProvenance decodes, both are ignored, and re-encoding drops
+// them while every other field survives.
+func TestDecodeAudioNodePayloadAcceptsAndDropsRetiredClockFields(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it",` +
+		`"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-MOTU_M4-00.pro-output-0"}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.LocalClockOverride != "" {
+		t.Errorf("LocalClockOverride = %q, want empty: the retired fields must not become the override", p.LocalClockOverride)
+	}
+	encoded, err := EncodeAudioNodePayload(p)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if strings.Contains(encoded, "clockDomain") {
+		t.Errorf("re-encoded payload still carries a retired clock field: %s", encoded)
+	}
+	if p.SinkBackend != AudioNodeSinkBackendPipeWire {
+		t.Errorf("SinkBackend = %q, want %q", p.SinkBackend, AudioNodeSinkBackendPipeWire)
+	}
+	if p.PipewireTargetNode == nil || *p.PipewireTargetNode != "alsa_output.usb-MOTU_M4-00.pro-output-0" {
+		t.Errorf("PipewireTargetNode = %v, want it carried through unchanged", p.PipewireTargetNode)
+	}
+	if p.ProgramRoute != "hw:0,0" || p.LTCRoute != "hw:0,0" || p.LTCChannel != 3 || len(p.ProgramChannels) != 2 {
+		t.Errorf("routing fields changed: %+v", p)
+	}
+}
+
+// TestDecodeAudioNodePayloadLocalClockOverride proves the ADR-052 field is
+// optional, round-trips when set, and refuses a null the way every other
+// optional string here does.
+func TestDecodeAudioNodePayloadLocalClockOverride(t *testing.T) {
+	absent, verr := DecodeAudioNodePayload(validAudioNodePayloadJSON())
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if absent.LocalClockOverride != "" {
+		t.Errorf("LocalClockOverride = %q, want empty when the key is absent", absent.LocalClockOverride)
+	}
+
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"localClockOverride":"house word clock"}`
+	set, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if set.LocalClockOverride != "house word clock" {
+		t.Errorf("LocalClockOverride = %q, want %q", set.LocalClockOverride, "house word clock")
+	}
+	encoded, err := EncodeAudioNodePayload(set)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(encoded, `"localClockOverride":"house word clock"`) {
+		t.Errorf("re-encoded payload dropped the override: %s", encoded)
+	}
+
+	null := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"localClockOverride":null}`
+	if _, verr := DecodeAudioNodePayload(null); verr == nil || verr.Field != "localClockOverride" {
+		t.Errorf("DecodeAudioNodePayload(localClockOverride null) = %v, want a localClockOverride refusal", verr)
 	}
 }

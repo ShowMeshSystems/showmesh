@@ -250,6 +250,15 @@ const (
 	// Cues also run the coordinator's fallback. Never a failure — see
 	// [audioNodeNotMultisyncRemoteReadiness]'s own doc comment.
 	ReadinessAudioNodeNotMultisyncRemote ReadinessCondition = "audio-node-not-multisync-remote"
+
+	// ReadinessAudioLTCSeparateLocalClock: an audio.node's LTC route names
+	// a different interface than its program route, and no
+	// localClockOverride says the two interfaces share one clock. ADR-052
+	// decision 4's readiness warning: two interfaces that are not locked
+	// together run at their own sample rates, so timecode drifts against
+	// the music across a cue. Never a failure. See
+	// [audioLTCSeparateLocalClockReadiness]'s own doc comment.
+	ReadinessAudioLTCSeparateLocalClock ReadinessCondition = "audio-ltc-separate-local-clock"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -576,6 +585,16 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// from that instance's own MultiSync systems list. Never a failure —
 	// see [audioNodeNotMultisyncRemoteReadiness]'s own doc comment.
 	if warning, err := audioNodeNotMultisyncRemoteReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 16 (ADR-052 decision 4): an audio.node sends LTC out a
+	// different interface than its program audio, with nothing saying the
+	// two share a clock. Never a failure. See
+	// [audioLTCSeparateLocalClockReadiness]'s own doc comment.
+	if warning, err := audioLTCSeparateLocalClockReadiness(ctx, st); err != nil {
 		return Report{}, err
 	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
@@ -1275,4 +1294,65 @@ func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, 
 		}
 	}
 	return "", nil
+}
+
+// audioLTCSeparateLocalClockReadiness implements condition 16 (see
+// [PlaylistReadiness]'s own doc comment): ADR-052 decision 4's drift
+// warning. A node whose LTC route names a different interface than its
+// program route has two sample clocks, and nothing locks one to the other
+// unless an operator's localClockOverride says external word clock does;
+// timecode then drifts against the music. Warning only: the show still
+// plays, and the operator decides what to do about the timecode.
+//
+// Silent for a program-only node (no LTC route at all), for the ordinary
+// case of one interface carrying both, and whenever an override is set. A
+// stored object this coordinator cannot read is skipped rather than
+// reported: "I could not check" must not read as a confirmed drift. Every
+// object is checked in id order and the first match is named, matching
+// this file's other deterministic fleet-wide conditions.
+func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store) (string, error) {
+	objs, err := st.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list audio.node objects: %w", err)
+	}
+	ids := make([]string, 0, len(objs))
+	revisions := make(map[string]int64, len(objs))
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		ids = append(ids, obj.ID)
+		revisions[obj.ID] = obj.CurrentRevision
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		rev, err := st.GetConfigRevision(ctx, config.AudioNodeConfigKind, id, revisions[id])
+		if errors.Is(err, store.ErrConfigRevisionNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: read audio.node %q revision %d: %w", id, revisions[id], err)
+		}
+		var payload config.AudioNodePayload
+		if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if warning := audioNodeLocalClockWarning(id, payload); warning != "" {
+			return warning, nil
+		}
+	}
+	return "", nil
+}
+
+// audioNodeLocalClockWarning is condition 16's decision for one decoded
+// object, separated so it is testable without a store and readable on its
+// own: empty means nothing to warn about.
+func audioNodeLocalClockWarning(nodeID string, p config.AudioNodePayload) string {
+	if p.LTCRoute == "" || p.LTCRoute == p.ProgramRoute || p.LocalClockOverride != "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"node %q sends LTC out %s and program audio out %s, and nothing says the two run on one local clock, so timecode will drift against the music. Move LTC onto the program interface, or name this node's local clock to record that they share a clock.",
+		nodeID, p.LTCRoute, p.ProgramRoute)
 }

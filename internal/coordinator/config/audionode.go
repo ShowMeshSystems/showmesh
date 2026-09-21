@@ -8,9 +8,9 @@ import (
 
 // This file is the per-node kind (ADR-039, IDENTIFIER-REGISTER.md's
 // "audio.node" reservation): which discovered output route carries
-// program, which carries LTC, and the operator-declared clock domain (no
-// software call proves two outputs share a hardware clock, so this is
-// declared, never inferred). A collection, mirroring show.surface and
+// program, which carries LTC, and an optional operator override naming
+// this node's local clock (ADR-052: the local clock is otherwise derived
+// from the program route). A collection, mirroring show.surface and
 // show.action: the object id is the node id itself rather than a
 // caller-chosen name.
 
@@ -104,11 +104,15 @@ func ValidateAudioNodeObjectID(id string) *ValidationError {
 	return ValidateShowObjectID("node id", id)
 }
 
+// "clockDomain" and "clockDomainProvenance" are listed so a stored
+// object that still carries them decodes; nothing reads them and the
+// next write drops them (ADR-052 decision 5).
 var audioNodeTopLevelKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true,
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
-	"role": true, "zone": true, "sinkBackend": true,
+	"localClockOverride": true,
+	"role":               true, "zone": true, "sinkBackend": true,
 	"pipewireTargetNode": true,
 	"outputLatency":      true,
 }
@@ -152,21 +156,11 @@ type AudioNodePayload struct {
 	// a discrete channel, never mixed into program.
 	LTCChannel int `json:"ltcChannel,omitempty"`
 
-	// ClockDomain is the operator's own name for the shared hardware
-	// clock ProgramRoute and LTCRoute are declared to share. Required
-	// even on a program-only node, where it names the clock the program
-	// route runs on: it is what a later LTC or multi-node alignment
-	// question is answered against, and asking for it once at declaration
-	// time is cheaper than inferring it afterwards. Never inferred: no
-	// software call on this platform proves two outputs share a clock.
-	ClockDomain string `json:"clockDomain"`
-
-	// ClockDomainProvenance is the operator's stated reason for the
-	// ClockDomain declaration (e.g. "single interface, both routes on it"
-	// or "manufacturer datasheet states shared word clock") — required
-	// for the identical reason ClockDomain itself is required: a
-	// declaration with no stated basis is indistinguishable from a guess.
-	ClockDomainProvenance string `json:"clockDomainProvenance"`
+	// LocalClockOverride names this node's local clock when the derived
+	// answer is wrong (ADR-052 decision 3): two interfaces sharing
+	// external word clock, which no software call on this platform can
+	// detect. Empty means derived from ProgramRoute.
+	LocalClockOverride string `json:"localClockOverride,omitempty"`
 
 	// Role is ADR-045's audio.node role: one of [AudioNodeRoleProgram],
 	// [AudioNodeRoleProgramLTC], or [AudioNodeRoleZone]. Optional on the
@@ -249,8 +243,7 @@ type OutputLatencyPayload struct {
 	Reference string `json:"reference,omitempty"`
 
 	// Confidence is the operator's own free-text judgment of how much to
-	// trust ValueUs. Free text, not a closed vocabulary, matching
-	// ClockDomainProvenance's own precedent.
+	// trust ValueUs. Free text, not a closed vocabulary.
 	Confidence string `json:"confidence,omitempty"`
 
 	// Configuration records the buffer/quantum/sample-rate configuration
@@ -307,11 +300,10 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
-	clockDomain, verr := decodeRequiredString(top, "clockDomain", "clockDomain")
-	if verr != nil {
-		return AudioNodePayload{}, verr
-	}
-	clockDomainProvenance, verr := decodeRequiredString(top, "clockDomainProvenance", "clockDomainProvenance")
+	// ADR-052 decision 5: "clockDomain" and "clockDomainProvenance" are
+	// accepted so a stored object keeps decoding, read by nothing, and
+	// dropped by the next write, which re-encodes from this struct.
+	localClockOverride, verr := decodeOptionalString(top, "localClockOverride", "localClockOverride")
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
@@ -320,7 +312,7 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, &ValidationError{
 			Code: ValidationCodeAudioNodeRouteMismatch, Field: "ltcRoute",
 			Detail: fmt.Sprintf(
-				"ltcRoute %q must name the same route as programRoute %q; program and LTC leave through one interface in one clock domain",
+				"ltcRoute %q names a different interface than programRoute %q. Name the same route for both, so timecode cannot drift against the music.",
 				ltcRoute, programRoute),
 		}
 	}
@@ -368,8 +360,8 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 	return AudioNodePayload{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
-		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
-		Role: role, Zone: zone,
+		LocalClockOverride: localClockOverride,
+		Role:               role, Zone: zone,
 		SinkBackend:        sinkBackend,
 		PipewireTargetNode: pipewireTargetNode,
 		OutputLatency:      outputLatency,
