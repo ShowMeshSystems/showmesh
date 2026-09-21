@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  deleteShowPlaylist,
   getFPPPlaylistDefinitionEntries,
   getFPPPlaylistReadiness,
   getMediaPlaylist,
@@ -19,7 +20,7 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -319,11 +320,33 @@ export function ShowsPlaylists() {
         )}
 
         {!drafting && selectedShow !== null && selectedShow.payload.runner === 'fpp' && (
-          <FPPPlaylistEditor playlist={selectedShow} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
+          <FPPPlaylistEditor
+            key={selectedShow.id}
+            playlist={selectedShow}
+            cues={state.kind === 'loaded' ? state.cues : []}
+            evidence={evidence}
+            readiness={readiness}
+            model={model}
+            onSaved={updatePlaylist}
+            onDeleted={() => {
+              closeInspector()
+              reload()
+            }}
+          />
         )}
 
         {!drafting && selectedShow !== null && selectedShow.payload.runner === 'showmesh-audio' && (
-          <AudioPlaylistEditor playlist={selectedShow} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
+          <AudioPlaylistEditor
+            key={selectedShow.id}
+            playlist={selectedShow}
+            cues={state.kind === 'loaded' ? state.cues : []}
+            model={model}
+            onSaved={updatePlaylist}
+            onDeleted={() => {
+              closeInspector()
+              reload()
+            }}
+          />
         )}
 
         {!drafting && selectedMedia !== null && (
@@ -358,6 +381,7 @@ function FPPPlaylistEditor({
   readiness,
   model,
   onSaved,
+  onDeleted,
 }: {
   playlist: Playlist
   cues: ConfigObjectSummary[]
@@ -365,6 +389,7 @@ function FPPPlaylistEditor({
   readiness: { state: ReadinessState; check: () => void }
   model: ReturnType<typeof useModelContext>
   onSaved: (response: Playlist) => void
+  onDeleted: () => void
 }) {
   const binding = playlist.payload.fpp
 
@@ -375,6 +400,17 @@ function FPPPlaylistEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<Playlist>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowPlaylist(playlist.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   useEffect(() => {
     const map: Record<string, string> = {}
@@ -677,6 +713,20 @@ function FPPPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <DeletePanel
+        title="Delete this playlist"
+        confirmNoun="the playlist's own name"
+        confirmValue={playlist.payload.name}
+        actionLabel="Delete playlist"
+        deleting={deleting}
+        error={deleteError}
+        allowed={saveGate.allowed}
+        disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+        onDelete={remove}
+      >
+        <p className="sm-small sm-muted">Deleting a playlist does not delete the cues or FPP definition it references.</p>
+      </DeletePanel>
     </Section>
   )
 }
@@ -688,11 +738,13 @@ function AudioPlaylistEditor({
   cues,
   model,
   onSaved,
+  onDeleted,
 }: {
   playlist: Playlist
   cues: ConfigObjectSummary[]
   model: ReturnType<typeof useModelContext>
   onSaved: (response: Playlist) => void
+  onDeleted: () => void
 }) {
   const [entries, setEntries] = useState<EntryDraft[]>([])
   const [dragIndex, setDragIndex] = useState<number | null>(null)
@@ -702,6 +754,8 @@ function AudioPlaylistEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<Playlist>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   useEffect(() => {
     setEntries(playlist.payload.entries.map((e) => ({ id: e.id, cue: e.cue })))
     setRepeat(playlist.payload.showmeshAudio?.repeat ?? 'none')
@@ -712,6 +766,15 @@ function AudioPlaylistEditor({
   }, [playlist])
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowPlaylist(playlist.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   const discard = () => {
     setEntries(playlist.payload.entries.map((e) => ({ id: e.id, cue: e.cue })))
@@ -904,6 +967,20 @@ function AudioPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <DeletePanel
+        title="Delete this playlist"
+        confirmNoun="the playlist's own name"
+        confirmValue={playlist.payload.name}
+        actionLabel="Delete playlist"
+        deleting={deleting}
+        error={deleteError}
+        allowed={saveGate.allowed}
+        disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+        onDelete={remove}
+      >
+        <p className="sm-small sm-muted">Deleting a playlist does not delete the cues it references.</p>
+      </DeletePanel>
     </Section>
   )
 }

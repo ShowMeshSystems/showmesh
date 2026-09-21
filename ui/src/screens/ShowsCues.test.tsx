@@ -13,6 +13,7 @@ const stubs = vi.hoisted(() => ({
   getShowCueRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() =>
     Promise.resolve({
       serverTime: '2026-08-30T21:00:00Z',
@@ -46,6 +47,7 @@ vi.mock('../api', async () => {
     getShowCueRevisions: (...args: never[]) => stubs.getShowCueRevisions(...args),
     getShowPlaylist: (...args: never[]) => stubs.getShowPlaylist(...args),
     putShowCue: (...args: never[]) => stubs.putShowCue(...args),
+    deleteShowCue: (...args: never[]) => stubs.deleteShowCue(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
   }
 })
@@ -231,6 +233,44 @@ describe('Shows · Cues tab', () => {
     stubs.putShowCue = putSpy
     fireEvent.click(save)
     expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  describe('deleting a cue', () => {
+    it('is inert until the name is typed exactly, then deletes and closes the inspector', async () => {
+      setup()
+      const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
+      fireEvent.click(row)
+      const deleteButton = await screen.findByRole('button', { name: 'Delete cue' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowCue = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type House Preshow Loop to confirm'), { target: { value: 'House Preshow Loop' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('cue-1'))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save cue' })).not.toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the cue open when the delete is refused', async () => {
+      setup()
+      stubs.deleteShowCue = () => Promise.reject(new ApiError('cue-1 is used by a playlist entry.', 409))
+      const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
+      fireEvent.click(row)
+      fireEvent.change(screen.getByLabelText('Type House Preshow Loop to confirm'), { target: { value: 'House Preshow Loop' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete cue' }))
+      expect(await screen.findByText('cue-1 is used by a playlist entry.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save cue' })).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      setup([])
+      const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
+      fireEvent.click(row)
+      fireEvent.change(screen.getByLabelText('Type House Preshow Loop to confirm'), { target: { value: 'House Preshow Loop' } })
+      expect(screen.getByRole('button', { name: 'Delete cue' })).toBeDisabled()
+    })
   })
 
   it('renders the compact active-revision summary for the cue, not a list heading', async () => {

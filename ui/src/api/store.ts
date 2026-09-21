@@ -2334,6 +2334,20 @@ export class ApiStore {
     }
   }
 
+  /**
+   * `DELETE /api/v1/config/show.action/{id}`. `config:write` only. Always
+   * sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteShowAction(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show.action/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/show.action/{id}/revisions`: revision history, newest first, metadata only. */
   async getShowActionRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -2461,6 +2475,20 @@ export class ApiStore {
     }
   }
 
+  /**
+   * `DELETE /api/v1/config/show.macro/{id}`. `config:write` only. Always
+   * sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteShowMacro(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show.macro/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/show.macro/{id}/revisions`: revision history, newest first, metadata only. */
   async getShowMacroRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -2529,6 +2557,22 @@ export class ApiStore {
   }
 
   /**
+   * `DELETE /api/v1/config/show/{id}`. `config:write` only. Always sends
+   * `{"confirm":true}`, the server's own required body. The coordinator
+   * refuses this with 409 when `id` is the active show; that refusal
+   * surfaces through the thrown error, unpre-empted here.
+   */
+  async deleteShow(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `PUT /api/v1/config/show.surface/{id}` (ADR-026). `config:write` only.
    * Full replacement — every field is required on every write, including
    * `channelRange` (the manual-channel-range path ADR-027 decision 4
@@ -2544,6 +2588,20 @@ export class ApiStore {
         payload,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/config/show.surface/{id}`. `config:write` only.
+   * Always sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteShowSurface(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show.surface/${encodeURIComponent(id)}`, body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -2594,6 +2652,20 @@ export class ApiStore {
     }
   }
 
+  /**
+   * `DELETE /api/v1/config/show.cue/{id}`. `config:write` only. Always
+   * sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteShowCue(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show.cue/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/show.cue/{id}/revisions`: revision history, newest first, metadata only. */
   async getShowCueRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -2622,6 +2694,20 @@ export class ApiStore {
         payload,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/config/show.playlist/{id}`. `config:write` only.
+   * Always sends `{"confirm":true}`, the server's own required body.
+   */
+  async deleteShowPlaylist(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/show.playlist/${encodeURIComponent(id)}`, body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

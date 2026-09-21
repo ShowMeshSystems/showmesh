@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
+  deleteShowSurface,
   getShowSurface,
   getShowSurfaceRevisions,
   putShowSurface,
   type ConfigShowSurface,
   type ShowSurfaceConfigResponse,
 } from '../api'
-import { Button, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, DeletePanel, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
@@ -221,6 +222,11 @@ export function ShowsPresentation() {
               setSelectedId(response.id)
               setCreating(false)
             }}
+            onDeleted={() => {
+              reload()
+              setCreating(false)
+              setSelectedId(null)
+            }}
             onCancel={() => {
               setCreating(false)
               setSelectedId(null)
@@ -241,6 +247,7 @@ function SurfaceEditor({
   existingIds,
   model,
   onSaved,
+  onDeleted,
   onCancel,
 }: {
   showId: string
@@ -248,6 +255,7 @@ function SurfaceEditor({
   existingIds: readonly string[]
   model: ReturnType<typeof useModelContext>
   onSaved: (response: ShowSurfaceConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
 }) {
   const isNew = surface === null
@@ -266,9 +274,21 @@ function SurfaceEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowSurfaceConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const nodeOptions = renderCapableNodes(model.nodes)
+
+  const remove = () => {
+    if (surface === null) return
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowSurface(surface.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   const widthN = Number(width)
   const heightN = Number(height)
@@ -497,6 +517,22 @@ function SurfaceEditor({
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       {surface !== null && <RevisionHistory fetch={() => getShowSurfaceRevisions(surface.id)} reloadKey={`${surface.id}:${surface.revision}`} />}
+
+      {surface !== null && (
+        <DeletePanel
+          title="Delete this surface"
+          confirmNoun="the surface's own name"
+          confirmValue={surface.payload.name}
+          actionLabel="Delete surface"
+          deleting={deleting}
+          error={deleteError}
+          allowed={saveGate.allowed}
+          disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+          onDelete={remove}
+        >
+          <p className="sm-small sm-muted">Deleting a surface stops the node from resolving it; the node's own output configuration is not touched.</p>
+        </DeletePanel>
+      )}
     </div>
   )
 }

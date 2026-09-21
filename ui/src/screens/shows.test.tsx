@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowActiveRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -26,6 +27,7 @@ vi.mock('../api', async () => {
     getShow: (...args: never[]) => stubs.getShow(...args),
     putShow: (...args: never[]) => stubs.putShow(...args),
     getShowRevisions: (...args: never[]) => stubs.getShowRevisions(...args),
+    deleteShow: (...args: never[]) => stubs.deleteShow(...args),
     getShowActive: (...args: never[]) => stubs.getShowActive(...args),
     putShowActive: (...args: never[]) => stubs.putShowActive(...args),
     getShowActiveRevisions: (...args: never[]) => stubs.getShowActiveRevisions(...args),
@@ -76,6 +78,7 @@ function renderDetail(id: string, model: Partial<Model> = {}) {
       <MemoryRouter initialEntries={[`/shows/${id}`]}>
         <Routes>
           <Route path="/shows/:id" element={<ShowDetail />} />
+          <Route path="/shows" element={<p>Shows list landing</p>} />
         </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
@@ -385,17 +388,54 @@ describe('Shows · Identity', () => {
     expect(screen.getByText('notes', { selector: '.sm-data' })).toBeInTheDocument()
   })
 
-  it('separates the delete control from the save path and leaves it inert with no endpoint', async () => {
+  it('separates the delete control from the save path and keeps it disabled until the name is typed', async () => {
     stubs.getShow = showResponse
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
-    renderDetail('winter-ridge-2026')
+    renderDetail('winter-ridge-2026', { session: signedIn(['config:write']) })
     await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
     const saveSection = screen.getByRole('button', { name: /Save show/ }).closest('section, div')
     const deleteButton = screen.getByRole('button', { name: 'Delete show' })
     expect(deleteButton).toBeDisabled()
     expect(saveSection?.contains(deleteButton)).toBe(false)
-    expect(screen.getByText(/no endpoint to delete/)).toBeInTheDocument()
+  })
+
+  it('is disabled for a principal without config:write, however it is typed', async () => {
+    stubs.getShow = showResponse
+    stubs.listConfigObjects = () => contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    renderDetail('winter-ridge-2026', { session: signedIn([]) })
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Type Winter Ridge 2026 to confirm'), { target: { value: 'Winter Ridge 2026' } })
+    expect(screen.getByRole('button', { name: 'Delete show' })).toBeDisabled()
+  })
+
+  it('types the name, sends the delete, and lands on the shows list', async () => {
+    stubs.getShow = showResponse
+    stubs.listConfigObjects = () => contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    const deleteSpy = vi.fn(() => Promise.resolve())
+    stubs.deleteShow = deleteSpy
+    renderDetail('winter-ridge-2026', { session: signedIn(['config:write']) })
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Type Winter Ridge 2026 to confirm'), { target: { value: 'Winter Ridge 2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete show' }))
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('winter-ridge-2026'))
+    await waitFor(() => expect(screen.getByText('Shows list landing')).toBeInTheDocument())
+  })
+
+  it('renders the coordinator’s refusal verbatim and keeps the show when the delete is refused', async () => {
+    stubs.getShow = showResponse
+    stubs.listConfigObjects = () => contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    stubs.deleteShow = () =>
+      Promise.reject(new ApiError('show "winter-ridge-2026" is currently named by show.active; change show.active to something else first, then delete show "winter-ridge-2026"', 409))
+    renderDetail('winter-ridge-2026', { session: signedIn(['config:write']) })
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Type Winter Ridge 2026 to confirm'), { target: { value: 'Winter Ridge 2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete show' }))
+    await waitFor(() => expect(screen.getByText(/is currently named by show.active/)).toBeInTheDocument())
+    expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument()
   })
 
   it('renders the compact active-revision summary, not a list heading, for the show object’s own revisions', async () => {
