@@ -48,9 +48,9 @@ async function sha256Hex(file: File): Promise<string> {
 export type AssetScope = { kind: 'show'; showId: string } | { kind: 'all' }
 
 const FSEQ_EXTENSION = 'fseq'
-const AUDIO_EXTENSIONS = new Set(['wav', 'mp3'])
+const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'flac', 'ogg'])
 const MEDIA_EXTENSIONS = new Set(['mp4', 'png'])
-const ACCEPTED_EXTENSIONS_LABEL = 'FSEQ, WAV, MP3, MP4, or PNG'
+const ACCEPTED_EXTENSIONS_LABEL = 'FSEQ, WAV, MP3, FLAC, OGG, MP4, or PNG'
 
 function fileExtension(filename: string): string {
   const dot = filename.lastIndexOf('.')
@@ -872,7 +872,7 @@ function AssetUploadForm({
       <div className="sm-inspector__group">
         <label className="sm-dropzone" htmlFor="asset-upload-file">
           <span className="sm-body">{file === null ? 'Choose a file' : file.name}</span>
-          <span className="sm-data sm-small sm-faint">FSEQ · WAV · MP3 · MP4 · PNG</span>
+          <span className="sm-data sm-small sm-faint">FSEQ · WAV · MP3 · FLAC · OGG · MP4 · PNG</span>
           <input id="asset-upload-file" type="file" onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)} />
         </label>
         {file !== null && (

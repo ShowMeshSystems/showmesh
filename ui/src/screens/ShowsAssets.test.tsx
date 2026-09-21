@@ -254,6 +254,16 @@ describe('Shows · Assets tab', () => {
     expect(uploadSpy.mock.calls[0]![1]).toMatchObject({ mediaType: 'audio' })
   })
 
+  it('picking a .flac file infers mediaType audio, matching what the coordinator decodes', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'preshow-bed.flac')] },
+    })
+    expect(await screen.findByLabelText('Media type')).toHaveValue('audio')
+  })
+
   it('picking a media file infers mediaType media and submits it', async () => {
     setup(['asset:write'], [])
     fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
@@ -282,7 +292,7 @@ describe('Shows · Assets tab', () => {
       target: { files: [new File(['bytes'], 'notes.txt')] },
     })
     expect(await screen.findByText(/is not an accepted file type/)).toBeInTheDocument()
-    expect(screen.getByText(/FSEQ, WAV, MP3, MP4, or PNG/)).toBeInTheDocument()
+    expect(screen.getByText(/FSEQ, WAV, MP3, FLAC, OGG, MP4, or PNG/)).toBeInTheDocument()
 
     const uploadSpy = vi.fn(() => new Promise(() => {}))
     stubs.uploadAsset = uploadSpy
