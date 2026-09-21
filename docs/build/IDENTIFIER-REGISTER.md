@@ -889,6 +889,12 @@ right and never inferred from the pipeline still being up.
 |---|---|---|
 | `node.audio.clock.alignment` | shipped | C6/C7; measured since 2026-09-11 (PR #451): the node's signed program-to-LTC offset in ms, observedAt = the node's own sample time |
 | `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
+| `node.audio.clock.local` | reserved | ADR-052 decisions 2 and 3: the node's local clock, the interface its program route leaves through, or the operator's override. Replaces `node.audio.clock.domain` |
+| `node.audio.clock.local.source` | reserved | ADR-052 decisions 2 and 3 (`derived`, `override`). Replaces `node.audio.clock.provenance` |
+| `node.audio.sync.state` | reserved | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
+| `node.audio.sync.follows` | reserved | ADR-052 decision 6: what the local clock follows, the PTP grandmaster identity and domain; blank when free-running |
+| `node.audio.sync.offset_ns` | reserved | ADR-052 decision 6: offset from the global clock; omitted when not measured |
+| `node.audio.sync.rate_ppm` | reserved | ADR-052 decision 6: measured rate adjustment in parts per million; omitted until a build measures it, never invented |
 
 **Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
 software could measure program-to-LTC alignment, so it was never derived
@@ -1221,6 +1227,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
+| `audio-ltc-separate-local-clock` | reserved | ADR-052 decision 4: a node's LTC route names a different interface than its program route and no local clock override says they share a clock. Reported only as `warning`, never `failingCondition` |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
@@ -1357,6 +1364,7 @@ value, and it does not belong here.
 | `duckFadeDurationMs` | shipped | how long the duck ramp takes when an announcement bed starts. Backfilled into every stored `audio.settings` revision by schema v24, which is what puts it in scope for this section |
 | `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
+| `localClockOverride` | reserved | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
