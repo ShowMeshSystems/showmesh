@@ -622,7 +622,7 @@ register entry comes from the code and never from a plan.
 | `asset.upload` | shipped | Track E |
 | `asset.fetch` | shipped | Track E |
 | `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
-| `asset.delete` | reserved | `DELETE /api/v1/assets/{id}`: an operator removing one registered asset row from the coordinator. Distinct from `asset.remove`, which deletes held content from a node's disk |
+| `asset.delete` | shipped | `DELETE /api/v1/assets/{id}`: an operator removing one registered asset row from the coordinator. Distinct from `asset.remove`, which deletes held content from a node's disk |
 | `asset.remove` | shipped | SM-306: `POST /api/v1/nodes/{nodeId}/assets/remove`'s own audit entries (Kind distinguishes dispatch from outcome), the same action string the Agent operation names table above reserves for the MQTT command itself |
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
@@ -792,7 +792,7 @@ divergence was reconciled below.
 | `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
 | `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
 | `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
-| `node.clock.ptp.frequency_ppm` | reserved | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which is `node.audio.sync.rate_ppm` |
+| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which is `node.audio.sync.rate_ppm` |
 | `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
 | `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
 | `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
