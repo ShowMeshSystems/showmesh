@@ -101,6 +101,17 @@ func TestOpenAPIAssetsResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("DELETE /assets/{id} with no body: status = %d, want 400; body: %s", noConfirmResp.StatusCode, noConfirmBody)
 	}
 	assertMatchesSchema(t, c, "Problem", noConfirmBody)
+
+	// A pinned-asset 409, this seam's own minted type: proves the shape
+	// api/openapi.yaml now documents for DELETE /assets/{id} against a
+	// real refusal.
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowWeatherDelay(t, api, token, `{"alert":{"delayAssetId":"`+rolledBack.Asset.ID+`"}}`)
+	pinnedResp, pinnedBody := doAssetDelete(t, api.Handler, rolledBack.Asset.ID, auth)
+	if pinnedResp.StatusCode != http.StatusConflict {
+		t.Fatalf("DELETE /assets/{id} pinned by show.weatherdelay: status = %d, want 409; body: %s", pinnedResp.StatusCode, pinnedBody)
+	}
+	assertMatchesSchema(t, c, "Problem", pinnedBody)
 }
 
 // mustDecodeJSON is a tiny local helper so this file does not need to

@@ -337,8 +337,8 @@ func deleteAsset(ctx context.Context, q querier, id string) (AssetRecord, error)
 	return rec, nil
 }
 
-// DeleteAsset is [Tx]'s form — the only form, matching [Tx.CreateAsset]:
-// an asset delete always composes with its audit entry in one transaction
+// DeleteAsset is [Tx]'s form, the only form, matching [Tx.CreateAsset]: an
+// asset delete always composes with its audit entry in one transaction
 // (ADR-024 decision 11).
 func (t *Tx) DeleteAsset(ctx context.Context, id string) (AssetRecord, error) {
 	return deleteAsset(ctx, t.tx, id)

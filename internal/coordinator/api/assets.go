@@ -300,6 +300,16 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	runtimeFilename := filePart.FileName()
+
+	// assetBlobMu (handlers.go) is held read-locked from here through this
+	// request's own metadata transaction below, so a concurrent
+	// handleDeleteAsset (which excludes every upload with its own write
+	// lock) can never count this blob as unreferenced and remove it while
+	// this upload's own row is still landing. Two uploads still run
+	// concurrently with each other; only a delete excludes them.
+	h.assetBlobMu.RLock()
+	defer h.assetBlobMu.RUnlock()
+
 	blob, err := h.deps.AssetBackend.Put(r.Context(), filePart, maxUpload)
 	_ = filePart.Close()
 	switch {
@@ -498,6 +508,115 @@ func (h *handlers) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 
 // --- DELETE /assets/{id} ---
 
+// errAssetPinned is handleDeleteAsset's own refusal (refuseIfAssetPinned):
+// id is named directly by the current show.weatherdelay alert or by a
+// current show.action's announcement media, so deleting it (which also
+// removes the bytes) would leave that reference playing nothing.
+type errAssetPinned struct {
+	assetID string
+	detail  string
+}
+
+func (e *errAssetPinned) Error() string {
+	return fmt.Sprintf("asset %q is pinned: %s", e.assetID, e.detail)
+}
+
+// ProblemTypeAssetPinned is [assetPinnedProblem]'s own type URI. A
+// separate minted type from showconfig.go's config-object-currently-
+// active (same 409, confirm-body, "name what references it" shape): an
+// asset row is not a configuration object, and conflating the two type
+// URIs would let a client's Type-keyed handling silently mix them up.
+const ProblemTypeAssetPinned = problemBaseURI + "asset-pinned"
+
+func assetPinnedProblem(e *errAssetPinned) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeAssetPinned,
+		Title:  "Asset delete refused: this asset is pinned",
+		Status: http.StatusConflict,
+		Detail: e.detail,
+	}
+}
+
+// refuseIfAssetPinned checks whether id is named directly, by id, from
+// outside its own identity tuple: the current show.weatherdelay alert's
+// delayAssetId/cancelNightAssetId, or any current show.action's
+// announcement media (assetsync/announcementfallback.go's own field,
+// carried at target.params.media.assetId). Both keep playing that exact
+// asset's bytes by id, so deleting it out from under either reference
+// would play nothing with no operator-visible reason why.
+func refuseIfAssetPinned(ctx context.Context, tx *store.Tx, id string) error {
+	if detail, err := assetPinnedByWeatherDelay(ctx, tx, id); err != nil {
+		return err
+	} else if detail != "" {
+		return &errAssetPinned{assetID: id, detail: detail}
+	}
+	if detail, err := assetPinnedByShowAction(ctx, tx, id); err != nil {
+		return err
+	} else if detail != "" {
+		return &errAssetPinned{assetID: id, detail: detail}
+	}
+	return nil
+}
+
+func assetPinnedByWeatherDelay(ctx context.Context, tx *store.Tx, id string) (string, error) {
+	obj, err := tx.GetConfigObject(ctx, config.ShowWeatherDelayConfigKind, config.ShowWeatherDelayConfigObjectID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if obj.CurrentRevision == 0 {
+		return "", nil
+	}
+	rev, err := tx.GetConfigRevision(ctx, config.ShowWeatherDelayConfigKind, config.ShowWeatherDelayConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return "", err
+	}
+	var payload config.WeatherDelayPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return "", err
+	}
+	switch id {
+	case payload.Alert.DelayAssetID:
+		return "This asset is the weather delay alert. Choose a different alert in the weather delay settings, then delete it.", nil
+	case payload.Alert.CancelNightAssetID:
+		return "This asset is the weather delay cancel alert. Choose a different alert in the weather delay settings, then delete it.", nil
+	}
+	return "", nil
+}
+
+func assetPinnedByShowAction(ctx context.Context, tx *store.Tx, id string) (string, error) {
+	objs, err := tx.ListConfigObjects(ctx, config.ShowActionConfigKind)
+	if err != nil {
+		return "", err
+	}
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := tx.GetConfigRevision(ctx, config.ShowActionConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return "", err
+		}
+		var payload config.ShowActionPayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return "", err
+		}
+		media, _ := payload.Target.Params["media"].(map[string]any)
+		assetID, _ := media["assetId"].(string)
+		if assetID != id {
+			continue
+		}
+		label := payload.Label
+		if label == "" {
+			label = obj.ID
+		}
+		return fmt.Sprintf("This asset is the announcement media for %q. Choose different media for that action, then delete it.", label), nil
+	}
+	return "", nil
+}
+
 // handleDeleteAsset serves DELETE /api/v1/assets/{id}: a hard delete of
 // one asset row, guarded by asset:write and requiring the same explicit
 // {"confirm":true} body every other delete in this package requires
@@ -505,13 +624,22 @@ func (h *handlers) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 // cannot quietly remove a row. Unlike a config object's DELETE, this is
 // not a tombstone: assets carry no revision history to preserve, and
 // deleting the current row for an identity leaves that identity with no
-// current asset (never promoting a superseded row back — that is
-// rollback's job, ADR-028 decision 10). No refuseIfActive-style check
-// applies here: an asset row is neither a live "what is running now"
-// selector (unlike show.active/night.session.active) nor pinned by name
-// inside a running night session's payload (unlike media.playlist), so
-// this delete carries no active-show or active-night refusal, matching
-// upload's own unconditional posture.
+// current asset (never promoting a superseded row back; that is
+// rollback's job, ADR-028 decision 10).
+//
+// No refuseIfActive-style check applies for an asset row being the live
+// "what is running now" selector or a running night session's own pinned
+// object, matching upload's own unconditional posture there. Two OTHER
+// things do pin an asset by id directly, and refuseIfAssetPinned refuses
+// those: the current show.weatherdelay alert, and a current show.action's
+// announcement media.
+//
+// assetBlobMu (handlers.go) is held write-locked for the whole call, from
+// before the metadata transaction through the blob and rendition removal
+// below: a concurrent upload holds it read-locked from before it stages
+// its own blob until its transaction commits, so this delete can never
+// count a just-staged blob as unreferenced and remove it while that
+// upload's own row is still landing.
 func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ac := authFromContext(r.Context())
@@ -522,10 +650,20 @@ func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.assetBlobMu.Lock()
+	defer h.assetBlobMu.Unlock()
+
 	var deleted store.AssetRecord
 	var blobOrphaned bool
+	var rendition store.AudioRenditionRecord
+	var renditionFound bool
+	var renditionBlobOrphaned bool
 	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		writeNow := h.now()
+
+		if perr := refuseIfAssetPinned(ctx, tx, id); perr != nil {
+			return identity.AuditEntry{}, perr
+		}
 
 		rec, derr := tx.DeleteAsset(ctx, id)
 		if derr != nil {
@@ -539,6 +677,40 @@ func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 		}
 		blobOrphaned = remaining == 0
 
+		// A rendition row is keyed by its ORIGINAL asset's own content
+		// hash, one row per hash (schemaV38's primary key), regardless of
+		// that asset's own mediaType: whenever the last row for a hash is
+		// gone, that hash's own rendition row (if any) is orphaned too,
+		// never gated on the deleted row's mediaType. Removed in this same
+		// transaction as the asset row, row first: a failure between this
+		// and the blob removal below leaves only a harmless orphan blob,
+		// never a ready row naming bytes that are already gone.
+		if blobOrphaned {
+			rend, rerr := tx.GetAudioRendition(ctx, rec.ContentHash)
+			switch {
+			case errors.Is(rerr, store.ErrAudioRenditionNotFound):
+			case rerr != nil:
+				return identity.AuditEntry{}, rerr
+			default:
+				if derr := tx.DeleteAudioRendition(ctx, rec.ContentHash); derr != nil {
+					return identity.AuditEntry{}, derr
+				}
+				rendition = rend
+				renditionFound = true
+				if rend.ContentHash != "" {
+					otherRenditions, cerr := tx.CountAudioRenditionsByContentHash(ctx, rend.ContentHash)
+					if cerr != nil {
+						return identity.AuditEntry{}, cerr
+					}
+					otherAssets, cerr := tx.CountAssetsByContentHash(ctx, rend.ContentHash)
+					if cerr != nil {
+						return identity.AuditEntry{}, cerr
+					}
+					renditionBlobOrphaned = otherRenditions == 0 && otherAssets == 0
+				}
+			}
+		}
+
 		return identity.AuditEntry{
 			Timestamp: writeNow, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
@@ -551,11 +723,15 @@ func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 			Kind: identity.AuditAdmin,
 		}, nil
 	})
-	if errors.Is(writeErr, store.ErrAssetNotFound) {
+	var pinned *errAssetPinned
+	switch {
+	case errors.As(writeErr, &pinned):
+		writeProblem(w, h.logger, now, assetPinnedProblem(pinned))
+		return
+	case errors.Is(writeErr, store.ErrAssetNotFound):
 		writeProblem(w, h.logger, now, assetNotFoundProblem(id))
 		return
-	}
-	if writeErr != nil {
+	case writeErr != nil:
 		h.writeInternalError(w, now, "delete asset", writeErr)
 		return
 	}
@@ -566,25 +742,21 @@ func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 	// own nudge after a write that changes what is current.
 	h.deps.AssetSyncNudger.Nudge()
 
-	// Bytes are removed only after the row is gone and only when nothing
-	// else references them (ADR-028 decision 4: bytes are metadata-driven,
-	// never owned by one row). This runs after commit and is best-effort:
-	// a failure here leaves an orphaned blob, the same accepted outcome
-	// handlePostAssetUpload's own doc comment already allows for a staged
-	// blob whose row was never registered.
+	// Bytes are removed only after their owning row is gone (row, then
+	// bytes, for the original asset and for its rendition alike) and only
+	// when nothing else references them (ADR-028 decision 4: bytes are
+	// metadata-driven, never owned by one row). This runs after commit and
+	// is best-effort: a failure here leaves an orphaned blob, the same
+	// accepted outcome handlePostAssetUpload's own doc comment already
+	// allows for a staged blob whose row was never registered.
 	if blobOrphaned {
 		if derr := h.deps.AssetBackend.Delete(r.Context(), deleted.ContentHash); derr != nil {
 			h.logWarn("failed to remove orphaned asset blob", "assetId", deleted.ID, "contentHash", deleted.ContentHash, "error", derr)
 		}
-		if deleted.MediaType == "audio" {
-			if rend, rerr := h.deps.Assets.GetAudioRendition(r.Context(), deleted.ContentHash); rerr == nil && rend.Status == store.AudioRenditionStatusReady {
-				if derr := h.deps.AssetBackend.Delete(r.Context(), rend.ContentHash); derr != nil {
-					h.logWarn("failed to remove orphaned audio rendition blob", "assetId", deleted.ID, "contentHash", rend.ContentHash, "error", derr)
-				}
-			}
-			if derr := h.deps.Assets.DeleteAudioRendition(r.Context(), deleted.ContentHash); derr != nil {
-				h.logWarn("failed to remove orphaned audio rendition row", "assetId", deleted.ID, "contentHash", deleted.ContentHash, "error", derr)
-			}
+	}
+	if renditionFound && renditionBlobOrphaned {
+		if derr := h.deps.AssetBackend.Delete(r.Context(), rendition.ContentHash); derr != nil {
+			h.logWarn("failed to remove orphaned audio rendition blob", "assetId", deleted.ID, "contentHash", rendition.ContentHash, "error", derr)
 		}
 	}
 

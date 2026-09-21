@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -353,5 +356,468 @@ func TestDeleteAssetAudioRemovesRenditionBlob(t *testing.T) {
 	}
 	if _, err := st.GetAudioRendition(context.Background(), uploaded.Asset.ContentHash); !errors.Is(err, store.ErrAudioRenditionNotFound) {
 		t.Errorf("audio rendition row after delete: err = %v, want ErrAudioRenditionNotFound", err)
+	}
+}
+
+// --- rendition blob reference counting (review finding 2) ---
+
+// TestDeleteAssetKeepsRenditionBlobReferencedByAnotherRenditionRow proves
+// a rendition BLOB (content-addressed like any other, ADR-028 decision 4)
+// is not removed while a second audio_renditions row still names it,
+// even though the asset row that triggered this delete's own original
+// rendition row is gone.
+func TestDeleteAssetKeepsRenditionBlobReferencedByAnotherRenditionRow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	backend := deps.AssetBackend
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	fields := validAssetFields()
+	fields["mediaType"] = "audio"
+	_, uploadBody := doAssetUpload(t, api.Handler, fields, "a.wav", minimalTestWAV(1), auth)
+	var uploaded v1AssetResponseForTest
+	mustDecodeJSON(t, uploadBody, &uploaded)
+
+	renditionBlob, err := backend.Put(context.Background(), bytes.NewReader([]byte("rendered wav bytes shared by two originals")), 1<<20)
+	if err != nil {
+		t.Fatalf("stage rendition blob: %v", err)
+	}
+	if err := st.SetAudioRenditionReady(context.Background(), uploaded.Asset.ContentHash, store.AudioRenditionReady{
+		ContentHash: renditionBlob.ContentHash, SizeBytes: renditionBlob.SizeBytes, DurationMillis: 500, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("set audio rendition ready for the deleted asset: %v", err)
+	}
+	// A SECOND original hash (never an asset row in this test; only the
+	// audio_renditions row matters for this proof) transcodes to the SAME
+	// bytes and still names renditionBlob's hash after the delete below.
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:some-other-original", store.AudioRenditionReady{
+		ContentHash: renditionBlob.ContentHash, SizeBytes: renditionBlob.SizeBytes, DurationMillis: 500, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("set audio rendition ready for the surviving original: %v", err)
+	}
+
+	if resp, body := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, want 204; body: %s", resp.StatusCode, body)
+	}
+
+	// This asset's own rendition ROW is gone (nothing resolves it by its
+	// original hash any longer)...
+	if _, err := st.GetAudioRendition(context.Background(), uploaded.Asset.ContentHash); !errors.Is(err, store.ErrAudioRenditionNotFound) {
+		t.Errorf("deleted asset's own rendition row: err = %v, want ErrAudioRenditionNotFound", err)
+	}
+	// ...but the BLOB survives: the surviving row still names it.
+	if _, _, err := backend.Open(context.Background(), renditionBlob.ContentHash); err != nil {
+		t.Fatalf("rendition blob after delete: Open = %v, want it to still exist (another audio_renditions row references it)", err)
+	}
+	if _, err := st.GetAudioRendition(context.Background(), "sha256:some-other-original"); err != nil {
+		t.Errorf("surviving rendition row: %v, want it untouched", err)
+	}
+}
+
+// TestDeleteAssetKeepsRenditionBlobReferencedByAnAssetRow proves a
+// rendition blob is not removed when an ASSET row's own content hash
+// happens to equal it, even though no other audio_renditions row does.
+func TestDeleteAssetKeepsRenditionBlobReferencedByAnAssetRow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	backend := deps.AssetBackend
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	// The bytes an unrelated fseq asset will carry ARE the rendition's own
+	// content, uploaded first so its content hash is known.
+	renditionBytes := []byte("this happens to be both a rendition and an fseq")
+	fseqFields := validAssetFields()
+	fseqFields["target"] = "render-02"
+	_, fseqBody := doAssetUpload(t, api.Handler, fseqFields, "coincidence.fseq", renditionBytes, auth)
+	var fseqAsset v1AssetResponseForTest
+	mustDecodeJSON(t, fseqBody, &fseqAsset)
+
+	audioFields := validAssetFields()
+	audioFields["mediaType"] = "audio"
+	audioFields["target"] = "render-01"
+	_, audioBody := doAssetUpload(t, api.Handler, audioFields, "a.wav", minimalTestWAV(2), auth)
+	var audioAsset v1AssetResponseForTest
+	mustDecodeJSON(t, audioBody, &audioAsset)
+
+	if err := st.SetAudioRenditionReady(context.Background(), audioAsset.Asset.ContentHash, store.AudioRenditionReady{
+		ContentHash: fseqAsset.Asset.ContentHash, SizeBytes: int64(len(renditionBytes)), DurationMillis: 500, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("set audio rendition ready: %v", err)
+	}
+
+	if resp, body := doAssetDelete(t, api.Handler, audioAsset.Asset.ID, auth); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, want 204; body: %s", resp.StatusCode, body)
+	}
+
+	if _, _, err := backend.Open(context.Background(), fseqAsset.Asset.ContentHash); err != nil {
+		t.Fatalf("blob after delete: Open = %v, want it to still exist (the fseq asset row still references it)", err)
+	}
+	if _, err := st.GetAsset(context.Background(), fseqAsset.Asset.ID); err != nil {
+		t.Errorf("unrelated fseq asset: %v, want it untouched", err)
+	}
+}
+
+// TestDeleteAssetCleansUpRenditionRegardlessOfDeletedRowsMediaType is
+// review finding 4: two rows share one content hash, one "audio" and one
+// "media"; deleting the audio row first, then the media row last, must
+// still clean up the rendition once the LAST of the two goes, not only
+// when the deleted row itself is "audio".
+func TestDeleteAssetCleansUpRenditionRegardlessOfDeletedRowsMediaType(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	backend := deps.AssetBackend
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	content := minimalTestWAV(3)
+	audioFields := validAssetFields()
+	audioFields["mediaType"] = "audio"
+	audioFields["sequence"] = "shared-audio-media"
+	_, audioBody := doAssetUpload(t, api.Handler, audioFields, "a.wav", content, auth)
+	var audioAsset v1AssetResponseForTest
+	mustDecodeJSON(t, audioBody, &audioAsset)
+
+	mediaFields := validAssetFields()
+	mediaFields["mediaType"] = "media"
+	mediaFields["sequence"] = "shared-audio-media"
+	_, mediaBody := doAssetUpload(t, api.Handler, mediaFields, "a.wav", content, auth)
+	var mediaAsset v1AssetResponseForTest
+	mustDecodeJSON(t, mediaBody, &mediaAsset)
+
+	if audioAsset.Asset.ContentHash != mediaAsset.Asset.ContentHash {
+		t.Fatalf("setup: expected both uploads to share a content hash; audio=%q media=%q", audioAsset.Asset.ContentHash, mediaAsset.Asset.ContentHash)
+	}
+
+	renditionBlob, err := backend.Put(context.Background(), bytes.NewReader([]byte("rendered wav bytes")), 1<<20)
+	if err != nil {
+		t.Fatalf("stage rendition blob: %v", err)
+	}
+	if err := st.SetAudioRenditionReady(context.Background(), audioAsset.Asset.ContentHash, store.AudioRenditionReady{
+		ContentHash: renditionBlob.ContentHash, SizeBytes: renditionBlob.SizeBytes, DurationMillis: 500, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("set audio rendition ready: %v", err)
+	}
+
+	// Delete the AUDIO row first. Its own mediaType matches "audio", but a
+	// "media" row still shares the content hash, so nothing is orphaned yet.
+	if resp, body := doAssetDelete(t, api.Handler, audioAsset.Asset.ID, auth); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete audio row: status = %d, want 204; body: %s", resp.StatusCode, body)
+	}
+	if _, err := st.GetAudioRendition(context.Background(), audioAsset.Asset.ContentHash); err != nil {
+		t.Fatalf("rendition row after deleting the audio row (media row still shares the hash): %v, want it to still exist", err)
+	}
+	if _, _, err := backend.Open(context.Background(), renditionBlob.ContentHash); err != nil {
+		t.Fatalf("rendition blob after deleting the audio row: Open = %v, want it to still exist", err)
+	}
+
+	// Delete the MEDIA row last: the mediaType of THIS deleted row is
+	// "media", never "audio", but it is the LAST row for that content
+	// hash, so the rendition must be cleaned up now.
+	if resp, body := doAssetDelete(t, api.Handler, mediaAsset.Asset.ID, auth); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete media row: status = %d, want 204; body: %s", resp.StatusCode, body)
+	}
+	if _, err := st.GetAudioRendition(context.Background(), audioAsset.Asset.ContentHash); !errors.Is(err, store.ErrAudioRenditionNotFound) {
+		t.Errorf("rendition row after deleting the last (media) row: err = %v, want ErrAudioRenditionNotFound", err)
+	}
+	if _, _, err := backend.Open(context.Background(), renditionBlob.ContentHash); !errors.Is(err, assetstore.ErrNotFound) {
+		t.Errorf("rendition blob after deleting the last (media) row: Open err = %v, want ErrNotFound", err)
+	}
+}
+
+// --- pinned assets (review finding 5) ---
+
+func mustPutShowWeatherDelay(t *testing.T, api *API, token, body string) {
+	t.Helper()
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.weatherdelay", body, map[string]string{"Authorization": "Bearer " + token})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.weatherdelay: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+}
+
+func TestDeleteAssetRefusedWhenPinnedByWeatherDelayAlert(t *testing.T) {
+	api, st, auth := assetsAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+
+	_, uploadBody := doAssetUpload(t, api.Handler, validAssetFields(), "alert.fseq", []byte("alert bytes"), auth)
+	var uploaded v1AssetResponseForTest
+	mustDecodeJSON(t, uploadBody, &uploaded)
+
+	mustPutShowWeatherDelay(t, api, token, `{"alert":{"delayAssetId":"`+uploaded.Asset.ID+`"}}`)
+
+	resp, body := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var p v1ProblemForTest
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v; body: %s", err, body)
+	}
+	const want = "This asset is the weather delay alert. Choose a different alert in the weather delay settings, then delete it."
+	if p.Detail != want {
+		t.Errorf("detail = %q, want %q", p.Detail, want)
+	}
+
+	if _, err := st.GetAsset(context.Background(), uploaded.Asset.ID); err != nil {
+		t.Errorf("pinned asset after a refused delete: %v, want it untouched", err)
+	}
+}
+
+func TestDeleteAssetRefusedWhenPinnedByWeatherDelayCancelNightAlert(t *testing.T) {
+	api, _, auth := assetsAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+
+	_, uploadBody := doAssetUpload(t, api.Handler, validAssetFields(), "cancel.fseq", []byte("cancel bytes"), auth)
+	var uploaded v1AssetResponseForTest
+	mustDecodeJSON(t, uploadBody, &uploaded)
+
+	mustPutShowWeatherDelay(t, api, token, `{"alert":{"cancelNightAssetId":"`+uploaded.Asset.ID+`"}}`)
+
+	resp, body := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var p v1ProblemForTest
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v; body: %s", err, body)
+	}
+	const want = "This asset is the weather delay cancel alert. Choose a different alert in the weather delay settings, then delete it."
+	if p.Detail != want {
+		t.Errorf("detail = %q, want %q", p.Detail, want)
+	}
+}
+
+func TestDeleteAssetRefusedWhenPinnedByShowActionAnnouncementMedia(t *testing.T) {
+	api, st, auth := assetsAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+
+	_, uploadBody := doAssetUpload(t, api.Handler, validAssetFields(), "welcome.fseq", []byte("welcome bytes"), auth)
+	var uploaded v1AssetResponseForTest
+	mustDecodeJSON(t, uploadBody, &uploaded)
+
+	mustPutAction(t, api, token, "start-announcement", `{
+		"show": "halloween-2026",
+		"label": "Welcome announcement",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": "render-01",
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.apply",
+			"params": {"media": {"assetId": "`+uploaded.Asset.ID+`", "contentHash": "`+uploaded.Asset.ContentHash+`", "filename": "welcome.fseq", "sizeBytes": 12}}
+		}
+	}`)
+
+	resp, body := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var p v1ProblemForTest
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v; body: %s", err, body)
+	}
+	const want = `This asset is the announcement media for "Welcome announcement". Choose different media for that action, then delete it.`
+	if p.Detail != want {
+		t.Errorf("detail = %q, want %q", p.Detail, want)
+	}
+
+	if _, err := st.GetAsset(context.Background(), uploaded.Asset.ID); err != nil {
+		t.Errorf("pinned asset after a refused delete: %v, want it untouched", err)
+	}
+}
+
+// TestDeleteAssetUnpinnedAssetStillDeletesWithWeatherDelayAndShowActionConfigured
+// proves the two pin checks are id-specific: a weather delay alert and an
+// announcement both naming OTHER asset ids must never block deleting an
+// unrelated asset.
+func TestDeleteAssetUnpinnedAssetStillDeletesWithWeatherDelayAndShowActionConfigured(t *testing.T) {
+	api, st, auth := assetsAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+
+	_, pinnedBody := doAssetUpload(t, api.Handler, validAssetFields(), "pinned.fseq", []byte("pinned bytes"), auth)
+	var pinned v1AssetResponseForTest
+	mustDecodeJSON(t, pinnedBody, &pinned)
+	mustPutShowWeatherDelay(t, api, token, `{"alert":{"delayAssetId":"`+pinned.Asset.ID+`"}}`)
+	mustPutAction(t, api, token, "start-announcement", `{
+		"show": "halloween-2026",
+		"label": "Welcome announcement",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": "render-01",
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.apply",
+			"params": {"media": {"assetId": "`+pinned.Asset.ID+`", "contentHash": "`+pinned.Asset.ContentHash+`", "filename": "pinned.fseq", "sizeBytes": 12}}
+		}
+	}`)
+
+	otherFields := validAssetFields()
+	otherFields["sequence"] = "unrelated"
+	_, otherBody := doAssetUpload(t, api.Handler, otherFields, "other.fseq", []byte("other bytes"), auth)
+	var other v1AssetResponseForTest
+	mustDecodeJSON(t, otherBody, &other)
+
+	if resp, body := doAssetDelete(t, api.Handler, other.Asset.ID, auth); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete unrelated asset: status = %d, want 204; body: %s", resp.StatusCode, body)
+	}
+	if _, err := st.GetAsset(context.Background(), other.Asset.ID); !errors.Is(err, store.ErrAssetNotFound) {
+		t.Errorf("deleted asset still present: err = %v, want ErrAssetNotFound", err)
+	}
+	// The pinned asset is unaffected by any of this.
+	if _, err := st.GetAsset(context.Background(), pinned.Asset.ID); err != nil {
+		t.Errorf("pinned asset: %v, want it untouched", err)
+	}
+}
+
+// --- the race (review finding 1) ---
+
+// fakeBlockingDeleteBackend wraps a real assetstore.Backend and, when
+// Delete is called for blockKey, signals started and then blocks on
+// release before calling through - letting a test hold
+// handleDeleteAsset inside its own post-commit blob removal while a
+// second request runs concurrently.
+type fakeBlockingDeleteBackend struct {
+	assetstore.Backend
+	blockKey string
+	started  chan struct{}
+	release  chan struct{}
+}
+
+func (b *fakeBlockingDeleteBackend) Delete(ctx context.Context, key string) error {
+	if key == b.blockKey {
+		close(b.started)
+		<-b.release
+	}
+	return b.Backend.Delete(ctx, key)
+}
+
+// TestDeleteAssetBlobRemovalExcludesConcurrentUpload is review finding
+// 1's own proof: without assetBlobMu, a delete's post-commit blob removal
+// could run concurrently with an upload's Put/registration for the SAME
+// content hash, ending with a current asset row whose bytes are gone.
+// This forces exactly that window (blocks the delete inside its own
+// backend.Delete call, after its metadata transaction has already
+// committed) and proves a concurrent upload of the identical bytes for a
+// different target does not proceed until the delete's write lock
+// releases, and reads back cleanly once both finish. Run with -race.
+func TestDeleteAssetBlobRemovalExcludesConcurrentUpload(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	blocker := &fakeBlockingDeleteBackend{Backend: deps.AssetBackend, started: make(chan struct{}), release: make(chan struct{})}
+	deps.AssetBackend = blocker
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	content := []byte("shared bytes for the race test")
+	fieldsA := validAssetFields()
+	fieldsA["target"] = "render-01"
+	_, bodyA := doAssetUpload(t, api.Handler, fieldsA, "a.fseq", content, auth)
+	var a v1AssetResponseForTest
+	mustDecodeJSON(t, bodyA, &a)
+	blocker.blockKey = a.Asset.ContentHash
+
+	// Built on the test goroutine (uses t); only the already-encoded bytes
+	// cross into the spawned goroutine below.
+	fieldsB := validAssetFields()
+	fieldsB["target"] = "render-02"
+	uploadBodyBuf, uploadContentType := buildAssetUploadMultipartBody(t, fieldsB, "b.fseq", content)
+	uploadBodyBytes := uploadBodyBuf.Bytes()
+
+	deleteStatus := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/assets/"+a.Asset.ID, bytes.NewReader([]byte(`{"confirm":true}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		api.Handler.ServeHTTP(rec, req)
+		deleteStatus <- rec.Result().StatusCode
+	}()
+
+	select {
+	case <-blocker.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete never reached its own blob removal")
+	}
+
+	uploadStatus := make(chan int, 1)
+	uploadBody := make(chan []byte, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(uploadBodyBytes))
+		req.Header.Set("Content-Type", uploadContentType)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		api.Handler.ServeHTTP(rec, req)
+		b, _ := io.ReadAll(rec.Result().Body)
+		uploadStatus <- rec.Result().StatusCode
+		uploadBody <- b
+	}()
+
+	// The concurrent upload must NOT complete while the delete's write
+	// lock is held (proving mutual exclusion, not merely eventual
+	// correctness).
+	select {
+	case <-uploadStatus:
+		t.Fatal("concurrent upload completed before the delete released its blob lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(blocker.release)
+
+	var deleteCode int
+	select {
+	case deleteCode = <-deleteStatus:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete never finished after its block was released")
+	}
+	if deleteCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", deleteCode)
+	}
+
+	var uploadCode int
+	var uploadRespBody []byte
+	select {
+	case uploadCode = <-uploadStatus:
+		uploadRespBody = <-uploadBody
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload never finished after the delete released its write lock")
+	}
+	if uploadCode != http.StatusOK {
+		t.Fatalf("upload status = %d, want 200; body: %s", uploadCode, uploadRespBody)
+	}
+
+	var uploaded v1AssetResponseForTest
+	mustDecodeJSON(t, uploadRespBody, &uploaded)
+	if uploaded.Asset.ContentHash != a.Asset.ContentHash {
+		t.Fatalf("uploaded content hash = %q, want %q", uploaded.Asset.ContentHash, a.Asset.ContentHash)
+	}
+
+	// The bytes are actually readable: the delete never won the race
+	// against this upload's own registration.
+	contentResp, contentBody := doRequest(t, api.Handler, "GET", "/api/v1/assets/"+uploaded.Asset.ID+"/content", auth)
+	if contentResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET content: status = %d, want 200; body: %s", contentResp.StatusCode, contentBody)
+	}
+	if !bytes.Equal(contentBody, content) {
+		t.Fatalf("served content = %q, want %q", contentBody, content)
 	}
 }

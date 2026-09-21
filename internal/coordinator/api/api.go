@@ -1477,10 +1477,6 @@ func (noAssetStore) GetAudioRendition(context.Context, string) (store.AudioRendi
 	return store.AudioRenditionRecord{}, store.ErrAudioRenditionNotFound
 }
 
-func (noAssetStore) DeleteAudioRendition(context.Context, string) error {
-	return nil
-}
-
 // errAssetBackendNotConfigured is [noAssetBackend.Put]'s uniform failure,
 // matching [errCommandStoreNotConfigured]'s identical posture: a write
 // dependency nobody has wired in refuses loudly rather than fabricating a

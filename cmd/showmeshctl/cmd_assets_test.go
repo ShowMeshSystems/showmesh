@@ -205,6 +205,30 @@ func TestCmdAssetsDelete(t *testing.T) {
 	}
 }
 
+// TestCmdAssetsDeletePinnedRefusalPrintsDetail proves the generic
+// problem-printing path (client.go's decodeProblemError, no special
+// casing needed) surfaces a 409 asset-pinned refusal exactly like every
+// other refusal: the coordinator's own Detail text, and exitConflict.
+func TestCmdAssetsDeletePinnedRefusalPrintsDetail(t *testing.T) {
+	const detail = "This asset is the weather delay alert. Choose a different alert in the weather delay settings, then delete it."
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprintf(w, `{"type":"https://showmesh.dev/problems/asset-pinned","title":"Asset delete refused: this asset is pinned","status":409,"detail":%q,"serverTime":"2026-08-10T21:00:00Z"}`, detail)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"delete", "--server", ts.URL, "--confirm", "pinned-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitConflict {
+		t.Fatalf("exit code = %d, want exitConflict; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), detail) {
+		t.Errorf("stderr = %q, want it to contain the coordinator's own detail %q", stderr.String(), detail)
+	}
+}
+
 func TestCmdAssetsDeleteNotFound(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/problem+json")

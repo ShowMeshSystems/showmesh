@@ -930,10 +930,6 @@ type AssetStore interface {
 	// ORIGINAL content hash, or [store.ErrAudioRenditionNotFound] if none
 	// has ever been queued, see mapAssetRendition (assets.go).
 	GetAudioRendition(ctx context.Context, originalContentHash string) (store.AudioRenditionRecord, error)
-	// DeleteAudioRendition removes originalContentHash's rendition row,
-	// once handleDeleteAsset has confirmed no asset row still references
-	// it. A no-op when no row exists for that hash.
-	DeleteAudioRendition(ctx context.Context, originalContentHash string) error
 }
 
 // AudioRenditionNudger requests that the coordinator's background audio

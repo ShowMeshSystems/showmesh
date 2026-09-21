@@ -161,17 +161,54 @@ func (s *Store) GetAudioRendition(ctx context.Context, originalHash string) (Aud
 	return getAudioRendition(ctx, s.db, originalHash)
 }
 
+// GetAudioRendition is [Store.GetAudioRendition]'s [Tx] form: a caller
+// deciding whether to remove a rendition alongside an asset row reads this
+// inside the same transaction as that row's own delete, so the decision
+// and the write it depends on cannot be split by a concurrent writer.
+func (t *Tx) GetAudioRendition(ctx context.Context, originalHash string) (AudioRenditionRecord, error) {
+	return getAudioRendition(ctx, t.tx, originalHash)
+}
+
+func deleteAudioRendition(ctx context.Context, q querier, originalHash string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM audio_renditions WHERE original_content_hash = ?`, originalHash); err != nil {
+		return fmt.Errorf("store: delete audio rendition %q: %w", originalHash, err)
+	}
+	return nil
+}
+
 // DeleteAudioRendition removes originalHash's rendition row, if any. A
 // caller removes this only once it has confirmed no asset row still
-// references originalHash — the row's own bytes are a different backend
+// references originalHash; the row's own bytes are a different backend
 // blob, keyed by the rendition's ContentHash, and are the caller's
 // separate responsibility to remove.
 func (s *Store) DeleteAudioRendition(ctx context.Context, originalHash string) error {
 	guardNotInTx(ctx, "Store.DeleteAudioRendition")
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM audio_renditions WHERE original_content_hash = ?`, originalHash); err != nil {
-		return fmt.Errorf("store: delete audio rendition %q: %w", originalHash, err)
+	return deleteAudioRendition(ctx, s.db, originalHash)
+}
+
+// DeleteAudioRendition is [Store.DeleteAudioRendition]'s [Tx] form: the
+// row is removed in the same transaction as the asset row that made it
+// orphaned, so a caller never observes the two half-applied.
+func (t *Tx) DeleteAudioRendition(ctx context.Context, originalHash string) error {
+	return deleteAudioRendition(ctx, t.tx, originalHash)
+}
+
+func countAudioRenditionsByContentHash(ctx context.Context, q querier, hash string) (int, error) {
+	row := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM audio_renditions WHERE content_hash = ?`, hash)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count audio renditions by content hash: %w", err)
 	}
-	return nil
+	return n, nil
+}
+
+// CountAudioRenditionsByContentHash counts every audio_renditions row
+// (keyed by original content hash) whose OWN rendition ContentHash equals
+// hash. A rendition blob is content-addressed the same way an asset blob
+// is (ADR-028 decision 4), so more than one original file can transcode to
+// identical bytes and share it.
+func (t *Tx) CountAudioRenditionsByContentHash(ctx context.Context, hash string) (int, error) {
+	return countAudioRenditionsByContentHash(ctx, t.tx, hash)
 }
 
 // ListAudioAssetContentHashesNeedingRendition returns every distinct
