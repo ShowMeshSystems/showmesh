@@ -3135,6 +3135,21 @@ export class ApiStore {
   }
 
   /**
+   * `DELETE /api/v1/assets/{id}` (ADR-028). `asset:write` only. Always
+   * sends `{"confirm":true}`, the server's own required body. A hard
+   * delete: no revision history survives.
+   */
+  async deleteAsset(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/assets/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * The same-origin URL for `GET /api/v1/assets/{id}/content` (ADR-028).
    * Never fetched by this store itself — a download is a plain browser
    * navigation/anchor, which carries the session cookie same-origin per

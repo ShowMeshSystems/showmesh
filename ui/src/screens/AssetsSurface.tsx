@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   assetContentUrl,
+  deleteAsset,
   getAssetContent,
   getAssetManifest,
   listAssets,
@@ -15,7 +16,7 @@ import {
   type NodeAssetManifest,
   type UploadProgress,
 } from '../api'
-import { Button, ButtonRow, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, type Tone } from '../kit'
+import { Button, ButtonRow, DeletePanel, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, type Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
@@ -454,6 +455,11 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
                 reload()
                 manifest.reload()
               }}
+              onDeleted={() => {
+                reload()
+                manifest.reload()
+                closeInspector()
+              }}
             />
           )}
         </aside>
@@ -526,12 +532,14 @@ function AssetDetail({
   entries,
   model,
   onRolledBack,
+  onDeleted,
 }: {
   asset: Asset
   history: Asset[]
   entries: NodeEntry[]
   model: ReturnType<typeof useModelContext>
   onRolledBack: () => void
+  onDeleted: () => void
 }) {
   const [rollback, setRollback] = useState<RollbackState>({ kind: 'idle' })
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
@@ -539,6 +547,18 @@ function AssetDetail({
   const [resyncing, setResyncing] = useState(false)
   const [resyncError, setResyncError] = useState<string | null>(null)
   const [resyncNote, setResyncNote] = useState<string | null>(null)
+
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const removeAsset = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteAsset(asset.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   const resync = () => {
     if (asset.targetKind !== 'node') return
@@ -754,6 +774,20 @@ function AssetDetail({
           {resyncing ? 'Re-syncing…' : 'Re-sync to node'}
         </Button>
       </div>
+
+      <DeletePanel
+        title="Delete this asset"
+        confirmNoun="the asset's own sequence name"
+        confirmValue={asset.sequence}
+        actionLabel="Delete asset"
+        deleting={deleting}
+        error={deleteError}
+        allowed={writeGate.allowed}
+        disallowedReason={writeGate.allowed ? undefined : writeGate.reason}
+        onDelete={removeAsset}
+      >
+        <p className="sm-small sm-muted">Deleting removes this one registered file from ShowMesh; it does not bring back an older file for the same sequence. Any copy already sent to a node stays there.</p>
+      </DeletePanel>
     </div>
   )
 }

@@ -4546,3 +4546,38 @@ describe('ApiStore: show-configuration deletes', () => {
     await expect(store.deleteShow('winter-ridge-2026')).rejects.toThrow(/show\.active/)
   })
 })
+
+describe('ApiStore: asset delete (ADR-028)', () => {
+  it('deleteAsset() sends DELETE with {"confirm":true} to /assets/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteAsset('asset id/1')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/assets/asset%20id%2F1')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('rejects on a 409 (asset-pinned) rather than resolving as if it succeeded', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 409, makeProblem({ status: 409, detail: 'asset "bench-resting" is named by the active weather delay alert' }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.deleteAsset('bench-resting')).rejects.toThrow(/weather delay/)
+  })
+})

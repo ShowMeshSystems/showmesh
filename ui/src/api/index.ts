@@ -472,6 +472,7 @@ export {
   getShowActiveRevisions,
   listAssets,
   uploadAsset,
+  deleteAsset,
   assetContentUrl,
   getAssetContent,
   getAssetManifest,

@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetContent: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   resyncNodeAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetManifest: (() => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes: [] })) as (...args: never[]) => Promise<unknown>,
 }))
 
@@ -25,6 +26,7 @@ vi.mock('../api', async () => {
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
     getAssetContent: (...args: never[]) => stubs.getAssetContent(...args),
     resyncNodeAssets: (...args: never[]) => stubs.resyncNodeAssets(...args),
+    deleteAsset: (...args: never[]) => stubs.deleteAsset(...args),
     getAssetManifest: (...args: never[]) => stubs.getAssetManifest(...args),
   }
 })
@@ -466,5 +468,62 @@ describe('Shows · Assets tab', () => {
     // The node this asset row was itself uploaded for still shows, Unknown, since this fixture gave it no manifest entry of its own.
     expect(screen.getAllByText('showmesh-node-01').length).toBeGreaterThan(0)
     expect(screen.getByText('Uploaded for this node.')).toBeInTheDocument()
+  })
+
+  describe('deleting an asset', () => {
+    it('is inert until the sequence is typed exactly, then deletes and closes the inspector', async () => {
+      setup(['asset:write'], [asset()])
+      fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+      const deleteButton = screen.getByRole('button', { name: 'Delete asset' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteAsset = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type carol-of-the-bells to confirm'), { target: { value: 'carol-of-the-bells' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('asset-1'))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the asset listed when the delete is refused', async () => {
+      setup(['asset:write'], [asset()])
+      stubs.deleteAsset = () => Promise.reject(new ApiError('asset "carol-of-the-bells" is named by the active weather delay alert.', 409))
+      fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type carol-of-the-bells to confirm'), { target: { value: 'carol-of-the-bells' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete asset' }))
+      expect(await screen.findByText('asset "carol-of-the-bells" is named by the active weather delay alert.')).toBeInTheDocument()
+      expect(screen.getByRole('row', { name: 'View carol-of-the-bells for media-front' })).toBeInTheDocument()
+    })
+
+    it('is disabled without asset:write, however it is typed', async () => {
+      setup([], [asset()])
+      fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type carol-of-the-bells to confirm'), { target: { value: 'carol-of-the-bells' } })
+      expect(screen.getByRole('button', { name: 'Delete asset' })).toBeDisabled()
+    })
+
+    it('switching to a different asset clears the refusal and the typed confirm text', async () => {
+      const first = asset()
+      const second = asset({ id: 'asset-2', sequence: 'jingle-bell-rock', target: 'media-back' })
+      setup(['asset:write'], [first, second])
+      stubs.deleteAsset = () => Promise.reject(new ApiError('asset "carol-of-the-bells" is named by the active weather delay alert.', 409))
+
+      fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type carol-of-the-bells to confirm'), { target: { value: 'carol-of-the-bells' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete asset' }))
+      expect(await screen.findByText('asset "carol-of-the-bells" is named by the active weather delay alert.')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('row', { name: 'View jingle-bell-rock for media-back' }))
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'jingle-bell-rock' })).toBeInTheDocument())
+      expect(screen.queryByText('asset "carol-of-the-bells" is named by the active weather delay alert.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Type jingle-bell-rock to confirm')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Delete asset' })).toBeDisabled()
+    })
   })
 })
