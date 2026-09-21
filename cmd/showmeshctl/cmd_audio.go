@@ -509,16 +509,16 @@ func printAudioNodeUsage(w io.Writer) {
 Read or write the coordinator's audio.node configuration objects, one per
 node: which discovered output route carries program and
 which channels on it, which channel on that SAME route carries LTC, and
-the clock domain the operator declares them to share (never inferred — no
-software call proves two outputs share a hardware clock). Reads and
+optionally the local clock, named only when the node cannot see it
+(no software call proves two interfaces share one clock). Reads and
 writes both require config:write, admin only.
 
 "set" is refused with the node's own advertised routes named in the error
 unless BOTH --program-route and --ltc-route are already present in that
 node's own capability advertisement (audio.output.local / audio.output.ltc)
 — never accepted on the operator's claim alone. --program-route and
---ltc-route must also name the SAME route: program and LTC leave through
-one interface in one clock domain. --program-channels lists distinct,
+--ltc-route must also name the SAME route, so timecode cannot drift
+against the music. --program-channels lists distinct,
 positive, 1-based indices (1,2 for reference stereo, 1 for mono);
 --ltc-channel is a positive 1-based index that must not appear in
 --program-channels. Advertise the node first (the agent must be running

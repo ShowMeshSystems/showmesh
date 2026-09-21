@@ -201,7 +201,7 @@ var _ collector.Collector = (*Collector)(nil)
 // SessionObservationDeleter is nodeaudio's own view onto *store.Store's
 // deletion surface for audio_session rows Poll already knows are gone.
 // *store.Store satisfies this directly, the same live-wiring precedent
-// [ClockDomainSource] already uses.
+// [LocalClockSource] already uses.
 type SessionObservationDeleter interface {
 	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
 	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
@@ -935,10 +935,8 @@ func lookupLocalClock(ctx context.Context, src LocalClockSource, nodeID string) 
 	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
 		return "", "", time.Time{}, fmt.Sprintf("stored audio.node configuration payload is malformed: %v", err)
 	}
-	if payload.LocalClockOverride != "" {
-		return payload.LocalClockOverride, LocalClockSourceOverride, rev.CreatedAt, ""
-	}
-	return payload.ProgramRoute, LocalClockSourceDerived, rev.CreatedAt, ""
+	local, localSource = config.AudioNodeLocalClock(payload)
+	return local, localSource, rev.CreatedAt, ""
 }
 
 // buildValue stamps ObservedAt from the caller-supplied observedAt:

@@ -594,7 +594,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// different interface than its program audio, with nothing saying the
 	// two share a clock. Never a failure. See
 	// [audioLTCSeparateLocalClockReadiness]'s own doc comment.
-	if warning, err := audioLTCSeparateLocalClockReadiness(ctx, st); err != nil {
+	if warning, err := audioLTCSeparateLocalClockReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
@@ -1304,55 +1304,101 @@ func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, 
 // timecode then drifts against the music. Warning only: the show still
 // plays, and the operator decides what to do about the timecode.
 //
-// Silent for a program-only node (no LTC route at all), for the ordinary
-// case of one interface carrying both, and whenever an override is set. A
-// stored object this coordinator cannot read is skipped rather than
-// reported: "I could not check" must not read as a confirmed drift. Every
-// object is checked in id order and the first match is named, matching
-// this file's other deterministic fleet-wide conditions.
-func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store) (string, error) {
-	objs, err := st.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+// Scoped exactly like [audioNodeNotMultisyncRemoteReadiness] one function
+// up, and for the same reason: only a node this Playlist's own Cues
+// resolve an audio output to, and only while p.Show is the active show,
+// so an unrelated node's declaration never lands on this Playlist's
+// report. Silent for a program-only node, for one interface carrying
+// both, and whenever an override is set. A stored object this coordinator
+// cannot read is skipped rather than reported: "I could not check" must
+// not read as a confirmed drift.
+func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: list audio.node objects: %w", err)
+		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
 	}
-	ids := make([]string, 0, len(objs))
-	revisions := make(map[string]int64, len(objs))
-	for _, obj := range objs {
-		if obj.CurrentRevision == 0 {
-			continue
-		}
-		ids = append(ids, obj.ID)
-		revisions[obj.ID] = obj.CurrentRevision
+	if !active.Configured || active.ShowID != p.Show {
+		return "", nil
 	}
-	sort.Strings(ids)
 
-	for _, id := range ids {
-		rev, err := st.GetConfigRevision(ctx, config.AudioNodeConfigKind, id, revisions[id])
-		if errors.Is(err, store.ErrConfigRevisionNotFound) {
-			continue
-		}
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
 		if err != nil {
-			return "", fmt.Errorf("fppreconcile: read audio.node %q revision %d: %w", id, revisions[id], err)
+			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
-		var payload config.AudioNodePayload
-		if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+		carriesAudio := false
+		for _, e := range catalog.Entries {
+			if e.Outputs.Audio != nil {
+				carriesAudio = true
+				break
+			}
+		}
+		if !carriesAudio {
 			continue
 		}
-		if warning := audioNodeLocalClockWarning(id, payload); warning != "" {
+		payload, ok, err := activeAudioNodePayload(ctx, st, n.NodeID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			continue
+		}
+		if warning := audioNodeLocalClockWarning(n.NodeID, payload); warning != "" {
 			return warning, nil
 		}
 	}
 	return "", nil
 }
 
+// activeAudioNodePayload reads nodeID's active audio.node object with
+// encoding/json rather than [config.DecodeAudioNodePayload]: this check
+// must be able to read a stored object whose routes differ, which that
+// decode refuses. ok is false when there is nothing readable to check.
+func activeAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (config.AudioNodePayload, bool, error) {
+	obj, err := st.GetConfigObject(ctx, config.AudioNodeConfigKind, nodeID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return config.AudioNodePayload{}, false, nil
+	}
+	if err != nil {
+		return config.AudioNodePayload{}, false, fmt.Errorf("fppreconcile: read audio.node %q: %w", nodeID, err)
+	}
+	if obj.CurrentRevision == 0 {
+		return config.AudioNodePayload{}, false, nil
+	}
+	rev, err := st.GetConfigRevision(ctx, config.AudioNodeConfigKind, nodeID, obj.CurrentRevision)
+	if errors.Is(err, store.ErrConfigRevisionNotFound) {
+		return config.AudioNodePayload{}, false, nil
+	}
+	if err != nil {
+		return config.AudioNodePayload{}, false, fmt.Errorf("fppreconcile: read audio.node %q revision %d: %w", nodeID, obj.CurrentRevision, err)
+	}
+	var payload config.AudioNodePayload
+	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+		return config.AudioNodePayload{}, false, nil
+	}
+	return payload, true, nil
+}
+
 // audioNodeLocalClockWarning is condition 16's decision for one decoded
 // object, separated so it is testable without a store and readable on its
-// own: empty means nothing to warn about.
+// own: empty means nothing to warn about. The comparison is between
+// INTERFACES, not route strings: two devices on one card share its sample
+// clock.
 func audioNodeLocalClockWarning(nodeID string, p config.AudioNodePayload) string {
-	if p.LTCRoute == "" || p.LTCRoute == p.ProgramRoute || p.LocalClockOverride != "" {
+	if p.LTCRoute == "" || p.LocalClockOverride != "" {
+		return ""
+	}
+	ltc, program := config.AudioNodeRouteInterface(p.LTCRoute), config.AudioNodeRouteInterface(p.ProgramRoute)
+	if ltc == program {
 		return ""
 	}
 	return fmt.Sprintf(
 		"node %q sends LTC out %s and program audio out %s, and nothing says the two run on one local clock, so timecode will drift against the music. Move LTC onto the program interface, or name this node's local clock to record that they share a clock.",
-		nodeID, p.LTCRoute, p.ProgramRoute)
+		nodeID, ltc, program)
 }

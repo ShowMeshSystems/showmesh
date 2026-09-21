@@ -2,7 +2,6 @@ package fppreconcile
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -18,6 +17,14 @@ func TestAudioNodeLocalClockWarning(t *testing.T) {
 		payload config.AudioNodePayload
 		want    bool
 	}{
+		{
+			name: "LTC on a second device of the same card",
+			payload: config.AudioNodePayload{
+				ProgramRoute: "hw:CARD=M4,DEV=0", LTCRoute: "hw:CARD=M4,DEV=1",
+				ProgramChannels: []int{1, 2}, LTCChannel: 1,
+			},
+			want: false,
+		},
 		{
 			name: "LTC on a second interface",
 			payload: config.AudioNodePayload{
@@ -64,37 +71,26 @@ func TestAudioNodeLocalClockWarning(t *testing.T) {
 	}
 }
 
-// TestAudioLTCSeparateLocalClockReadinessReadsTheStore proves the check
-// reaches a stored object, including one whose routes differ. Such an
-// object is written here directly: the write path refuses two different
-// routes, so this warning covers a stored object the API would not
-// currently accept.
-func TestAudioLTCSeparateLocalClockReadinessReadsTheStore(t *testing.T) {
+// TestPlaylistReadinessAudioLTCSeparateLocalClockSilentOnOneInterface
+// proves the condition runs in the whole readiness path and says nothing
+// for the ordinary node, one interface carrying both.
+//
+// The warning's own firing case cannot be reached from here yet:
+// DecodeAudioNodePayload still refuses an LTC route that differs from the
+// program route, and assetsync's cue-catalog resolution decodes every
+// declared node's object, so a stored object of that shape fails this
+// whole report before condition 16 is reached. The decision itself is
+// covered by TestAudioNodeLocalClockWarning above, so the warning works
+// the day that refusal is lifted.
+func TestPlaylistReadinessAudioLTCSeparateLocalClockSilentOnOneInterface(t *testing.T) {
 	st := openTestStore(t)
-	putAudioNode(t, st, "audio-01")
+	p := multisyncReadyPlaylistFixture(t, st)
 
-	warning, err := audioLTCSeparateLocalClockReadiness(context.Background(), st)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
-		t.Fatalf("audioLTCSeparateLocalClockReadiness: %v", err)
+		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if warning != "" {
-		t.Fatalf("warning = %q, want none for a single-interface node", warning)
-	}
-
-	raw, err := json.Marshal(config.AudioNodePayload{
-		ProgramRoute: "hw:CARD=M4,DEV=0", LTCRoute: "hw:CARD=Solo,DEV=0",
-		ProgramChannels: []int{1, 2}, LTCChannel: 1,
-	})
-	if err != nil {
-		t.Fatalf("marshal audio.node payload: %v", err)
-	}
-	putConfig(t, st, config.AudioNodeConfigKind, "audio-02", string(raw))
-
-	warning, err = audioLTCSeparateLocalClockReadiness(context.Background(), st)
-	if err != nil {
-		t.Fatalf("audioLTCSeparateLocalClockReadiness: %v", err)
-	}
-	if !strings.Contains(warning, "audio-02") {
-		t.Fatalf("warning = %q, want it to name audio-02", warning)
+	if !report.Ready || strings.Contains(report.Warning, "drift against the music") {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no drift warning for a node whose LTC and program share one route", report.Ready, report.Warning)
 	}
 }

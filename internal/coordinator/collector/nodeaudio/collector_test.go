@@ -555,8 +555,10 @@ func TestLTCStateMapping(t *testing.T) {
 
 // TestPollReportsLocalClockFromConfigNotFromTheNode proves the local clock
 // observation comes from the coordinator's own audio.node configuration,
-// never from anything the node itself reported, and that an unset override
-// means it is derived from the program route (ADR-052 decision 2).
+// never from anything the node itself reported, that an unset override
+// means it is derived from the program route (ADR-052 decision 2), and
+// that the derived value names the interface rather than the whole route:
+// one card carries one sample clock.
 func TestPollReportsLocalClockFromConfigNotFromTheNode(t *testing.T) {
 	declaredAt := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
 	src := configuredAudioNodeSource(t, "hw:CARD=PCH,DEV=0", "", declaredAt)
@@ -567,14 +569,30 @@ func TestPollReportsLocalClockFromConfigNotFromTheNode(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	local := findObs(t, obs, SignalClockLocal)
-	if local.Value != "hw:CARD=PCH,DEV=0" {
-		t.Errorf("local clock = %v, want the configured program route", local.Value)
+	if local.Value != "hw:CARD=PCH" {
+		t.Errorf("local clock = %v, want the interface the program route leaves through", local.Value)
 	}
 	if local.ObservedAt == nil || !local.ObservedAt.Equal(declaredAt) {
 		t.Errorf("local clock ObservedAt = %v, want the declaration's own CreatedAt %v", local.ObservedAt, declaredAt)
 	}
-	if got := findObs(t, obs, SignalClockLocalSource); got.Value != LocalClockSourceDerived {
-		t.Errorf("local clock source = %v, want %q", got.Value, LocalClockSourceDerived)
+	if got := findObs(t, obs, SignalClockLocalSource); got.Value != config.AudioNodeLocalClockDerived {
+		t.Errorf("local clock source = %v, want %q", got.Value, config.AudioNodeLocalClockDerived)
+	}
+}
+
+// TestPollReportsLocalClockOfANonALSARoute proves a route this package
+// cannot read a card out of, such as a PipeWire node name, is its own
+// interface and is reported verbatim.
+func TestPollReportsLocalClockOfANonALSARoute(t *testing.T) {
+	const route = "alsa_output.usb-MOTU_M4-00.pro-output-0"
+	src := configuredAudioNodeSource(t, route, "", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	st := NewStore(WithLocalClockSource(src))
+	st.Put("audio-01", samplePayload(), time.Now())
+
+	obs, _ := New(st).Poll(context.Background())
+
+	if got := findObs(t, obs, SignalClockLocal); got.Value != route {
+		t.Errorf("local clock = %v, want %q verbatim", got.Value, route)
 	}
 }
 
@@ -592,8 +610,8 @@ func TestPollReportsLocalClockOverride(t *testing.T) {
 	if got := findObs(t, obs, SignalClockLocal); got.Value != "house word clock" {
 		t.Errorf("local clock = %v, want the operator's override", got.Value)
 	}
-	if got := findObs(t, obs, SignalClockLocalSource); got.Value != LocalClockSourceOverride {
-		t.Errorf("local clock source = %v, want %q", got.Value, LocalClockSourceOverride)
+	if got := findObs(t, obs, SignalClockLocalSource); got.Value != config.AudioNodeLocalClockOverride {
+		t.Errorf("local clock source = %v, want %q", got.Value, config.AudioNodeLocalClockOverride)
 	}
 }
 

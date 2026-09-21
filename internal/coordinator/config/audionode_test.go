@@ -795,3 +795,49 @@ func TestDecodeAudioNodePayloadLocalClockOverride(t *testing.T) {
 		t.Errorf("DecodeAudioNodePayload(localClockOverride null) = %v, want a localClockOverride refusal", verr)
 	}
 }
+
+// TestAudioNodeLocalClock covers ADR-052's derivation: the override when
+// an operator named one, otherwise the interface the program route leaves
+// through. One card carries one sample clock, so two devices on it are
+// one local clock; a route in any other form is its own interface.
+func TestAudioNodeLocalClock(t *testing.T) {
+	cases := []struct {
+		name       string
+		payload    AudioNodePayload
+		wantLocal  string
+		wantSource string
+	}{
+		{
+			name:       "ALSA route by card name",
+			payload:    AudioNodePayload{ProgramRoute: "hw:CARD=M4,DEV=1"},
+			wantLocal:  "hw:CARD=M4",
+			wantSource: AudioNodeLocalClockDerived,
+		},
+		{
+			name:       "ALSA route by card index",
+			payload:    AudioNodePayload{ProgramRoute: "plughw:1,0"},
+			wantLocal:  "plughw:1",
+			wantSource: AudioNodeLocalClockDerived,
+		},
+		{
+			name:       "PipeWire node name",
+			payload:    AudioNodePayload{ProgramRoute: "alsa_output.usb-MOTU_M4-00.pro-output-0"},
+			wantLocal:  "alsa_output.usb-MOTU_M4-00.pro-output-0",
+			wantSource: AudioNodeLocalClockDerived,
+		},
+		{
+			name:       "operator override",
+			payload:    AudioNodePayload{ProgramRoute: "hw:CARD=M4,DEV=0", LocalClockOverride: "house word clock"},
+			wantLocal:  "house word clock",
+			wantSource: AudioNodeLocalClockOverride,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			local, source := AudioNodeLocalClock(tc.payload)
+			if local != tc.wantLocal || source != tc.wantSource {
+				t.Errorf("AudioNodeLocalClock = %q/%q, want %q/%q", local, source, tc.wantLocal, tc.wantSource)
+			}
+		})
+	}
+}

@@ -4687,7 +4687,8 @@ paths:
       description: >-
         Requires `config:write` (admin only). `id` is the node id and must
         pass the same syntax a node id must satisfy. This is a FULL
-        REPLACEMENT: every field is required on every write. `programRoute`
+        REPLACEMENT: a field this write omits is cleared, not carried
+        forward. `programRoute`
         and `ltcRoute` are each cross-checked, LIVE, against this node's
         OWN most recent capability advertisement (`audio.output.local` /
         `audio.output.ltc`) - never accepted on the operator's claim
@@ -15761,13 +15762,14 @@ components:
       description: >-
         The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039):
         the body PUT /config/audio.node/{id}
-        accepts (a full replacement - every required field non-null and
+        accepts (a full replacement: every field the write omits is
+        cleared, and every required field must be non-null and
         non-empty), and the "payload" member of GET
         /config/audio.node/{id}'s response. `programRoute` and `ltcRoute`
         name discovered output routes (device identities the node itself
-        reported) and, when both are given, MUST name the same route:
-        program and LTC leave through one interface in one clock domain,
-        so two different route names are refused. `programChannels` is
+        reported) and, when both are given, MUST name the same route, so
+        timecode cannot drift against the music: two different route
+        names are refused. `programChannels` is
         the ordered, distinct, 1-based channel indices on that route
         carrying program audio ([1, 2] for reference stereo, [1] for
         mono); `ltcChannel` is the 1-based index carrying LTC and must
@@ -15802,8 +15804,8 @@ components:
         pre-ADR-045 audio.node object already implicitly held, since an
         installation had exactly one and it always carried both program
         and LTC. At most one audio.node across the installation may carry
-        `program+ltc` at a time (ADR-018's one clock domain, one LTC
-        emitter); a second is refused, naming both node ids. `zone` is
+        `program+ltc` at a time (ADR-018: one LTC emitter); a second is
+        refused, naming both node ids. `zone` is
         the operator's own name for the independent speaker zone this
         node drives, present only when `role` is `zone` - refused on any
         other role, since an ignored field would read as an applied one.
@@ -16159,8 +16161,9 @@ components:
         channel already claimed by programChannels), and
         "audio-node-route-mismatch" (a non-empty ltcRoute naming a
         DIFFERENT device route from programRoute: program and LTC leave
-        through one interface in one clock domain, ADR-018, so the two
-        must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to
+        through one interface so timecode cannot drift against the music,
+        ADR-018, so the two must name the same route or ltcRoute must be
+        absent). Two are this contract's own additions, both scoped to
         `POST /integrations/fpp/playlist-entry-observations`:
         "unsupported-observation-schema-version" (`schemaVersion` is not
         `1`, `400`) and "observation-entry-key-mismatch" (the coordinator

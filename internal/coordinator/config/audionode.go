@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -251,6 +253,42 @@ type OutputLatencyPayload struct {
 	// value is only valid for the configuration it was measured under.
 	Configuration string `json:"configuration,omitempty"`
 }
+
+// AudioNodeLocalClockDerived and AudioNodeLocalClockOverride are the two
+// ways a node's local clock is known (ADR-052 decisions 2 and 3): read
+// off its program route, or named by the operator.
+const (
+	AudioNodeLocalClockDerived  = "derived"
+	AudioNodeLocalClockOverride = "override"
+)
+
+// AudioNodeLocalClock is p's local clock and which of the two ways it was
+// known: [LocalClockOverride] when the operator named one, otherwise the
+// interface p's program route leaves through.
+func AudioNodeLocalClock(p AudioNodePayload) (local, source string) {
+	if p.LocalClockOverride != "" {
+		return p.LocalClockOverride, AudioNodeLocalClockOverride
+	}
+	return AudioNodeRouteInterface(p.ProgramRoute), AudioNodeLocalClockDerived
+}
+
+// AudioNodeRouteInterface is the interface an output route leaves
+// through: one card carries one sample clock, so "hw:CARD=M4,DEV=0" and
+// "hw:CARD=M4,DEV=1" are one local clock. A route in any other form, such
+// as a PipeWire node name, is its own interface and is returned verbatim.
+func AudioNodeRouteInterface(route string) string {
+	if !alsaRoutePrefix.MatchString(route) {
+		return route
+	}
+	if comma := strings.Index(route, ","); comma >= 0 {
+		return route[:comma]
+	}
+	return route
+}
+
+// alsaRoutePrefix matches the ALSA device-name forms this installation's
+// nodes advertise ("hw:1,0", "plughw:CARD=M4,DEV=0").
+var alsaRoutePrefix = regexp.MustCompile(`^(plug)?(hw|dmix|dsnoop):`)
 
 // EncodeAudioNodePayload marshals p into config_revisions.payload_json's
 // column shape. p is assumed already valid (the product of

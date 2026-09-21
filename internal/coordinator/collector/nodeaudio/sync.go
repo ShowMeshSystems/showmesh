@@ -12,14 +12,6 @@ import (
 // node.audio.sync.state/.follows/.offset_ns/.rate_ppm. Nothing here
 // measures anything itself.
 
-// LocalClockSourceDerived and LocalClockSourceOverride are the two values
-// node.audio.clock.local.source carries: read off the configured program
-// route, or named by the operator's localClockOverride (ADR-052).
-const (
-	LocalClockSourceDerived  = "derived"
-	LocalClockSourceOverride = "override"
-)
-
 // The three values node.audio.sync.state carries (ADR-052 decision 6).
 // SyncStateLocked requires both a locked clock provider and a pipeline
 // built on that clock: either alone leaves the output free-running.
@@ -36,7 +28,6 @@ const (
 func syncObservations(nodeID string, p mqttproto.AudioPayload, rep report, clockStat ClockStatusSource) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
-	observedAt := p.ObservedAt
 
 	// An empty clock source is a node with no engine built, or an agent
 	// that predates the field: neither is evidence about sync.
@@ -51,10 +42,20 @@ func syncObservations(nodeID string, p mqttproto.AudioPayload, rep report, clock
 		return notCollectedSync(res, source, "this node has never reported its clock status", rep.receivedAt)
 	}
 
+	// Every value below comes from the clock report, so all of them carry
+	// its own evidence time: stamped with the audio report's, a clock
+	// report that stopped hours ago would keep reading as current.
+	observedAt := clock.ObservedAt
+
 	state := syncState(p.EngineClockSource, clock.State)
-	obs := []observation.Observation{
-		buildValue(nodeID, SignalSyncState, state, observedAt, rep),
-		buildValue(nodeID, SignalSyncFollows, syncFollows(state, clock), observedAt, rep),
+	obs := []observation.Observation{buildValue(nodeID, SignalSyncState, state, observedAt, rep)}
+
+	follows, followsKnown := syncFollows(state, clock)
+	if followsKnown {
+		obs = append(obs, buildValue(nodeID, SignalSyncFollows, follows, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSyncFollows, source,
+			"this node's clock provider did not report a grandmaster for this reading", rep.receivedAt))
 	}
 
 	if state != SyncStateFreeRunning && clock.OffsetKnown {
@@ -91,15 +92,19 @@ func syncState(engineClockSource, clockState string) string {
 
 // syncFollows names the global clock being followed: the grandmaster
 // identity, plus the domain when the provider reported one. Blank while
-// free-running or when no grandmaster was reported.
-func syncFollows(state string, clock mqttproto.ClockPayload) string {
-	if state == SyncStateFreeRunning || !clock.GMKnown || clock.GrandmasterIdentity == "" {
-		return ""
+// free-running, which is a value. known is false when a following node's
+// provider reported no grandmaster, which is not a value.
+func syncFollows(state string, clock mqttproto.ClockPayload) (follows string, known bool) {
+	if state == SyncStateFreeRunning {
+		return "", true
+	}
+	if !clock.GMKnown || clock.GrandmasterIdentity == "" {
+		return "", false
 	}
 	if !clock.DomainKnown {
-		return "PTP " + clock.GrandmasterIdentity
+		return "PTP " + clock.GrandmasterIdentity, true
 	}
-	return "PTP " + clock.GrandmasterIdentity + ":" + strconv.FormatInt(clock.Domain, 10)
+	return "PTP " + clock.GrandmasterIdentity + ":" + strconv.FormatInt(clock.Domain, 10), true
 }
 
 func syncOffsetAbsentReason(state string) string {

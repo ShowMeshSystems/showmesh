@@ -170,8 +170,8 @@ func TestToNodePushesProgramOnlyAudioNodeWithoutLTCKeys(t *testing.T) {
 	if params["programRoute"] != payload.ProgramRoute {
 		t.Errorf("programRoute = %v, want %v", params["programRoute"], payload.ProgramRoute)
 	}
-	if _, present := params["clockDomain"]; present {
-		t.Errorf("params carries clockDomain = %v; the retired field must not be pushed", params["clockDomain"])
+	if params["clockDomain"] == "" || params["clockDomain"] == nil {
+		t.Errorf("clockDomain = %v; an agent older than ADR-052 requires it", params["clockDomain"])
 	}
 }
 
@@ -439,7 +439,8 @@ func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 // TestToNodePushesLocalClockOverrideOnlyWhenSet proves the ADR-052 field
 // reaches the node when an operator set it, and that the key is absent
 // otherwise: an empty string pushed as a value would read on the node as
-// a local clock named "".
+// a local clock named "". It also pins the two retired keys an agent
+// older than ADR-052 still requires, filled from the local clock.
 func TestToNodePushesLocalClockOverrideOnlyWhenSet(t *testing.T) {
 	cs := newFakeConfigStore()
 	set := config.AudioNodePayload{
@@ -463,6 +464,10 @@ func TestToNodePushesLocalClockOverrideOnlyWhenSet(t *testing.T) {
 	if params["localClockOverride"] != "house word clock" {
 		t.Errorf("localClockOverride = %v, want %q", params["localClockOverride"], "house word clock")
 	}
+	if params["clockDomain"] != "house word clock" || params["clockDomainProvenance"] != config.AudioNodeLocalClockOverride {
+		t.Errorf("retired keys = %v/%v, want the local clock and %q",
+			params["clockDomain"], params["clockDomainProvenance"], config.AudioNodeLocalClockOverride)
+	}
 
 	derived := config.AudioNodePayload{
 		ProgramRoute:    "hw:CARD=X,DEV=0",
@@ -483,5 +488,9 @@ func TestToNodePushesLocalClockOverrideOnlyWhenSet(t *testing.T) {
 	}
 	if _, present := params["localClockOverride"]; present {
 		t.Errorf("params carries localClockOverride = %v; the key must be absent when the local clock is derived", params["localClockOverride"])
+	}
+	if params["clockDomain"] != "hw:CARD=X" || params["clockDomainProvenance"] != config.AudioNodeLocalClockDerived {
+		t.Errorf("retired keys = %v/%v, want the derived local clock and %q",
+			params["clockDomain"], params["clockDomainProvenance"], config.AudioNodeLocalClockDerived)
 	}
 }

@@ -146,3 +146,36 @@ func TestSyncNoClockStatusSourceWiredIsNotCollected(t *testing.T) {
 		t.Errorf("sync state absence = %q, want %q", got.Absence, observation.StateNotCollected)
 	}
 }
+
+// TestSyncCarriesTheClockReportsOwnEvidenceTime proves every sync signal
+// is stamped with the clock report's own ObservedAt, not the audio
+// report's: a node still publishing audio while its clock report stopped
+// hours ago must not read as locked right now.
+func TestSyncCarriesTheClockReportsOwnEvidenceTime(t *testing.T) {
+	clockObservedAt := sampleObservedAt.Add(-3 * time.Hour)
+	clock := lockedClockPayload()
+	clock.ObservedAt = &clockObservedAt
+	obs := syncObs(t, "phc", fakeClockStatusSource{payload: clock, have: true})
+
+	for _, sig := range []observation.SignalID{SignalSyncState, SignalSyncFollows, SignalSyncOffsetNs} {
+		got := findObs(t, obs, sig)
+		if got.ObservedAt == nil || !got.ObservedAt.Equal(clockObservedAt) {
+			t.Errorf("%s ObservedAt = %v, want the clock report's own %v", sig, got.ObservedAt, clockObservedAt)
+		}
+	}
+}
+
+// TestSyncFollowsIsNotCollectedWithoutAGrandmaster proves a following node
+// whose provider reported no grandmaster reports not collected rather than
+// a present empty string, which would read as "follows nothing". Blank
+// stays correct only while free-running.
+func TestSyncFollowsIsNotCollectedWithoutAGrandmaster(t *testing.T) {
+	clock := lockedClockPayload()
+	clock.GMKnown, clock.GrandmasterIdentity = false, ""
+	obs := syncObs(t, "phc", fakeClockStatusSource{payload: clock, have: true})
+
+	got := findObs(t, obs, SignalSyncFollows)
+	if got.Absence != observation.StateNotCollected {
+		t.Errorf("sync follows absence = %q, want %q", got.Absence, observation.StateNotCollected)
+	}
+}
