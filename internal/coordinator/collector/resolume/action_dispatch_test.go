@@ -555,12 +555,15 @@ func TestDispatchLaunchClipPersistentClipIgnoresDeck(t *testing.T) {
 
 // --- The composition-identity gate (§3.6, acceptance criterion 6) ---------
 
+// TestDispatchRefusesWhenIdentityUnknown uses clearLayer, not blackout: the
+// emergency blackout is the one action this state does not refuse (see
+// TestDispatchBlackoutIgnoresTheIdentityGate below).
 func TestDispatchRefusesWhenIdentityUnknown(t *testing.T) {
 	now := time.Now()
 	arena := newFakeArena(&now)
 	d := newTestActionDispatcher(t, arena, &now, SurveySnapshot{}) // zero value: SurveyRan false
 
-	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	out, err := d.Dispatch(context.Background(), ActionClearLayer, ActionParams{LayerID: testLayerOne})
 	if err != nil {
 		t.Fatalf("Dispatch error = %v", err)
 	}
@@ -674,6 +677,116 @@ func TestDispatchExemptActionIsNotRefusedForStaleIdentityEvidence(t *testing.T) 
 	}
 	if out.DispatchedAt.IsZero() {
 		t.Errorf("DispatchedAt is zero, so nothing was dispatched")
+	}
+}
+
+// identityGateExemptTestStates is the three identity states the emergency
+// blackout must dispatch through unrefused (owner ruling, TRACK-D-D3-SPEC.md
+// §3.6): no survey has ever completed, a completed survey found the identity
+// false, and a completed survey found it unknown. Every one of these refused
+// blackout before that ruling was implemented.
+var identityGateExemptTestStates = []struct {
+	name string
+	snap func(now time.Time) SurveySnapshot
+}{
+	{"no survey has ever run", func(now time.Time) SurveySnapshot { return SurveySnapshot{} }},
+	{"identity is false", func(now time.Time) SurveySnapshot {
+		snap := identifiedSnapshot(now)
+		snap.Identity = IdentityFalse
+		return snap
+	}},
+	{"identity is unknown", func(now time.Time) SurveySnapshot {
+		snap := identifiedSnapshot(now)
+		snap.Identity = IdentityUnknown
+		return snap
+	}},
+}
+
+// TestDispatchBlackoutIgnoresTheIdentityGate proves blackout is dispatched
+// and confirmed in every one of [identityGateExemptTestStates].
+func TestDispatchBlackoutIgnoresTheIdentityGate(t *testing.T) {
+	for _, tt := range identityGateExemptTestStates {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			arena := newFakeArena(&now)
+			arena.layers[testLayerOne] = &faLayer{
+				bypassedParamID: 9001, masterParamID: 9002, master: 1,
+				activeClip: idPtr(testClipA),
+			}
+			arena.layers[testLayerTwo] = &faLayer{
+				bypassedParamID: 9011, masterParamID: 9012, master: 1,
+				activeClip: idPtr(testClipB),
+			}
+			arena.layers[3000000000003] = &faLayer{bypassedParamID: 9021, masterParamID: 9022, master: 1}
+
+			d := newTestActionDispatcher(t, arena, &now, tt.snap(now))
+			out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+			if err != nil {
+				t.Fatalf("Dispatch error = %v", err)
+			}
+			if out.State != ActionConfirmed {
+				t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionConfirmed, out.Reason)
+			}
+			if !out.ConfirmedAt.After(out.DispatchedAt) {
+				t.Errorf("ConfirmedAt = %s, want strictly after DispatchedAt %s (confirmation must post-date dispatch)", out.ConfirmedAt, out.DispatchedAt)
+			}
+		})
+	}
+}
+
+// TestNonBlackoutActionsStillRefuseOnTheIdentityGate is a table test over
+// [actionRegistry] itself, so an action registered later is covered without
+// editing this test: every action other than the emergency blackout must
+// still be refused by the identity gate in all three
+// [identityGateExemptTestStates].
+func TestNonBlackoutActionsStillRefuseOnTheIdentityGate(t *testing.T) {
+	genericParams := func(name ActionName) ActionParams {
+		switch name {
+		case ActionLaunchClip:
+			return ActionParams{ClipID: testClipA}
+		case ActionClearLayer, ActionSetLayerBypass, ActionSetLayerMaster:
+			return ActionParams{LayerID: testLayerOne, Bypassed: true, Master: 0.5}
+		case ActionLaunchColumn:
+			return ActionParams{ColumnID: testColumnOne}
+		case ActionSelectDeck:
+			return ActionParams{DeckID: testDeckOne}
+		default:
+			return ActionParams{}
+		}
+	}
+
+	for _, tt := range identityGateExemptTestStates {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, e := range actionRegistry {
+				if e.Name == ActionBlackout {
+					continue
+				}
+				t.Run(string(e.Name), func(t *testing.T) {
+					now := time.Now()
+					arena := newFakeArena(&now)
+					arena.layers[testLayerOne] = &faLayer{
+						bypassedParamID: 9001, masterParamID: 9002, master: 1,
+						activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 0.1,
+					}
+					arena.clips[testClipA] = &faClip{connected: "Disconnected", ownerLayer: testLayerOne}
+					arena.columns[testColumnOne] = &faColumn{connected: "Disconnected"}
+
+					d := newTestActionDispatcher(t, arena, &now, tt.snap(now))
+					out, err := d.Dispatch(context.Background(), e.Name, genericParams(e.Name))
+					if err != nil {
+						t.Fatalf("Dispatch error = %v", err)
+					}
+					if out.State != ActionRefused {
+						t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+					}
+					arena.mu.Lock()
+					defer arena.mu.Unlock()
+					if len(arena.requests) != 0 {
+						t.Errorf("requests = %v, want zero — the identity gate must refuse before any read", arena.requests)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -867,6 +980,145 @@ func TestDispatchBlackoutAlreadyEmptyIsUnconfirmable(t *testing.T) {
 	}
 	if out.State != ActionUnconfirmable {
 		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+}
+
+// newTestActionDispatcherNoComposition is [newTestActionDispatcher] over a
+// [Collector] whose [CompositionStore] has never been loaded, so
+// [CompositionStore.Current] reports [ErrCompositionNotUploaded] to every
+// action that resolves against it.
+func newTestActionDispatcherNoComposition(t *testing.T, arena *fakeArena, now *time.Time, snap SurveySnapshot) *ActionDispatcher {
+	t.Helper()
+	srv := httptest.NewServer(arena)
+	t.Cleanup(srv.Close)
+
+	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(now)})
+	c.recordSurveySnapshot(snap)
+
+	return NewActionDispatcher(c, ActionDispatcherOptions{
+		Now: fixedClock(now), Sleep: fakeSleep(now), PollInterval: 10 * time.Millisecond,
+	})
+}
+
+// testActionParamsFor is a minimal by-action [ActionParams], good enough to
+// reach past param resolution to whatever gate a table test over
+// [actionRegistry] is checking.
+func testActionParamsFor(name ActionName) ActionParams {
+	switch name {
+	case ActionLaunchClip:
+		return ActionParams{ClipID: testClipA}
+	case ActionClearLayer, ActionSetLayerBypass, ActionSetLayerMaster:
+		return ActionParams{LayerID: testLayerOne, Bypassed: true, Master: 0.5}
+	case ActionLaunchColumn:
+		return ActionParams{ColumnID: testColumnOne}
+	case ActionSelectDeck:
+		return ActionParams{DeckID: testDeckOne}
+	default:
+		return ActionParams{}
+	}
+}
+
+// TestDispatchBlackoutSendsWhenNoCompositionIsUploaded is the owner ruling
+// that an emergency stop always stops: with nothing uploaded there is no
+// layer list to baseline or confirm against, so blackout still sends
+// disconnect-all and reports unconfirmable with a plain reason, never
+// refused.
+func TestDispatchBlackoutSendsWhenNoCompositionIsUploaded(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+
+	d := newTestActionDispatcherNoComposition(t, arena, &now, identifiedSnapshot(now))
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmable {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+	if out.Reason == "" {
+		t.Error("Reason is empty, want a plain operator-readable reason")
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	found := false
+	for _, req := range arena.requests {
+		if req == "POST /api/v1/composition/disconnect-all" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("disconnect-all was never dispatched; requests = %v", arena.requests)
+	}
+}
+
+// TestNonBlackoutActionsStillRefuseWhenNoCompositionIsUploaded is a table
+// test over [actionRegistry] itself, so an action registered later is
+// covered without editing this test: every action other than the emergency
+// blackout must still refuse outright when nothing has been uploaded — only
+// blackout is exempt from needing a layer list to dispatch.
+func TestNonBlackoutActionsStillRefuseWhenNoCompositionIsUploaded(t *testing.T) {
+	for _, e := range actionRegistry {
+		if e.Name == ActionBlackout {
+			continue
+		}
+		t.Run(string(e.Name), func(t *testing.T) {
+			now := time.Now()
+			arena := newFakeArena(&now)
+
+			d := newTestActionDispatcherNoComposition(t, arena, &now, identifiedSnapshot(now))
+			out, err := d.Dispatch(context.Background(), e.Name, testActionParamsFor(e.Name))
+			if err != nil {
+				t.Fatalf("Dispatch error = %v", err)
+			}
+			if out.State != ActionRefused {
+				t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+			}
+		})
+	}
+}
+
+// TestDispatchBlackoutSendsWhenCompositionHasNoTrackedLayers is the same
+// owner ruling as TestDispatchBlackoutSendsWhenNoCompositionIsUploaded,
+// extended to a composition that IS uploaded but tracks zero layers: there is
+// still no layer list to baseline or confirm against, so blackout sends
+// disconnect-all and reports unconfirmable rather than refusing.
+func TestDispatchBlackoutSendsWhenCompositionHasNoTrackedLayers(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+
+	comp := &resolumecomp.Composition{
+		Name:      "zero-layer fixture",
+		WrittenBy: resolumecomp.WrittenBy{Product: "Resolume Arena", Major: 7, Minor: 23, Micro: 2, Revision: 1},
+		Canvas:    resolumecomp.Canvas{Width: 1920, Height: 1080},
+		Decks:     []resolumecomp.Deck{{ID: testDeckOne.String(), Name: "Deck One"}},
+	}
+
+	d := newTestActionDispatcherWithComposition(t, arena, &now, identifiedSnapshot(now), comp)
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmable {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+	if out.Reason == "" {
+		t.Error("Reason is empty, want a plain operator-readable reason")
+	}
+	if !contains(out.Reason, "was sent") {
+		t.Errorf("Reason = %q, want the fact that the blackout was sent stated first", out.Reason)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	found := false
+	for _, req := range arena.requests {
+		if req == "POST /api/v1/composition/disconnect-all" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("disconnect-all was never dispatched; requests = %v", arena.requests)
 	}
 }
 

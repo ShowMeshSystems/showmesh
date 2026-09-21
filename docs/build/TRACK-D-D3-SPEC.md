@@ -143,9 +143,9 @@ For ~1.2 s after a restart the REST API answers `200 OK` describing a compositio
 that is not the show, carrying the **correct composition name** for the last 0.7 s
 of it. There is no `loading` field.
 
-**No action dispatches while composition identity is `unknown` or `false`.** It is
-refused with the reason stated. D-2 already computes identity; D-3 consumes it and
-does not recompute it.
+**No action dispatches while composition identity is `unknown` or `false`, except the
+emergency `blackout`.** Every other action is refused with the reason stated. D-2
+already computes identity; D-3 consumes it and does not recompute it.
 
 > **Amended 2026-08-15.** The identity reading needs the same freshness fence the deck
 > term needed, and unlike the deck term it cannot be re-read cheaply: the identity check
@@ -163,7 +163,14 @@ does not recompute it.
 > whose WebSocket has been closed for fifteen minutes refuses `blackout`, and a refusal
 > fires no fallback (decision 7), so the operator is worse off than during a coordinator
 > outage. An identity of `unknown` or `false` is a fact about the composition rather than
-> about our pipeline, so it still refuses every action including the exempt ones.
+> about our pipeline, so it still refuses every action except the emergency `blackout`
+> (see the amendment below).
+>
+> **Amended 2026-09-21, owner ruling.** `blackout` is never refused by this gate, on any
+> reading, not only a stale one: a dark wall is what the operator asked for, whatever
+> composition is loaded. `clearLayer` keeps the narrower stale-only carve-out above, since
+> it targets one layer by a reference resolved against the uploaded composition, which an
+> unconfirmed identity cannot vouch for.
 
 ## 4. Confirmation, which is where Step 8's defects lived
 
@@ -353,7 +360,12 @@ unreachable by both shipped clients.
    with the transition at 0.1 s confirms faster, **demonstrating the deadline is
    derived rather than constant**.
 5. A deadline expiry produces `unconfirmed` with a reason, never `failed`.
-6. **No action dispatches while composition identity is unknown or false.**
+6. **No action dispatches while composition identity is unknown or false, except
+   the emergency `blackout`** (§3.6's 2026-09-21 amendment). **`blackout` also still
+   dispatches when no composition has been uploaded at all, or when the uploaded
+   composition has no tracked layers**, since it needs no layer list to send; it
+   reports `unconfirmable`, since with no layer list there is nothing to confirm
+   against.
 7. Every action requires `resolume:action`; a principal without it gets `403` and no
    HTTP request reaches Resolume.
 8. **Every registry entry declares a safety class**, and the build fails if one does

@@ -60,6 +60,11 @@ type ActionDescriptor struct {
 	Name               ActionName
 	SafetyClass        ActionSafetyClass
 	LocalFallbackClass string
+
+	// IdentityGateExempt: never refused by the identity gate on any reading —
+	// TRACK-D-D3-SPEC.md §3.6's owner ruling, [ActionBlackout] only. Stronger
+	// than ActionSafetyClassExempt's stale-only carve-out for clearLayer.
+	IdentityGateExempt bool
 }
 
 // actionRegistry is TRACK-D-D3-SPEC.md §2's table in full, with §5.2's safety
@@ -68,7 +73,7 @@ type ActionDescriptor struct {
 var actionRegistry = []ActionDescriptor{
 	{Name: ActionLaunchClip, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionClearLayer, SafetyClass: ActionSafetyClassExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
-	{Name: ActionBlackout, SafetyClass: ActionSafetyClassExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
+	{Name: ActionBlackout, SafetyClass: ActionSafetyClassExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired, IdentityGateExempt: true},
 	{Name: ActionLaunchColumn, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSelectDeck, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerBypass, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
@@ -84,6 +89,18 @@ func actionSafetyClass(name ActionName) ActionSafetyClass {
 		}
 	}
 	return ActionSafetyClassUndeclared
+}
+
+// actionIdentityGateExempt returns name's declared
+// [ActionDescriptor.IdentityGateExempt], or false for a name not in the
+// registry.
+func actionIdentityGateExempt(name ActionName) bool {
+	for _, e := range actionRegistry {
+		if e.Name == name {
+			return e.IdentityGateExempt
+		}
+	}
+	return false
 }
 
 // ActionOutcomeState is the five-way result TRACK-D-D3-SPEC.md's §3-§4
@@ -599,13 +616,29 @@ func identityGateRefusal(snap SurveySnapshot, now time.Time) (reason string, ref
 // to rest a decision on, asks for a fresh survey so the next attempt is not
 // refused for the same reason.
 //
-// An exempt action is not refused for a STALE reading. Staleness is a fact
+// clearLayer is not refused for a STALE reading only. Staleness is a fact
 // about this package's own evidence pipeline, and refusing a stop for want of
 // our own evidence is the fail-closed inversion ADR-024 decision 11 settled
 // for the audit write. An identity of unknown or false is a fact about the
-// composition, so §3.6's refusal still applies to every action.
+// composition, so §3.6's refusal still applies to clearLayer on those
+// readings.
+//
+// blackout ([ActionDescriptor.IdentityGateExempt]) is never refused here on
+// any reading: a dark wall is what the operator asked for, whatever
+// composition is loaded (owner ruling, TRACK-D-D3-SPEC.md §3.6). It still
+// requests a fresh survey when the reading is stale or missing, same as
+// clearLayer.
 func (d *ActionDispatcher) identityGate(name ActionName, snap SurveySnapshot) (string, bool) {
 	reason, refuse, stale := identityGateRefusal(snap, d.now())
+	if !refuse {
+		return "", false
+	}
+	if actionIdentityGateExempt(name) {
+		if stale || !snap.SurveyRan || !snap.IdentityKnown {
+			d.collector.RequestSurvey(false)
+		}
+		return "", false
+	}
 	if stale {
 		d.collector.RequestSurvey(false)
 		if actionSafetyClass(name) == ActionSafetyClassExempt {
