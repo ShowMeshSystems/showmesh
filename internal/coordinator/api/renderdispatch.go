@@ -773,12 +773,20 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	// evaluateRenderSurfaceState path can ever set it — a transport probe
 	// has no desired pipeline STATE to match and never reports one failed.
 	var pipelineFailed bool
-	if in.Action == "render.transport.probe" {
+	switch in.Action {
+	case "render.transport.probe":
 		// No desired STATE to match (unlike apply/clear/restart): a probe
 		// that correctly reports the runtime absent is just as confirmed
 		// as one that reports it present — see confirmRenderTransportProbe.
 		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
-	} else {
+	case "render.surface.blackout":
+		// A blackout never changes surface.pipeline.state (build item 2: no
+		// pipeline restart on either path), so confirmRenderCommand's own
+		// signal is the wrong evidence to poll here — this is confirmed by
+		// surface.output.mode instead, the same evidence the node's own
+		// frame writer reports its forced black through.
+		confirmed, outcomeState, outcomeReason = h.confirmRenderBlackout(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
+	default:
 		// render.pipeline.restart's wantState "running" is what the surface
 		// already was before this command (that is the whole point of a
 		// restart), so a naive receipt-time fence could trivially confirm
@@ -1123,6 +1131,97 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	}
 	v, _ := o.Value.(bool)
 	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
+}
+
+// renderSignalOutputMode mirrors internal/coordinator/collector/noderender's
+// own SignalSurfaceOutputMode ("surface.output.mode") wire spelling,
+// independently reproduced for the identical each-side-of-a-layering-
+// boundary reason renderSignalPipelineState's own doc comment gives one
+// const above.
+const renderSignalOutputMode = "surface.output.mode"
+
+// confirmRenderBlackout polls surface.output.mode for evidence dated at or
+// after dispatchedAt reporting [mqttproto.RenderDrawingBlackout] — build
+// item 2: render.surface.blackout has no pipeline lifecycle transition to
+// confirm against, so it is confirmed by the same draw-state signal
+// render.surface.apply/clear/restart never touch, never by
+// surface.pipeline.state.
+func (h *handlers) confirmRenderBlackout(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+	if h.deps.Observations == nil {
+		return false, string(observation.StateNotCollected), "no observation source is configured"
+	}
+	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
+	ticker := time.NewTicker(renderCommandPollInterval)
+	defer ticker.Stop()
+
+	for {
+		confirmed, outcomeState, outcomeReason = h.evaluateRenderOutputMode(ctx, nodeID, surfaceID, mqttproto.RenderDrawingBlackout, dispatchedAt)
+		if confirmed {
+			return true, outcomeState, outcomeReason
+		}
+		if !time.Now().Before(absDeadline) {
+			return false, outcomeState, outcomeReason
+		}
+		select {
+		case <-ctx.Done():
+			return false, string(observation.StateUnknownAge), "confirmation aborted before the deadline: " + ctx.Err().Error()
+		case <-ticker.C:
+		}
+	}
+}
+
+// evaluateRenderOutputMode reports confirmed=true once a fresh
+// surface.output.mode reading (dated at or after notBefore) from the node
+// this command was dispatched to equals want, mirroring
+// evaluateRenderSurfaceState's identical fencing (source, ObservedAt,
+// StateCurrent) for a different signal.
+func (h *handlers) evaluateRenderOutputMode(ctx context.Context, nodeID, surfaceID, want string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+	kind := observation.ResourceSurface
+	sig := observation.SignalID(renderSignalOutputMode)
+	wantSource := renderNodeSourceFor(nodeID)
+	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return false, string(observation.StateCollectionFailed), "reading surface.output.mode for confirmation: " + err.Error()
+	}
+	var o observation.Observation
+	var found bool
+	for _, cand := range obs {
+		if cand.Resource.Kind == kind && cand.Resource.ID == surfaceID && cand.Signal == sig && cand.Source == wantSource {
+			o = cand
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.output.mode observation is recorded for this surface from node %s yet", nodeID)
+	}
+	src := o.Source
+	if src == "" {
+		src = "unknown source"
+	}
+	if o.ObservedAt == nil {
+		return false, string(observation.StateUnknownAge), fmt.Sprintf(
+			"surface.output.mode evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+	}
+	if o.ObservedAt.Before(notBefore) {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.output.mode reading has arrived since this command was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
+			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
+	}
+	state := o.StateAt(h.now())
+	if state != observation.StateCurrent {
+		reason := o.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("surface.output.mode evidence state is %s", state)
+		}
+		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
+	}
+	v, _ := o.Value.(string)
+	if v == want {
+		return true, string(state), fmt.Sprintf("surface.output.mode = %q (via %s)", v, src)
+	}
+	return false, string(state), fmt.Sprintf("surface.output.mode = %v, wanted %q (via %s)", o.Value, want, src)
 }
 
 // renderCommandReplayConflictProblem mirrors fppCommandReplayConflictProblem

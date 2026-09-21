@@ -271,6 +271,57 @@ func TestRenderPayloadValidateRejectsStaleWithIdleModeOrFailureOutput(t *testing
 	}
 }
 
+// TestRenderPayloadValidateAcceptsBlackoutDrawing proves the fifth drawing
+// state is a legal report with no idleMode and no failureOutput: forced
+// black is neither an operator-chosen idle cycle nor an extraction failure.
+func TestRenderPayloadValidateAcceptsBlackoutDrawing(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       RenderDrawingBlackout,
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate() with drawing=blackout returned an error: %v", err)
+	}
+}
+
+// TestRenderPayloadValidateRejectsBlackoutWithIdleModeOrFailureOutput proves
+// drawing=blackout carries neither companion field, mirroring drawing=stale's
+// identical rule one state over.
+func TestRenderPayloadValidateRejectsBlackoutWithIdleModeOrFailureOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		idleMode      string
+		failureOutput string
+	}{
+		{"idleMode set", RenderIdleOutputBlack, ""},
+		{"failureOutput set", "", RenderFailureOutputBlack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := RenderPayload{
+				Surfaces: []RenderSurfaceReport{
+					{
+						SurfaceID:     "surface-1",
+						PipelineState: RenderPipelineStateRunning,
+						Drawing:       RenderDrawingBlackout,
+						IdleMode:      tc.idleMode,
+						FailureOutput: tc.failureOutput,
+						ObservedAt:    time.Now(),
+					},
+				},
+			}
+			if err := p.Validate(); err == nil {
+				t.Fatalf("Validate() returned no error for drawing=blackout with idleMode=%q failureOutput=%q", tc.idleMode, tc.failureOutput)
+			}
+		})
+	}
+}
+
 // TestRenderPayloadValidateRejectsUnrecognizedDrawing proves Drawing's
 // closed vocabulary is actually enforced, not merely documented.
 func TestRenderPayloadValidateRejectsUnrecognizedDrawing(t *testing.T) {

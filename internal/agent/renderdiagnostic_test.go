@@ -140,7 +140,7 @@ func coldNodeIn(t *testing.T, diagnosticSurfaceID string) (*renderOperations, *r
 		t.Fatalf("a cold node must hold no persisted assignment, got %d", len(persisted))
 	}
 
-	ops := newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), nil, diagnosticSurfaceID, logs)
+	ops := newRenderOperations(sup, store, pipeline.NewHoldBlackStore(dir), dir, multisync.NewTimeline(clock.now, multisync.Config{}), nil, diagnosticSurfaceID, logs)
 	t.Cleanup(func() {
 		ops.Shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

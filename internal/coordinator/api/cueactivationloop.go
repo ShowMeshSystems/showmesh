@@ -769,8 +769,8 @@ func blackAndSilenceEpisode(obs store.FPPPlaylistEntryObservationRecord) string 
 	return obs.InstanceUUID + "-" + strconv.FormatInt(obs.EntryOccurrenceSequence, 10)
 }
 
-// dispatchBlackAndSilence dispatches render.surface.clear to every surface
-// belonging to a node in nodeIDs, and audio.session.stop against
+// dispatchBlackAndSilence dispatches render.surface.blackout to every
+// surface belonging to a node in nodeIDs, and audio.session.stop against
 // [blackAndSilenceAudioSessionID] on every one of those nodes that has
 // declared an audio.node object — H0.2's full blackAndSilence effect
 // ("the renderer blacks its surfaces and ShowMesh-owned audio silences"),
@@ -785,19 +785,21 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 		return
 	}
 	for _, nodeID := range nodeIDs {
-		h.dispatchBlackAndSilenceClearSurfaces(ctx, now, nodeID, issuer, episode)
+		h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, nodeID, issuer, episode)
 		h.dispatchBlackAndSilenceAudioStop(ctx, now, nodeID, issuer, episode)
 	}
 }
 
-// dispatchBlackAndSilenceClearSurfaces dispatches render.surface.clear to
-// every show.surface belonging to nodeID (H0.2's render half of the
-// blackAndSilence effect) — split out of [dispatchBlackAndSilence] so
-// [dispatchCueScopedBlackAndSilence] can reuse the identical clear logic
-// (idempotency key shape, log lines) for a scoped target that must clear
-// render surfaces WITHOUT also stopping every audio session on the node,
-// which dispatchBlackAndSilence's own node-wide effect always does.
-func (h *handlers) dispatchBlackAndSilenceClearSurfaces(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
+// dispatchBlackAndSilenceBlackoutSurfaces dispatches render.surface.blackout
+// to every show.surface belonging to nodeID (H0.2's render half of the
+// blackAndSilence effect), keeping each surface's assignment and pipeline
+// intact so the NDI source never disappears — split out of
+// [dispatchBlackAndSilence] so [dispatchCueScopedBlackAndSilence] can reuse
+// the identical blackout logic (idempotency key shape, log lines) for a
+// scoped target that must black out render surfaces WITHOUT also stopping
+// every audio session on the node, which dispatchBlackAndSilence's own
+// node-wide effect always does.
+func (h *handlers) dispatchBlackAndSilenceBlackoutSurfaces(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
 	surfaceIDs, err := surfaceIDsForNodeAnyShow(ctx, h.deps.Config, nodeID)
 	if err != nil {
 		h.logWarn("cue activation loop: resolve surfaces for blackAndSilence failed", "nodeId", nodeID, "error", err)
@@ -805,26 +807,26 @@ func (h *handlers) dispatchBlackAndSilenceClearSurfaces(ctx context.Context, now
 	}
 	for _, surfaceID := range surfaceIDs {
 		in := renderDispatchInput{
-			Action: "render.surface.clear", NodeID: nodeID, SurfaceID: surfaceID,
+			Action: "render.surface.blackout", NodeID: nodeID, SurfaceID: surfaceID,
 			Params:         map[string]any{"surfaceId": surfaceID},
-			IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID + "-" + episode,
-			DesiredState:   "stopped",
+			IdempotencyKey: "cueact-blackout-" + nodeID + "-" + surfaceID + "-" + episode,
+			DesiredState:   "blackout",
 			IssuerID:       issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 			Form: issuer.Form, CredentialID: issuer.CredentialID,
 		}
 		result, problem, err := h.executeRenderDispatch(ctx, now, in)
 		switch {
 		case err != nil:
-			h.logWarn("cue activation loop: blackAndSilence clear dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "error", err)
+			h.logWarn("cue activation loop: blackAndSilence blackout dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "error", err)
 		case problem != nil:
-			h.logWarn("cue activation loop: blackAndSilence clear dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "detail", problem.Detail)
+			h.logWarn("cue activation loop: blackAndSilence blackout dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "detail", problem.Detail)
 		case result.Replay:
-			// Not a failure: this episode's clear was already
+			// Not a failure: this episode's blackout was already
 			// dispatched on an earlier tick and this is a repeat
 			// tick of the SAME episode — logged so a suppressed
 			// dispatch is visible evidence, never a silent no-op
 			// (TRACK-H-H3-SPEC.md section 6).
-			h.logDebug("cue activation loop: blackAndSilence clear suppressed as a replay of an unchanged episode", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
+			h.logDebug("cue activation loop: blackAndSilence blackout suppressed as a replay of an unchanged episode", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
 		}
 	}
 }
@@ -832,19 +834,19 @@ func (h *handlers) dispatchBlackAndSilenceClearSurfaces(ctx context.Context, now
 // dispatchCueScopedBlackAndSilence fails targets to black, each scoped to
 // exactly the outputs its own refused Cue declared for it (Eric's ruling:
 // "it should not fail for the entire show, just that single bad cue") —
-// never [dispatchBlackAndSilence]'s node-wide clear-every-surface-and-
+// never [dispatchBlackAndSilence]'s node-wide blackout-every-surface-and-
 // stop-every-session effect, which is correct for an H0.2 Playlist-binding
 // mismatch (the WHOLE binding is wrong) but was wrong here: an audio-only
-// Cue's refusal must never clear a render surface that Cue never touches,
-// and a render-only Cue's refusal must never stop the background bed or
-// an in-flight announcement, neither of which that Cue's own outputs
+// Cue's refusal must never black out a render surface that Cue never
+// touches, and a render-only Cue's refusal must never stop the background
+// bed or an in-flight announcement, neither of which that Cue's own outputs
 // declare.
 //
-//   - target.Outputs.Render != nil: clear every one of the node's own
-//     show.surface objects (render is scoped by surface ASSIGNMENT, not
-//     further per-Cue — [assetsync.ResolveCueCatalog]'s own doc comment —
-//     so "the surfaces this Cue declares" is exactly the node's own
-//     assigned surfaces).
+//   - target.Outputs.Render != nil: black out every one of the node's own
+//     show.surface objects, keeping each one's assignment (render is scoped
+//     by surface ASSIGNMENT, not further per-Cue —
+//     [assetsync.ResolveCueCatalog]'s own doc comment — so "the surfaces
+//     this Cue declares" is exactly the node's own assigned surfaces).
 //   - target.Outputs.Audio != nil: stop ONLY [cueactivation.AudioSessionID],
 //     the one session an ordinary Cue's audio output ever runs in — never
 //     [cueactivation.BackgroundSessionID] (the showmesh-audio runner's own
@@ -865,7 +867,7 @@ func (h *handlers) dispatchCueScopedBlackAndSilence(ctx context.Context, now tim
 	}
 	for _, target := range targets {
 		if target.Outputs.Render != nil {
-			h.dispatchBlackAndSilenceClearSurfaces(ctx, now, target.NodeID, issuer, episode)
+			h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, target.NodeID, issuer, episode)
 		}
 		if target.Outputs.Audio != nil {
 			h.dispatchBlackAndSilenceAudioStopSession(ctx, now, target.NodeID, cueactivation.AudioSessionID, issuer, episode)

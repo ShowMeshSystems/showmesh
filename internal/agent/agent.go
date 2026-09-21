@@ -177,6 +177,11 @@ func Run() int {
 	// and a render node whose broker has gone away keeps rendering).
 	sup := pipeline.NewSupervisor(time.Now, nil, logger)
 	assignmentStore := pipeline.NewAssignmentStore(cfg.AssetDir)
+	// holdBlackStore persists render.surface.blackout's own flag (build
+	// item 3), constructed and loaded before the boot resume below so a
+	// node restarted after a stop comes up black with its assignment
+	// intact.
+	holdBlackStore := pipeline.NewHoldBlackStore(cfg.AssetDir)
 
 	// timeline is this node's single MultiSync-driven position estimate,
 	// shared by every surface's frame writer (ADR-026 N=1 is a renderer
@@ -306,7 +311,7 @@ func Run() int {
 	// The diagnostic surface id is handed in HERE, ahead of the boot resume
 	// below, because the resume builds that surface's frame writer and the
 	// idle-output override has to be in place before it does.
-	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, cfg.DiagnosticSurface.SurfaceID, logger)
+	renderOps := newRenderOperations(sup, assignmentStore, holdBlackStore, cfg.AssetDir, timeline, showMode, cfg.DiagnosticSurface.SurfaceID, logger)
 	renderOps.weatherDelay = weatherDelay
 
 	// catalogStore is this node's held Cue catalog (TRACK-H-H3-SPEC.md

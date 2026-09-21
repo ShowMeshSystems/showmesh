@@ -11,12 +11,13 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
-// This file is ADR-053 decision 6's own "every render surface is cleared,
-// and emergency stop gains the render surface clear as well" shared
-// dispatch: one enumeration of every declared (nodeId, surfaceId) pair,
-// and one concurrent fan-out of render.surface.clear across all of them,
-// used by both emergencystop.go (its fourth target kind) and
-// weatherdelay.go (start's own render clear).
+// This file is ADR-053 decision 6's own "every render surface is blacked
+// out, keeping its assignment, and emergency stop gains the render surface
+// blackout as well" shared dispatch: one enumeration of every declared
+// (nodeId, surfaceId) pair, and one concurrent fan-out of
+// render.surface.blackout across all of them, used by both emergencystop.go
+// (its fourth target kind) and weatherdelay.go (start and cancel night's
+// own render blackout, both routed through the same dispatch path).
 
 // renderSurfaceRef names one declared show.surface object: its own config
 // object id (the surface id) and the node it is assigned to.
@@ -61,23 +62,23 @@ func (h *handlers) declaredRenderSurfaces(ctx context.Context) ([]renderSurfaceR
 	return out, nil
 }
 
-// clearAllRenderSurfaces dispatches render.surface.clear to every declared
-// render surface CONCURRENTLY, mirroring
+// blackoutAllRenderSurfaces dispatches render.surface.blackout to every
+// declared render surface CONCURRENTLY, mirroring
 // [handlers.emergencyStopAllAudioNodes]'s identical "one target must never
 // wait on another" reasoning and its identical read-failure-vs-genuinely-
 // empty distinction. issuerID/issuerName/clientAddr identify who asked;
 // idempotencyKey derives a stable per-surface key the same way
 // emergencyStopNodeIdempotencyKey does, so a retried top-level request
 // reproduces the same per-surface dispatch identity.
-func (h *handlers) clearAllRenderSurfaces(ctx context.Context, now time.Time, idempotencyKey, issuerID, issuerName string, form identity.CredentialForm, credentialID, clientAddr string) []v1.EmergencyStopInstanceOutcome {
+func (h *handlers) blackoutAllRenderSurfaces(ctx context.Context, now time.Time, idempotencyKey, issuerID, issuerName string, form identity.CredentialForm, credentialID, clientAddr string) []v1.EmergencyStopInstanceOutcome {
 	surfaces, err := h.declaredRenderSurfaces(ctx)
 	if err != nil {
-		h.logWarn("render surface clear: failed to list declared show.surface objects; no clear could be dispatched", "error", err)
+		h.logWarn("render surface blackout: failed to list declared show.surface objects; no blackout could be dispatched", "error", err)
 		return []v1.EmergencyStopInstanceOutcome{{
 			InstanceID:    renderSurfaceListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindRender,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list declared show.surface objects, so no clear could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("could not list declared show.surface objects, so no blackout could be dispatched to any of them: %v", err),
 		}}
 	}
 	if len(surfaces) == 0 {
@@ -92,17 +93,17 @@ func (h *handlers) clearAllRenderSurfaces(ctx context.Context, now time.Time, id
 			defer wg.Done()
 			instanceID := s.NodeID + "/" + s.SurfaceID
 			in := renderDispatchInput{
-				Action: "render.surface.clear", NodeID: s.NodeID, SurfaceID: s.SurfaceID,
+				Action: "render.surface.blackout", NodeID: s.NodeID, SurfaceID: s.SurfaceID,
 				Params:         map[string]any{"surfaceId": s.SurfaceID},
-				IdempotencyKey: renderSurfaceClearIdempotencyKey(idempotencyKey, s.NodeID, s.SurfaceID),
-				DesiredState:   "stopped",
+				IdempotencyKey: renderSurfaceBlackoutIdempotencyKey(idempotencyKey, s.NodeID, s.SurfaceID),
+				DesiredState:   "blackout",
 				IssuerID:       issuerID, IssuerName: issuerName,
 				ClientAddr: clientAddr, Form: form, CredentialID: credentialID,
 			}
 			outcome, problem, err := h.executeRenderDispatch(ctx, now, in)
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "failed", OutcomeReason: "this clear could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "failed", OutcomeReason: "this blackout could not be dispatched because of an internal coordinator error"}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "refused", OutcomeReason: problem.Detail}
 			default:
@@ -114,6 +115,11 @@ func (h *handlers) clearAllRenderSurfaces(ctx context.Context, now time.Time, id
 	return out
 }
 
-func renderSurfaceClearIdempotencyKey(idempotencyKey, nodeID, surfaceID string) string {
-	return "rendersurfaceclear:" + idempotencyKey + ":" + nodeID + ":" + surfaceID
+// renderSurfaceBlackoutIdempotencyKey derives one surface's dispatch key
+// under a "rendersurfaceblackout:" prefix, distinct from the retired
+// "rendersurfaceclear:" prefix a stale key from before this change used: a
+// blackout and a clear are different dispatches, and a key collision
+// between the two would replay the wrong one's outcome.
+func renderSurfaceBlackoutIdempotencyKey(idempotencyKey, nodeID, surfaceID string) string {
+	return "rendersurfaceblackout:" + idempotencyKey + ":" + nodeID + ":" + surfaceID
 }

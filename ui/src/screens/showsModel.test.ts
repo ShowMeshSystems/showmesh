@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Node } from '../api'
 import {
   audioDerivedSafetyClass,
   cueActivationSummary,
@@ -14,6 +15,7 @@ import {
   resolumeDerivedSafetyClass,
   resolveAudioNodes,
   resolvedNodesFact,
+  surfaceRenderStatus,
   type CueActivationDraft,
 } from './showsModel'
 
@@ -287,5 +289,32 @@ describe('ADR-049 decision 10: the show names its audio nodes once', () => {
     expect(explicitListExcludeConflictError(['a'], ['b'])).toBe("This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude.")
     expect(explicitListExcludeConflictError(['a'], [])).toBeNull()
     expect(explicitListExcludeConflictError([], ['b'])).toBeNull()
+  })
+})
+
+describe('surfaceRenderStatus', () => {
+  function nodeWithRenderEntries(entries: readonly unknown[]): Node {
+    return { nodeId: 'render-01', label: 'Render node', render: entries } as unknown as Node
+  }
+
+  it('shows "Held black" for a running pipeline whose output mode is blackout, never "unclaimed"', () => {
+    const node = nodeWithRenderEntries([
+      { resource: { kind: 'surface', id: 'surface-1' }, signal: 'surface.pipeline.state', state: 'current', value: 'running', observedAt: '2026-09-21T00:00:00Z' },
+      { resource: { kind: 'surface', id: 'surface-1' }, signal: 'surface.output.mode', state: 'current', value: 'blackout', observedAt: '2026-09-21T00:00:00Z' },
+    ])
+    const status = surfaceRenderStatus([node], 'render-01', 'surface-1', '2026-09-21T00:00:01Z')
+    expect(status.label).toBe('Held black')
+    expect(status.detail).toBe('Returns with the next cue.')
+    expect(status.unclaimed).toBe(false)
+  })
+
+  it('still shows the ordinary running label when the output mode is content, not blackout', () => {
+    const node = nodeWithRenderEntries([
+      { resource: { kind: 'surface', id: 'surface-1' }, signal: 'surface.pipeline.state', state: 'current', value: 'running', observedAt: '2026-09-21T00:00:00Z' },
+      { resource: { kind: 'surface', id: 'surface-1' }, signal: 'surface.output.mode', state: 'current', value: 'content', observedAt: '2026-09-21T00:00:00Z' },
+    ])
+    const status = surfaceRenderStatus([node], 'render-01', 'surface-1', '2026-09-21T00:00:01Z')
+    expect(status.label).toBe('running')
+    expect(status.unclaimed).toBe(false)
   })
 })

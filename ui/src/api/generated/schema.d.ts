@@ -2095,7 +2095,7 @@ export interface paths {
         put?: never;
         /**
          * Start a weather delay (ADR-053)
-         * @description Behind `show:weatherdelay:invoke`. No confirmation step (ADR-053 decision 1). Persists the state as active BEFORE any stop is sent, then concurrently dispatches the emergency-stop level 1 fan-out, a render surface clear, the weatherdelay.start node command over MQTT and a signed direct HTTP request to each plan node, and audio.node.silence to every declared node outside the plan. A failed target is reported, never hidden, and never rolls the state back. Starting while already active re-sends everything and does not reset `startedAt`.
+         * @description Behind `show:weatherdelay:invoke`. No confirmation step (ADR-053 decision 1). Persists the state as active BEFORE any stop is sent, then concurrently dispatches the emergency-stop level 1 fan-out, a render surface blackout (keeping each surface's assignment), the weatherdelay.start node command over MQTT and a signed direct HTTP request to each plan node, and audio.node.silence to every declared node outside the plan. A failed target is reported, never hidden, and never rolls the state back. Starting while already active re-sends everything and does not reset `startedAt`.
          */
         post: operations["startWeatherDelay"];
         delete?: never;

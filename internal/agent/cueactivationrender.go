@@ -104,6 +104,18 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 			a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
 	}
 
+	// Build item 2: an authorized activation that gets this far has either
+	// swapped this surface's content or confirmed it already matches — both
+	// count as "resumes content" for render.surface.blackout's own held-black
+	// flag, so it clears here, before either branch below, rather than only
+	// on the full-swap path. A failure to persist the clear is logged, never
+	// returned: the activation itself already succeeded (or was already
+	// correct) by this point, and refusing it over a held-black bookkeeping
+	// write would turn a working activation into a reported failure.
+	if err := o.clearHeldBlack(a.SurfaceID); err != nil {
+		o.logger.Warn("cue.activate (render): failed to clear held-black flag", "surface_id", a.SurfaceID, "error", err)
+	}
+
 	// Already exactly this Cue's resolved FSEQ, running under act's Show
 	// and Generation, AND actually running: a redelivered/duplicate
 	// activation, or a mid-show catalog deploy that resolved to unchanged

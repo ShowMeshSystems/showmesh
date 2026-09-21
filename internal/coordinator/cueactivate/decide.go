@@ -190,7 +190,7 @@ type Decision struct {
 
 	// ClearNodes lists the nodes a StateMismatched decision under the
 	// blackAndSilence policy must be told to black/silence, using the
-	// EXISTING render.surface.clear (and, where wired, audio-silence)
+	// EXISTING render.surface.blackout (and, where wired, audio-silence)
 	// command paths rather than a cue.activate: blacking is not itself an
 	// activation of any Cue.
 	ClearNodes []string

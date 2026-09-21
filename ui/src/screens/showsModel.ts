@@ -382,6 +382,15 @@ export function surfaceRenderStatus(nodes: readonly Node[], nodeId: string, surf
   const age = ageMs(stateEntry.observedAt, nowIso)
   const ageLabel = age === null ? null : `${formatDuration(age)} ago`
   if (stateEntry.state === 'current') {
+    // A held-black surface still reports its pipeline running (its
+    // assignment and NDI source are untouched), so pipeline state alone
+    // would read as ordinary content here - surface.output.mode is what
+    // actually says this surface is forced black between songs or during
+    // a stop.
+    const outputMode = entries.find((entry) => entry.signal === 'surface.output.mode')
+    if (outputMode?.value === 'blackout') {
+      return { tone, label: 'Held black', detail: 'Returns with the next cue.', unclaimed: false }
+    }
     const rate = entries.find((entry) => entry.signal === 'surface.frames.rate')
     const rateLabel = typeof rate?.value === 'number' ? ` · ${rate.value} fps` : ''
     return { tone, label: `${String(stateEntry.value ?? 'running')}${rateLabel}`, detail: ageLabel, unclaimed: false }
