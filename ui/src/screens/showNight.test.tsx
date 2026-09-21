@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
@@ -18,6 +18,7 @@ const stubs = vi.hoisted(() => ({
   ) => Promise<unknown>,
   getNightSessionConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putNightSessionConfig: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+  deleteNightSessionConfig: (() => Promise.resolve(undefined)) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => Promise.resolve({ serverTime: '', assets: [] })) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => Promise.resolve({ serverTime: '', definitions: [] })) as (...args: never[]) => Promise<unknown>,
   getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -66,6 +67,7 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getNightSessionConfig: (...args: never[]) => stubs.getNightSessionConfig(...args),
     putNightSessionConfig: (...args: never[]) => stubs.putNightSessionConfig(...args),
+    deleteNightSessionConfig: (...args: never[]) => stubs.deleteNightSessionConfig(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getShowAction: (...args: never[]) => stubs.getShowAction(...args),
@@ -136,6 +138,7 @@ describe('Show Night', () => {
     stubs.listConfigObjects = () => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })
     stubs.getNightSessionConfig = () => new Promise(() => {})
     stubs.putNightSessionConfig = () => Promise.resolve({})
+    stubs.deleteNightSessionConfig = () => Promise.resolve(undefined)
     stubs.getShow = () =>
       Promise.resolve({
         serverTime: '',
@@ -1724,6 +1727,83 @@ describe('Show Night', () => {
       fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
       fireEvent.click(await screen.findByLabelText('Enable background audio while resting'))
       expect(screen.queryByText(detail)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('deleting a definition', () => {
+    it('is inert until the label is typed exactly, then deletes and closes the inspector', async () => {
+      mockListConfigObjects()
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const deleteButton = screen.getByRole('button', { name: 'Delete definition' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve(undefined))
+      stubs.deleteNightSessionConfig = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type Winter Ridge to confirm'), { target: { value: 'Winter Ridge' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('winter-ridge-2026'))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save definition' })).not.toBeInTheDocument())
+      expect(screen.queryByRole('row', { name: 'Edit Winter Ridge' })).not.toBeInTheDocument()
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the definition open when the delete is refused', async () => {
+      mockListConfigObjects()
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.deleteNightSessionConfig = () => Promise.reject(new ApiError('winter-ridge-2026 is currently named by night.session.active.', 409))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.change(screen.getByLabelText('Type Winter Ridge to confirm'), { target: { value: 'Winter Ridge' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete definition' }))
+      expect(await screen.findByText('winter-ridge-2026 is currently named by night.session.active.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save definition' })).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      mockListConfigObjects()
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      renderDefinitions({ session: { ...allowedSessionBase, scopes: [] } as never })
+      await openWinterRidgeDefinition()
+      fireEvent.change(screen.getByLabelText('Type Winter Ridge to confirm'), { target: { value: 'Winter Ridge' } })
+      expect(screen.getByRole('button', { name: 'Delete definition' })).toBeDisabled()
+    })
+
+    it('switching to a different definition clears the refusal and the typed confirm text', async () => {
+      stubs.listConfigObjects = ((kind: string) => {
+        if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'audio.node') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        return Promise.resolve({
+          serverTime: '',
+          kind: 'night.session',
+          objects: [
+            { id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' },
+            { id: 'spring-thaw-2026', label: 'Spring Thaw', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' },
+          ],
+        })
+      }) as typeof stubs.listConfigObjects
+      stubs.getNightSessionConfig = (id: string) =>
+        Promise.resolve(id === 'spring-thaw-2026' ? { ...fullDefinitionResponse('Spring Thaw'), id: 'spring-thaw-2026' } : fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.deleteNightSessionConfig = () => Promise.reject(new ApiError('winter-ridge-2026 is currently named by night.session.active.', 409))
+      renderDefinitions({ session: configWriteSession })
+
+      await openWinterRidgeDefinition()
+      fireEvent.change(screen.getByLabelText('Type Winter Ridge to confirm'), { target: { value: 'Winter Ridge' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete definition' }))
+      expect(await screen.findByText('winter-ridge-2026 is currently named by night.session.active.')).toBeInTheDocument()
+
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Spring Thaw' }))
+      await screen.findByDisplayValue('Spring Thaw')
+      expect(screen.queryByText('winter-ridge-2026 is currently named by night.session.active.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Type Spring Thaw to confirm')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Delete definition' })).toBeDisabled()
     })
   })
 })

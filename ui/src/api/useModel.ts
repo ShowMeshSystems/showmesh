@@ -358,6 +358,10 @@ export function getAudioNodeConfigRevisions(id: string): Promise<ConfigRevisions
   return store.getAudioNodeConfigRevisions(id)
 }
 
+export function deleteAudioNode(id: string): Promise<void> {
+  return store.deleteAudioNode(id)
+}
+
 // Long-run program-to-LTC drift recordings. Same thin pass-through pattern.
 export function listAudioAlignmentRuns(nodeId: string): Promise<AudioAlignmentRunListResponse> {
   return store.listAudioAlignmentRuns(nodeId)
@@ -1087,6 +1091,10 @@ export function putNightSessionConfig(
 
 export function getNightSessionConfigRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getNightSessionConfigRevisions(id)
+}
+
+export function deleteNightSessionConfig(id: string): Promise<void> {
+  return store.deleteNightSessionConfig(id)
 }
 
 export function getNightSessionConfigRevision(id: string, revision: number): Promise<NightSessionConfigResponse> {

@@ -4489,6 +4489,54 @@ describe('ApiStore: show-configuration deletes', () => {
     expect(JSON.parse(gotBody)).toEqual({ confirm: true })
   })
 
+  it('deleteNightSessionConfig() sends DELETE with {"confirm":true} to /config/night.session/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteNightSessionConfig('friday night/1')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/night.session/friday%20night%2F1')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteAudioNode() sends DELETE with {"confirm":true} to /config/audio.node/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteAudioNode('node-01/stage')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/audio.node/node-01%2Fstage')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
   it('rejects on a 409 (e.g. the active show) rather than resolving as if it succeeded', async () => {
     const s = await server((_req, res) => {
       respondProblem(res, 409, makeProblem({ status: 409, detail: 'show "winter-ridge-2026" is currently named by show.active' }))

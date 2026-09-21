@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ApiError,
+  deleteAudioNode,
   getAudioNode,
   getAudioNodeConfigRevisions,
   getNodeClock,
@@ -13,7 +14,7 @@ import {
   type ConfigObjectSummary,
   type NodeClockConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, DeletePanel, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
 import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
@@ -176,7 +177,17 @@ export function SettingsNodeRouting() {
         )}
       </Section>
 
-      {selectedId !== null && <NodeRoutingForm key={`audio:${selectedId}`} nodeId={selectedId} saveGate={gate} />}
+      {selectedId !== null && (
+        <NodeRoutingForm
+          key={`audio:${selectedId}`}
+          nodeId={selectedId}
+          saveGate={gate}
+          onDeleted={(id) => {
+            setNodesState((prev) => (prev.kind !== 'loaded' ? prev : { kind: 'loaded', nodes: prev.nodes.filter((n) => n.id !== id) }))
+            setSelectedId((prev) => (prev === id ? null : prev))
+          }}
+        />
+      )}
 
       <Section id="st-node-clock-select" title="PTP clock node">
         {nodeClockObjectsState.kind === 'loading' ? (
@@ -226,7 +237,7 @@ export function SettingsNodeRouting() {
   )
 }
 
-function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: ScopeGateResult }) {
+function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; saveGate: ScopeGateResult; onDeleted: (id: string) => void }) {
   const model = useModelContext()
   const node = model.nodes.find((n) => n.nodeId === nodeId) ?? null
   const programRoutes = node !== null ? advertisedRoutes(node, 'audio.output.local') : null
@@ -252,6 +263,17 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<AudioNodeConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const removeNode = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteAudioNode(nodeId)
+      .then(() => onDeleted(nodeId))
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -685,6 +707,20 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
       <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" />
+
+      <DeletePanel
+        title="Delete this node"
+        confirmNoun="the node's own id"
+        confirmValue={nodeId}
+        actionLabel="Delete node"
+        deleting={deleting}
+        error={deleteError}
+        allowed={saveGate.allowed}
+        disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+        onDelete={removeNode}
+      >
+        <p className="sm-small sm-muted">Deleting this node leaves any show action or cue that targets it reporting a missing target.</p>
+      </DeletePanel>
     </>
   )
 }

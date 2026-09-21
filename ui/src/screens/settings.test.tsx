@@ -38,6 +38,7 @@ const stubs = vi.hoisted(() => ({
   getAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNodeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getNodeClockConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -79,6 +80,7 @@ vi.mock('../api', async () => {
     getAudioNode: (...args: never[]) => stubs.getAudioNode(...args),
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
     getAudioNodeConfigRevisions: (...args: never[]) => stubs.getAudioNodeConfigRevisions(...args),
+    deleteAudioNode: (...args: never[]) => stubs.deleteAudioNode(...args),
     getNodeClock: (...args: never[]) => stubs.getNodeClock(...args),
     putNodeClock: (...args: never[]) => stubs.putNodeClock(...args),
     getNodeClockConfigRevisions: (...args: never[]) => stubs.getNodeClockConfigRevisions(...args),
@@ -1085,6 +1087,88 @@ describe('Settings › Node routing', () => {
         confidence: 'high',
         configuration: 'PipeWire quantum 1024, 48000 Hz',
       },
+    })
+  })
+
+  describe('deleting a node', () => {
+    function twoNodes() {
+      stubs.listConfigObjects = (kind: string) =>
+        kind === 'audio.node'
+          ? Promise.resolve({
+              serverTime: '2026-08-30T21:00:00Z',
+              kind: 'audio.node',
+              objects: [
+                { id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' },
+                { id: 'audio-node-02', label: 'hw:CARD=USB,DEV=1', show: '', currentRevision: 1, updatedAt: '2026-08-30T18:00:00Z' },
+              ],
+            })
+          : Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [] })
+      stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+      stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    }
+
+    function oneNode() {
+      stubs.listConfigObjects = () =>
+        Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+      stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+      stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    }
+
+    it('is inert until the node id is typed exactly, then deletes and the node leaves the list', async () => {
+      oneNode()
+      renderAt('/settings/node-routing', { nodes: [] })
+
+      await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+      const deleteButton = screen.getByRole('button', { name: 'Delete node' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteAudioNode = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type audio-node-01 to confirm'), { target: { value: 'audio-node-01' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('audio-node-01'))
+      await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Audio node' })).not.toBeInTheDocument())
+      expect(screen.getByText('No audio.node object has ever been configured.')).toBeInTheDocument()
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the node open when the delete is refused', async () => {
+      oneNode()
+      stubs.deleteAudioNode = () => Promise.reject(new ApiError('audio-node-01 is targeted by a show action.', 409))
+      renderAt('/settings/node-routing', { nodes: [] })
+
+      await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type audio-node-01 to confirm'), { target: { value: 'audio-node-01' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
+      expect(await screen.findByText('audio-node-01 is targeted by a show action.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save routing' })).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      oneNode()
+      renderAt('/settings/node-routing', { nodes: [], session: signedIn([]) } as unknown as Partial<Model>)
+
+      await waitFor(() => expect(screen.getByText(/Will be accepted|Will be refused/)).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type audio-node-01 to confirm'), { target: { value: 'audio-node-01' } })
+      expect(screen.getByRole('button', { name: 'Delete node' })).toBeDisabled()
+    })
+
+    it('switching to a different node clears the refusal and the typed confirm text', async () => {
+      twoNodes()
+      stubs.deleteAudioNode = () => Promise.reject(new ApiError('audio-node-01 is targeted by a show action.', 409))
+      renderAt('/settings/node-routing', { nodes: [] })
+
+      await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type audio-node-01 to confirm'), { target: { value: 'audio-node-01' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
+      expect(await screen.findByText('audio-node-01 is targeted by a show action.')).toBeInTheDocument()
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Audio node' }), { target: { value: 'audio-node-02' } })
+      await waitFor(() => expect(screen.getByLabelText('Type audio-node-02 to confirm')).toBeInTheDocument())
+      expect(screen.queryByText('audio-node-01 is targeted by a show action.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Type audio-node-02 to confirm')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Delete node' })).toBeDisabled()
     })
   })
 })
