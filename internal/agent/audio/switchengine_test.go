@@ -25,6 +25,34 @@ func TestSwitchableEngineUnboundReportsNoBinding(t *testing.T) {
 	}
 }
 
+// TestSwitchableEngineReleaseAllReportsUnboundRatherThanACleanSweep
+// proves ReleaseAll on an unbound SwitchableEngine (a rebind window)
+// returns the same unbound error every other state-changing call does,
+// not (0, nil): a caller like [Manager.SilenceAll] must be able to tell
+// "nothing left to release" apart from "the sweep never actually ran",
+// since a rebind window can still have a branch live on the engine this
+// one is about to replace.
+func TestSwitchableEngineReleaseAllReportsUnboundRatherThanACleanSweep(t *testing.T) {
+	e := NewSwitchableEngine()
+	released, err := e.ReleaseAll(context.Background())
+	if err == nil {
+		t.Fatal("ReleaseAll on an unbound SwitchableEngine returned nil error, want the unbound reason")
+	}
+	if released != 0 {
+		t.Errorf("released = %d, want 0", released)
+	}
+
+	// After a real bind and an intervening detach (Set(nil), matching a
+	// rebind window mid-[Manager.RebindEngine]), the reason must be the
+	// rebind-in-progress one, not the never-bound one -- see
+	// [SwitchableEngine.unbound]'s own doc comment.
+	e.Set(NewFakeEngine(time.Now))
+	e.Set(nil)
+	if _, err := e.ReleaseAll(context.Background()); err == nil {
+		t.Fatal("ReleaseAll during a rebind window returned nil error, want the rebind-in-progress reason")
+	}
+}
+
 // TestSwitchableEngineDelegatesToCurrent proves Set actually rebinds
 // every call to the newly set engine, not merely the first one ever set.
 func TestSwitchableEngineDelegatesToCurrent(t *testing.T) {

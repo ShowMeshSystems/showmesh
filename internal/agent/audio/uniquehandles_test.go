@@ -61,7 +61,7 @@ func TestSilenceAllAfterPromoteAndRestagingReleasesEveryBranch(t *testing.T) {
 			t.Fatalf("attempt %d: stage prepare b: %+v", attempt, r)
 		}
 
-		results, _ := m.SilenceAll(ctx)
+		results, _, _ := m.SilenceAll(ctx)
 		if len(results) != 2 {
 			t.Fatalf("attempt %d: SilenceAll returned %d results, want 2", attempt, len(results))
 		}
@@ -170,7 +170,7 @@ func TestSilenceAllExceptReleasesEveryBranchIncludingOnesNoSessionOwns(t *testin
 		t.Fatalf("planting an orphan handle: %v", err)
 	}
 
-	results, released := m.SilenceAllExcept(ctx, excluded)
+	results, released, _ := m.SilenceAllExcept(ctx, excluded)
 	if len(results) != 1 || results[0].ID != other {
 		t.Fatalf("SilenceAllExcept results = %+v, want exactly one result for %q", results, other)
 	}

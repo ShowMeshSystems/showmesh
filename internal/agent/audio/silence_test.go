@@ -73,7 +73,7 @@ func TestSilenceAllStopsEverySessionUnaddressedByRevision(t *testing.T) {
 		t.Fatalf("start s2 = %+v", r)
 	}
 
-	results, _ := m.SilenceAll(ctx)
+	results, _, _ := m.SilenceAll(ctx)
 	if len(results) != 2 {
 		t.Fatalf("SilenceAll returned %d results, want 2", len(results))
 	}
@@ -156,7 +156,7 @@ func TestSilenceAllNeverResumesAnInterruptedSessionRegardlessOfOrder(t *testing.
 
 	engine.reset()
 
-	if results, _ := m.SilenceAll(ctx); len(results) != targets+1 {
+	if results, _, _ := m.SilenceAll(ctx); len(results) != targets+1 {
 		t.Fatalf("SilenceAll returned %d results, want %d", len(results), targets+1)
 	}
 
@@ -204,7 +204,7 @@ func TestSilenceAllBoundsAWedgedSessionAndStillSilencesTheRest(t *testing.T) {
 
 	done := make(chan []SessionSilenceOutcome, 1)
 	go func() {
-		results, _ := m.SilenceAll(ctx)
+		results, _, _ := m.SilenceAll(ctx)
 		done <- results
 	}()
 
@@ -250,7 +250,7 @@ func TestSilenceAllIsIdempotent(t *testing.T) {
 	m := newTestManager(t, c)
 	ctx := context.Background()
 
-	if results, _ := m.SilenceAll(ctx); len(results) != 0 {
+	if results, _, _ := m.SilenceAll(ctx); len(results) != 0 {
 		t.Fatalf("SilenceAll on an empty node returned %d results, want 0", len(results))
 	}
 
@@ -260,12 +260,12 @@ func TestSilenceAllIsIdempotent(t *testing.T) {
 		t.Fatalf("apply = %+v", r)
 	}
 
-	first, _ := m.SilenceAll(ctx)
+	first, _, _ := m.SilenceAll(ctx)
 	if len(first) != 1 || first[0].Outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
 		t.Fatalf("first SilenceAll = %+v, want one Unconfirmable outcome", first)
 	}
 
-	second, _ := m.SilenceAll(ctx)
+	second, _, _ := m.SilenceAll(ctx)
 	if len(second) != 1 || second[0].Outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
 		t.Fatalf("second SilenceAll on an already-silent session = %+v, want Unconfirmable again, not an error", second)
 	}
@@ -297,7 +297,7 @@ func TestSilenceAllLeavesRevisionLedgerUsableForTheNextCommand(t *testing.T) {
 	}
 	before := s.revState.Current()
 
-	if results, _ := m.SilenceAll(ctx); len(results) != 1 || results[0].Outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
+	if results, _, _ := m.SilenceAll(ctx); len(results) != 1 || results[0].Outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
 		t.Fatalf("SilenceAll = %+v, want one Unconfirmable outcome", results)
 	}
 
@@ -344,7 +344,7 @@ func TestSilenceAllReportsFailedWhenPersistFails(t *testing.T) {
 	}
 
 	store.armSaveFailures(1, nil)
-	results, _ := m.SilenceAll(ctx)
+	results, _, _ := m.SilenceAll(ctx)
 	if len(results) != 1 {
 		t.Fatalf("SilenceAll returned %d results, want 1", len(results))
 	}

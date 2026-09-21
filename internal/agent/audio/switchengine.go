@@ -215,12 +215,19 @@ func (e *SwitchableEngine) LiveHandles(ctx context.Context) ([]EngineHandle, err
 	return cur.LiveHandles(ctx)
 }
 
-// ReleaseAll forwards to whatever engine is currently bound; an unbound
-// engine holds nothing to release, matching Release's own no-op contract.
+// ReleaseAll forwards to whatever engine is currently bound. Unlike
+// Release, an unbound engine reports its own unbound error rather than a
+// silent (0, nil): Release's zero is genuinely idempotent (there was
+// never anything to release under that one handle), but ReleaseAll's
+// zero would otherwise read as "nothing was left playing", which is
+// never true evidence during a rebind window -- there may be a branch
+// still live on the engine this one is about to replace, and no caller
+// here can tell the difference between that and a genuinely empty node.
 func (e *SwitchableEngine) ReleaseAll(ctx context.Context, except ...EngineHandle) (int, error) {
 	cur, ok := e.get()
 	if !ok {
-		return 0, nil
+		_, err := e.unbound()
+		return 0, err
 	}
 	return cur.ReleaseAll(ctx, except...)
 }

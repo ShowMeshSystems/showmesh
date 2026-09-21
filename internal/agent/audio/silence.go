@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -36,9 +37,16 @@ type SessionSilenceOutcome struct {
 // behind, or one no session ever owned. This runs even when a per-session
 // stop above failed or blocked, so an emergency stop never leaves a
 // branch playing merely because one session lost track of it.
-func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int) {
+//
+// The third return is false when that final sweep itself could not run
+// to completion (for example, an engine rebind window with no engine
+// currently bound): the count above is then a floor, not a clean sweep,
+// and the caller must not report this operation as confirmed on the
+// strength of the per-session outcomes alone.
+func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int, bool) {
 	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept())
-	return outcomes, m.releaseEveryEngineBranchExcept(ctx)
+	released, sweepConfirmed := m.releaseEveryEngineBranchExcept(ctx)
+	return outcomes, released, sweepConfirmed
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
@@ -48,31 +56,60 @@ func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int)
 // (loaded and staged) those excluded sessions currently own, so their
 // audio survives it exactly as their own per-session stop above was
 // never run against them.
-func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) ([]SessionSilenceOutcome, int) {
+func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) ([]SessionSilenceOutcome, int, bool) {
 	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept(excludeIDs...))
-	return outcomes, m.releaseEveryEngineBranchExcept(ctx, m.handlesOwnedBy(excludeIDs...)...)
+	released, sweepConfirmed := m.releaseEveryEngineBranchExceptSessions(ctx, excludeIDs...)
+	return outcomes, released, sweepConfirmed
 }
 
-// handlesOwnedBy collects every engine handle, loaded and staged, the
-// sessions named by ids currently hold, so [Manager.SilenceAllExcept]'s
-// final sweep can except them by handle rather than by session.
-func (m *Manager) handlesOwnedBy(ids ...pkgaudio.SessionID) []EngineHandle {
-	var handles []EngineHandle
+// releaseEveryEngineBranchExceptSessions is [Manager.
+// releaseEveryEngineBranchExcept] except by session id: it locks every
+// named, still-live session in ids and keeps every one of those locks
+// held across both reading its loaded/staged handles AND running the
+// engine sweep itself, so none of them can load or stage a new handle in
+// the window between the two -- the race a plain snapshot-then-sweep
+// (read the handles, unlock, sweep) leaves open, since a session loading
+// right in that window would own a handle this sweep never learns to
+// except. ids are locked in a fixed order (sorted), not the order the
+// caller gave them, so two overlapping calls naming the same sessions in
+// different orders cannot deadlock each other.
+func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, ids ...pkgaudio.SessionID) (int, bool) {
+	seen := make(map[pkgaudio.SessionID]bool, len(ids))
+	sorted := make([]pkgaudio.SessionID, 0, len(ids))
 	for _, id := range ids {
-		s, ok := m.get(id)
-		if !ok {
+		if id == "" || seen[id] {
 			continue
 		}
+		seen[id] = true
+		sorted = append(sorted, id)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	sessions := make([]*Session, 0, len(sorted))
+	for _, id := range sorted {
+		if s, ok := m.get(id); ok {
+			sessions = append(sessions, s)
+		}
+	}
+	for _, s := range sessions {
 		s.mu.Lock()
+	}
+	defer func() {
+		for _, s := range sessions {
+			s.mu.Unlock()
+		}
+	}()
+
+	var except []EngineHandle
+	for _, s := range sessions {
 		if s.handleLoaded {
-			handles = append(handles, s.handle)
+			except = append(except, s.handle)
 		}
 		if s.stage != nil && s.stage.ready {
-			handles = append(handles, s.stage.handle)
+			except = append(except, s.stage.handle)
 		}
-		s.mu.Unlock()
 	}
-	return handles
+	return m.releaseEveryEngineBranchExcept(ctx, except...)
 }
 
 // releaseEveryEngineBranchExcept runs after every per-session stop
@@ -81,14 +118,56 @@ func (m *Manager) handlesOwnedBy(ids ...pkgaudio.SessionID) []EngineHandle {
 // handles, and logs rather than fails on an engine error, since this is
 // already the last-resort sweep behind the per-session outcomes those
 // callers report. Bounded like every other engine call SilenceAll makes.
-func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) int {
+// The second return is false when the sweep itself did not run to
+// completion (for example [SwitchableEngine.ReleaseAll] with no engine
+// currently bound, mid-rebind): the released count is then a floor, not
+// proof nothing else was left playing.
+//
+// When it releases at least one branch, it also logs one WARN naming the
+// count and the released handles' own names, taken from a [Engine.
+// LiveHandles] read before the sweep minus one after it: an orphaned
+// branch no session accounted for must be findable in the node's own
+// log, even though [pkg/audio]'s wire evidence today only carries the
+// count.
+func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) (int, bool) {
+	liveCtx, liveCancel := boundedEngineCallContext(ctx)
+	before, beforeErr := m.engine.LiveHandles(liveCtx)
+	liveCancel()
+
 	relCtx, relCancel := boundedEngineCallContext(ctx)
-	defer relCancel()
 	released, err := m.engine.ReleaseAll(relCtx, except...)
+	relCancel()
 	if err != nil {
-		m.logf("audio: releasing every remaining engine branch failed: %v", err)
+		m.logf("audio: an emergency stop's final engine sweep did not complete; some branches may still be playing: %v", err)
 	}
-	return released
+
+	if released > 0 && beforeErr == nil {
+		afterCtx, afterCancel := boundedEngineCallContext(ctx)
+		after, afterErr := m.engine.LiveHandles(afterCtx)
+		afterCancel()
+		if afterErr == nil {
+			m.logf("audio: an emergency stop released %d engine branch(es) no session had already accounted for: %v", released, releasedHandleNames(before, after))
+		}
+	}
+
+	return released, err == nil
+}
+
+// releasedHandleNames returns every handle present in before but not in
+// after, so [Manager.releaseEveryEngineBranchExcept] can name what an
+// unaccounted-for release actually tore down.
+func releasedHandleNames(before, after []EngineHandle) []EngineHandle {
+	still := make(map[EngineHandle]struct{}, len(after))
+	for _, h := range after {
+		still[h] = struct{}{}
+	}
+	var out []EngineHandle
+	for _, h := range before {
+		if _, ok := still[h]; !ok {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,

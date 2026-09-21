@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -334,6 +335,21 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	obsCtx, cancel := boundedObserveContext(ctx)
 	obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
 	cancel()
+	if errors.Is(err, ErrHandleNotLoaded) {
+		// The engine already discarded this handle (an emergency stop's
+		// ReleaseAll sweep, most likely): resolve to stopped and resolve
+		// the pending fade, so the next Start re-prepares instead of
+		// wedging behind a handle no later Observe can ever find again.
+		// Matches [Manager.stopExecLocked]'s identical branch.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.handleLoaded = false
+		s.loadedIdentity = ""
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.mgr.stopLTCLocked(ctx, s)
+		s.persistBestEffortLocked("state change")
+		return
+	}
 	if err != nil {
 		// A failing Observe here is the same class of evidence
 		// [Manager.watchTick]'s identical poll already treats as a fault:

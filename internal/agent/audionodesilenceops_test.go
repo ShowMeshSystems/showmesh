@@ -95,6 +95,40 @@ func TestSilenceNodeReportsSessionsFoundAndConfirmed(t *testing.T) {
 	}
 }
 
+// TestSilenceNodeReportsUnclaimedBranchesReleased proves a branch no
+// session ever owned -- loaded straight onto the engine, bypassing every
+// session -- is still swept up by the final unconditional ReleaseAll and
+// counted in unclaimedBranchesReleased, so an orphan a per-session stop
+// could never reach on its own is visible in this result rather than
+// silently surviving.
+func TestSilenceNodeReportsUnclaimedBranchesReleased(t *testing.T) {
+	dir := t.TempDir()
+	engine := audio.NewFakeEngine(time.Now)
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	op := silenceNode(mgr)
+
+	ctx := context.Background()
+	orphan := audio.EngineHandle("orphan/never-owned/1")
+	if _, err := engine.Load(ctx, orphan, pkgaudio.MediaRef{AssetID: "orphan-asset", ContentHash: "orphan-hash"}, time.Second); err != nil {
+		t.Fatalf("load an orphan handle directly on the engine: %v", err)
+	}
+
+	result, err := op(ctx, map[string]any{}, time.Now)
+	if err != nil {
+		t.Fatalf("silenceNode: unexpected error %v", err)
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Value = %v (%T), want map[string]any", result.Value, result.Value)
+	}
+	if val["sessionsFound"] != 0 {
+		t.Errorf("sessionsFound = %v, want 0 (the orphan was never owned by any session)", val["sessionsFound"])
+	}
+	if val["unclaimedBranchesReleased"] != 1 {
+		t.Fatalf("unclaimedBranchesReleased = %v, want 1 (the orphan handle no session ever owned)", val["unclaimedBranchesReleased"])
+	}
+}
+
 // TestSilenceNodeNotWired proves the not-wired error names the action.
 func TestSilenceNodeNotWired(t *testing.T) {
 	op := silenceNode(nil)

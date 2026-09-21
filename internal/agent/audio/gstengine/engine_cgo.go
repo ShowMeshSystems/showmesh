@@ -63,8 +63,10 @@ type Engine struct {
 
 	// inFlightReplacements holds every swap replacement built but not
 	// yet swapped into handles or torn down, never reachable through
-	// handles, so Close must sweep it too. Guarded by e.mu.
-	inFlightReplacements map[*branch]struct{}
+	// handles, so Close must sweep it too, keyed to the handle the swap
+	// is replacing so [Engine.ReleaseAll] can honor its own except list
+	// against a swap still in flight. Guarded by e.mu.
+	inFlightReplacements map[*branch]agentaudio.EngineHandle
 
 	// retiringBranches holds every branch a swap has already muted and
 	// re-pointed handles away from, whose teardown is still running on
@@ -170,7 +172,7 @@ func New(cfg Config) (*Engine, error) {
 	e := &Engine{
 		cfg:                  cfg,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
-		inFlightReplacements: make(map[*branch]struct{}),
+		inFlightReplacements: make(map[*branch]agentaudio.EngineHandle),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
@@ -240,7 +242,7 @@ func NewUnavailable(reason string) *Engine {
 	return &Engine{
 		availReason:          reason,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
-		inFlightReplacements: make(map[*branch]struct{}),
+		inFlightReplacements: make(map[*branch]agentaudio.EngineHandle),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
@@ -1144,11 +1146,12 @@ func (e *Engine) unindexBranch(b *branch) {
 }
 
 // trackReplacement and untrackReplacement add and remove b from
-// inFlightReplacements; see that field's doc comment for why Close needs
-// this set at all.
-func (e *Engine) trackReplacement(b *branch) {
+// inFlightReplacements, keyed to the handle its swap is replacing; see
+// that field's doc comment for why Close and [Engine.ReleaseAll] both
+// need this set.
+func (e *Engine) trackReplacement(b *branch, handle agentaudio.EngineHandle) {
 	e.mu.Lock()
-	e.inFlightReplacements[b] = struct{}{}
+	e.inFlightReplacements[b] = handle
 	e.mu.Unlock()
 }
 

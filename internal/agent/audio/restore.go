@@ -131,6 +131,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 	if hadPrevious {
 		previous.mu.Lock()
 		previous.releaseEngineLocked(ctx)
+		previous.discardStageLocked(ctx)
 		previous.mu.Unlock()
 	}
 

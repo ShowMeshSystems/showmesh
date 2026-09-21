@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -321,12 +322,6 @@ type Session struct {
 	// cleared alongside schedule. See itemschedule.go.
 	stage *itemStage
 
-	// stageSeq gives every staging attempt's own engine handle a unique
-	// name, so a retried attempt, or a repeat lap staging the very same
-	// item id again, never collides with a handle still in use. See
-	// itemschedule.go.
-	stageSeq uint64
-
 	// lastSnapshot is the most recent [SessionSnapshot] this session
 	// itself successfully built, via [Session.snapshotLocked]. Read
 	// lock-free by [Session.snapshotWithBudget] when it could not
@@ -546,8 +541,8 @@ func (s *Session) currentItemLocked() (pkgaudio.PlaylistItem, bool) {
 // call here unique regardless of itemID or session id repetition, so a
 // later Load can never silently take over an earlier, still-live
 // branch's slot in the engine's own handle map. Never persisted, like
-// [Session.stageSeq]'s identical convention: handles are minted fresh
-// every process lifetime.
+// itemschedule.go's identical staged-handle convention: handles are
+// minted fresh every process lifetime.
 func (s *Session) engineHandleFor(itemID string) EngineHandle {
 	return EngineHandle(fmt.Sprintf("%s/%s/%d", s.id, itemID, s.mgr.handleSeq.Add(1)))
 }
@@ -1102,6 +1097,21 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 	obsCtx, cancel := boundedObserveContext(ctx)
 	obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
 	cancel()
+	if errors.Is(err, ErrHandleNotLoaded) {
+		// The engine already discarded this handle (an emergency stop's
+		// ReleaseAll sweep, most likely): resolve exactly as a confirmed
+		// stop instead of leaving the session stuck behind a handle no
+		// later Observe can ever find again. Matches [Manager.
+		// stopExecLocked]'s identical branch.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.handleLoaded = false
+		s.loadedIdentity = ""
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.mgr.stopLTCLocked(ctx, s)
+		s.persistBestEffortLocked("state change")
+		return
+	}
 	if err != nil {
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		return

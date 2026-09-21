@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-gst/go-gst/pkg/gst"
@@ -293,7 +294,7 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 	// Tracked only once build has actually created replacement's
 	// elements: Close's fan-out would otherwise reach a branch whose
 	// element fields are still nil.
-	e.trackReplacement(replacement)
+	e.trackReplacement(replacement, handle)
 	defer e.untrackReplacement(replacement)
 	cleanup := func() { _ = bestEffortTeardown(replacement) }
 
@@ -331,7 +332,7 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		// position landed at or past EOS: swap the handle to the
 		// replacement anyway, so it correctly reports Completed, but
 		// there is nothing left to play or join.
-		return e.commitSwap(handle, old, replacement, replacement.observe(e.cfg.now())), nil
+		return e.commitSwap(handle, old, replacement, replacement.observe(e.cfg.now()))
 	}
 	if targetState != pkgaudio.StatePlaying {
 		// blockFlow is for API consistency (blockProbeID reads blocked);
@@ -352,14 +353,29 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 	// live query racing however far decode buffered ahead during join's
 	// own setup window. unfreeze runs after, once this swap is done.
 	obs := replacement.observe(e.cfg.now())
-	return e.commitSwap(handle, old, replacement, obs), nil
+	return e.commitSwap(handle, old, replacement, obs)
 }
 
 // commitSwap mutes old's mixer pads, re-points handle to replacement,
 // unfreezes it if it is Playing, and retires old in the background.
 // Shared by swapToPosition's playing/paused path and its EOS shortcut.
-func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *branch, obs agentaudio.EngineObservation) agentaudio.EngineObservation {
+//
+// Refuses to publish replacement, tearing it down instead, when
+// e.handles[handle] no longer names old: the only way that happens is a
+// concurrent Release or [Engine.ReleaseAll] already tearing old down and
+// forgetting handle while this swap was still building its replacement
+// (a released handle's name is never reused -- every handle is minted
+// fresh, and [Engine.Load] refuses to overwrite a live branch). Without
+// this check, an emergency stop that overtakes a swap already in flight
+// would otherwise be silently undone the moment that swap committed,
+// re-arming a branch the caller already believes was released.
+func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *branch, obs agentaudio.EngineObservation) (agentaudio.EngineObservation, error) {
 	e.mu.Lock()
+	if e.handles[handle] != old {
+		e.mu.Unlock()
+		_ = bestEffortTeardown(replacement)
+		return agentaudio.EngineObservation{}, fmt.Errorf("%w: gstengine: handle was released while its swap was still in flight", agentaudio.ErrHandleNotLoaded)
+	}
 	for _, pad := range old.channelMixerPads {
 		if pad != nil {
 			pad.SetObjectProperty("mute", true)
@@ -372,7 +388,7 @@ func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *br
 		replacement.unfreeze()
 	}
 	e.retireAsync(old)
-	return obs
+	return obs, nil
 }
 
 // retireAsync tears old down in the background, since it is already
@@ -492,11 +508,23 @@ func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error)
 }
 
 // ReleaseAll tears down every branch this pipeline currently holds except
-// the handles named in except, via the same [Engine.Release] every other
-// caller uses, and reports how many it actually released. Continues past
-// one handle's release failure rather than abandoning the rest, so one
-// stuck branch never leaves every other one live too; the first error, if
-// any, is returned once the sweep finishes.
+// the handles named in except, and reports how many it actually
+// released. Continues past one branch's release failure rather than
+// abandoning the rest, so one stuck branch never leaves every other one
+// live too; the first error, if any, is returned once the sweep
+// finishes.
+//
+// Covers exactly the three sets [Engine.Close] does (see its own doc
+// comment): e.handles, released the same way every other caller does,
+// via [Engine.Release]; inFlightReplacements, a swap's replacement not
+// yet published to e.handles, which except still applies to by the
+// handle its swap is replacing, so a branch swapping in for an excepted
+// handle is left to complete rather than torn down out from under it;
+// and retiringBranches, already muted and unreachable through any
+// handle, so except cannot apply to it at all. Without the first two,
+// a swap already in flight when this runs could still publish a live,
+// unfrozen branch afterward -- see [Engine.commitSwap]'s own refusal,
+// this sweep's other half of that fix.
 func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHandle) (int, error) {
 	skip := make(map[agentaudio.EngineHandle]struct{}, len(except))
 	for _, h := range except {
@@ -509,19 +537,51 @@ func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHand
 			toRelease = append(toRelease, h)
 		}
 	}
+	var inFlight []*branch
+	for b, h := range e.inFlightReplacements {
+		if _, ok := skip[h]; !ok {
+			inFlight = append(inFlight, b)
+		}
+	}
+	retiring := make([]*branch, 0, len(e.retiringBranches))
+	for b := range e.retiringBranches {
+		retiring = append(retiring, b)
+	}
 	e.mu.Unlock()
 
 	released := 0
+	var mu sync.Mutex
 	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+	}
+
 	for _, h := range toRelease {
 		if err := e.Release(ctx, h); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+			recordErr(err)
 			continue
 		}
 		released++
 	}
+
+	var wg sync.WaitGroup
+	for _, b := range append(inFlight, retiring...) {
+		wg.Add(1)
+		go func(b *branch) {
+			defer wg.Done()
+			recordErr(bestEffortTeardown(b))
+		}(b)
+	}
+	wg.Wait()
+	released += len(inFlight) + len(retiring)
+
 	return released, firstErr
 }
 
