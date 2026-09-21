@@ -1013,6 +1013,10 @@ export function uploadAsset(
   return store.uploadAsset(file, fields, onProgress)
 }
 
+export function deleteAsset(id: string): Promise<void> {
+  return store.deleteAsset(id)
+}
+
 export function assetContentUrl(id: string): string {
   return store.assetContentUrl(id)
 }

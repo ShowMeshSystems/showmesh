@@ -10,6 +10,7 @@ const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetManifest: (() => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes: [] })) as (...args: never[]) => Promise<unknown>,
+  deleteAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -20,6 +21,7 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
     getAssetManifest: (...args: never[]) => stubs.getAssetManifest(...args),
+    deleteAsset: (...args: never[]) => stubs.deleteAsset(...args),
   }
 })
 
@@ -262,5 +264,18 @@ describe('Assets library', () => {
 
     fireEvent.click(within(region).getByRole('row', { name: 'View carol-of-the-bells for media-front' }))
     expect(await screen.findByText('Not built yet. Nodes still play the original file.')).toBeInTheDocument()
+  })
+
+  it('deleting an asset also works from the /assets library, not only the show tab', async () => {
+    setup(['asset:write'], [asset()])
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+
+    const deleteSpy = vi.fn(() => Promise.resolve())
+    stubs.deleteAsset = deleteSpy
+    fireEvent.change(screen.getByLabelText('Type carol-of-the-bells to confirm'), { target: { value: 'carol-of-the-bells' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete asset' }))
+
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('asset-1'))
   })
 })
