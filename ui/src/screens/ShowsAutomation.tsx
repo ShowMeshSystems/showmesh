@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  deleteShowAction,
+  deleteShowMacro,
   getMacroRun,
   getActionBinding,
   getShowAction,
@@ -32,7 +34,7 @@ import {
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
@@ -375,6 +377,7 @@ export function ShowsAutomation() {
                   onRemoveStep={(index) => removeStep(macro, index)}
                   onMoveStep={(index, direction) => moveStep(macro, index, direction)}
                   onReorderStep={(from, to) => moveStepTo(macro, from, to)}
+                  onDeleted={reload}
                 />
               )
             })
@@ -447,6 +450,10 @@ export function ShowsAutomation() {
                   reload()
                   setAside({ kind: 'none' })
                 }}
+                onDeleted={() => {
+                  reload()
+                  setAside({ kind: 'none' })
+                }}
                 onCancel={() => setAside({ kind: 'none' })}
                 onReloadAfterStale={() => {
                   reload()
@@ -497,6 +504,7 @@ function MacroCard({
   onRemoveStep,
   onMoveStep,
   onReorderStep,
+  onDeleted,
 }: {
   macro: ShowMacroConfigResponse
   steps: readonly ConfigShowMacroStep[]
@@ -515,10 +523,22 @@ function MacroCard({
   onRemoveStep: (index: number) => void
   onMoveStep: (index: number, direction: -1 | 1) => void
   onReorderStep: (from: number, to: number) => void
+  onDeleted: () => void
 }) {
   const [runOutcome, setRunOutcome] = useState<{ tone: Tone; detail: string } | null>(null)
   const [running, setRunning] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowMacro(macro.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   const run = () => {
     setRunning(true)
@@ -635,6 +655,18 @@ function MacroCard({
         )}
       </p>
       {runOutcome !== null && <RuledStrip absence={runOutcome.tone === 'good' ? 'empty' : 'failed'} label={runOutcome.tone === 'good' ? 'Accepted' : 'Refused'} fact={runOutcome.detail} />}
+      <DeletePanel
+        title="Delete this macro"
+        confirmValue={macro.payload.label}
+        actionLabel="Delete macro"
+        deleting={deleting}
+        error={deleteError}
+        allowed={canAuthor.allowed}
+        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
+        onDelete={remove}
+      >
+        <p className="sm-small sm-muted">Deleting a macro does not delete its steps' actions; those remain, reachable by direct invoke or another macro.</p>
+      </DeletePanel>
     </div>
   )
 }
@@ -1911,6 +1943,7 @@ function ActionEditor({
   binding,
   macroUsages,
   onSaved,
+  onDeleted,
   onCancel,
   onReloadAfterStale,
 }: {
@@ -1920,6 +1953,7 @@ function ActionEditor({
   binding: ActionBinding | undefined
   macroUsages: readonly { label: string; stepNumbers: number[] }[]
   onSaved: (response: ShowActionConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
   onReloadAfterStale: () => void
 }) {
@@ -1938,6 +1972,17 @@ function ActionEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActionConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowAction(action.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   useEffect(() => {
     if (integration !== 'resolume') return
@@ -2128,6 +2173,23 @@ function ActionEditor({
       {stale !== null && <StaleWriteStrip stale={stale} onReload={onReloadAfterStale} />}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={() => getShowActionRevisions(action.id)} reloadKey={`${action.id}:${action.revision}`} />
+
+      <DeletePanel
+        title="Delete this action"
+        confirmValue={action.payload.label}
+        actionLabel="Delete action"
+        deleting={deleting}
+        error={deleteError}
+        allowed={canAuthor.allowed}
+        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
+        onDelete={remove}
+      >
+        {macroUsages.length > 0 ? (
+          <p className="sm-small sm-muted">Deleting this action leaves its steps in every macro that used it pointing at nothing.</p>
+        ) : (
+          <p className="sm-small sm-muted">Not used by any macro in this show.</p>
+        )}
+      </DeletePanel>
     </div>
   )
 }

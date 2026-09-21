@@ -19,6 +19,7 @@ export { NotWired, NotWiredBanner } from './NotWired'
 export { Popover } from './Popover'
 export { Drawer } from './Drawer'
 export { ConfirmDialog } from './ConfirmDialog'
+export { DeletePanel } from './DeletePanel'
 export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,

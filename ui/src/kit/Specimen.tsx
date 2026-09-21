@@ -17,6 +17,7 @@ import {
   ConfirmDialog,
   ConnectionPill,
   DefinitionStrip,
+  DeletePanel,
   Drawer,
   Field,
   FieldGrid,
@@ -690,6 +691,25 @@ export function Specimen() {
               </Section>
             }
           />
+        </SpecSection>
+
+        <SpecSection
+          number="14 · Delete panel"
+          id="specimen-delete"
+          title="One type-to-confirm shape for every config object"
+          detail="D-019: deleting a config object is sharp, danger-styled, never adjacent to the save control, and asks the operator to type the object's own name before the button enables."
+        >
+          <DeletePanel
+            title="Delete this cue"
+            confirmValue="opening-blackout"
+            actionLabel="Delete cue"
+            deleting={false}
+            error={null}
+            allowed={true}
+            onDelete={() => {}}
+          >
+            <p className="sm-small sm-muted">Deleting a cue removes only this object; nothing else in the reference graph names a cue id.</p>
+          </DeletePanel>
         </SpecSection>
       </div>
     </div>

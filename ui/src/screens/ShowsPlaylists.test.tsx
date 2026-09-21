@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   getShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowPlaylistRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistDefinitionEntries: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -28,6 +29,7 @@ vi.mock('../api', async () => {
     getShowPlaylist: (...args: never[]) => stubs.getShowPlaylist(...args),
     getShowPlaylistRevisions: (...args: never[]) => stubs.getShowPlaylistRevisions(...args),
     putShowPlaylist: (...args: never[]) => stubs.putShowPlaylist(...args),
+    deleteShowPlaylist: (...args: never[]) => stubs.deleteShowPlaylist(...args),
     getFPPPlaylistDefinitionEntries: (...args: never[]) => stubs.getFPPPlaylistDefinitionEntries(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
@@ -237,6 +239,34 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
       expect(screen.getByRole('button', { name: 'Save playlist' })).not.toBeDisabled()
     })
+
+    it('is inert until the name is typed exactly, then deletes and closes the inspector', async () => {
+      setup()
+      await openPlaylistRow('Background Music')
+      await screen.findByRole('button', { name: 'Save playlist' })
+      const deleteButton = screen.getByRole('button', { name: 'Delete playlist' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowPlaylist = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type Background Music to confirm'), { target: { value: 'Background Music' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('p1'))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save playlist' })).not.toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the playlist open when the delete is refused', async () => {
+      setup()
+      await openPlaylistRow('Background Music')
+      await screen.findByRole('button', { name: 'Save playlist' })
+      stubs.deleteShowPlaylist = () => Promise.reject(new ApiError('p1 is referenced by a night session.', 409))
+      fireEvent.change(screen.getByLabelText('Type Background Music to confirm'), { target: { value: 'Background Music' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete playlist' }))
+      expect(await screen.findByText('p1 is referenced by a night session.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save playlist' })).toBeInTheDocument()
+    })
   })
 
   describe('FPP playlist', () => {
@@ -383,6 +413,31 @@ describe('Shows · Playlists tab editing', () => {
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'Save playlist' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Discard changes' })).toBeDisabled()
+    })
+
+    it('is inert until the name is typed exactly, then deletes and closes the inspector', async () => {
+      setup()
+      await openPlaylistRow('Main Show')
+      await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
+      const deleteButton = screen.getByRole('button', { name: 'Delete playlist' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowPlaylist = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type Main Show to confirm'), { target: { value: 'Main Show' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('p1'))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save playlist' })).not.toBeInTheDocument())
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      setup({ scopes: [] })
+      await openPlaylistRow('Main Show')
+      await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type Main Show to confirm'), { target: { value: 'Main Show' } })
+      expect(screen.getByRole('button', { name: 'Delete playlist' })).toBeDisabled()
     })
 
     it('rebinding the FPP source playlist renders inert, stating why', async () => {

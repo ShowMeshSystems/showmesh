@@ -26,6 +26,8 @@ const stubs = vi.hoisted(() => ({
   listActionBindings: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowMacro: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShowMacro: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listResolumeActions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   submitMacroRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   invokeAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -45,6 +47,8 @@ vi.mock('../api', async () => {
     listActionBindings: (...args: never[]) => stubs.listActionBindings(...args),
     putShowMacro: (...args: never[]) => stubs.putShowMacro(...args),
     putShowAction: (...args: never[]) => stubs.putShowAction(...args),
+    deleteShowMacro: (...args: never[]) => stubs.deleteShowMacro(...args),
+    deleteShowAction: (...args: never[]) => stubs.deleteShowAction(...args),
     listResolumeActions: (...args: never[]) => stubs.listResolumeActions(...args),
     submitMacroRun: (...args: never[]) => stubs.submitMacroRun(...args),
     invokeAction: (...args: never[]) => stubs.invokeAction(...args),
@@ -568,6 +572,44 @@ describe('Shows · Automation tab', () => {
     })
   })
 
+  describe('deleting a macro', () => {
+    it('is inert until the label is typed exactly, then deletes and refreshes the list', async () => {
+      setup()
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
+      const deleteButton = screen.getByRole('button', { name: 'Delete macro' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowMacro = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
+      expect(deleteButton).not.toBeDisabled()
+
+      const reloadSpy = vi.fn((kind: string) => withContents(kind, [], [actionSummary()]))
+      stubs.listConfigObjects = reloadSpy
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('preshow-lights-up'))
+      await waitFor(() => expect(screen.getByText('No macro matches here.')).toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the macro when the delete is refused', async () => {
+      setup()
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
+      stubs.deleteShowMacro = () => Promise.reject(new ApiError('preshow-lights-up is referenced by a cue.', 409))
+      fireEvent.change(screen.getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete macro' }))
+      expect(await screen.findByText('preshow-lights-up is referenced by a cue.')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      setup(['show:macro:run'])
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
+      expect(screen.getByRole('button', { name: 'Delete macro' })).toBeDisabled()
+    })
+  })
+
   function resolumeActionsFixture() {
     return Promise.resolve({
       serverTime: '2026-08-30T21:00:00Z',
@@ -776,6 +818,42 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(save)
       expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
       expect(putSpy).not.toHaveBeenCalled()
+    })
+
+    it('is inert until the label is typed exactly, then deletes and closes the editor', async () => {
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      const deleteButton = await within(aside).findByRole('button', { name: 'Delete action' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowAction = deleteSpy
+      fireEvent.change(within(aside).getByLabelText('Type Start Preshow Playlist to confirm'), { target: { value: 'Start Preshow Playlist' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('start-preshow'))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the action open when the delete is refused', async () => {
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
+      stubs.deleteShowAction = () => Promise.reject(new ApiError('start-preshow is used by a macro step.', 409))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      fireEvent.change(within(aside).getByLabelText('Type Start Preshow Playlist to confirm'), { target: { value: 'Start Preshow Playlist' } })
+      fireEvent.click(within(aside).getByRole('button', { name: 'Delete action' }))
+      expect(await within(aside).findByText('start-preshow is used by a macro step.')).toBeInTheDocument()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' }, ['show:macro:run'])
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      fireEvent.change(within(aside).getByLabelText('Type Start Preshow Playlist to confirm'), { target: { value: 'Start Preshow Playlist' } })
+      expect(within(aside).getByRole('button', { name: 'Delete action' })).toBeDisabled()
     })
   })
 
