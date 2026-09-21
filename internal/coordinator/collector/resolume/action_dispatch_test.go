@@ -555,12 +555,15 @@ func TestDispatchLaunchClipPersistentClipIgnoresDeck(t *testing.T) {
 
 // --- The composition-identity gate (§3.6, acceptance criterion 6) ---------
 
+// TestDispatchRefusesWhenIdentityUnknown uses clearLayer, not blackout: the
+// emergency blackout is the one action this state does not refuse (see
+// TestDispatchBlackoutIgnoresTheIdentityGate below).
 func TestDispatchRefusesWhenIdentityUnknown(t *testing.T) {
 	now := time.Now()
 	arena := newFakeArena(&now)
 	d := newTestActionDispatcher(t, arena, &now, SurveySnapshot{}) // zero value: SurveyRan false
 
-	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	out, err := d.Dispatch(context.Background(), ActionClearLayer, ActionParams{LayerID: testLayerOne})
 	if err != nil {
 		t.Fatalf("Dispatch error = %v", err)
 	}
@@ -674,6 +677,116 @@ func TestDispatchExemptActionIsNotRefusedForStaleIdentityEvidence(t *testing.T) 
 	}
 	if out.DispatchedAt.IsZero() {
 		t.Errorf("DispatchedAt is zero, so nothing was dispatched")
+	}
+}
+
+// identityGateExemptTestStates is the three identity states the emergency
+// blackout must dispatch through unrefused (owner ruling, TRACK-D-D3-SPEC.md
+// §3.6): no survey has ever completed, a completed survey found the identity
+// false, and a completed survey found it unknown. Every one of these refused
+// blackout before that ruling was implemented.
+var identityGateExemptTestStates = []struct {
+	name string
+	snap func(now time.Time) SurveySnapshot
+}{
+	{"no survey has ever run", func(now time.Time) SurveySnapshot { return SurveySnapshot{} }},
+	{"identity is false", func(now time.Time) SurveySnapshot {
+		snap := identifiedSnapshot(now)
+		snap.Identity = IdentityFalse
+		return snap
+	}},
+	{"identity is unknown", func(now time.Time) SurveySnapshot {
+		snap := identifiedSnapshot(now)
+		snap.Identity = IdentityUnknown
+		return snap
+	}},
+}
+
+// TestDispatchBlackoutIgnoresTheIdentityGate proves blackout is dispatched
+// and confirmed in every one of [identityGateExemptTestStates].
+func TestDispatchBlackoutIgnoresTheIdentityGate(t *testing.T) {
+	for _, tt := range identityGateExemptTestStates {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			arena := newFakeArena(&now)
+			arena.layers[testLayerOne] = &faLayer{
+				bypassedParamID: 9001, masterParamID: 9002, master: 1,
+				activeClip: idPtr(testClipA),
+			}
+			arena.layers[testLayerTwo] = &faLayer{
+				bypassedParamID: 9011, masterParamID: 9012, master: 1,
+				activeClip: idPtr(testClipB),
+			}
+			arena.layers[3000000000003] = &faLayer{bypassedParamID: 9021, masterParamID: 9022, master: 1}
+
+			d := newTestActionDispatcher(t, arena, &now, tt.snap(now))
+			out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+			if err != nil {
+				t.Fatalf("Dispatch error = %v", err)
+			}
+			if out.State != ActionConfirmed {
+				t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionConfirmed, out.Reason)
+			}
+			if !out.ConfirmedAt.After(out.DispatchedAt) {
+				t.Errorf("ConfirmedAt = %s, want strictly after DispatchedAt %s (confirmation must post-date dispatch)", out.ConfirmedAt, out.DispatchedAt)
+			}
+		})
+	}
+}
+
+// TestNonBlackoutActionsStillRefuseOnTheIdentityGate is a table test over
+// [actionRegistry] itself, so an action registered later is covered without
+// editing this test: every action other than the emergency blackout must
+// still be refused by the identity gate in all three
+// [identityGateExemptTestStates].
+func TestNonBlackoutActionsStillRefuseOnTheIdentityGate(t *testing.T) {
+	genericParams := func(name ActionName) ActionParams {
+		switch name {
+		case ActionLaunchClip:
+			return ActionParams{ClipID: testClipA}
+		case ActionClearLayer, ActionSetLayerBypass, ActionSetLayerMaster:
+			return ActionParams{LayerID: testLayerOne, Bypassed: true, Master: 0.5}
+		case ActionLaunchColumn:
+			return ActionParams{ColumnID: testColumnOne}
+		case ActionSelectDeck:
+			return ActionParams{DeckID: testDeckOne}
+		default:
+			return ActionParams{}
+		}
+	}
+
+	for _, tt := range identityGateExemptTestStates {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, e := range actionRegistry {
+				if e.Name == ActionBlackout {
+					continue
+				}
+				t.Run(string(e.Name), func(t *testing.T) {
+					now := time.Now()
+					arena := newFakeArena(&now)
+					arena.layers[testLayerOne] = &faLayer{
+						bypassedParamID: 9001, masterParamID: 9002, master: 1,
+						activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 0.1,
+					}
+					arena.clips[testClipA] = &faClip{connected: "Disconnected", ownerLayer: testLayerOne}
+					arena.columns[testColumnOne] = &faColumn{connected: "Disconnected"}
+
+					d := newTestActionDispatcher(t, arena, &now, tt.snap(now))
+					out, err := d.Dispatch(context.Background(), e.Name, genericParams(e.Name))
+					if err != nil {
+						t.Fatalf("Dispatch error = %v", err)
+					}
+					if out.State != ActionRefused {
+						t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+					}
+					arena.mu.Lock()
+					defer arena.mu.Unlock()
+					if len(arena.requests) != 0 {
+						t.Errorf("requests = %v, want zero — the identity gate must refuse before any read", arena.requests)
+					}
+				})
+			}
+		})
 	}
 }
 

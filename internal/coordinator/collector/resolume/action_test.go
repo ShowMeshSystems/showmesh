@@ -83,6 +83,18 @@ func TestActionSafetyClassMembershipIsExactlyBlackoutAndClearLayer(t *testing.T)
 	}
 }
 
+// TestIdentityGateExemptMembershipIsExactlyBlackout pins the owner ruling
+// (TRACK-D-D3-SPEC.md §3.6) against silent addition or removal: clearLayer is
+// explicitly NOT identity-gate exempt, only stale-exempt via SafetyClass.
+func TestIdentityGateExemptMembershipIsExactlyBlackout(t *testing.T) {
+	for _, e := range actionRegistry {
+		want := e.Name == ActionBlackout
+		if e.IdentityGateExempt != want {
+			t.Errorf("action %q: IdentityGateExempt = %v, want %v", e.Name, e.IdentityGateExempt, want)
+		}
+	}
+}
+
 func TestEveryActionDeclaresCoordinatorRequiredFallback(t *testing.T) {
 	for _, e := range actionRegistry {
 		if e.LocalFallbackClass != localFallbackClassCoordinatorRequired {
