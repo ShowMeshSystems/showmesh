@@ -321,6 +321,49 @@ func (t *Tx) GetAsset(ctx context.Context, id string) (AssetRecord, error) {
 	return getAsset(ctx, t.tx, id)
 }
 
+// deleteAsset reads id's row, deletes it, and returns what it deleted, or
+// [ErrAssetNotFound]. It never promotes a superseded row: a deleted
+// current row leaves its identity with no current asset, exactly as if
+// the row had never been uploaded (rollback, not this, is how an older
+// row becomes current again).
+func deleteAsset(ctx context.Context, q querier, id string) (AssetRecord, error) {
+	rec, err := getAsset(ctx, q, id)
+	if err != nil {
+		return AssetRecord{}, err
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM assets WHERE id = ?`, id); err != nil {
+		return AssetRecord{}, fmt.Errorf("store: delete asset %q: %w", id, err)
+	}
+	return rec, nil
+}
+
+// DeleteAsset is [Tx]'s form, the only form, matching [Tx.CreateAsset]: an
+// asset delete always composes with its audit entry in one transaction
+// (ADR-024 decision 11).
+func (t *Tx) DeleteAsset(ctx context.Context, id string) (AssetRecord, error) {
+	return deleteAsset(ctx, t.tx, id)
+}
+
+// countAssetsByContentHash counts every row (current and superseded
+// alike) whose content_hash equals hash.
+func countAssetsByContentHash(ctx context.Context, q querier, hash string) (int, error) {
+	row := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM assets WHERE content_hash = ?`, hash)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count assets by content hash: %w", err)
+	}
+	return n, nil
+}
+
+// CountAssetsByContentHash reports how many asset rows still reference
+// hash. Run this after [Tx.DeleteAsset] removes the row in question: a
+// result of 0 means the deleted row was the last one, so the caller may
+// remove the backend blob (and any audio rendition built from it); any
+// other value means another asset row still needs those bytes.
+func (t *Tx) CountAssetsByContentHash(ctx context.Context, hash string) (int, error) {
+	return countAssetsByContentHash(ctx, t.tx, hash)
+}
+
 // AssetFilter narrows [Store.ListAssets], mirroring [DesiredStateFilter]'s
 // shape (desired_state.go): every field is optional (empty means "match
 // any"). NodeID filters to TargetKind == AssetTargetKindNode AND

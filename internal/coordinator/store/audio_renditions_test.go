@@ -76,6 +76,32 @@ func TestAudioRenditionLifecycleRenderingReadyFailed(t *testing.T) {
 	}
 }
 
+// TestDeleteAudioRenditionRemovesRowAndIsIdempotent proves a rendition row
+// deletes cleanly and a repeat delete against an already-gone row is a
+// no-op, not an error - matching Backend.Delete's identical posture.
+func TestDeleteAudioRenditionRemovesRowAndIsIdempotent(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	const hash = "sha256:original"
+
+	if err := st.SetAudioRenditionReady(ctx, hash, AudioRenditionReady{
+		ContentHash: "sha256:wav", SizeBytes: 2048, DurationMillis: 1500, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("SetAudioRenditionReady: %v", err)
+	}
+
+	if err := st.DeleteAudioRendition(ctx, hash); err != nil {
+		t.Fatalf("DeleteAudioRendition: %v", err)
+	}
+	if _, err := st.GetAudioRendition(ctx, hash); !errors.Is(err, ErrAudioRenditionNotFound) {
+		t.Errorf("GetAudioRendition after delete = %v, want ErrAudioRenditionNotFound", err)
+	}
+
+	if err := st.DeleteAudioRendition(ctx, hash); err != nil {
+		t.Errorf("second DeleteAudioRendition = %v, want nil (idempotent)", err)
+	}
+}
+
 // TestListAudioAssetContentHashesNeedingRenditionSkipsReadyAndSuperseded
 // proves the reconcile query only surfaces a current audio asset with no
 // ready rendition, never a superseded one and never one already ready,

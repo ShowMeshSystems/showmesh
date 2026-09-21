@@ -9108,6 +9108,71 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteAsset
+      summary: Delete one asset row (Track E seam E3/E4, ADR-028)
+      description: >-
+        Requires `asset:write` (admin only), the same scope POST requires.
+        Requires an explicit `{"confirm":true}` body. A HARD delete, not a
+        tombstone: an asset row carries no revision history to preserve.
+        Deleting the CURRENT asset for its (show, sequence, targetKind,
+        target, mediaType) identity leaves that identity with no current
+        asset - it never promotes a superseded row back to current
+        (re-uploading matching bytes is what does that; see `rolledBack`
+        on `POST /assets`). The manifest and Cue readiness reflect the
+        deletion exactly as if the asset had never been uploaded. The
+        stored content blob, and any audio rendition built from it, are
+        removed from this coordinator's own storage only once no other
+        asset row still references the same content hash - a node's own
+        disk is never touched by this route; that is `POST
+        /nodes/{nodeId}/assets/remove`'s job. `404` for an unknown id,
+        including a second delete of an id already removed. Refused with
+        `409` (`asset-pinned`) when the current show.weatherdelay alert or
+        a current show.action's announcement media names this asset id
+        directly; `detail` names what references it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigObjectDeleteRequest"
+      responses:
+        "204":
+          description: The asset row was deleted.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            This asset is pinned by id (`asset-pinned`): the current
+            show.weatherdelay alert or a current show.action's
+            announcement media names it directly. `detail` names what
+            references it.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets/{id}/content:
     get:
       operationId: getAssetContent
@@ -16229,6 +16294,7 @@ components:
             - https://showmesh.dev/problems/payload-too-large
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
+            - https://showmesh.dev/problems/asset-pinned
             - https://showmesh.dev/problems/night-not-ready
             - https://showmesh.dev/problems/night-state-rejected
             - https://showmesh.dev/problems/night-ambiguous

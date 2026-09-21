@@ -294,6 +294,38 @@ func TestVolumeBackendOpenIsNotFoundForAnUnknownHash(t *testing.T) {
 	}
 }
 
+// TestVolumeBackendDeleteRemovesTheBlob proves a deleted blob is gone: a
+// second Open reports ErrNotFound.
+func TestVolumeBackendDeleteRemovesTheBlob(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	blob, err := b.Put(ctx, bytes.NewReader([]byte("delete me")), 1<<20)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	if err := b.Delete(ctx, blob.ContentHash); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, _, err := b.Open(ctx, blob.ContentHash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Open after delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestVolumeBackendDeleteIsIdempotent proves deleting a key that names no
+// blob is not an error: a caller may retry a delete or race an earlier
+// one that already removed it.
+func TestVolumeBackendDeleteIsIdempotent(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+	unknown := sha256Prefix + strings.Repeat("b", sha256HexLen)
+
+	if err := b.Delete(ctx, unknown); err != nil {
+		t.Fatalf("Delete of an unknown hash = %v, want nil", err)
+	}
+}
+
 // TestVolumeBackendRejectsPathTraversalKeys plants a real file next to
 // (not under) the backend's root and crafts a key that would resolve onto
 // it via "../" if pathForKey only checked the "sha256:" prefix. A weaker

@@ -348,6 +348,9 @@ Commands:
   assets list [--show <id>] [--node <id>] [--sequence <id>]
                            enumerate asset metadata
   assets get <assetId>    show one asset's full metadata
+  assets delete --confirm <assetId>
+                           remove one asset row (write, requires asset:write);
+                           a hard delete, no revision history to preserve
   assets upload            stream a file into the asset store (write, requires
                            asset:write; --show --sequence --media-type
                            --target-kind [--target] --file)

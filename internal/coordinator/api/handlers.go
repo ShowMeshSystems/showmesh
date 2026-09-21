@@ -208,6 +208,15 @@ type handlers struct {
 	// staging for that entry has not finished yet - the launch step reads
 	// this without blocking and never waits for it to appear.
 	nightFirstCueStageResult map[string][]string
+
+	// assetBlobMu orders an asset upload's blob write against a delete's
+	// blob removal for the same content hash (assets.go). An upload holds
+	// the read lock from before AssetBackend.Put until its own metadata
+	// transaction commits; a delete holds the write lock from before its
+	// metadata transaction until the blob (and any rendition) removal
+	// finishes. Multiple uploads still run concurrently with each other;
+	// only a delete excludes every upload.
+	assetBlobMu sync.RWMutex
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

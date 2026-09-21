@@ -264,6 +264,8 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdAssetsList(rest, stdout, stderr, clock)
 	case "get":
 		return cmdAssetsGet(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdAssetsDelete(rest, stdout, stderr, clock)
 	case "upload":
 		return cmdAssetsUpload(rest, stdout, stderr, clock)
 	case "fetch":
@@ -298,6 +300,13 @@ Subcommands:
   list             enumerate asset metadata, optionally narrowed by
                    --show/--node/--sequence
   get <assetId>    show one asset's full metadata
+  delete --confirm <assetId>
+                   remove one asset row (write, requires asset:write); a
+                   hard delete, no revision history to preserve. Deleting
+                   the current asset for its identity leaves that identity
+                   with no current asset - it does not restore an older
+                   one ("rollback" is a fresh upload of matching bytes,
+                   not this)
   upload           stream a file into the store and register its metadata
                    (write, requires asset:write)
   fetch <assetId>  download one asset's bytes, verifying the content hash
@@ -418,6 +427,59 @@ func cmdAssetsGet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		return exitOK
 	}
 	printAssetDetail(stdout, resp.Asset)
+	return exitOK
+}
+
+// --- delete ---
+
+// cmdAssetsDelete mirrors cmdMediaPlaylistDelete's own shape
+// (cmd_media_playlist.go): --confirm is required and checked locally
+// before any request is sent. Unlike that command, this is a hard delete
+// (DELETE /api/v1/assets/{id}) - an asset row carries no revision history
+// to preserve.
+func cmdAssetsDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl assets delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this asset")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets delete --confirm <assetId>")
+		_, _ = fmt.Fprintln(stderr, "\nRemove one asset row (DELETE /api/v1/assets/{id}). A hard delete: there")
+		_, _ = fmt.Fprintln(stderr, "is no revision history to preserve. Deleting the current asset for its")
+		_, _ = fmt.Fprintln(stderr, "identity leaves that identity with no current asset - it never restores")
+		_, _ = fmt.Fprintln(stderr, "an older one. Requires asset:write and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "assets delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl assets delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "assets delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/assets/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "assets delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "asset %s deleted\n", id)
 	return exitOK
 }
 

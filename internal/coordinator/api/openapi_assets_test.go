@@ -55,6 +55,8 @@ func TestOpenAPIAssetsResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("POST /assets (rollback): status = %d, want 200; body: %s", rollbackResp.StatusCode, rollbackBody)
 	}
 	assertMatchesSchema(t, c, "AssetResponse", rollbackBody)
+	var rolledBack v1AssetResponseForTest
+	mustDecodeJSON(t, rollbackBody, &rolledBack)
 
 	// A validation-error sample, to prove the shared Problem shape one
 	// more time on this seam's own refusal path.
@@ -80,6 +82,36 @@ func TestOpenAPIAssetsResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("GET /assets/no-such-asset: status = %d, want 404; body: %s", notFoundResp.StatusCode, notFoundBody)
 	}
 	assertMatchesSchema(t, c, "Problem", notFoundBody)
+
+	// DELETE /assets/{id}: 204 (no body to check against a schema), a
+	// missing confirm body's 400 Problem, and an unknown id's 404 Problem.
+	delResp, delBody := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE /assets/{id}: status = %d, want 204; body: %s", delResp.StatusCode, delBody)
+	}
+
+	delAgainResp, delAgainBody := doAssetDelete(t, api.Handler, uploaded.Asset.ID, auth)
+	if delAgainResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("DELETE /assets/{id} (already deleted): status = %d, want 404; body: %s", delAgainResp.StatusCode, delAgainBody)
+	}
+	assertMatchesSchema(t, c, "Problem", delAgainBody)
+
+	noConfirmResp, noConfirmBody := doRequest(t, api.Handler, "DELETE", "/api/v1/assets/"+rolledBack.Asset.ID, auth)
+	if noConfirmResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("DELETE /assets/{id} with no body: status = %d, want 400; body: %s", noConfirmResp.StatusCode, noConfirmBody)
+	}
+	assertMatchesSchema(t, c, "Problem", noConfirmBody)
+
+	// A pinned-asset 409, this seam's own minted type: proves the shape
+	// api/openapi.yaml now documents for DELETE /assets/{id} against a
+	// real refusal.
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowWeatherDelay(t, api, token, `{"alert":{"delayAssetId":"`+rolledBack.Asset.ID+`"}}`)
+	pinnedResp, pinnedBody := doAssetDelete(t, api.Handler, rolledBack.Asset.ID, auth)
+	if pinnedResp.StatusCode != http.StatusConflict {
+		t.Fatalf("DELETE /assets/{id} pinned by show.weatherdelay: status = %d, want 409; body: %s", pinnedResp.StatusCode, pinnedBody)
+	}
+	assertMatchesSchema(t, c, "Problem", pinnedBody)
 }
 
 // mustDecodeJSON is a tiny local helper so this file does not need to

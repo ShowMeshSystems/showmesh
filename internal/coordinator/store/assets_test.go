@@ -716,3 +716,94 @@ func TestCreateAssetTxFormRollsBackOnError(t *testing.T) {
 		t.Errorf("GetAsset(a1) after rollback err = %v, want ErrAssetNotFound", err)
 	}
 }
+
+// TestDeleteAssetRemovesRowAndReturnsIt proves DeleteAsset both removes
+// the row and hands the caller what it deleted, for the audit entry.
+func TestDeleteAssetRemovesRowAndReturnsIt(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	rec := newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq")
+	if _, _, err := st.CreateAsset(ctx, rec); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	var deleted AssetRecord
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		var derr error
+		deleted, derr = tx.DeleteAsset(ctx, "a1")
+		return derr
+	})
+	if err != nil {
+		t.Fatalf("InTx delete: %v", err)
+	}
+	if deleted.ID != "a1" || deleted.ContentHash != "sha256:a1" {
+		t.Errorf("deleted = %+v, want the row that was removed", deleted)
+	}
+
+	if _, err := st.GetAsset(ctx, "a1"); !errors.Is(err, ErrAssetNotFound) {
+		t.Errorf("GetAsset(a1) after delete err = %v, want ErrAssetNotFound", err)
+	}
+}
+
+// TestDeleteAssetUnknownIDReturnsNotFound proves an unknown id refuses
+// rather than deleting nothing silently.
+func TestDeleteAssetUnknownIDReturnsNotFound(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		_, derr := tx.DeleteAsset(ctx, "does-not-exist")
+		return derr
+	})
+	if !errors.Is(err, ErrAssetNotFound) {
+		t.Errorf("err = %v, want ErrAssetNotFound", err)
+	}
+}
+
+// TestCountAssetsByContentHashCountsEveryReferencingRow proves the count
+// includes superseded rows (a caller uses it AFTER deleting one row, so
+// what remains is what still needs the blob) and excludes an unrelated
+// hash.
+func TestCountAssetsByContentHashCountsEveryReferencingRow(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:shared", "f.fseq")); err != nil {
+		t.Fatalf("create a1: %v", err)
+	}
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a2", "halloween-2026", "opening", AssetTargetKindNode, "render-02", "sha256:shared", "f.fseq")); err != nil {
+		t.Fatalf("create a2: %v", err)
+	}
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a3", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:other", "g.fseq")); err != nil {
+		t.Fatalf("create a3: %v", err)
+	}
+
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		n, cerr := tx.CountAssetsByContentHash(ctx, "sha256:shared")
+		if cerr != nil {
+			return cerr
+		}
+		if n != 2 {
+			t.Errorf("count for shared hash = %d, want 2", n)
+		}
+		n, cerr = tx.CountAssetsByContentHash(ctx, "sha256:other")
+		if cerr != nil {
+			return cerr
+		}
+		if n != 1 {
+			t.Errorf("count for other hash = %d, want 1", n)
+		}
+		n, cerr = tx.CountAssetsByContentHash(ctx, "sha256:none")
+		if cerr != nil {
+			return cerr
+		}
+		if n != 0 {
+			t.Errorf("count for unreferenced hash = %d, want 0", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("InTx: %v", err)
+	}
+}
