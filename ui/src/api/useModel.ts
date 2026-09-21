@@ -746,6 +746,10 @@ export function getShowActionRevisions(id: string): Promise<ConfigRevisionsRespo
   return store.getShowActionRevisions(id)
 }
 
+export function deleteShowAction(id: string): Promise<void> {
+  return store.deleteShowAction(id)
+}
+
 // The pre-show binding check and one action invocation, outside of any
 // macro run (ADR-029). Same thin pass-through pattern as every method
 // above.
@@ -776,6 +780,10 @@ export function putShowMacro(id: string, payload: ConfigShowMacro): Promise<Sche
 
 export function getShowMacroRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowMacroRevisions(id)
+}
+
+export function deleteShowMacro(id: string): Promise<void> {
+  return store.deleteShowMacro(id)
 }
 
 export function submitMacroRun(macroId: string): Promise<SchemaMacroRunSubmitResponse> {
@@ -910,12 +918,20 @@ export function getShowRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowRevisions(id)
 }
 
+export function deleteShow(id: string): Promise<void> {
+  return store.deleteShow(id)
+}
+
 export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {
   return store.putShowSurface(id, payload)
 }
 
 export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowSurfaceRevisions(id)
+}
+
+export function deleteShowSurface(id: string): Promise<void> {
+  return store.deleteShowSurface(id)
 }
 
 // Track H seam H6: show.cue authoring. Same thin pass-through pattern as
@@ -933,12 +949,20 @@ export function getShowCueRevisions(id: string): Promise<ConfigRevisionsResponse
   return store.getShowCueRevisions(id)
 }
 
+export function deleteShowCue(id: string): Promise<void> {
+  return store.deleteShowCue(id)
+}
+
 export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
   return store.putShowPlaylist(id, payload)
 }
 
 export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowPlaylistRevisions(id)
+}
+
+export function deleteShowPlaylist(id: string): Promise<void> {
+  return store.deleteShowPlaylist(id)
 }
 
 export function getMediaPlaylist(id: string): Promise<SchemaMediaPlaylistConfigResponse> {

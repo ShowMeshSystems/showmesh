@@ -15,7 +15,6 @@ func validAudioNodeConfig(revision int64) audioNodeConfig {
 	return audioNodeConfig{
 		ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "d", ClockDomainProvenance: "p",
 		Revision: revision,
 	}
 }
@@ -310,11 +309,9 @@ func TestAudioBindingApplyNodeReplayRebuildsWhenEngineBroken(t *testing.T) {
 // two-output interface, which has no channel to spare for LTC.
 func programOnlyNodeParams() map[string]any {
 	return map[string]any{
-		"programRoute":          "hw:CARD=USB,DEV=0",
-		"programChannels":       []any{float64(1), float64(2)},
-		"clockDomain":           "solo",
-		"clockDomainProvenance": "single interface",
-		"revision":              float64(1),
+		"programRoute":    "hw:CARD=USB,DEV=0",
+		"programChannels": []any{float64(1), float64(2)},
+		"revision":        float64(1),
 	}
 }
 
@@ -450,5 +447,42 @@ func TestOutputLatencyConfigUnmeasuredAppliesZero(t *testing.T) {
 	c := outputLatencyConfig{ValueUs: 12345, Method: "unmeasured"}
 	if got := c.effectiveOutputLatencyUs(); got != 0 {
 		t.Errorf("effectiveOutputLatencyUs = %d, want 0 for method \"unmeasured\"", got)
+	}
+}
+
+// TestDecodeAudioNodeConfigAcceptsRetiredClockFields proves ADR-052
+// decision 5 from the node's side: an older coordinator still sending
+// clockDomain and clockDomainProvenance is accepted, and a coordinator
+// that has stopped sending them is accepted too.
+func TestDecodeAudioNodeConfigAcceptsRetiredClockFields(t *testing.T) {
+	with := programOnlyNodeParams()
+	with["clockDomain"] = "solo"
+	with["clockDomainProvenance"] = "single interface"
+	if _, err := decodeAudioNodeConfig(with); err != nil {
+		t.Errorf("decodeAudioNodeConfig(with retired fields) = %v, want nil", err)
+	}
+	if _, err := decodeAudioNodeConfig(programOnlyNodeParams()); err != nil {
+		t.Errorf("decodeAudioNodeConfig(without retired fields) = %v, want nil", err)
+	}
+}
+
+// TestDecodeAudioNodeConfigCarriesLocalClockOverride proves the ADR-052
+// field reaches the binding, and that omitting it is not an error.
+func TestDecodeAudioNodeConfigCarriesLocalClockOverride(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["localClockOverride"] = "house word clock"
+	p, err := decodeAudioNodeConfig(params)
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.LocalClockOverride != "house word clock" {
+		t.Errorf("LocalClockOverride = %q, want %q", p.LocalClockOverride, "house word clock")
+	}
+	absent, err := decodeAudioNodeConfig(programOnlyNodeParams())
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if absent.LocalClockOverride != "" {
+		t.Errorf("LocalClockOverride = %q, want empty when the key is absent", absent.LocalClockOverride)
 	}
 }

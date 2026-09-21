@@ -276,22 +276,27 @@ func Run() int {
 	// SAME store, on its own poll cadence.
 	renderStore := noderender.NewStore()
 
+	// Track I seam I1: node.clock's own push cache, the identical shape
+	// as audioStore below, one report type over. See nodeclock's
+	// package doc comment. Constructed first because audioStore reads it
+	// for node.audio.sync.* (ADR-052).
+	clockStore := nodeclock.NewStore()
+
 	// Track C seam C1a: audio's own push cache, the identical shape as
 	// renderStore above, one report type over — see nodeaudio's package
-	// doc comment. *store.Store already satisfies nodeaudio.ClockDomainSource
-	// directly, so a node never claims its own clock domain (that is
-	// operator-declared audio.node configuration, read live on every poll).
-	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
+	// doc comment. *store.Store already satisfies
+	// nodeaudio.LocalClockSource directly, so a node never claims that two
+	// of its outputs share one clock (that is operator-declared audio.node
+	// configuration, read live on every poll).
+	audioStore := nodeaudio.NewStore(
+		nodeaudio.WithLocalClockSource(st),
+		nodeaudio.WithClockStatusSource(clockStore),
+	)
 
 	// Wraps audioStore so an alignment sample lands on a node's
 	// active audio_alignment_runs run without changing what audioStore
 	// itself stores or how it is polled.
 	alignmentRecorder := audioalignment.NewRecorder(audioStore, st, logger)
-
-	// Track I seam I1: node.clock's own push cache, the identical shape
-	// as audioStore above, one report type over — see nodeclock's
-	// package doc comment.
-	clockStore := nodeclock.NewStore()
 
 	// fppconnectpush's own push cache, the identical "record at
 	// push time, read back on demand" shape as renderStore/audioStore

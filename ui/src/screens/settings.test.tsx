@@ -702,8 +702,6 @@ describe('Settings › Node routing', () => {
       payload: {
         programRoute: overrides.programRoute ?? 'hw:CARD=USB,DEV=0',
         programChannels: overrides.programChannels ?? [1, 2],
-        clockDomain: 'usb-audio-0',
-        clockDomainProvenance: 'single interface',
         ...(overrides.ltcRoute !== undefined ? { ltcRoute: overrides.ltcRoute, ltcChannel: overrides.ltcChannel } : {}),
         ...(overrides.role !== undefined ? { role: overrides.role } : {}),
         ...(overrides.zone !== undefined ? { zone: overrides.zone } : {}),
@@ -904,11 +902,12 @@ describe('Settings › Node routing', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
-    // An operator editing only the clock domain, never touching the backend
-    // controls at all: this is the surface's own "audio node set" defect,
-    // fixed by carrying the loaded payload's sinkBackend/pipewireTargetNode
-    // forward rather than rebuilding the PUT body from scratch.
-    fireEvent.change(screen.getByLabelText('Domain'), { target: { value: 'usb-audio-0-renamed' } })
+    // An operator editing only the channel layout, never touching the
+    // backend controls at all: this is the surface's own "audio node set"
+    // defect, fixed by carrying the loaded payload's
+    // sinkBackend/pipewireTargetNode forward rather than rebuilding the PUT
+    // body from scratch.
+    fireEvent.change(screen.getByLabelText('Program channels'), { target: { value: '1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
@@ -1105,8 +1104,6 @@ describe('Settings › Node routing › PTP clock', () => {
       payload: {
         programRoute: 'hw:CARD=USB,DEV=0',
         programChannels: [1, 2],
-        clockDomain: 'usb-audio-0',
-        clockDomainProvenance: 'single interface',
         outputLatency: { method: 'unmeasured' },
       },
       updatedAt: '2026-08-30T18:00:00Z',
@@ -1722,7 +1719,7 @@ describe('RevisionHistory, shared across editors', () => {
         kind: 'audio.node',
         id: 'audio-node-01',
         revision: 4,
-        payload: { programRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], clockDomain: 'usb-audio-0', clockDomainProvenance: 'single interface' },
+        payload: { programRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2] },
         updatedAt: '2026-08-30T18:00:00Z',
         createdByPrincipalId: 'p1',
         createdByPrincipalName: 'erbartos',

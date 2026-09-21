@@ -131,8 +131,8 @@ type NodeRenderLister interface {
 // discovery reports. Unlike NodeRenderObservations, this DOES perform a
 // bounded, synchronous local store read on every call — nodeID's active
 // audio.node configuration (ADR-039), the only source its
-// node.audio.clock.domain/provenance observations are ever built from,
-// because a node cannot supply its own clock domain.
+// node.audio.clock.local observations are ever built from, because the
+// local clock is derived from the route that configuration names.
 type NodeAudioLister interface {
 	// NodeAudioObservations returns every node.audio.* observation this
 	// coordinator currently holds for nodeID's most recently reported

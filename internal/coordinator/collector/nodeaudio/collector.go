@@ -124,7 +124,7 @@ func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) o
 // alignmentStateObservation renders node.audio.clock.alignment.state, the
 // threshold verdict on the same sample alignmentObservation reported.
 // An unmeasured sample carries its own not_collected reason forward.
-func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc ClockDomainSource) observation.Observation {
+func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc LocalClockSource) observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
 
@@ -158,7 +158,7 @@ func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.A
 // lookupDriftIgnoreThresholdMs reads audio.settings' driftIgnoreThresholdMs
 // live through clockSrc. An object nothing has configured reports the
 // shipped default (config.AudioSettingsDefaultPayload).
-func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc ClockDomainSource) (thresholdMs int, reason string) {
+func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc LocalClockSource) (thresholdMs int, reason string) {
 	if clockSrc == nil {
 		return 0, "no configuration source wired into this coordinator"
 	}
@@ -201,7 +201,7 @@ var _ collector.Collector = (*Collector)(nil)
 // SessionObservationDeleter is nodeaudio's own view onto *store.Store's
 // deletion surface for audio_session rows Poll already knows are gone.
 // *store.Store satisfies this directly, the same live-wiring precedent
-// [ClockDomainSource] already uses.
+// [LocalClockSource] already uses.
 type SessionObservationDeleter interface {
 	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
 	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
@@ -261,7 +261,7 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 
 	liveIDs := make(map[string]struct{})
 	for nodeID, rep := range snap {
-		obs = append(obs, nodeObservations(ctx, nodeID, rep, c.store.clockSrc)...)
+		obs = append(obs, nodeObservations(ctx, nodeID, rep, c.store.clockSrc, c.store.clockStat)...)
 		obs = append(obs, sessionObservations(nodeID, rep)...)
 
 		cur := make(map[string]struct{}, len(rep.payload.Sessions))
@@ -321,11 +321,11 @@ func (s *Store) NodeAudioObservations(nodeID string) []observation.Observation {
 	if !ok {
 		return nil
 	}
-	obs := nodeObservations(context.Background(), nodeID, rep, s.clockSrc)
+	obs := nodeObservations(context.Background(), nodeID, rep, s.clockSrc, s.clockStat)
 	return append(obs, sessionObservations(nodeID, rep)...)
 }
 
-func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc ClockDomainSource) []observation.Observation {
+func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc LocalClockSource, clockStat ClockStatusSource) []observation.Observation {
 	p := rep.payload
 	// observedAt backs every signal this function builds. [Store] keeps
 	// only a node's most recent report and nothing evicts it, so ValidFor
@@ -386,18 +386,19 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		buildValue(nodeID, SignalOutputsPipeWireEnumeratedReason, p.PipeWireEnumeratedReason, observedAt, rep),
 	)
 
-	domain, provenance, declaredAt, reason := lookupClockDomain(ctx, clockSrc, nodeID)
+	local, localSource, declaredAt, reason := lookupLocalClock(ctx, clockSrc, nodeID)
 	if reason != "" {
 		obs = append(obs,
-			failed(res, SignalClockDomain, source, reason, rep.receivedAt),
-			failed(res, SignalClockProvenance, source, reason, rep.receivedAt),
+			failed(res, SignalClockLocal, source, reason, rep.receivedAt),
+			failed(res, SignalClockLocalSource, source, reason, rep.receivedAt),
 		)
 	} else {
 		obs = append(obs,
-			buildConfiguredValue(nodeID, SignalClockDomain, domain, declaredAt, rep),
-			buildConfiguredValue(nodeID, SignalClockProvenance, provenance, declaredAt, rep),
+			buildConfiguredValue(nodeID, SignalClockLocal, local, declaredAt, rep),
+			buildConfiguredValue(nodeID, SignalClockLocalSource, localSource, declaredAt, rep),
 		)
 	}
+	obs = append(obs, syncObservations(nodeID, p, rep, clockStat)...)
 
 	obs = append(obs, alignmentObservation(nodeID, p, rep))
 	obs = append(obs, alignmentStateObservation(ctx, nodeID, p, rep, clockSrc))
@@ -903,14 +904,16 @@ func SourceForSession(nodeID, sessionID string) string {
 	return SourceFor(nodeID) + sourceNodeSeparator + sessionID
 }
 
-// lookupClockDomain reads nodeID's active audio.node configuration
+// lookupLocalClock reads nodeID's active audio.node configuration
 // (ADR-039) from clockSrc, live, on every call — never cached — so an
 // operator's write is reflected on the very next observation, the same
 // live-read rule audionode.go's own placement check applies to capability
-// evidence. reason is non-empty exactly when domain/provenance/declaredAt
+// evidence. local is the operator's localClockOverride when set and the
+// configured program route otherwise, and localSource names which of the
+// two (ADR-052 decisions 2 and 3). reason is non-empty exactly when they
 // are not usable: no source wired in, no configuration ever activated for
 // this node, or a store/decode failure.
-func lookupClockDomain(ctx context.Context, src ClockDomainSource, nodeID string) (domain, provenance string, declaredAt time.Time, reason string) {
+func lookupLocalClock(ctx context.Context, src LocalClockSource, nodeID string) (local, localSource string, declaredAt time.Time, reason string) {
 	if src == nil {
 		return "", "", time.Time{}, "no configuration source wired into this coordinator"
 	}
@@ -932,7 +935,8 @@ func lookupClockDomain(ctx context.Context, src ClockDomainSource, nodeID string
 	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
 		return "", "", time.Time{}, fmt.Sprintf("stored audio.node configuration payload is malformed: %v", err)
 	}
-	return payload.ClockDomain, payload.ClockDomainProvenance, rev.CreatedAt, ""
+	local, localSource = config.AudioNodeLocalClock(payload)
+	return local, localSource, rev.CreatedAt, ""
 }
 
 // buildValue stamps ObservedAt from the caller-supplied observedAt:

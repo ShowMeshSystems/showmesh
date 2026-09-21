@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   getShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowSurfaceRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deleteShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -24,6 +25,7 @@ vi.mock('../api', async () => {
     getShowSurface: (...args: never[]) => stubs.getShowSurface(...args),
     getShowSurfaceRevisions: (...args: never[]) => stubs.getShowSurfaceRevisions(...args),
     putShowSurface: (...args: never[]) => stubs.putShowSurface(...args),
+    deleteShowSurface: (...args: never[]) => stubs.deleteShowSurface(...args),
   }
 })
 
@@ -313,6 +315,45 @@ describe('Shows · Presentation tab', () => {
     stubs.putShowSurface = putSpy
     fireEvent.click(save)
     expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  describe('deleting a surface', () => {
+    it('is inert until the name is typed exactly, then deletes and closes the inspector', async () => {
+      setup()
+      const row = await screen.findByRole('row', { name: 'Edit Garage door' })
+      fireEvent.click(row)
+      const deleteButton = await screen.findByRole('button', { name: 'Delete surface' })
+      expect(deleteButton).toBeDisabled()
+
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      stubs.deleteShowSurface = deleteSpy
+      fireEvent.change(screen.getByLabelText('Type Garage door to confirm'), { target: { value: 'Garage door' } })
+      expect(deleteButton).not.toBeDisabled()
+      fireEvent.click(deleteButton)
+
+      await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('garage'))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save surface' })).not.toBeInTheDocument())
+    })
+
+    it('renders the coordinator’s refusal verbatim and keeps the surface open when the delete is refused', async () => {
+      setup()
+      stubs.deleteShowSurface = () => Promise.reject(new ApiError('garage is referenced by a live pipeline.', 409))
+      const row = await screen.findByRole('row', { name: 'Edit Garage door' })
+      fireEvent.click(row)
+      fireEvent.change(screen.getByLabelText('Type Garage door to confirm'), { target: { value: 'Garage door' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete surface' }))
+      expect(await screen.findByText('garage is referenced by a live pipeline.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save surface' })).toBeInTheDocument()
+    })
+
+    it('is disabled without config:write, however it is typed', async () => {
+      setup([])
+      const row = await screen.findByRole('row', { name: 'Edit Garage door' })
+      fireEvent.click(row)
+      await screen.findByRole('button', { name: 'Save surface' })
+      fireEvent.change(screen.getByLabelText('Type Garage door to confirm'), { target: { value: 'Garage door' } })
+      expect(screen.getByRole('button', { name: 'Delete surface' })).toBeDisabled()
+    })
   })
 
   it('a stale surface save is refused, writes nothing, and names the changed fields', async () => {

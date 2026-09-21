@@ -19,7 +19,7 @@ import {
   type ConfigMediaPlaylistItem,
   type MediaPlaylistConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, DeletePanel, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
@@ -220,7 +220,6 @@ export function MediaPlaylistEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<Playlist>, { kind: 'stale' }> | null>(null)
-  const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
@@ -229,7 +228,6 @@ export function MediaPlaylistEditor({
     setDirty(false)
     setSaveError(null)
     setStale(null)
-    setDeleteConfirmText('')
     setDeleteError(null)
   }, [playlist])
 
@@ -311,24 +309,20 @@ export function MediaPlaylistEditor({
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
-      <div className="sm-panel sm-stack-5">
-        <h3 className="sm-subsection__title">Delete this media playlist</h3>
+      <DeletePanel
+        key={playlist.id}
+        title="Delete this media playlist"
+        confirmValue={playlist.payload.label}
+        confirmNoun="the playlist's own label"
+        actionLabel="Delete media playlist"
+        deleting={deleting}
+        error={deleteError}
+        allowed={saveGate.allowed}
+        disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+        onDelete={remove}
+      >
         <p className="sm-small sm-muted">A tombstone: nothing else in this codebase's reference graph names a media.playlist id, so deleting one orphans nothing.</p>
-        <Field label={`Type ${playlist.payload.label} to confirm`} help="Asks for the playlist's own label before it proceeds.">
-          {(p) => <Input {...p} value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} />}
-        </Field>
-        {deleteError !== null && <RuledStrip absence="failed" label="Delete failed" fact={deleteError} />}
-        <ButtonRow>
-          <Button
-            variant="danger"
-            onClick={remove}
-            disabled={deleteConfirmText !== playlist.payload.label || deleting || !saveGate.allowed}
-            title={!saveGate.allowed ? saveGate.reason : deleteConfirmText !== playlist.payload.label ? 'Type the label exactly to enable this.' : undefined}
-          >
-            {deleting ? 'Deleting…' : 'Delete media playlist'}
-          </Button>
-        </ButtonRow>
-      </div>
+      </DeletePanel>
     </Section>
   )
 }

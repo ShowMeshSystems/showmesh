@@ -25,8 +25,11 @@ const (
 	SignalOutputsTruncated  observation.SignalID = "node.audio.outputs.truncated"
 	SignalProgramState      observation.SignalID = "node.audio.program.state"
 	SignalLTCState          observation.SignalID = "node.audio.ltc.state"
-	SignalClockDomain       observation.SignalID = "node.audio.clock.domain"
-	SignalClockProvenance   observation.SignalID = "node.audio.clock.provenance"
+	// SignalClockLocal and SignalClockLocalSource are ADR-052's local
+	// clock and which of "derived" or "override" produced it. Built from
+	// the node's audio.node configuration, never from its own report.
+	SignalClockLocal       observation.SignalID = "node.audio.clock.local"
+	SignalClockLocalSource observation.SignalID = "node.audio.clock.local.source"
 
 	// SignalClockAlignment is AUDIO-ENGINE section 15's program-to-LTC
 	// alignment signal: the signed millisecond offset between a node's
@@ -36,8 +39,7 @@ const (
 	// [observation.StateNotCollected] with a reason whenever the node's
 	// own report carries no measured sample, an unmeasured tick, or an
 	// agent build that predates this evidence, and never inferred from
-	// the program and LTC buses both being usable or from
-	// ClockDomain/ClockProvenance declaring a shared clock. See
+	// the program and LTC buses both being usable. See
 	// [alignmentObservation].
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 
@@ -169,6 +171,19 @@ const (
 	SignalOutputsPipeWireEnumeratedReason observation.SignalID = "node.audio.outputs.pipewire_enumerated_reason"
 )
 
+// The four node.audio.sync.* signals are ADR-052 decision 6's sync
+// status: whether this node's local clock is locked to the global clock,
+// what it follows, the offset, and the rate adjustment. Built from the
+// node's own PTP report and the clock its pipeline was built on, so a
+// locked provider on a system-clock pipeline is not a locked output.
+// See [syncObservations].
+const (
+	SignalSyncState    observation.SignalID = "node.audio.sync.state"
+	SignalSyncFollows  observation.SignalID = "node.audio.sync.follows"
+	SignalSyncOffsetNs observation.SignalID = "node.audio.sync.offset_ns"
+	SignalSyncRatePPM  observation.SignalID = "node.audio.sync.rate_ppm"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -183,8 +198,12 @@ var AllSignalIDs = []observation.SignalID{
 	SignalOutputsPipeWireEnumeratedReason,
 	SignalProgramState,
 	SignalLTCState,
-	SignalClockDomain,
-	SignalClockProvenance,
+	SignalClockLocal,
+	SignalClockLocalSource,
+	SignalSyncState,
+	SignalSyncFollows,
+	SignalSyncOffsetNs,
+	SignalSyncRatePPM,
 	SignalClockAlignment,
 	SignalClockAlignmentState,
 	SignalLTCFrameRate,

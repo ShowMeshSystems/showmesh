@@ -95,7 +95,7 @@ export function audioNodeVerdict(payload: {
   if (hasLtcRoute && payload.programRoute.trim() !== payload.ltcRoute.trim()) {
     return {
       ok: false,
-      reason: 'Program and LTC leave through one interface in one clock domain. LTC route must name the same route as program route.',
+      reason: 'LTC route names a different interface than program route. Name the same route for both, so timecode cannot drift against the music.',
     }
   }
   if (hasLtcChannel) {

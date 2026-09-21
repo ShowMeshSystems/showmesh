@@ -209,10 +209,10 @@ var audioSessionCapabilityIDs = []capability.ID{
 // hardware (every render node and the development laptop) returns an
 // empty set, not a fault.
 //
-// This node never claims its own clock domain: no software call here
-// proves two outputs share a hardware clock, so ClockDomain/
-// ClockDomainProvenance are the coordinator's own operator-declared
-// audio.node configuration (ADR-039), not anything this agent reports.
+// This node never claims that two of its outputs share one clock: no
+// software call here proves it, so an operator's localClockOverride is
+// part of the coordinator's own audio.node configuration (ADR-039,
+// ADR-052), not anything this agent reports.
 func detectAudioCapabilities(ctx context.Context) capability.Set {
 	d := discoverAudio(ctx)
 	// d.Routes is the ALSA+PipeWire merge, so eviction (a device genuinely

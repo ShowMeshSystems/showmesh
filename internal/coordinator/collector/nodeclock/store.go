@@ -19,7 +19,7 @@ type report struct {
 // Store holds, for each node that has ever published a clock report, the
 // most recently received one. The zero value is not usable; construct
 // with [NewStore]. Mirrors nodeaudio.Store, minus that package's
-// ClockDomainSource: node.clock has no analogous coordinator-declared
+// LocalClockSource: node.clock has no analogous coordinator-declared
 // value a node's own report needs merged in — every field this package
 // reports comes straight from the node's own evidence.
 type Store struct {

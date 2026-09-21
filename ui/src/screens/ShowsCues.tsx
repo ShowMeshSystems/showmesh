@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  deleteShowCue,
   getAudioSettingsConfig,
   getShowCue,
   getShowCueRevisions,
@@ -13,7 +14,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, DeletePanel, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -224,6 +225,11 @@ export function ShowsCues() {
               upsertCue(response)
               setSelectedId(response.id)
               setCreating(false)
+            }}
+            onDeleted={() => {
+              reload()
+              setCreating(false)
+              setSelectedId(null)
             }}
             onCancel={() => {
               setCreating(false)
@@ -451,6 +457,7 @@ function CueEditor({
   audioAssets,
   model,
   onSaved,
+  onDeleted,
   onCancel,
 }: {
   showId: string
@@ -459,6 +466,7 @@ function CueEditor({
   audioAssets: readonly Asset[]
   model: ReturnType<typeof useModelContext>
   onSaved: (response: ShowCueConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
 }) {
   const isNew = cue === null
@@ -489,6 +497,18 @@ function CueEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowCueConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    if (cue === null) return
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowCue(cue.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   useEffect(() => {
     if (fps === null) return
@@ -830,6 +850,22 @@ function CueEditor({
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       {cue !== null && <RevisionHistory fetch={() => getShowCueRevisions(cue.id)} reloadKey={`${cue.id}:${cue.revision}`} />}
+
+      {cue !== null && (
+        <DeletePanel
+          title="Delete this cue"
+          confirmNoun="the cue's own name"
+          confirmValue={cue.payload.name}
+          actionLabel="Delete cue"
+          deleting={deleting}
+          error={deleteError}
+          allowed={saveGate.allowed}
+          disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+          onDelete={remove}
+        >
+          <p className="sm-small sm-muted">Deleting a cue leaves any playlist entry that used it pointing at nothing.</p>
+        </DeletePanel>
+      )}
     </div>
   )
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -38,8 +39,7 @@ func nodeViewWithAudioCapabilities(nodeID string, programRoutes, ltcRoutes []str
 	}
 }
 
-const validAudioNodeBody = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
-	`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+const validAudioNodeBody = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3}`
 
 func mustPutAudioNode(t *testing.T, api *API, token, id, body string) (int, string) {
 	t.Helper()
@@ -131,8 +131,7 @@ func TestPutAudioNodeRejectsRouteMismatch(t *testing.T) {
 	})
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3}`
 	status, respBody := mustPutAudioNode(t, api, token, "render-01", body)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", status, respBody)
@@ -155,8 +154,7 @@ func TestPutAudioNodeRejectsLTCChannelOverlappingProgramChannels(t *testing.T) {
 	})
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":2,` +
-		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":2}`
 	status, respBody := mustPutAudioNode(t, api, token, "render-01", body)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", status, respBody)
@@ -269,5 +267,88 @@ func TestPutAudioNodeRevisionPreconditionWiring(t *testing.T) {
 	}
 	if resp, body := putNode(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("If-None-Match against an already-created node: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestAudioNodeRetiredClockFieldsAreAcceptedAndDropped proves ADR-052
+// decision 5 end to end through the real handlers: a stored object
+// carrying clockDomain and clockDomainProvenance reads back without them,
+// and an unrelated edit that never mentions sinkBackend or
+// pipewireTargetNode does not reset either.
+func TestAudioNodeRetiredClockFieldsAreAcceptedAndDropped(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	authHeader := map[string]string{"Authorization": "Bearer " + token}
+
+	legacy := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it",` +
+		`"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-MOTU_M4-00.pro-output-0"}`
+	status, body := mustPutAudioNode(t, api, token, "render-01", legacy)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", status, body)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", authHeader)
+	if strings.Contains(string(getBody), "clockDomain") {
+		t.Fatalf("GET still carries a retired clock field; body: %s", getBody)
+	}
+	for _, want := range []string{
+		`"programRoute":"hw:0,0"`, `"ltcRoute":"hw:0,0"`, `"programChannels":[1,2]`, `"ltcChannel":3`,
+		`"sinkBackend":"pipewiresink"`, `"pipewireTargetNode":"alsa_output.usb-MOTU_M4-00.pro-output-0"`,
+	} {
+		if !containsAll(string(getBody), want) {
+			t.Fatalf("GET lost %s; body: %s", want, getBody)
+		}
+	}
+
+	// An unrelated edit: the channel layout changes, and every other
+	// stored field is sent back exactly as it was read.
+	edit := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":3,` +
+		`"sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-MOTU_M4-00.pro-output-0"}`
+	status, body = mustPutAudioNode(t, api, token, "render-01", edit)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", status, body)
+	}
+	_, getBody = doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", authHeader)
+	if strings.Contains(string(getBody), "clockDomain") {
+		t.Fatalf("GET still carries a retired clock field after the edit; body: %s", getBody)
+	}
+	for _, want := range []string{
+		`"programChannels":[1]`, `"sinkBackend":"pipewiresink"`,
+		`"pipewireTargetNode":"alsa_output.usb-MOTU_M4-00.pro-output-0"`,
+	} {
+		if !containsAll(string(getBody), want) {
+			t.Fatalf("edit lost %s; body: %s", want, getBody)
+		}
+	}
+}
+
+// TestPutAudioNodeAcceptsLocalClockOverride proves the ADR-052 field
+// survives a write and a read.
+func TestPutAudioNodeAcceptsLocalClockOverride(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"localClockOverride":"house word clock"}`
+	status, respBody := mustPutAudioNode(t, api, token, "render-01", body)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", status, respBody)
+	}
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(getBody), `"localClockOverride":"house word clock"`) {
+		t.Fatalf("GET lost the override; body: %s", getBody)
 	}
 }

@@ -110,7 +110,6 @@ func TestToNodePushesConfiguredAudioNode(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute: "hw:CARD=X,DEV=0", LTCRoute: "hw:CARD=X,DEV=0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "one-interface", ClockDomainProvenance: "single card",
 	}
 	raw, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
@@ -146,7 +145,6 @@ func TestToNodePushesProgramOnlyAudioNodeWithoutLTCKeys(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute:    "hw:CARD=USB,DEV=0",
 		ProgramChannels: []int{1, 2},
-		ClockDomain:     "solo", ClockDomainProvenance: "two-output interface",
 	}
 	raw, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
@@ -172,8 +170,8 @@ func TestToNodePushesProgramOnlyAudioNodeWithoutLTCKeys(t *testing.T) {
 	if params["programRoute"] != payload.ProgramRoute {
 		t.Errorf("programRoute = %v, want %v", params["programRoute"], payload.ProgramRoute)
 	}
-	if params["clockDomain"] != payload.ClockDomain {
-		t.Errorf("clockDomain = %v, want %v", params["clockDomain"], payload.ClockDomain)
+	if params["clockDomain"] == "" || params["clockDomain"] == nil {
+		t.Errorf("clockDomain = %v; an agent older than ADR-052 requires it", params["clockDomain"])
 	}
 }
 
@@ -185,7 +183,6 @@ func TestToNodePushesBothLTCKeysWhenDeclared(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute: "hw:CARD=X,DEV=0", LTCRoute: "hw:CARD=X,DEV=0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain: "one-interface", ClockDomainProvenance: "single card",
 	}
 	raw, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
@@ -220,7 +217,6 @@ func TestToNodePushesMeasuredOutputLatency(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute:    "hw:CARD=X,DEV=0",
 		ProgramChannels: []int{1, 2},
-		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
 		OutputLatency: config.OutputLatencyPayload{
 			ValueUs: 55997, Method: config.OutputLatencyMethodLoopback,
 			MeasuredAt: &measuredAt, Reference: "node-2 loopback",
@@ -261,7 +257,6 @@ func TestToNodeOmitsOutputLatencyWhenUnmeasured(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute:    "hw:CARD=X,DEV=0",
 		ProgramChannels: []int{1, 2},
-		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
 	}
 	raw, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
@@ -290,9 +285,8 @@ func TestToNodePushesPipeWireSinkBackend(t *testing.T) {
 	cs := newFakeConfigStore()
 	targetNode := "alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0"
 	payload := config.AudioNodePayload{
-		ProgramRoute:    "hw:CARD=X,DEV=0",
-		ProgramChannels: []int{1, 2},
-		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
+		ProgramRoute:       "hw:CARD=X,DEV=0",
+		ProgramChannels:    []int{1, 2},
 		SinkBackend:        config.AudioNodeSinkBackendPipeWire,
 		PipewireTargetNode: &targetNode,
 	}
@@ -326,7 +320,6 @@ func TestToNodeOmitsSinkBackendWhenDefault(t *testing.T) {
 	payload := config.AudioNodePayload{
 		ProgramRoute:    "hw:CARD=X,DEV=0",
 		ProgramChannels: []int{1, 2},
-		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
 	}
 	raw, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
@@ -441,4 +434,63 @@ func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{failNext: true}
 	BestEffort(context.Background(), cs, pub, time.Now, "any-node", nil)
+}
+
+// TestToNodePushesLocalClockOverrideOnlyWhenSet proves the ADR-052 field
+// reaches the node when an operator set it, and that the key is absent
+// otherwise: an empty string pushed as a value would read on the node as
+// a local clock named "". It also pins the two retired keys an agent
+// older than ADR-052 still requires, filled from the local clock.
+func TestToNodePushesLocalClockOverrideOnlyWhenSet(t *testing.T) {
+	cs := newFakeConfigStore()
+	set := config.AudioNodePayload{
+		ProgramRoute:       "hw:CARD=X,DEV=0",
+		ProgramChannels:    []int{1, 2},
+		LocalClockOverride: "house word clock",
+	}
+	raw, err := config.EncodeAudioNodePayload(set)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "node-1", 1, raw)
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok := pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if params["localClockOverride"] != "house word clock" {
+		t.Errorf("localClockOverride = %v, want %q", params["localClockOverride"], "house word clock")
+	}
+	if params["clockDomain"] != "house word clock" || params["clockDomainProvenance"] != config.AudioNodeLocalClockOverride {
+		t.Errorf("retired keys = %v/%v, want the local clock and %q",
+			params["clockDomain"], params["clockDomainProvenance"], config.AudioNodeLocalClockOverride)
+	}
+
+	derived := config.AudioNodePayload{
+		ProgramRoute:    "hw:CARD=X,DEV=0",
+		ProgramChannels: []int{1, 2},
+	}
+	raw, err = config.EncodeAudioNodePayload(derived)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "node-2", 1, raw)
+	pub = &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-2"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok = pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if _, present := params["localClockOverride"]; present {
+		t.Errorf("params carries localClockOverride = %v; the key must be absent when the local clock is derived", params["localClockOverride"])
+	}
+	if params["clockDomain"] != "hw:CARD=X" || params["clockDomainProvenance"] != config.AudioNodeLocalClockDerived {
+		t.Errorf("retired keys = %v/%v, want the derived local clock and %q",
+			params["clockDomain"], params["clockDomainProvenance"], config.AudioNodeLocalClockDerived)
+	}
 }

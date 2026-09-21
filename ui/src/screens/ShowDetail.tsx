@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  deleteShow,
   getShow,
   getShowRevisions,
   listConfigObjects,
@@ -10,7 +11,7 @@ import {
   type ConfigShowWrite,
   type ShowConfigResponse,
 } from '../api'
-import { Button, ButtonRow, ChoiceGroup, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
+import { Button, ButtonRow, ChoiceGroup, DeletePanel, Field, Input, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -110,6 +111,8 @@ export function ShowDetail() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const audioNodesState = useAudioNodes()
 
   useEffect(() => {
@@ -158,6 +161,15 @@ export function ShowDetail() {
       })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
+  }
+
+  const removeShow = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShow(id)
+      .then(() => navigate('/shows'))
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
   }
 
   if (state.kind === 'loading') {
@@ -328,31 +340,23 @@ export function ShowDetail() {
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
       <Section id="sh-danger" title="Delete this show">
-        <div className="sm-panel">
+        <DeletePanel
+          key={id}
+          confirmValue={payload.name}
+          confirmNoun="the show's own name"
+          actionLabel="Delete show"
+          deleting={deleting}
+          error={deleteError}
+          allowed={saveGate.allowed}
+          disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
+          onDelete={removeShow}
+        >
           <p className="sm-small sm-muted">
-            {active ? (
-              <>
-                This is the <strong>active</strong> show, the one this installation's authority is currently set to.
-                That is not the same as a show running right now, which Show Night reports. Deleting it would orphan{' '}
-                {counts === 'loading' || counts === 'failed'
-                  ? 'this show’s configured objects'
-                  : `${counts.cues} cues, ${counts.playlists} playlists and ${counts.surfaces} surfaces`}
-                , and leave the installation with no authority for tonight.
-              </>
-            ) : (
-              'Deleting a show removes its own configuration objects; its assets are content, not configuration, and are not removed either way.'
-            )}
+            {active
+              ? 'This is the active show. It cannot be deleted until another show is made active.'
+              : "Deleting a show removes only the show object itself. Its cues, playlists, surfaces and other objects stay until they are deleted on their own."}
           </p>
-          <ButtonRow>
-            <NotWired label="No delete endpoint">
-              <Button variant="danger">Delete show</Button>
-            </NotWired>
-          </ButtonRow>
-          <p className="sm-small sm-faint">
-            The coordinator has no endpoint to delete a show config object today. This control is drawn to its final
-            shape and is inert.
-          </p>
-        </div>
+        </DeletePanel>
       </Section>
     </>
   )

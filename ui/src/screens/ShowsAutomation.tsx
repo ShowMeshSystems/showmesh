@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  deleteShowAction,
+  deleteShowMacro,
   getMacroRun,
   getActionBinding,
   getShowAction,
@@ -32,7 +34,7 @@ import {
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
@@ -412,6 +414,11 @@ export function ShowsAutomation() {
               clearMacroDraft(stepAside.id)
               setAside({ kind: 'none' })
             }}
+            onDeleted={() => {
+              clearMacroDraft(stepAside.id)
+              setAside({ kind: 'none' })
+              reload()
+            }}
             onCancel={() => {
               clearMacroDraft(stepAside.id)
               setAside({ kind: 'none' })
@@ -444,6 +451,10 @@ export function ShowsAutomation() {
                 binding={bindingMap.get(editing.id)}
                 macroUsages={macroUsagesForAction(macros, editing.id)}
                 onSaved={() => {
+                  reload()
+                  setAside({ kind: 'none' })
+                }}
+                onDeleted={() => {
                   reload()
                   setAside({ kind: 'none' })
                 }}
@@ -803,6 +814,7 @@ function StepEditor({
   bindings,
   canAuthor,
   onSaved,
+  onDeleted,
   onCancel,
 }: {
   macro: ShowMacroConfigResponse
@@ -812,6 +824,7 @@ function StepEditor({
   bindings: ReadonlyMap<string, ActionBinding>
   canAuthor: { allowed: boolean; reason?: string }
   onSaved: (response: ShowMacroConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
 }) {
   const step = steps[stepIndex]
@@ -826,6 +839,17 @@ function StepEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowMacroConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowMacro(macro.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   if (step === undefined) return null
 
@@ -981,6 +1005,20 @@ function StepEditor({
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={() => getShowMacroRevisions(macro.id)} reloadKey={`${macro.id}:${macro.revision}`} />
+
+      <DeletePanel
+        title="Delete this macro"
+        confirmNoun="the macro's own label"
+        confirmValue={macro.payload.label}
+        actionLabel="Delete macro"
+        deleting={deleting}
+        error={deleteError}
+        allowed={canAuthor.allowed}
+        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
+        onDelete={remove}
+      >
+        <p className="sm-small sm-muted">Deleting a macro does not delete its steps' actions; those remain, reachable by direct invoke or another macro.</p>
+      </DeletePanel>
     </div>
   )
 }
@@ -1911,6 +1949,7 @@ function ActionEditor({
   binding,
   macroUsages,
   onSaved,
+  onDeleted,
   onCancel,
   onReloadAfterStale,
 }: {
@@ -1920,6 +1959,7 @@ function ActionEditor({
   binding: ActionBinding | undefined
   macroUsages: readonly { label: string; stepNumbers: number[] }[]
   onSaved: (response: ShowActionConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
   onReloadAfterStale: () => void
 }) {
@@ -1938,6 +1978,17 @@ function ActionEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActionConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowAction(action.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   useEffect(() => {
     if (integration !== 'resolume') return
@@ -2128,6 +2179,24 @@ function ActionEditor({
       {stale !== null && <StaleWriteStrip stale={stale} onReload={onReloadAfterStale} />}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={() => getShowActionRevisions(action.id)} reloadKey={`${action.id}:${action.revision}`} />
+
+      <DeletePanel
+        title="Delete this action"
+        confirmNoun="the action's own label"
+        confirmValue={action.payload.label}
+        actionLabel="Delete action"
+        deleting={deleting}
+        error={deleteError}
+        allowed={canAuthor.allowed}
+        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
+        onDelete={remove}
+      >
+        {macroUsages.length > 0 ? (
+          <p className="sm-small sm-muted">Deleting this action leaves its steps in every macro that used it pointing at nothing.</p>
+        ) : (
+          <p className="sm-small sm-muted">Not used by any macro in this show.</p>
+        )}
+      </DeletePanel>
     </div>
   )
 }
