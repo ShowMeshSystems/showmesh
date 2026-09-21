@@ -47,6 +47,25 @@ async function sha256Hex(file: File): Promise<string> {
 /** Either one show's assets or every show's assets, shared by the show tab and the /assets library. */
 export type AssetScope = { kind: 'show'; showId: string } | { kind: 'all' }
 
+const FSEQ_EXTENSION = 'fseq'
+const AUDIO_EXTENSIONS = new Set(['wav', 'mp3'])
+const MEDIA_EXTENSIONS = new Set(['mp4', 'png'])
+const ACCEPTED_EXTENSIONS_LABEL = 'FSEQ, WAV, MP3, MP4, or PNG'
+
+function fileExtension(filename: string): string {
+  const dot = filename.lastIndexOf('.')
+  return dot === -1 ? '' : filename.slice(dot + 1).toLowerCase()
+}
+
+/** The mediaType a chosen file's extension implies, or null when the extension names none of the accepted types. */
+function inferMediaType(filename: string): 'fseq' | 'audio' | 'media' | null {
+  const ext = fileExtension(filename)
+  if (ext === FSEQ_EXTENSION) return 'fseq'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
+  if (MEDIA_EXTENSIONS.has(ext)) return 'media'
+  return null
+}
+
 type ListState =
   | { kind: 'loading' }
   | { kind: 'loaded'; assets: Asset[] }
@@ -760,8 +779,9 @@ function AssetUploadForm({
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [fileHash, setFileHash] = useState<string | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
   const [sequence, setSequence] = useState('')
-  const [mediaType, setMediaType] = useState<'fseq' | 'audio' | 'media'>('fseq')
+  const [mediaType, setMediaType] = useState<'fseq' | 'audio' | 'media' | null>(null)
   const [targetKind, setTargetKind] = useState<'node' | 'show'>('show')
   const [target, setTarget] = useState('')
   const [showId, setShowId] = useState(scope.kind === 'show' ? scope.showId : '')
@@ -802,6 +822,25 @@ function AssetUploadForm({
             (targetKind === 'show' || a.target === target),
         ) ?? null
 
+  const handleFileChange = (selected: File | null) => {
+    if (selected === null) {
+      setFile(null)
+      setMediaType(null)
+      setFileError(null)
+      return
+    }
+    const inferred = inferMediaType(selected.name)
+    if (inferred === null) {
+      setFile(null)
+      setMediaType(null)
+      setFileError(`"${selected.name}" is not an accepted file type. Choose an ${ACCEPTED_EXTENSIONS_LABEL} file.`)
+      return
+    }
+    setFile(selected)
+    setMediaType(inferred)
+    setFileError(null)
+  }
+
   let blockReason: string | null = null
   if (file === null) blockReason = 'Choose a file.'
   else if (sequence.trim() === '') blockReason = 'Name the logical sequence this file belongs to.'
@@ -809,7 +848,7 @@ function AssetUploadForm({
   else if (targetKind === 'node' && target === '') blockReason = 'Identity needs a target. There is no default.'
 
   const submit = () => {
-    if (blockReason !== null || file === null) return
+    if (blockReason !== null || file === null || mediaType === null) return
     setUploading(true)
     setError(null)
     setResult(null)
@@ -834,13 +873,14 @@ function AssetUploadForm({
         <label className="sm-dropzone" htmlFor="asset-upload-file">
           <span className="sm-body">{file === null ? 'Choose a file' : file.name}</span>
           <span className="sm-data sm-small sm-faint">FSEQ · WAV · MP3 · MP4 · PNG</span>
-          <input id="asset-upload-file" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input id="asset-upload-file" type="file" onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)} />
         </label>
         {file !== null && (
           <p className="sm-small sm-muted sm-stack-2">
             <span className="sm-data">{file.name}</span> · {file.size} bytes
           </p>
         )}
+        {fileError !== null && <Notice tone="bad" headline={fileError} />}
       </div>
 
       <div className="sm-inspector__group">
@@ -874,10 +914,21 @@ function AssetUploadForm({
 
         <Field label="Media type">
           {(props) => (
-            <Select {...props} value={mediaType} onChange={(e) => setMediaType(e.target.value as 'fseq' | 'audio' | 'media')}>
-              <option value="fseq">FSEQ</option>
-              <option value="audio">Audio</option>
-              <option value="media">Media</option>
+            <Select
+              {...props}
+              value={mediaType ?? ''}
+              disabled={mediaType === null}
+              onChange={(e) => setMediaType(e.target.value as 'fseq' | 'audio' | 'media')}
+            >
+              {mediaType === null ? (
+                <option value="">Choose a file first</option>
+              ) : (
+                <>
+                  <option value="fseq">FSEQ</option>
+                  <option value="audio">Audio</option>
+                  <option value="media">Media</option>
+                </>
+              )}
             </Select>
           )}
         </Field>
