@@ -2,6 +2,8 @@ package clock
 
 import (
 	"errors"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -59,12 +61,15 @@ func TestFrequencyPPMForModeHardwarePicksTheDevice(t *testing.T) {
 	fakePHCLookup(t, 0, true, nil, nil)
 	fakeFrequencyReaders(t, 15.286, nil, 999, nil)
 
-	ppm, ok := frequencyPPMForMode("eno2", TimestampingHardware)
+	ppm, ok, reason := frequencyPPMForMode("eno2", TimestampingHardware)
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
 	if ppm != 15.286 {
 		t.Errorf("ppm = %v, want the PHC reading 15.286, not the realtime one", ppm)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty when ok is true", reason)
 	}
 }
 
@@ -73,7 +78,7 @@ func TestFrequencyPPMForModeHardwarePicksTheDevice(t *testing.T) {
 func TestFrequencyPPMForModeSoftwarePicksTheSystemClock(t *testing.T) {
 	fakeFrequencyReaders(t, 999, nil, 14.767, nil)
 
-	ppm, ok := frequencyPPMForMode("eth0", TimestampingSoftware)
+	ppm, ok, _ := frequencyPPMForMode("eth0", TimestampingSoftware)
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
@@ -83,23 +88,53 @@ func TestFrequencyPPMForModeSoftwarePicksTheSystemClock(t *testing.T) {
 }
 
 // TestFrequencyPPMForModeHardwareNoPHCReportsUnknown proves an interface
-// with no PHC reports unknown under hardware mode rather than silently
-// falling back to CLOCK_REALTIME.
+// with no PHC reports unknown under hardware mode, naming the interface,
+// rather than silently falling back to CLOCK_REALTIME.
 func TestFrequencyPPMForModeHardwareNoPHCReportsUnknown(t *testing.T) {
 	fakePHCLookup(t, 0, false, nil, nil)
-	if _, ok := frequencyPPMForMode("eth0", TimestampingHardware); ok {
+	_, ok, reason := frequencyPPMForMode("eth0", TimestampingHardware)
+	if ok {
 		t.Fatalf("ok = true, want false: eth0 has no PHC")
+	}
+	if !strings.Contains(reason, "eth0") {
+		t.Errorf("reason = %q, want it to name the interface", reason)
 	}
 }
 
 // TestFrequencyPPMForModeReadErrorReportsUnknown proves a device read
-// failure (permission denied, device missing) reports unknown, never a
-// fabricated zero.
+// failure (permission denied, device missing) reports unknown with the
+// OS error text, never a fabricated zero.
 func TestFrequencyPPMForModeReadErrorReportsUnknown(t *testing.T) {
 	fakePHCLookup(t, 0, true, nil, nil)
 	fakeFrequencyReaders(t, 0, errors.New("open /dev/ptp0: permission denied"), 0, nil)
 
-	if _, ok := frequencyPPMForMode("eno2", TimestampingHardware); ok {
+	_, ok, reason := frequencyPPMForMode("eno2", TimestampingHardware)
+	if ok {
 		t.Fatalf("ok = true, want false: the PHC read failed")
+	}
+	if !strings.Contains(reason, "permission denied") {
+		t.Errorf("reason = %q, want the OS error text surfaced", reason)
+	}
+}
+
+// TestFrequencyPPMForModePlatformUnavailableReportsUnknown proves a
+// platform that cannot read the frequency at all (the non-Linux stub)
+// reports unknown with that fact stated, not a fabricated zero. Skipped
+// where the real Linux syscall would otherwise run and mask the stub.
+func TestFrequencyPPMForModePlatformUnavailableReportsUnknown(t *testing.T) {
+	origPHC, origRT := phcFrequencyPPM, realtimeFrequencyPPM
+	phcFrequencyPPM = PHCFrequencyPPM
+	realtimeFrequencyPPM = RealtimeFrequencyPPM
+	t.Cleanup(func() { phcFrequencyPPM, realtimeFrequencyPPM = origPHC, origRT })
+
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping: CLOCK_REALTIME is genuinely readable on Linux, this test covers the non-Linux stub")
+	}
+	_, ok, reason := frequencyPPMForMode("eth0", TimestampingSoftware)
+	if ok {
+		t.Fatalf("ok = true, want false: this platform cannot read CLOCK_REALTIME's frequency")
+	}
+	if !strings.Contains(reason, "platform") {
+		t.Errorf("reason = %q, want it to say this platform cannot read it", reason)
 	}
 }

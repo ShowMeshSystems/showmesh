@@ -207,25 +207,33 @@ func TestExternalProviderFrequencyPPMNoPHCReadsRealtime(t *testing.T) {
 	fakeFrequencyReaders(t, 999, nil, 14.767, nil)
 	p := NewExternalProvider(ExternalConfig{Interface: "eth0"})
 
-	ppm, ok := p.frequencyPPM()
+	ppm, ok, reason := p.frequencyPPM()
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
 	if ppm != 14.767 {
 		t.Errorf("ppm = %v, want the realtime reading 14.767", ppm)
 	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty when ok is true", reason)
+	}
 }
 
 // TestExternalProviderFrequencyPPMUndeclaredPHCReportsUnknown mirrors
 // [TestExternalProviderNowRefusesPHCPresentWithNoDeclaration]: without an
 // operator attestation this provider cannot tell whether the PHC is
-// actually what is being disciplined.
+// actually what is being disciplined. The reason must say what to set,
+// not merely that the value is unavailable.
 func TestExternalProviderFrequencyPPMUndeclaredPHCReportsUnknown(t *testing.T) {
 	fakePHCLookup(t, 0, true, nil, nil)
 	p := NewExternalProvider(ExternalConfig{Interface: "eno2"})
 
-	if _, ok := p.frequencyPPM(); ok {
+	_, ok, reason := p.frequencyPPM()
+	if ok {
 		t.Fatalf("ok = true, want false: no phcDevice declared")
+	}
+	if !strings.Contains(reason, "eno2") || !strings.Contains(reason, "phcDevice") {
+		t.Errorf("reason = %q, want it to name the interface and phcDevice", reason)
 	}
 }
 
@@ -237,12 +245,15 @@ func TestExternalProviderFrequencyPPMDeclaredMatchingPHCReadsDevice(t *testing.T
 	fakeFrequencyReaders(t, 15.286, nil, 999, nil)
 	p := NewExternalProvider(ExternalConfig{Interface: "eno2", PHCDevice: "/dev/ptp0"})
 
-	ppm, ok := p.frequencyPPM()
+	ppm, ok, reason := p.frequencyPPM()
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
 	if ppm != 15.286 {
 		t.Errorf("ppm = %v, want the PHC reading 15.286", ppm)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty when ok is true", reason)
 	}
 }
 
@@ -252,7 +263,28 @@ func TestExternalProviderFrequencyPPMMismatchedPHCReportsUnknown(t *testing.T) {
 	fakePHCLookup(t, 0, true, nil, nil)
 	p := NewExternalProvider(ExternalConfig{Interface: "eno2", PHCDevice: "/dev/ptp1"})
 
-	if _, ok := p.frequencyPPM(); ok {
+	_, ok, reason := p.frequencyPPM()
+	if ok {
 		t.Fatalf("ok = true, want false: declared /dev/ptp1 does not match the interface's own PHC index 0")
+	}
+	if !strings.Contains(reason, "phcDevice") {
+		t.Errorf("reason = %q, want it to name phcDevice", reason)
+	}
+}
+
+// TestExternalProviderFrequencyPPMOpenFailureIncludesOSError proves a PHC
+// that cannot be opened reports the underlying OS error text, not a bare
+// "unknown".
+func TestExternalProviderFrequencyPPMOpenFailureIncludesOSError(t *testing.T) {
+	fakePHCLookup(t, 0, true, nil, nil)
+	fakeFrequencyReaders(t, 0, errors.New("open /dev/ptp0: permission denied"), 0, nil)
+	p := NewExternalProvider(ExternalConfig{Interface: "eno2", PHCDevice: "/dev/ptp0"})
+
+	_, ok, reason := p.frequencyPPM()
+	if ok {
+		t.Fatalf("ok = true, want false: the PHC read failed")
+	}
+	if !strings.Contains(reason, "permission denied") {
+		t.Errorf("reason = %q, want the OS error text surfaced", reason)
 	}
 }

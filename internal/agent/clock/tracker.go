@@ -234,6 +234,7 @@ func (t *Tracker) buildStatus(raw RawStatus, now time.Time) Status {
 		OffsetKnown:         raw.OffsetKnown && t.state == StateLocked,
 		FrequencyPPM:        raw.FrequencyPPM,
 		FrequencyPPMKnown:   raw.FrequencyPPMKnown,
+		FrequencyPPMReason:  raw.FrequencyPPMReason,
 		ClockClass:          raw.ClockClass,
 		ClockClassKnown:     raw.ClockClassKnown,
 		Timestamping:        raw.Timestamping,

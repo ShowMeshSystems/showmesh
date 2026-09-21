@@ -84,11 +84,9 @@ func (r *PHCReader) Close() error {
 	return r.f.Close()
 }
 
-// readFreqPPM reads clockID's current frequency adjustment via
-// clock_adjtime with a zeroed Timex (modes=0 is a pure read, adjusting
-// nothing) and converts its Freq to parts per million -- observed on a
-// real node's /dev/ptp0 2026-09-21: freq 1001812 is +15.286 ppm, the
-// kernel's own scaled-by-65536 convention (RES-019 §1).
+// readFreqPPM reads clockID's frequency via clock_adjtime with a zeroed
+// Timex (modes=0 is a pure read) and converts it to parts per million --
+// RES-019 §1.
 func readFreqPPM(clockID int32) (float64, error) {
 	var tx unix.Timex
 	if _, err := unix.ClockAdjtime(clockID, &tx); err != nil {
@@ -97,8 +95,8 @@ func readFreqPPM(clockID int32) (float64, error) {
 	return scaledFreqToPPM(tx.Freq), nil
 }
 
-// PHCFrequencyPPM opens /dev/ptp<index> and reads its current frequency
-// adjustment in parts per million -- see [readFreqPPM].
+// PHCFrequencyPPM opens /dev/ptp<index> and reads its frequency in parts
+// per million.
 func PHCFrequencyPPM(index int) (float64, error) {
 	r, err := OpenPHC(index)
 	if err != nil {
@@ -108,9 +106,8 @@ func PHCFrequencyPPM(index int) (float64, error) {
 	return readFreqPPM(r.clockID)
 }
 
-// RealtimeFrequencyPPM reads CLOCK_REALTIME's current frequency
-// adjustment in parts per million -- what a software-timestamped ptp4l
-// disciplines directly (RES-019 §1).
+// RealtimeFrequencyPPM reads CLOCK_REALTIME's frequency in parts per
+// million -- what a software-timestamped ptp4l disciplines directly.
 func RealtimeFrequencyPPM() (float64, error) {
 	return readFreqPPM(unix.CLOCK_REALTIME)
 }

@@ -128,7 +128,11 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 	if p.FrequencyPPMKnown {
 		obs = append(obs, buildValue(nodeID, SignalFrequencyPPM, p.FrequencyPPM, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalFrequencyPPM, source, "no frequency adjustment is available for this node's clock", rep.receivedAt))
+		reason := p.FrequencyPPMReason
+		if reason == "" {
+			reason = "no frequency adjustment is available for this node's clock"
+		}
+		obs = append(obs, notCollected(res, SignalFrequencyPPM, source, reason, rep.receivedAt))
 	}
 
 	if p.ClockClassKnown {

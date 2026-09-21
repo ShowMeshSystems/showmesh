@@ -111,6 +111,7 @@ func clockPayloadFromStatus(status clock.Status) mqttproto.ClockPayload {
 		OffsetKnown:         status.OffsetKnown,
 		FrequencyPPM:        status.FrequencyPPM,
 		FrequencyPPMKnown:   status.FrequencyPPMKnown,
+		FrequencyPPMReason:  status.FrequencyPPMReason,
 		ClockClass:          int64(status.ClockClass),
 		ClockClassKnown:     status.ClockClassKnown,
 		Timestamping:        string(status.Timestamping),

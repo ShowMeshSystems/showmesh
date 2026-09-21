@@ -536,8 +536,10 @@ func (p *ManagedProvider) Poll(ctx context.Context) RawStatus {
 		// rule everywhere else.
 		if reached, known := p.reachedTimestampingMode(); known {
 			raw.Timestamping, raw.TimestampingKnown = reached, true
-			if ppm, ok := frequencyPPMForMode(p.cfg.Interface, reached); ok {
+			if ppm, ok, reason := frequencyPPMForMode(p.cfg.Interface, reached); ok {
 				raw.FrequencyPPM, raw.FrequencyPPMKnown = ppm, true
+			} else {
+				raw.FrequencyPPMReason = reason
 			}
 		}
 	}

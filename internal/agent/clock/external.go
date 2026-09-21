@@ -110,36 +110,34 @@ func (p *ExternalProvider) Now(context.Context) MediaTime {
 	}
 }
 
-// frequencyPPM mirrors [ExternalProvider.Now]'s own trust decision: no
-// PHC on the interface means CLOCK_REALTIME is what is actually being
-// steered; a PHC exists only when [ExternalConfig.PHCDevice] is declared
-// and matches it, the same operator attestation Now() relies on since
-// this provider's read-only socket cannot confirm timestamping mode
-// itself. ok is false whenever that decision cannot be made confidently.
-func (p *ExternalProvider) frequencyPPM() (float64, bool) {
+// frequencyPPM mirrors [ExternalProvider.Now]'s own trust decision: an
+// interface with no PHC is CLOCK_REALTIME, a declared and matching
+// [ExternalConfig.PHCDevice] is that PHC. reason states why whenever ok
+// is false.
+func (p *ExternalProvider) frequencyPPM() (ppm float64, ok bool, reason string) {
 	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
-		return 0, false
+		return 0, false, fmt.Sprintf("Could not check %s for a hardware clock: %v.", p.cfg.Interface, err)
 	}
 	if !hasPHC {
 		v, err := realtimeFrequencyPPM()
 		if err != nil {
-			return 0, false
+			return 0, false, fmt.Sprintf("Could not read the system clock's frequency: %v.", err)
 		}
-		return v, true
+		return v, true, ""
 	}
 	if p.cfg.PHCDevice == "" {
-		return 0, false
+		return 0, false, fmt.Sprintf("%s has a hardware clock, but no PHC device is declared for it. Set phcDevice in this node's clock settings to report its frequency.", p.cfg.Interface)
 	}
-	declaredIndex, ok := phcDeviceIndex(p.cfg.PHCDevice)
-	if !ok || declaredIndex != index {
-		return 0, false
+	declaredIndex, parsed := phcDeviceIndex(p.cfg.PHCDevice)
+	if !parsed || declaredIndex != index {
+		return 0, false, fmt.Sprintf("phcDevice does not match %s's hardware clock. Fix phcDevice in this node's clock settings.", p.cfg.Interface)
 	}
 	v, err := phcFrequencyPPM(index)
 	if err != nil {
-		return 0, false
+		return 0, false, fmt.Sprintf("Could not read /dev/ptp%d's frequency: %v.", index, err)
 	}
-	return v, true
+	return v, true, ""
 }
 
 // phcDeviceIndex parses "/dev/ptpN" into N; ok is false for anything else.
@@ -169,8 +167,10 @@ func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 	}
 	raw := pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
 	if raw.Reachable {
-		if ppm, ok := p.frequencyPPM(); ok {
+		if ppm, ok, reason := p.frequencyPPM(); ok {
 			raw.FrequencyPPM, raw.FrequencyPPMKnown = ppm, true
+		} else {
+			raw.FrequencyPPMReason = reason
 		}
 	}
 	return raw

@@ -14,6 +14,7 @@ package clock
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -95,31 +96,32 @@ var (
 	scaledFreqToPPM      = func(freq int64) float64 { return float64(freq) / 65536 }
 )
 
-// frequencyPPMForMode reads the frequency adjustment of the clock a
-// provider on iface actually steers under mode: the interface's PHC
-// under hardware timestamping, CLOCK_REALTIME under software. ok is
-// false whenever that reading cannot be trusted -- no PHC on iface, or
-// the read itself failed -- never a fabricated zero.
-func frequencyPPMForMode(iface string, mode Timestamping) (ppm float64, ok bool) {
+// frequencyPPMForMode reads iface's steered-clock frequency under mode:
+// the PHC under hardware, CLOCK_REALTIME under software. reason states
+// why whenever ok is false.
+func frequencyPPMForMode(iface string, mode Timestamping) (ppm float64, ok bool, reason string) {
 	switch mode {
 	case TimestampingHardware:
 		index, hasPHC, err := phcIndexForInterface(iface)
-		if err != nil || !hasPHC {
-			return 0, false
+		if err != nil {
+			return 0, false, fmt.Sprintf("Could not check %s for a hardware clock: %v.", iface, err)
+		}
+		if !hasPHC {
+			return 0, false, fmt.Sprintf("%s has no hardware clock even though hardware timestamping is active.", iface)
 		}
 		v, err := phcFrequencyPPM(index)
 		if err != nil {
-			return 0, false
+			return 0, false, fmt.Sprintf("Could not read /dev/ptp%d's frequency: %v.", index, err)
 		}
-		return v, true
+		return v, true, ""
 	case TimestampingSoftware:
 		v, err := realtimeFrequencyPPM()
 		if err != nil {
-			return 0, false
+			return 0, false, fmt.Sprintf("Could not read the system clock's frequency: %v.", err)
 		}
-		return v, true
+		return v, true, ""
 	default:
-		return 0, false
+		return 0, false, ""
 	}
 }
 
@@ -178,14 +180,12 @@ type RawStatus struct {
 	OffsetNs    int64
 	OffsetKnown bool
 
-	// FrequencyPPM is how far this provider's steered clock (its
-	// interface's PHC under hardware timestamping, CLOCK_REALTIME under
-	// software) is currently being adjusted from its free-running rate,
-	// in parts per million, read via clock_adjtime's own Freq (scaled by
-	// 65536 -- RES-019 §1's own observed constant). Never node.audio.sync.
-	// rate_ppm's audio-interface rate.
-	FrequencyPPM      float64
-	FrequencyPPMKnown bool
+	// FrequencyPPM is how far this provider's steered clock is being
+	// adjusted, in parts per million -- never node.audio.sync.rate_ppm's
+	// audio-interface rate. FrequencyPPMReason explains an unknown value.
+	FrequencyPPM       float64
+	FrequencyPPMKnown  bool
+	FrequencyPPMReason string
 
 	ClockClass      int
 	ClockClassKnown bool
@@ -295,12 +295,12 @@ type Status struct {
 	OffsetNs    int64
 	OffsetKnown bool
 
-	// FrequencyPPM carries [RawStatus.FrequencyPPM] straight through:
-	// how hard this node's steered clock is being pulled, independent of
-	// lock state (a servo can still be applying a correction while
-	// acquiring or in holdover).
-	FrequencyPPM      float64
-	FrequencyPPMKnown bool
+	// FrequencyPPM carries [RawStatus.FrequencyPPM] straight through,
+	// independent of lock state: a servo can still be steering the clock
+	// while acquiring or in holdover.
+	FrequencyPPM       float64
+	FrequencyPPMKnown  bool
+	FrequencyPPMReason string
 
 	ClockClass      int
 	ClockClassKnown bool

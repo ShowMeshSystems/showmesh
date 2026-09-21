@@ -318,3 +318,26 @@ func TestTrackerFrequencyPPMUnknownWhenRawDidNotReportIt(t *testing.T) {
 		t.Fatalf("FrequencyPPMKnown = true, want false: raw never reported a frequency")
 	}
 }
+
+// TestTrackerFrequencyPPMReasonPassesThrough proves the reason a
+// provider gives for an unknown frequency reaches [Status] unchanged,
+// the same rest-of-the-report-unaffected rule the offset/timescale
+// fields already follow when one signal fails to read.
+func TestTrackerFrequencyPPMReasonPassesThrough(t *testing.T) {
+	raw := lockedRaw("gm-1", 100)
+	raw.FrequencyPPMReason = "eth0 has no hardware clock even though hardware timestamping is active."
+
+	p := &fakeProvider{kind: ProviderExternal, iface: "eth0", raws: []RawStatus{raw}}
+	tr := NewTracker(p, TrackerConfig{}, func() time.Time { return time.Unix(0, 0) })
+	s := tr.Poll(context.Background())
+
+	if s.FrequencyPPMKnown {
+		t.Fatalf("FrequencyPPMKnown = true, want false")
+	}
+	if s.FrequencyPPMReason != raw.FrequencyPPMReason {
+		t.Errorf("FrequencyPPMReason = %q, want %q", s.FrequencyPPMReason, raw.FrequencyPPMReason)
+	}
+	if s.OffsetNs != 100 || !s.OffsetKnown {
+		t.Errorf("the rest of the report must be unaffected by the frequency failure: OffsetNs=%v OffsetKnown=%v", s.OffsetNs, s.OffsetKnown)
+	}
+}

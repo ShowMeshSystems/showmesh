@@ -127,6 +127,9 @@ func TestCollectorPollNotLockedReportsReasonAndNoOffset(t *testing.T) {
 	if frequency.Absence == "" {
 		t.Errorf("frequencyPpm: expected not_collected when the payload never reported it, got a value")
 	}
+	if frequency.Reason == "" {
+		t.Errorf("frequencyPpm: expected a fallback reason when the payload carried none, got empty")
+	}
 
 	lockedSeconds := findObs(t, obs, SignalLockedSeconds)
 	if lockedSeconds.Absence == "" {
@@ -136,6 +139,29 @@ func TestCollectorPollNotLockedReportsReasonAndNoOffset(t *testing.T) {
 	lastStepAt := findObs(t, obs, SignalLastStepAt)
 	if lastStepAt.Absence == "" {
 		t.Errorf("lastStepAt: expected not_collected (no step observed), got a value")
+	}
+}
+
+// TestCollectorPollUsesAgentFrequencyReasonWhenPresent proves a specific
+// agent-supplied reason wins over the collector's own generic fallback --
+// an operator on a node with a hardware clock but no declared PHC device
+// gets told what to set, not just "unavailable".
+func TestCollectorPollUsesAgentFrequencyReasonWhenPresent(t *testing.T) {
+	st := NewStore()
+	observedAt := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	payload := mqttproto.ClockPayload{
+		State: "locked", Provider: "external", Timescale: "ptp",
+		FrequencyPPMReason: "eth0 has a hardware clock, but no PHC device is declared for it. Set phcDevice in this node's clock settings to report its frequency.",
+		ObservedAt:         &observedAt,
+	}
+	st.Put("node-1", payload, observedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	frequency := findObs(t, obs, SignalFrequencyPPM)
+	if frequency.Reason != payload.FrequencyPPMReason {
+		t.Errorf("reason = %q, want the agent's own reason %q", frequency.Reason, payload.FrequencyPPMReason)
 	}
 }
 
