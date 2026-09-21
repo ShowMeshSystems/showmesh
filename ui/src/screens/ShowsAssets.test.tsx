@@ -214,6 +214,116 @@ describe('Shows · Assets tab', () => {
     expect(submit).toHaveAttribute('title', 'Identity needs a target. There is no default.')
   })
 
+  it('picking an .fseq file infers mediaType fseq and submits it', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'rooftop-finale.fseq')] },
+    })
+    expect(await screen.findByLabelText('Media type')).toHaveValue('fseq')
+
+    const uploadSpy = vi.fn((file: File, fields: Record<string, unknown>) => {
+      void file
+      void fields
+      return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', asset: asset({ sequence: 'rooftop-finale', targetKind: 'show', target: '' }), rolledBack: false })
+    })
+    stubs.uploadAsset = uploadSpy
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement)
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalled())
+    expect(uploadSpy.mock.calls[0]![1]).toMatchObject({ mediaType: 'fseq' })
+  })
+
+  it('picking an audio file infers mediaType audio and submits it', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'preshow-bed.mp3')] },
+    })
+    expect(await screen.findByLabelText('Media type')).toHaveValue('audio')
+
+    const uploadSpy = vi.fn((file: File, fields: Record<string, unknown>) => {
+      void file
+      void fields
+      return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', asset: asset({ sequence: 'rooftop-finale', mediaType: 'audio', targetKind: 'show', target: '' }), rolledBack: false })
+    })
+    stubs.uploadAsset = uploadSpy
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement)
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalled())
+    expect(uploadSpy.mock.calls[0]![1]).toMatchObject({ mediaType: 'audio' })
+  })
+
+  it('picking a .flac file infers mediaType audio, matching what the coordinator decodes', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'preshow-bed.flac')] },
+    })
+    expect(await screen.findByLabelText('Media type')).toHaveValue('audio')
+  })
+
+  it('picking a media file infers mediaType media and submits it', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'logo.png')] },
+    })
+    expect(await screen.findByLabelText('Media type')).toHaveValue('media')
+
+    const uploadSpy = vi.fn((file: File, fields: Record<string, unknown>) => {
+      void file
+      void fields
+      return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', asset: asset({ sequence: 'rooftop-finale', mediaType: 'media', targetKind: 'show', target: '' }), rolledBack: false })
+    })
+    stubs.uploadAsset = uploadSpy
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement)
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalled())
+    expect(uploadSpy.mock.calls[0]![1]).toMatchObject({ mediaType: 'media' })
+  })
+
+  it('an unrecognized extension is refused in the form, names what is accepted, and submits nothing', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'notes.txt')] },
+    })
+    expect(await screen.findByText(/is not an accepted file type/)).toBeInTheDocument()
+    expect(screen.getByText(/FSEQ, WAV, MP3, FLAC, OGG, MP4, or PNG/)).toBeInTheDocument()
+
+    const uploadSpy = vi.fn(() => new Promise(() => {}))
+    stubs.uploadAsset = uploadSpy
+    const submit = screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement
+    expect(submit).toBeDisabled()
+    fireEvent.click(submit)
+    expect(uploadSpy).not.toHaveBeenCalled()
+  })
+
+  it('the operator can override the inferred type as a deliberate act', async () => {
+    setup(['asset:write'], [])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: 'rooftop-finale' } })
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), {
+      target: { files: [new File(['bytes'], 'rooftop-finale.fseq')] },
+    })
+    const mediaTypeSelect = await screen.findByLabelText('Media type')
+    expect(mediaTypeSelect).toHaveValue('fseq')
+    fireEvent.change(mediaTypeSelect, { target: { value: 'media' } })
+
+    const uploadSpy = vi.fn((file: File, fields: Record<string, unknown>) => {
+      void file
+      void fields
+      return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', asset: asset({ sequence: 'rooftop-finale', mediaType: 'media', targetKind: 'show', target: '' }), rolledBack: false })
+    })
+    stubs.uploadAsset = uploadSpy
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement)
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalled())
+    expect(uploadSpy.mock.calls[0]![1]).toMatchObject({ mediaType: 'media' })
+  })
+
   it('an upload reports rolledBack honestly rather than a plain success', async () => {
     setup(['asset:write'], [])
     fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
