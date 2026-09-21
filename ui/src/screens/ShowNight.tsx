@@ -1561,7 +1561,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               disallowedReason={gate.allowed ? undefined : gate.reason}
               onDelete={removeDefinition}
             >
-              <p className="sm-small sm-muted">Deleting a night session definition does not stop a running night; it only removes it from this list.</p>
+              <p className="sm-small sm-muted">A definition cannot be deleted while its night is running; stop the night first.</p>
             </DeletePanel>
           )}
         </div>}
