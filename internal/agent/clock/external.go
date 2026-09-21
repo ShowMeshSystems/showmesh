@@ -110,6 +110,36 @@ func (p *ExternalProvider) Now(context.Context) MediaTime {
 	}
 }
 
+// frequencyPPM mirrors [ExternalProvider.Now]'s own trust decision: an
+// interface with no PHC is CLOCK_REALTIME, a declared and matching
+// [ExternalConfig.PHCDevice] is that PHC. reason states why whenever ok
+// is false.
+func (p *ExternalProvider) frequencyPPM() (ppm float64, ok bool, reason string) {
+	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
+	if err != nil {
+		return 0, false, fmt.Sprintf("Could not check %s for a hardware clock: %v.", p.cfg.Interface, err)
+	}
+	if !hasPHC {
+		v, err := realtimeFrequencyPPM()
+		if err != nil {
+			return 0, false, fmt.Sprintf("Could not read the system clock's frequency: %v.", err)
+		}
+		return v, true, ""
+	}
+	if p.cfg.PHCDevice == "" {
+		return 0, false, fmt.Sprintf("%s has a hardware clock, but no PHC device is declared for it. Set phcDevice in this node's clock settings to report its frequency.", p.cfg.Interface)
+	}
+	declaredIndex, parsed := phcDeviceIndex(p.cfg.PHCDevice)
+	if !parsed || declaredIndex != index {
+		return 0, false, fmt.Sprintf("phcDevice does not match %s's hardware clock. Fix phcDevice in this node's clock settings.", p.cfg.Interface)
+	}
+	v, err := phcFrequencyPPM(index)
+	if err != nil {
+		return 0, false, fmt.Sprintf("Could not read /dev/ptp%d's frequency: %v.", index, err)
+	}
+	return v, true, ""
+}
+
 // phcDeviceIndex parses "/dev/ptpN" into N; ok is false for anything else.
 // Re-checks rather than trusting the wire: a malformed value must be an
 // honest refusal, never a panic or a wrong index.
@@ -135,7 +165,15 @@ func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 	if _, err := os.Stat(p.cfg.UDSAddress); err != nil {
 		return RawStatus{Reachable: false, Reason: fmt.Sprintf("Cannot reach the clock socket %s: %v.", p.cfg.UDSAddress, err)}
 	}
-	return pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
+	raw := pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
+	if raw.Reachable {
+		if ppm, ok, reason := p.frequencyPPM(); ok {
+			raw.FrequencyPPM, raw.FrequencyPPMKnown = ppm, true
+		} else {
+			raw.FrequencyPPMReason = reason
+		}
+	}
+	return raw
 }
 
 // pollViaUDS is [ExternalProvider.Poll]'s and [ManagedProvider.Poll]'s

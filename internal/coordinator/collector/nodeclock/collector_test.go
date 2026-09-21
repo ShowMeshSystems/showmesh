@@ -28,6 +28,7 @@ func lockedPayload(observedAt time.Time) mqttproto.ClockPayload {
 		Domain: 24, DomainKnown: true,
 		GrandmasterIdentity: "3cecef.fffe.a1b2c3", GMKnown: true,
 		Timescale: "ptp", OffsetNs: -42, OffsetKnown: true,
+		FrequencyPPM: 15.286, FrequencyPPMKnown: true,
 		ClockClass: 248, ClockClassKnown: true,
 		Timestamping: "hardware", TimestampingKnown: true,
 		LockedSeconds: 120, LockedSecondsKnown: true,
@@ -79,6 +80,11 @@ func TestCollectorPollRendersLockedPayload(t *testing.T) {
 		t.Errorf("offsetNs value = %v, want -42", offset.Value)
 	}
 
+	frequency := findObs(t, obs, SignalFrequencyPPM)
+	if frequency.Value != 15.286 {
+		t.Errorf("frequencyPpm value = %v, want 15.286", frequency.Value)
+	}
+
 	lockedSeconds := findObs(t, obs, SignalLockedSeconds)
 	if lockedSeconds.Value != int64(120) {
 		t.Errorf("lockedSeconds value = %v, want 120", lockedSeconds.Value)
@@ -117,6 +123,14 @@ func TestCollectorPollNotLockedReportsReasonAndNoOffset(t *testing.T) {
 		t.Errorf("offsetNs: expected not_collected while not locked, got a value")
 	}
 
+	frequency := findObs(t, obs, SignalFrequencyPPM)
+	if frequency.Absence == "" {
+		t.Errorf("frequencyPpm: expected not_collected when the payload never reported it, got a value")
+	}
+	if frequency.Reason == "" {
+		t.Errorf("frequencyPpm: expected a fallback reason when the payload carried none, got empty")
+	}
+
 	lockedSeconds := findObs(t, obs, SignalLockedSeconds)
 	if lockedSeconds.Absence == "" {
 		t.Errorf("lockedSeconds: expected not_collected while not locked, got a value")
@@ -125,6 +139,29 @@ func TestCollectorPollNotLockedReportsReasonAndNoOffset(t *testing.T) {
 	lastStepAt := findObs(t, obs, SignalLastStepAt)
 	if lastStepAt.Absence == "" {
 		t.Errorf("lastStepAt: expected not_collected (no step observed), got a value")
+	}
+}
+
+// TestCollectorPollUsesAgentFrequencyReasonWhenPresent proves a specific
+// agent-supplied reason wins over the collector's own generic fallback --
+// an operator on a node with a hardware clock but no declared PHC device
+// gets told what to set, not just "unavailable".
+func TestCollectorPollUsesAgentFrequencyReasonWhenPresent(t *testing.T) {
+	st := NewStore()
+	observedAt := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	payload := mqttproto.ClockPayload{
+		State: "locked", Provider: "external", Timescale: "ptp",
+		FrequencyPPMReason: "eth0 has a hardware clock, but no PHC device is declared for it. Set phcDevice in this node's clock settings to report its frequency.",
+		ObservedAt:         &observedAt,
+	}
+	st.Put("node-1", payload, observedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	frequency := findObs(t, obs, SignalFrequencyPPM)
+	if frequency.Reason != payload.FrequencyPPMReason {
+		t.Errorf("reason = %q, want the agent's own reason %q", frequency.Reason, payload.FrequencyPPMReason)
 	}
 }
 

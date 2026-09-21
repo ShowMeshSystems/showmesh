@@ -29,6 +29,7 @@ const (
 	SignalGrandmasterIdentity observation.SignalID = "node.clock.ptp.grandmaster_identity"
 	SignalTimescale           observation.SignalID = "node.clock.ptp.timescale"
 	SignalOffsetNs            observation.SignalID = "node.clock.ptp.offset_ns"
+	SignalFrequencyPPM        observation.SignalID = "node.clock.ptp.frequency_ppm"
 	SignalClockClass          observation.SignalID = "node.clock.ptp.clock_class"
 	SignalTimestamping        observation.SignalID = "node.clock.ptp.timestamping"
 	SignalLockedSeconds       observation.SignalID = "node.clock.ptp.locked_seconds"
@@ -50,6 +51,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalGrandmasterIdentity,
 	SignalTimescale,
 	SignalOffsetNs,
+	SignalFrequencyPPM,
 	SignalClockClass,
 	SignalTimestamping,
 	SignalLockedSeconds,

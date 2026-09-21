@@ -125,6 +125,16 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 		obs = append(obs, notCollected(res, SignalOffsetNs, source, "no fresh offset is available; the clock is not currently locked", rep.receivedAt))
 	}
 
+	if p.FrequencyPPMKnown {
+		obs = append(obs, buildValue(nodeID, SignalFrequencyPPM, p.FrequencyPPM, observedAt, rep))
+	} else {
+		reason := p.FrequencyPPMReason
+		if reason == "" {
+			reason = "no frequency adjustment is available for this node's clock"
+		}
+		obs = append(obs, notCollected(res, SignalFrequencyPPM, source, reason, rep.receivedAt))
+	}
+
 	if p.ClockClassKnown {
 		obs = append(obs, buildValue(nodeID, SignalClockClass, p.ClockClass, observedAt, rep))
 	} else {
