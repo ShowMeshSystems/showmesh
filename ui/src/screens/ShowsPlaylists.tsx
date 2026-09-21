@@ -321,6 +321,7 @@ export function ShowsPlaylists() {
 
         {!drafting && selectedShow !== null && selectedShow.payload.runner === 'fpp' && (
           <FPPPlaylistEditor
+            key={selectedShow.id}
             playlist={selectedShow}
             cues={state.kind === 'loaded' ? state.cues : []}
             evidence={evidence}
@@ -336,6 +337,7 @@ export function ShowsPlaylists() {
 
         {!drafting && selectedShow !== null && selectedShow.payload.runner === 'showmesh-audio' && (
           <AudioPlaylistEditor
+            key={selectedShow.id}
             playlist={selectedShow}
             cues={state.kind === 'loaded' ? state.cues : []}
             model={model}
@@ -714,6 +716,7 @@ function FPPPlaylistEditor({
 
       <DeletePanel
         title="Delete this playlist"
+        confirmNoun="the playlist's own name"
         confirmValue={playlist.payload.name}
         actionLabel="Delete playlist"
         deleting={deleting}
@@ -967,6 +970,7 @@ function AudioPlaylistEditor({
 
       <DeletePanel
         title="Delete this playlist"
+        confirmNoun="the playlist's own name"
         confirmValue={playlist.payload.name}
         actionLabel="Delete playlist"
         deleting={deleting}

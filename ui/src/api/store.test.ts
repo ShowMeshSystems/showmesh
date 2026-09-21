@@ -4337,3 +4337,164 @@ describe('ApiStore: exact int64 audio session revisions', () => {
     expect(resp.observations[0]?.value).toBe('1788358834726046720')
   })
 })
+
+// Each of the six show-configuration deletes needs its own proof that
+// ApiStore issues DELETE to the exact /config/<kind>/{id} path with the
+// required {"confirm":true} body, the same evidence bar
+// deleteNodeDeclaration's own block above set. Every screen test mocks
+// this module at the '../api' boundary, so none of them can see the real
+// request shape.
+describe('ApiStore: show-configuration deletes', () => {
+  it('deleteShow() sends DELETE with {"confirm":true} to /config/show/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShow('winter ridge/2026')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show/winter%20ridge%2F2026')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteShowAction() sends DELETE with {"confirm":true} to /config/show.action/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShowAction('start preshow/1')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show.action/start%20preshow%2F1')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteShowMacro() sends DELETE with {"confirm":true} to /config/show.macro/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShowMacro('preshow lights/up')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show.macro/preshow%20lights%2Fup')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteShowCue() sends DELETE with {"confirm":true} to /config/show.cue/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShowCue('house preshow/loop')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show.cue/house%20preshow%2Floop')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteShowPlaylist() sends DELETE with {"confirm":true} to /config/show.playlist/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShowPlaylist('main show/1')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show.playlist/main%20show%2F1')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteShowSurface() sends DELETE with {"confirm":true} to /config/show.surface/{id}, id encoded', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteShowSurface('garage/door')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/config/show.surface/garage%2Fdoor')
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('rejects on a 409 (e.g. the active show) rather than resolving as if it succeeded', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 409, makeProblem({ status: 409, detail: 'show "winter-ridge-2026" is currently named by show.active' }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.deleteShow('winter-ridge-2026')).rejects.toThrow(/show\.active/)
+  })
+})

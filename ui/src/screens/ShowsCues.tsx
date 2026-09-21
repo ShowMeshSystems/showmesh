@@ -854,6 +854,7 @@ function CueEditor({
       {cue !== null && (
         <DeletePanel
           title="Delete this cue"
+          confirmNoun="the cue's own name"
           confirmValue={cue.payload.name}
           actionLabel="Delete cue"
           deleting={deleting}

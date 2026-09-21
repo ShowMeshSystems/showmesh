@@ -377,7 +377,6 @@ export function ShowsAutomation() {
                   onRemoveStep={(index) => removeStep(macro, index)}
                   onMoveStep={(index, direction) => moveStep(macro, index, direction)}
                   onReorderStep={(from, to) => moveStepTo(macro, from, to)}
-                  onDeleted={reload}
                 />
               )
             })
@@ -414,6 +413,11 @@ export function ShowsAutomation() {
               upsertMacro(response)
               clearMacroDraft(stepAside.id)
               setAside({ kind: 'none' })
+            }}
+            onDeleted={() => {
+              clearMacroDraft(stepAside.id)
+              setAside({ kind: 'none' })
+              reload()
             }}
             onCancel={() => {
               clearMacroDraft(stepAside.id)
@@ -504,7 +508,6 @@ function MacroCard({
   onRemoveStep,
   onMoveStep,
   onReorderStep,
-  onDeleted,
 }: {
   macro: ShowMacroConfigResponse
   steps: readonly ConfigShowMacroStep[]
@@ -523,22 +526,10 @@ function MacroCard({
   onRemoveStep: (index: number) => void
   onMoveStep: (index: number, direction: -1 | 1) => void
   onReorderStep: (from: number, to: number) => void
-  onDeleted: () => void
 }) {
   const [runOutcome, setRunOutcome] = useState<{ tone: Tone; detail: string } | null>(null)
   const [running, setRunning] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-
-  const remove = () => {
-    setDeleting(true)
-    setDeleteError(null)
-    deleteShowMacro(macro.id)
-      .then(onDeleted)
-      .catch((err: unknown) => setDeleteError(describeApiError(err)))
-      .finally(() => setDeleting(false))
-  }
 
   const run = () => {
     setRunning(true)
@@ -655,18 +646,6 @@ function MacroCard({
         )}
       </p>
       {runOutcome !== null && <RuledStrip absence={runOutcome.tone === 'good' ? 'empty' : 'failed'} label={runOutcome.tone === 'good' ? 'Accepted' : 'Refused'} fact={runOutcome.detail} />}
-      <DeletePanel
-        title="Delete this macro"
-        confirmValue={macro.payload.label}
-        actionLabel="Delete macro"
-        deleting={deleting}
-        error={deleteError}
-        allowed={canAuthor.allowed}
-        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
-        onDelete={remove}
-      >
-        <p className="sm-small sm-muted">Deleting a macro does not delete its steps' actions; those remain, reachable by direct invoke or another macro.</p>
-      </DeletePanel>
     </div>
   )
 }
@@ -835,6 +814,7 @@ function StepEditor({
   bindings,
   canAuthor,
   onSaved,
+  onDeleted,
   onCancel,
 }: {
   macro: ShowMacroConfigResponse
@@ -844,6 +824,7 @@ function StepEditor({
   bindings: ReadonlyMap<string, ActionBinding>
   canAuthor: { allowed: boolean; reason?: string }
   onSaved: (response: ShowMacroConfigResponse) => void
+  onDeleted: () => void
   onCancel: () => void
 }) {
   const step = steps[stepIndex]
@@ -858,6 +839,17 @@ function StepEditor({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowMacroConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const remove = () => {
+    setDeleting(true)
+    setDeleteError(null)
+    deleteShowMacro(macro.id)
+      .then(onDeleted)
+      .catch((err: unknown) => setDeleteError(describeApiError(err)))
+      .finally(() => setDeleting(false))
+  }
 
   if (step === undefined) return null
 
@@ -1013,6 +1005,20 @@ function StepEditor({
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={() => getShowMacroRevisions(macro.id)} reloadKey={`${macro.id}:${macro.revision}`} />
+
+      <DeletePanel
+        title="Delete this macro"
+        confirmNoun="the macro's own label"
+        confirmValue={macro.payload.label}
+        actionLabel="Delete macro"
+        deleting={deleting}
+        error={deleteError}
+        allowed={canAuthor.allowed}
+        disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
+        onDelete={remove}
+      >
+        <p className="sm-small sm-muted">Deleting a macro does not delete its steps' actions; those remain, reachable by direct invoke or another macro.</p>
+      </DeletePanel>
     </div>
   )
 }
@@ -2176,6 +2182,7 @@ function ActionEditor({
 
       <DeletePanel
         title="Delete this action"
+        confirmNoun="the action's own label"
         confirmValue={action.payload.label}
         actionLabel="Delete action"
         deleting={deleting}

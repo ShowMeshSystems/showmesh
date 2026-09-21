@@ -313,6 +313,7 @@ export function MediaPlaylistEditor({
         key={playlist.id}
         title="Delete this media playlist"
         confirmValue={playlist.payload.label}
+        confirmNoun="the playlist's own label"
         actionLabel="Delete media playlist"
         deleting={deleting}
         error={deleteError}

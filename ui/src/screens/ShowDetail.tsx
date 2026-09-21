@@ -342,8 +342,8 @@ export function ShowDetail() {
       <Section id="sh-danger" title="Delete this show">
         <DeletePanel
           key={id}
-          title="Delete this show"
           confirmValue={payload.name}
+          confirmNoun="the show's own name"
           actionLabel="Delete show"
           deleting={deleting}
           error={deleteError}
@@ -352,18 +352,9 @@ export function ShowDetail() {
           onDelete={removeShow}
         >
           <p className="sm-small sm-muted">
-            {active ? (
-              <>
-                This is the <strong>active</strong> show, the one this installation's authority is currently set to.
-                That is not the same as a show running right now, which Show Night reports. Deleting it would orphan{' '}
-                {counts === 'loading' || counts === 'failed'
-                  ? 'this show’s configured objects'
-                  : `${counts.cues} cues, ${counts.playlists} playlists and ${counts.surfaces} surfaces`}
-                , and leave the installation with no authority for tonight.
-              </>
-            ) : (
-              'Deleting a show removes its own configuration objects; its assets are content, not configuration, and are not removed either way.'
-            )}
+            {active
+              ? 'This is the active show. It cannot be deleted until another show is made active.'
+              : "Deleting a show removes only the show object itself. Its cues, playlists, surfaces and other objects stay until they are deleted on their own."}
           </p>
         </DeletePanel>
       </Section>

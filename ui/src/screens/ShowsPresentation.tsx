@@ -521,6 +521,7 @@ function SurfaceEditor({
       {surface !== null && (
         <DeletePanel
           title="Delete this surface"
+          confirmNoun="the surface's own name"
           confirmValue={surface.payload.name}
           actionLabel="Delete surface"
           deleting={deleting}

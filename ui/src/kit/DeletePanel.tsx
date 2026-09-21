@@ -4,11 +4,13 @@ import { Field, Input } from './Field'
 import { RuledStrip } from './StateBlocks'
 
 type DeletePanelProps = {
-  /** "Delete this show", "Delete this cue". */
-  title: string
+  /** "Delete this show", "Delete this cue". Omit when the caller already renders this heading itself (ShowDetail's own Section title). */
+  title?: string | undefined
   /** What the operator must type before the button enables, e.g. the object's own label or id. */
   confirmValue: string
-  /** "Delete show", "Delete cue" — the button's own label while idle. */
+  /** What confirmValue names, for the help text: "the playlist's own label", "the cue's own id". */
+  confirmNoun: string
+  /** "Delete show", "Delete cue": the button's own label while idle. */
   actionLabel: string
   deleting: boolean
   /** The coordinator's own refusal text, rendered verbatim; never write a local explanation. */
@@ -25,15 +27,15 @@ type DeletePanelProps = {
  * The type-to-confirm destructive panel every config-object delete uses
  * (D-019). One shared implementation so every kind asks the same way.
  */
-export function DeletePanel({ title, confirmValue, actionLabel, deleting, error, allowed, disallowedReason, onDelete, children }: DeletePanelProps) {
+export function DeletePanel({ title, confirmValue, confirmNoun, actionLabel, deleting, error, allowed, disallowedReason, onDelete, children }: DeletePanelProps) {
   const [typed, setTyped] = useState('')
   const matches = typed === confirmValue
 
   return (
     <div className="sm-panel sm-stack-5">
-      <h3 className="sm-subsection__title">{title}</h3>
+      {title !== undefined && <h3 className="sm-subsection__title">{title}</h3>}
       {children}
-      <Field label={`Type ${confirmValue} to confirm`} help="Asks for the object's own label or id before it proceeds.">
+      <Field label={`Type ${confirmValue} to confirm`} help={`Asks for ${confirmNoun} before it proceeds.`}>
         {(p) => <Input {...p} value={typed} onChange={(e) => setTyped(e.target.value)} />}
       </Field>
       {error !== null && <RuledStrip absence="failed" label="Delete failed" fact={error} />}

@@ -702,6 +702,7 @@ export function Specimen() {
           <DeletePanel
             title="Delete this cue"
             confirmValue="opening-blackout"
+            confirmNoun="the cue's own name"
             actionLabel="Delete cue"
             deleting={false}
             error={null}

@@ -440,6 +440,39 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('button', { name: 'Delete playlist' })).toBeDisabled()
     })
 
+    it('switching to a different playlist clears the refusal and the typed confirm text', async () => {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) =>
+        kind === 'show.playlist'
+          ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [summary(), summary({ id: 'p2', label: 'Second Show' })] })
+          : withCues(kind, [cueSummary(), cueSummary2()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowPlaylist = (id: string) =>
+        Promise.resolve(playlistResponse(fppPlaylist(id === 'p2' ? { name: 'Second Show' } : {}), id))
+      stubs.getFPPPlaylistDefinitionEntries = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          instanceUuid: 'uuid-1',
+          playlistHash: 'a'.repeat(64),
+          entries: [{ section: 'mainPlaylist', position: 0, type: 'sequence', sequenceName: 'wizards-in-winter.fseq', mediaName: '' }],
+        })
+      stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: [] })
+      stubs.deleteShowPlaylist = () => Promise.reject(new ApiError('main-show is referenced by a night session.', 409))
+      renderWorkspace({ session: signedIn(['config:write']) })
+
+      await openPlaylistRow('Main Show')
+      await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
+      fireEvent.change(screen.getByLabelText('Type Main Show to confirm'), { target: { value: 'Main Show' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Delete playlist' }))
+      expect(await screen.findByText('main-show is referenced by a night session.')).toBeInTheDocument()
+
+      await openPlaylistRow('Second Show')
+      await waitFor(() => expect(screen.getByLabelText('Type Second Show to confirm')).toBeInTheDocument())
+      expect(screen.queryByText('main-show is referenced by a night session.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Type Second Show to confirm')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Delete playlist' })).toBeDisabled()
+    })
+
     it('rebinding the FPP source playlist renders inert, stating why', async () => {
       setup()
       await openPlaylistRow('Main Show')

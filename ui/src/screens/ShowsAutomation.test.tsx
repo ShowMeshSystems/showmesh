@@ -573,10 +573,17 @@ describe('Shows · Automation tab', () => {
   })
 
   describe('deleting a macro', () => {
-    it('is inert until the label is typed exactly, then deletes and refreshes the list', async () => {
+    it('is offered where the macro is edited, not on every card in the list', async () => {
       setup()
       await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
-      const deleteButton = screen.getByRole('button', { name: 'Delete macro' })
+      expect(screen.queryByRole('button', { name: 'Delete macro' })).not.toBeInTheDocument()
+    })
+
+    it('is inert until the label is typed exactly, then deletes and closes the step editor', async () => {
+      setup()
+      const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepButton)
+      const deleteButton = await screen.findByRole('button', { name: 'Delete macro' })
       expect(deleteButton).toBeDisabled()
 
       const deleteSpy = vi.fn(() => Promise.resolve())
@@ -589,24 +596,28 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(deleteButton)
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('preshow-lights-up'))
-      await waitFor(() => expect(screen.getByText('No macro matches here.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     })
 
-    it('renders the coordinator’s refusal verbatim and keeps the macro when the delete is refused', async () => {
+    it('renders the coordinator’s refusal verbatim and keeps the step editor open when the delete is refused', async () => {
       setup()
-      await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
+      const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepButton)
+      const aside = screen.getByRole('dialog')
       stubs.deleteShowMacro = () => Promise.reject(new ApiError('preshow-lights-up is referenced by a cue.', 409))
-      fireEvent.change(screen.getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Delete macro' }))
-      expect(await screen.findByText('preshow-lights-up is referenced by a cue.')).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument()
+      fireEvent.change(within(aside).getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
+      fireEvent.click(within(aside).getByRole('button', { name: 'Delete macro' }))
+      expect(await within(aside).findByText('preshow-lights-up is referenced by a cue.')).toBeInTheDocument()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
     })
 
     it('is disabled without config:write, however it is typed', async () => {
       setup(['show:macro:run'])
-      await waitFor(() => expect(screen.getByRole('heading', { name: 'Preshow Lights Up' })).toBeInTheDocument())
-      fireEvent.change(screen.getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
-      expect(screen.getByRole('button', { name: 'Delete macro' })).toBeDisabled()
+      const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepButton)
+      const aside = screen.getByRole('dialog')
+      fireEvent.change(within(aside).getByLabelText('Type Preshow Lights Up to confirm'), { target: { value: 'Preshow Lights Up' } })
+      expect(within(aside).getByRole('button', { name: 'Delete macro' })).toBeDisabled()
     })
   })
 
