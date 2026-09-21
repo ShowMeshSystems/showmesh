@@ -215,6 +215,16 @@ func (e *SwitchableEngine) LiveHandles(ctx context.Context) ([]EngineHandle, err
 	return cur.LiveHandles(ctx)
 }
 
+// ReleaseAll forwards to whatever engine is currently bound; an unbound
+// engine holds nothing to release, matching Release's own no-op contract.
+func (e *SwitchableEngine) ReleaseAll(ctx context.Context, except ...EngineHandle) (int, error) {
+	cur, ok := e.get()
+	if !ok {
+		return 0, nil
+	}
+	return cur.ReleaseAll(ctx, except...)
+}
+
 // StartLTC, StopLTC, and ObserveLTC forward to whatever engine is
 // currently bound, so an [LTCGenerator] assertion against this value
 // survives every rebind. A never-bound engine, or a bound one that cannot

@@ -442,7 +442,11 @@ func TestWeatherDelayChangeInPlaceReplacesTheAlert(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if len(live) != 1 || !strings.HasSuffix(string(live[0]), "cancelNight-0") {
+	// Contains, not HasSuffix: every handle now carries a unique,
+	// unpredictable per-manager sequence number after its item id (see
+	// audio.Session.engineHandleFor), so "cancelNight-0" is a middle
+	// segment, never the handle's own trailing text.
+	if len(live) != 1 || !strings.Contains(string(live[0]), "/cancelNight-0/") {
 		t.Fatalf("live engine handles = %v, want only the cancel alert (the delay alert released)", live)
 	}
 }

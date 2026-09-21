@@ -536,8 +536,20 @@ func (s *Session) currentItemLocked() (pkgaudio.PlaylistItem, bool) {
 	return pkgaudio.PlaylistItem{}, false
 }
 
+// engineHandleFor names a handle for one load of itemID on s: the session
+// id and item id alone are not enough, because a session applying MEDIA
+// rather than a playlist always resolves itemID to the same
+// [nonPlaylistItemID] constant, so the same session id reused for two
+// unrelated loads (a coordinator-driven staging session restaged for a
+// second cue) would otherwise mint the identical name twice. m.handleSeq
+// is a per-manager, monotonically increasing counter that makes every
+// call here unique regardless of itemID or session id repetition, so a
+// later Load can never silently take over an earlier, still-live
+// branch's slot in the engine's own handle map. Never persisted, like
+// [Session.stageSeq]'s identical convention: handles are minted fresh
+// every process lifetime.
 func (s *Session) engineHandleFor(itemID string) EngineHandle {
-	return EngineHandle(fmt.Sprintf("%s/%s", s.id, itemID))
+	return EngineHandle(fmt.Sprintf("%s/%s/%d", s.id, itemID, s.mgr.handleSeq.Add(1)))
 }
 
 // releaseEngineLocked discards s's current engine handle, if any. Best

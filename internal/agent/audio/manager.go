@@ -125,6 +125,11 @@ type Manager struct {
 	// previous tick. Only RunWatcher's single goroutine ever touches it.
 	lastTickUnownedHandles map[EngineHandle]struct{}
 
+	// handleSeq is the monotonically increasing counter [Session.
+	// engineHandleFor] appends to every handle name it mints. Atomic
+	// because sessions mint handles under their own lock, never m.mu.
+	handleSeq atomic.Uint64
+
 	// duckFadeWait, when set, replaces [Manager.waitDuckFade]'s own real,
 	// context-cancelable timer with a test's own function, so a test can
 	// observe or deterministically control the duck-then-start wait
@@ -1317,6 +1322,19 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 	stopCtx, stopCancel := bound(ctx)
 	_, stopErr := s.mgr.engine.Stop(stopCtx, s.handle)
 	stopCancel()
+	if errors.Is(stopErr, ErrHandleNotLoaded) {
+		// The engine holds nothing under this name already, so there is
+		// nothing left to Release either: resolve exactly as a successful
+		// stop rather than leaving the session in StateStopping behind a
+		// handle no later Observe can ever confirm again.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.handleLoaded = false
+		s.loadedIdentity = ""
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+	}
 	var releaseErr error
 	if stopErr == nil {
 		relCtx, relCancel := bound(ctx)

@@ -29,16 +29,66 @@ type SessionSilenceOutcome struct {
 // the raw ctx given here: this loop is serial, so one wedged call must
 // not stall the sessions waiting behind it or the result this operation
 // reports.
-func (m *Manager) SilenceAll(ctx context.Context) []SessionSilenceOutcome {
-	return m.silenceSessions(ctx, m.liveSessionsExcept())
+//
+// The second return is how many additional engine branches the final,
+// unconditional [Engine.ReleaseAll] sweep released that no session's own
+// stop above accounted for: a branch a failed per-session stop left
+// behind, or one no session ever owned. This runs even when a per-session
+// stop above failed or blocked, so an emergency stop never leaves a
+// branch playing merely because one session lost track of it.
+func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int) {
+	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept())
+	return outcomes, m.releaseEveryEngineBranchExcept(ctx)
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
 // excludeIDs, so a weather delay alert keeps playing. More than one id is
 // excluded when a caller must leave every alert session alone, not just
-// the one it started.
-func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) []SessionSilenceOutcome {
-	return m.silenceSessions(ctx, m.liveSessionsExcept(excludeIDs...))
+// the one it started. Its own final engine-wide sweep excepts the handles
+// (loaded and staged) those excluded sessions currently own, so their
+// audio survives it exactly as their own per-session stop above was
+// never run against them.
+func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) ([]SessionSilenceOutcome, int) {
+	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept(excludeIDs...))
+	return outcomes, m.releaseEveryEngineBranchExcept(ctx, m.handlesOwnedBy(excludeIDs...)...)
+}
+
+// handlesOwnedBy collects every engine handle, loaded and staged, the
+// sessions named by ids currently hold, so [Manager.SilenceAllExcept]'s
+// final sweep can except them by handle rather than by session.
+func (m *Manager) handlesOwnedBy(ids ...pkgaudio.SessionID) []EngineHandle {
+	var handles []EngineHandle
+	for _, id := range ids {
+		s, ok := m.get(id)
+		if !ok {
+			continue
+		}
+		s.mu.Lock()
+		if s.handleLoaded {
+			handles = append(handles, s.handle)
+		}
+		if s.stage != nil && s.stage.ready {
+			handles = append(handles, s.stage.handle)
+		}
+		s.mu.Unlock()
+	}
+	return handles
+}
+
+// releaseEveryEngineBranchExcept runs after every per-session stop
+// [SilenceAll]/[SilenceAllExcept] dispatches has already been attempted:
+// it releases whatever the engine still holds live except the named
+// handles, and logs rather than fails on an engine error, since this is
+// already the last-resort sweep behind the per-session outcomes those
+// callers report. Bounded like every other engine call SilenceAll makes.
+func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) int {
+	relCtx, relCancel := boundedEngineCallContext(ctx)
+	defer relCancel()
+	released, err := m.engine.ReleaseAll(relCtx, except...)
+	if err != nil {
+		m.logf("audio: releasing every remaining engine branch failed: %v", err)
+	}
+	return released
 }
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,

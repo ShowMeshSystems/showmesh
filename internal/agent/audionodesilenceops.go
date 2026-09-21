@@ -53,7 +53,7 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		}
 
 		executedAt := now()
-		results := mgr.SilenceAll(ctx)
+		results, unclaimedReleased := mgr.SilenceAll(ctx)
 		observedAt := now()
 
 		confirmed := true
@@ -75,6 +75,11 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 			Value: map[string]any{
 				"sessionsFound": len(results),
 				"sessions":      sessions,
+				// unclaimedBranchesReleased is the final engine-wide sweep's
+				// own count (audio.Manager.SilenceAll): branches it released
+				// that no session above already accounted for, so a stray one
+				// is visible in this result instead of silently surviving.
+				"unclaimedBranchesReleased": unclaimedReleased,
 			},
 			ExecutedAt: executedAt,
 			ObservedAt: observedAt,

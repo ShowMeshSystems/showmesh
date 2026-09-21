@@ -95,7 +95,7 @@ func (e *Engine) branchFor(handle agentaudio.EngineHandle) (*branch, error) {
 	defer e.mu.Unlock()
 	b, ok := e.handles[handle]
 	if !ok {
-		return nil, fmt.Errorf("gstengine: no loaded handle %q", handle)
+		return nil, fmt.Errorf("%w: gstengine: no loaded handle %q", agentaudio.ErrHandleNotLoaded, handle)
 	}
 	return b, nil
 }
@@ -150,6 +150,18 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 	}
 
 	e.mu.Lock()
+	if _, exists := e.handles[handle]; exists {
+		e.mu.Unlock()
+		// A live branch already answers to this name: taking it over here
+		// would orphan whatever the existing branch holds, unaddressable by
+		// any later call against the same handle (this package's own
+		// handle-uniqueness contract, see agentaudio.Session.engineHandleFor,
+		// is what a caller relies on instead of ever reaching this path in
+		// production). The newly built branch, never indexed, is torn down
+		// rather than leaked.
+		_ = b.teardown(ctx)
+		return agentaudio.EngineObservation{}, fmt.Errorf("gstengine: a live branch is already loaded under handle %q", handle)
+	}
 	e.handles[handle] = b
 	e.mu.Unlock()
 
@@ -477,6 +489,40 @@ func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error)
 		out = append(out, h)
 	}
 	return out, nil
+}
+
+// ReleaseAll tears down every branch this pipeline currently holds except
+// the handles named in except, via the same [Engine.Release] every other
+// caller uses, and reports how many it actually released. Continues past
+// one handle's release failure rather than abandoning the rest, so one
+// stuck branch never leaves every other one live too; the first error, if
+// any, is returned once the sweep finishes.
+func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHandle) (int, error) {
+	skip := make(map[agentaudio.EngineHandle]struct{}, len(except))
+	for _, h := range except {
+		skip[h] = struct{}{}
+	}
+	e.mu.Lock()
+	toRelease := make([]agentaudio.EngineHandle, 0, len(e.handles))
+	for h := range e.handles {
+		if _, ok := skip[h]; !ok {
+			toRelease = append(toRelease, h)
+		}
+	}
+	e.mu.Unlock()
+
+	released := 0
+	var firstErr error
+	for _, h := range toRelease {
+		if err := e.Release(ctx, h); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		released++
+	}
+	return released, firstErr
 }
 
 // seekTo issues a flushing, accurate seek on the branch and re-anchors
