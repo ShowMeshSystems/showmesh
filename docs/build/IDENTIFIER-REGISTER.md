@@ -623,6 +623,7 @@ register entry comes from the code and never from a plan.
 | `asset.upload` | shipped | Track E |
 | `asset.fetch` | shipped | Track E |
 | `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+| `asset.delete` | reserved | `DELETE /api/v1/assets/{id}`: an operator removing one registered asset row from the coordinator. Distinct from `asset.remove`, which deletes held content from a node's disk |
 | `asset.remove` | shipped | SM-306: `POST /api/v1/nodes/{nodeId}/assets/remove`'s own audit entries (Kind distinguishes dispatch from outcome), the same action string the Agent operation names table above reserves for the MQTT command itself |
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
