@@ -322,6 +322,17 @@ func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, w dispatchWin
 
 // --- blackout -------------------------------------------------------------
 
+// blackoutSentWithoutLayers sends disconnect-all when there is no layer list
+// to baseline or confirm against, and reports unconfirmable naming why.
+func (d *ActionDispatcher) blackoutSentWithoutLayers(ctx context.Context, w dispatchWindow, name ActionName, why string) ActionOutcome {
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "blackout", d.collector.client.DisconnectAll)
+	if bad != nil {
+		return *bad
+	}
+	return unconfirmableOutcome(name, dispatchedAt, fmt.Sprintf(
+		"The blackout was sent. It could not be checked because %s. Look at the wall to confirm it worked.", why))
+}
+
 func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindow) ActionOutcome {
 	name := ActionBlackout
 
@@ -333,16 +344,13 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindo
 	if err != nil {
 		// No composition means no layer list, so there is nothing to baseline
 		// or confirm against. Send the blackout anyway rather than refuse it.
-		dispatchedAt, bad := d.writePhase(ctx, w, name, "blackout", d.collector.client.DisconnectAll)
-		if bad != nil {
-			return *bad
-		}
-		return unconfirmableOutcome(name, dispatchedAt,
-			"No composition is uploaded to this coordinator, so the blackout could not be checked. It was sent anyway.")
+		return d.blackoutSentWithoutLayers(ctx, w, name, "no composition is uploaded to this coordinator")
 	}
 	layers := tc.Layers()
 	if len(layers) == 0 {
-		return refusedOutcome(name, "the uploaded composition has no tracked layers to blackout")
+		// A layer list with nothing in it is the same "nothing to baseline or
+		// confirm against" case as no composition at all.
+		return d.blackoutSentWithoutLayers(ctx, w, name, "the uploaded composition has no tracked layers")
 	}
 
 	baseline := w.beginBaseline(ctx)

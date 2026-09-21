@@ -1078,6 +1078,50 @@ func TestNonBlackoutActionsStillRefuseWhenNoCompositionIsUploaded(t *testing.T) 
 	}
 }
 
+// TestDispatchBlackoutSendsWhenCompositionHasNoTrackedLayers is the same
+// owner ruling as TestDispatchBlackoutSendsWhenNoCompositionIsUploaded,
+// extended to a composition that IS uploaded but tracks zero layers: there is
+// still no layer list to baseline or confirm against, so blackout sends
+// disconnect-all and reports unconfirmable rather than refusing.
+func TestDispatchBlackoutSendsWhenCompositionHasNoTrackedLayers(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+
+	comp := &resolumecomp.Composition{
+		Name:      "zero-layer fixture",
+		WrittenBy: resolumecomp.WrittenBy{Product: "Resolume Arena", Major: 7, Minor: 23, Micro: 2, Revision: 1},
+		Canvas:    resolumecomp.Canvas{Width: 1920, Height: 1080},
+		Decks:     []resolumecomp.Deck{{ID: testDeckOne.String(), Name: "Deck One"}},
+	}
+
+	d := newTestActionDispatcherWithComposition(t, arena, &now, identifiedSnapshot(now), comp)
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmable {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+	if out.Reason == "" {
+		t.Error("Reason is empty, want a plain operator-readable reason")
+	}
+	if !contains(out.Reason, "was sent") {
+		t.Errorf("Reason = %q, want the fact that the blackout was sent stated first", out.Reason)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	found := false
+	for _, req := range arena.requests {
+		if req == "POST /api/v1/composition/disconnect-all" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("disconnect-all was never dispatched; requests = %v", arena.requests)
+	}
+}
+
 // --- launchColumn -----------------------------------------------------
 
 func TestDispatchLaunchColumnConfirms(t *testing.T) {
