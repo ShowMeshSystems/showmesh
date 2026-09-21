@@ -154,6 +154,73 @@ func TestCmdAssetsGetNotFound(t *testing.T) {
 	}
 }
 
+// --- delete ---
+
+// TestCmdAssetsDeleteRequiresConfirm proves --confirm is checked locally
+// before any request is sent, mirroring cmd_media_playlist_test.go's
+// identical proof one kind over.
+func TestCmdAssetsDeleteRequiresConfirm(t *testing.T) {
+	requested := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"delete", "--server", ts.URL, "asset-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+	if requested {
+		t.Errorf("a request was sent despite missing --confirm")
+	}
+}
+
+func TestCmdAssetsDelete(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"delete", "--server", ts.URL, "--confirm", "asset-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/api/v1/assets/asset-1" {
+		t.Errorf("path = %q, want /api/v1/assets/asset-1", gotPath)
+	}
+	if !strings.Contains(string(gotBody), `"confirm":true`) {
+		t.Errorf("body = %s, want confirm:true", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "asset-1") {
+		t.Errorf("stdout = %q, want it to name the deleted id", stdout.String())
+	}
+}
+
+func TestCmdAssetsDeleteNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/resource-not-found","title":"Resource not found","status":404,"detail":"no asset with id \"no-such\" exists","serverTime":"2026-08-10T21:00:00Z"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"delete", "--server", ts.URL, "--confirm", "no-such"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitNotFound {
+		t.Fatalf("exit code = %d, want exitNotFound; stderr=%s", code, stderr.String())
+	}
+}
+
 // --- upload ---
 
 // receivedUpload captures what the fake coordinator's POST /assets

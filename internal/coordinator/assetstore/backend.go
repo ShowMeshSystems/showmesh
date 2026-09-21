@@ -56,4 +56,9 @@ type Backend interface {
 	// Stat returns the size of the blob stored under key without opening
 	// it.
 	Stat(ctx context.Context, key string) (int64, error)
+
+	// Delete removes the blob stored under key. It is idempotent: a key
+	// naming no stored blob is not an error, since a caller may retry a
+	// delete or race an earlier one that already removed it.
+	Delete(ctx context.Context, key string) error
 }

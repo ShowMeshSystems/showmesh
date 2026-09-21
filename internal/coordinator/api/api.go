@@ -1477,6 +1477,10 @@ func (noAssetStore) GetAudioRendition(context.Context, string) (store.AudioRendi
 	return store.AudioRenditionRecord{}, store.ErrAudioRenditionNotFound
 }
 
+func (noAssetStore) DeleteAudioRendition(context.Context, string) error {
+	return nil
+}
+
 // errAssetBackendNotConfigured is [noAssetBackend.Put]'s uniform failure,
 // matching [errCommandStoreNotConfigured]'s identical posture: a write
 // dependency nobody has wired in refuses loudly rather than fabricating a
@@ -1499,6 +1503,10 @@ func (noAssetBackend) Open(context.Context, string) (io.ReadSeekCloser, int64, e
 
 func (noAssetBackend) Stat(context.Context, string) (int64, error) {
 	return 0, assetstore.ErrNotFound
+}
+
+func (noAssetBackend) Delete(context.Context, string) error {
+	return nil
 }
 
 // scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
@@ -2376,6 +2384,13 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/assets", h.writeGuard(&scopeAssetWrite, h.handlePostAssetUpload))
 	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
+	// DELETE shares asset:write with POST (the same write-authority scope
+	// for this store) and requires the same {"confirm":true} body every
+	// other delete in this package requires. A hard delete, not a
+	// tombstone — assets carry no revision history — see
+	// handleDeleteAsset's own doc comment for what it does and does not
+	// refuse.
+	mux.HandleFunc("DELETE /api/v1/assets/{id}", h.writeGuard(&scopeAssetWrite, h.handleDeleteAsset))
 	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
 	// Same node:read gate as .../content, one route below it: an audio
 	// asset's separately content-addressed rendition bytes rather than the

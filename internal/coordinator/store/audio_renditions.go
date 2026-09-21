@@ -161,6 +161,19 @@ func (s *Store) GetAudioRendition(ctx context.Context, originalHash string) (Aud
 	return getAudioRendition(ctx, s.db, originalHash)
 }
 
+// DeleteAudioRendition removes originalHash's rendition row, if any. A
+// caller removes this only once it has confirmed no asset row still
+// references originalHash — the row's own bytes are a different backend
+// blob, keyed by the rendition's ContentHash, and are the caller's
+// separate responsibility to remove.
+func (s *Store) DeleteAudioRendition(ctx context.Context, originalHash string) error {
+	guardNotInTx(ctx, "Store.DeleteAudioRendition")
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM audio_renditions WHERE original_content_hash = ?`, originalHash); err != nil {
+		return fmt.Errorf("store: delete audio rendition %q: %w", originalHash, err)
+	}
+	return nil
+}
+
 // ListAudioAssetContentHashesNeedingRendition returns every distinct
 // CURRENT audio asset content hash with no READY audio_renditions row: no
 // row at all, or a row still rendering or failed. Superseded audio assets

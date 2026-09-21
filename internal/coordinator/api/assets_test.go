@@ -682,6 +682,9 @@ func (fakeTooLargeBackend) Open(context.Context, string) (io.ReadSeekCloser, int
 func (fakeTooLargeBackend) Stat(context.Context, string) (int64, error) {
 	return 0, assetstore.ErrNotFound
 }
+func (fakeTooLargeBackend) Delete(context.Context, string) error {
+	return nil
+}
 
 func TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
@@ -725,6 +728,9 @@ func (fakeNoSpaceBackend) Open(context.Context, string) (io.ReadSeekCloser, int6
 }
 func (fakeNoSpaceBackend) Stat(context.Context, string) (int64, error) {
 	return 0, assetstore.ErrNotFound
+}
+func (fakeNoSpaceBackend) Delete(context.Context, string) error {
+	return nil
 }
 
 func TestPostAssetUploadNoSpace507(t *testing.T) {

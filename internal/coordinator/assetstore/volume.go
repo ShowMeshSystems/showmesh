@@ -198,6 +198,18 @@ func (b *VolumeBackend) Open(_ context.Context, key string) (io.ReadSeekCloser, 
 	return f, info.Size(), nil
 }
 
+// Delete implements Backend.
+func (b *VolumeBackend) Delete(_ context.Context, key string) error {
+	path, err := b.pathForKey(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // Stat implements Backend.
 func (b *VolumeBackend) Stat(_ context.Context, key string) (int64, error) {
 	path, err := b.pathForKey(key)

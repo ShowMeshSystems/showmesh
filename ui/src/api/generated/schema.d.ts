@@ -3073,7 +3073,11 @@ export interface paths {
         get: operations["getAsset"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete one asset row (Track E seam E3/E4, ADR-028)
+         * @description Requires `asset:write` (admin only), the same scope POST requires. Requires an explicit `{"confirm":true}` body. A HARD delete, not a tombstone: an asset row carries no revision history to preserve. Deleting the CURRENT asset for its (show, sequence, targetKind, target, mediaType) identity leaves that identity with no current asset - it never promotes a superseded row back to current (re-uploading matching bytes is what does that; see `rolledBack` on `POST /assets`). The manifest and Cue readiness reflect the deletion exactly as if the asset had never been uploaded. The stored content blob, and any audio rendition built from it, are removed from this coordinator's own storage only once no other asset row still references the same content hash - a node's own disk is never touched by this route; that is `POST /nodes/{nodeId}/assets/remove`'s job. `404` for an unknown id, including a second delete of an id already removed.
+         */
+        delete: operations["deleteAsset"];
         options?: never;
         head?: never;
         patch?: never;
@@ -13945,6 +13949,37 @@ export interface operations {
                     "application/json": components["schemas"]["AssetResponse"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The asset row was deleted. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];

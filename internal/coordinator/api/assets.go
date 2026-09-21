@@ -496,6 +496,101 @@ func (h *handlers) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, assetResponse(now, a, false))
 }
 
+// --- DELETE /assets/{id} ---
+
+// handleDeleteAsset serves DELETE /api/v1/assets/{id}: a hard delete of
+// one asset row, guarded by asset:write and requiring the same explicit
+// {"confirm":true} body every other delete in this package requires
+// (decodeConfigDeleteConfirmBody, showconfig.go), so a mis-issued call
+// cannot quietly remove a row. Unlike a config object's DELETE, this is
+// not a tombstone: assets carry no revision history to preserve, and
+// deleting the current row for an identity leaves that identity with no
+// current asset (never promoting a superseded row back — that is
+// rollback's job, ADR-028 decision 10). No refuseIfActive-style check
+// applies here: an asset row is neither a live "what is running now"
+// selector (unlike show.active/night.session.active) nor pinned by name
+// inside a running night session's payload (unlike media.playlist), so
+// this delete carries no active-show or active-night refusal, matching
+// upload's own unconditional posture.
+func (h *handlers) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	ac := authFromContext(r.Context())
+	id := r.PathValue("id")
+
+	if problem := decodeConfigDeleteConfirmBody(r); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	var deleted store.AssetRecord
+	var blobOrphaned bool
+	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		writeNow := h.now()
+
+		rec, derr := tx.DeleteAsset(ctx, id)
+		if derr != nil {
+			return identity.AuditEntry{}, derr
+		}
+		deleted = rec
+
+		remaining, cerr := tx.CountAssetsByContentHash(ctx, rec.ContentHash)
+		if cerr != nil {
+			return identity.AuditEntry{}, cerr
+		}
+		blobOrphaned = remaining == 0
+
+		return identity.AuditEntry{
+			Timestamp: writeNow, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: "asset.delete", Target: rec.ID,
+			Params: map[string]any{
+				"assetId": rec.ID, "show": rec.ShowID, "sequence": rec.SequenceID,
+				"targetKind": rec.TargetKind, "target": rec.TargetID,
+				"mediaType": rec.MediaType, "contentHash": rec.ContentHash,
+			},
+			Kind: identity.AuditAdmin,
+		}, nil
+	})
+	if errors.Is(writeErr, store.ErrAssetNotFound) {
+		writeProblem(w, h.logger, now, assetNotFoundProblem(id))
+		return
+	}
+	if writeErr != nil {
+		h.writeInternalError(w, now, "delete asset", writeErr)
+		return
+	}
+
+	// The manifest and cue readiness read the assets table live; nudging
+	// asset sync is what tells a node to stop holding what it fetched for
+	// the row that is now gone, exactly mirroring handlePostAssetUpload's
+	// own nudge after a write that changes what is current.
+	h.deps.AssetSyncNudger.Nudge()
+
+	// Bytes are removed only after the row is gone and only when nothing
+	// else references them (ADR-028 decision 4: bytes are metadata-driven,
+	// never owned by one row). This runs after commit and is best-effort:
+	// a failure here leaves an orphaned blob, the same accepted outcome
+	// handlePostAssetUpload's own doc comment already allows for a staged
+	// blob whose row was never registered.
+	if blobOrphaned {
+		if derr := h.deps.AssetBackend.Delete(r.Context(), deleted.ContentHash); derr != nil {
+			h.logWarn("failed to remove orphaned asset blob", "assetId", deleted.ID, "contentHash", deleted.ContentHash, "error", derr)
+		}
+		if deleted.MediaType == "audio" {
+			if rend, rerr := h.deps.Assets.GetAudioRendition(r.Context(), deleted.ContentHash); rerr == nil && rend.Status == store.AudioRenditionStatusReady {
+				if derr := h.deps.AssetBackend.Delete(r.Context(), rend.ContentHash); derr != nil {
+					h.logWarn("failed to remove orphaned audio rendition blob", "assetId", deleted.ID, "contentHash", rend.ContentHash, "error", derr)
+				}
+			}
+			if derr := h.deps.Assets.DeleteAudioRendition(r.Context(), deleted.ContentHash); derr != nil {
+				h.logWarn("failed to remove orphaned audio rendition row", "assetId", deleted.ID, "contentHash", deleted.ContentHash, "error", derr)
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- GET /assets/{id}/content ---
 
 // handleGetAssetContent serves GET /api/v1/assets/{id}/content's bytes via
