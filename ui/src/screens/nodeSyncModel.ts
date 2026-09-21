@@ -40,16 +40,25 @@ function formatSignedPpm(ppm: number): string {
   return `${sign}${Math.abs(ppm).toFixed(2)}`
 }
 
-function syncLineText(state: string, follows: SignalFact<string>, offsetNs: SignalFact<number>, ratePpm: SignalFact<number>): string {
-  const stateWord = state === 'locked' ? 'Locked' : state === 'acquiring' ? 'Acquiring' : 'Free-running'
-  if (state === 'free_running') return 'Sync: Free-running on the local clock'
+/** A state value this build does not know must never borrow a known state's name or presentation. */
+function syncLineText(state: string, follows: SignalFact<string>, offsetNs: SignalFact<number>, ratePpm: SignalFact<number>): SignalFact<string> {
+  if (state === 'free_running') return { kind: 'value', value: 'Sync: Free-running on the local clock' }
+  if (state !== 'locked' && state !== 'acquiring') {
+    return {
+      kind: 'absent',
+      absence: 'unavailable',
+      label: 'Unavailable',
+      fact: `This node reported a sync state this version does not know: ${state}.`,
+    }
+  }
 
+  const stateWord = state === 'locked' ? 'Locked' : 'Acquiring'
   const clauses: string[] = []
   if (follows.kind === 'value' && follows.value !== '') clauses.push(`Follows ${follows.value}`)
   if (offsetNs.kind === 'value') clauses.push(`δ ${formatOffsetNs(offsetNs.value)}`)
   if (ratePpm.kind === 'value') clauses.push(`rate ${formatSignedPpm(ratePpm.value)} ppm`)
 
-  return clauses.length === 0 ? `Sync: ${stateWord}.` : `Sync: ${stateWord}. ${clauses.join(', ')}`
+  return { kind: 'value', value: clauses.length === 0 ? `Sync: ${stateWord}.` : `Sync: ${stateWord}. ${clauses.join(', ')}` }
 }
 
 /**
@@ -73,7 +82,7 @@ export function nodeSyncStatus(node: Node): NodeSyncStatus {
 
   const syncLine: SignalFact<string> =
     stateEntry !== undefined && stateEntry.state === 'current' && stateEntry.value !== null
-      ? { kind: 'value', value: syncLineText(String(stateEntry.value), followsFact, offsetFact, rateFact) }
+      ? syncLineText(String(stateEntry.value), followsFact, offsetFact, rateFact)
       : fact(stateEntry, () => '')
 
   const steer = fact(findSignal(node.clock, 'node.clock.ptp.frequency_ppm'), (value) => `Clock steered ${formatSignedPpm(Number(value))} ppm`)

@@ -69,6 +69,23 @@ describe('nodeSyncStatus', () => {
     expect(status.syncLine).toEqual({ kind: 'absent', absence: 'unobserved', label: 'Unobserved', fact: 'this node has never reported its clock status' })
   })
 
+  it('a sync state this build does not know never borrows a known state\'s name', () => {
+    const status = nodeSyncStatus(
+      nodeWith([
+        ev('node.audio.sync.state', { value: 'holdover' }),
+        ev('node.audio.sync.follows', { value: FOLLOWS }),
+        ev('node.audio.sync.offset_ns', { value: 200 }),
+        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
+      ]),
+    )
+    expect(status.syncLine).toEqual({
+      kind: 'absent',
+      absence: 'unavailable',
+      label: 'Unavailable',
+      fact: 'This node reported a sync state this version does not know: holdover.',
+    })
+  })
+
   it('a stale sync state reports stale, not a value read from before it went stale', () => {
     const status = nodeSyncStatus(nodeWith([ev('node.audio.sync.state', { state: 'stale', value: 'locked', reason: 'no fresher clock report has arrived' })]))
     expect(status.syncLine).toEqual({ kind: 'absent', absence: 'stale', label: 'Stale', fact: 'no fresher clock report has arrived' })
