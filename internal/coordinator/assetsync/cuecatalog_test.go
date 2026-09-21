@@ -67,9 +67,7 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "single interface, both routes on it",
-		Role:                  config.AudioNodeRoleProgramLTC,
+		Role: config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)
@@ -83,11 +81,9 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 func putProgramOnlyAudioNode(t *testing.T, st *store.Store, nodeID string) {
 	t.Helper()
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
-		ProgramRoute:          "usb-interface",
-		ProgramChannels:       []int{1, 2},
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "two-output interface, program only",
-		Role:                  config.AudioNodeRoleProgram,
+		ProgramRoute:    "usb-interface",
+		ProgramChannels: []int{1, 2},
+		Role:            config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode program-only audio.node payload: %v", err)

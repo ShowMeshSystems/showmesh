@@ -31,11 +31,13 @@ type audioNodeConfig struct {
 	// LTCRoute and LTCChannel are empty/zero on a program-only node that
 	// emits no LTC. gstengine.Config already accepts LTCChannel 0 and
 	// wires every unclaimed channel to silence.
-	LTCRoute              string `json:"ltcRoute,omitempty"`
-	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel,omitempty"`
-	ClockDomain           string `json:"clockDomain"`
-	ClockDomainProvenance string `json:"clockDomainProvenance"`
+	LTCRoute        string `json:"ltcRoute,omitempty"`
+	ProgramChannels []int  `json:"programChannels"`
+	LTCChannel      int    `json:"ltcChannel,omitempty"`
+	// LocalClockOverride names this node's local clock explicitly
+	// (ADR-052); empty means it is derived from ProgramRoute. Carried
+	// so a binding records what the coordinator declared.
+	LocalClockOverride string `json:"localClockOverride,omitempty"`
 
 	// SinkBackend is the GStreamer output backend this node builds
 	// against: [realAudioSinkFactory] ("alsasink", the default used
@@ -236,10 +238,14 @@ func (b *audioBinding) currentSettingsRevision() (revision int64, have bool) {
 	return b.settingsRevision, b.haveSettings
 }
 
+// "clockDomain" and "clockDomainProvenance" are listed so a coordinator
+// that still sends them is accepted; nothing reads them (ADR-052
+// decision 5).
 var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
-	"sinkBackend": true, "pipewireTargetNode": true, "revision": true,
+	"localClockOverride": true,
+	"sinkBackend":        true, "pipewireTargetNode": true, "revision": true,
 	"outputLatency": true,
 }
 
@@ -253,7 +259,7 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	if err := rejectUnknownKeys(action, params, audioNodeConfigureKnownKeys); err != nil {
 		return audioNodeConfig{}, err
 	}
-	for _, field := range []string{"programRoute", "programChannels", "clockDomain", "clockDomainProvenance", "revision"} {
+	for _, field := range []string{"programRoute", "programChannels", "revision"} {
 		if _, ok := params[field]; !ok {
 			return audioNodeConfig{}, fmt.Errorf("%s: params.%s is required", action, field)
 		}
@@ -293,12 +299,6 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	}
 	if haveLTCChannel && p.LTCChannel < 1 {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.ltcChannel must be a positive channel index", action)
-	}
-	if p.ClockDomain == "" {
-		return audioNodeConfig{}, fmt.Errorf("%s: params.clockDomain must be a non-empty string", action)
-	}
-	if p.ClockDomainProvenance == "" {
-		return audioNodeConfig{}, fmt.Errorf("%s: params.clockDomainProvenance must be a non-empty string", action)
 	}
 	switch p.SinkBackend {
 	case "", realAudioSinkFactory, pipewireAudioSinkFactory:

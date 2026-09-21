@@ -134,9 +134,7 @@ func TestActionBindingAudioChecksEveryTargetNodeNotOnlyTheFirst(t *testing.T) {
 	// across the installation may hold the default role "program+ltc"
 	// (ADR-018's one clock domain), so porch-node and yard-node cannot
 	// both take the default.
-	const yardNodeBody = `{"programRoute":"hw:0,1","programChannels":[1,2],` +
-		`"clockDomain":"second-interface","clockDomainProvenance":"second physical interface, program only",` +
-		`"role":"program"}`
+	const yardNodeBody = `{"programRoute":"hw:0,1","programChannels":[1,2],"role":"program"}`
 	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithAudioCapabilities("porch-node", []string{"hw:0,0"}, []string{"hw:0,0"}),
 		nodeViewWithAudioCapabilities("yard-node", []string{"hw:0,1"}, nil),

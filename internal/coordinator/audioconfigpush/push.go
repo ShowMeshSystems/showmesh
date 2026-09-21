@@ -92,11 +92,22 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 		return fmt.Errorf("decode stored audio.node payload: %s", verr.Error())
 	}
 
+	local, localSource := config.AudioNodeLocalClock(payload)
 	params := map[string]any{
 		"programRoute":    payload.ProgramRoute,
 		"programChannels": payload.ProgramChannels,
-		"clockDomain":     payload.ClockDomain, "clockDomainProvenance": payload.ClockDomainProvenance,
-		"revision": obj.CurrentRevision,
+		// An agent older than ADR-052 requires these two keys and
+		// refuses the payload without them. The coordinator is upgraded
+		// before its nodes, so both stay on the wire, filled from the
+		// local clock.
+		"clockDomain":           local,
+		"clockDomainProvenance": localSource,
+		"revision":              obj.CurrentRevision,
+	}
+	// Omitted when unset: absent means the node's local clock is derived
+	// from its program route (ADR-052 decision 3).
+	if payload.LocalClockOverride != "" {
+		params["localClockOverride"] = payload.LocalClockOverride
 	}
 	// A program-only node's stored payload carries no LTC route or
 	// channel, and the agent refuses one of the pair without the other,

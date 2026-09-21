@@ -238,8 +238,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const [programChannelsText, setProgramChannelsText] = useState('')
   const [ltcOn, setLtcOn] = useState(false)
   const [ltcChannelText, setLtcChannelText] = useState('')
-  const [clockDomain, setClockDomain] = useState('')
-  const [clockDomainProvenance, setClockDomainProvenance] = useState('')
   const [role, setRole] = useState<AudioNodeRole>(DEFAULT_ROLE)
   const [zone, setZone] = useState('')
   const [sinkBackend, setSinkBackend] = useState<AudioSinkBackend>(DEFAULT_SINK_BACKEND)
@@ -266,8 +264,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         setProgramChannelsText(response.payload.programChannels.join(', '))
         setLtcOn(response.payload.ltcRoute !== undefined && response.payload.ltcRoute !== '')
         setLtcChannelText(response.payload.ltcChannel !== undefined ? String(response.payload.ltcChannel) : '')
-        setClockDomain(response.payload.clockDomain)
-        setClockDomainProvenance(response.payload.clockDomainProvenance)
         setRole(response.payload.role ?? DEFAULT_ROLE)
         setZone(response.payload.zone ?? '')
         setSinkBackend(response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
@@ -314,8 +310,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     channelsValid &&
     ltcChannelValid &&
     zoneValid &&
-    clockDomain.trim() !== '' &&
-    clockDomainProvenance.trim() !== '' &&
     outputLatencyValueUsValid &&
     outputLatencyProvenanceValid
 
@@ -325,8 +319,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     setProgramChannelsText(state.response.payload.programChannels.join(', '))
     setLtcOn(state.response.payload.ltcRoute !== undefined && state.response.payload.ltcRoute !== '')
     setLtcChannelText(state.response.payload.ltcChannel !== undefined ? String(state.response.payload.ltcChannel) : '')
-    setClockDomain(state.response.payload.clockDomain)
-    setClockDomainProvenance(state.response.payload.clockDomainProvenance)
     setRole(state.response.payload.role ?? DEFAULT_ROLE)
     setZone(state.response.payload.zone ?? '')
     setSinkBackend(state.response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
@@ -360,8 +352,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           ...state.response.payload,
           programRoute,
           programChannels,
-          clockDomain,
-          clockDomainProvenance,
           role,
           sinkBackend,
         }
@@ -562,37 +552,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             </Field>
           </div>
         )}
-      </Section>
-
-      <Section id="st-clock" title="Clock domain">
-        <div className="sm-panel" style={{ borderStyle: 'dashed' }}>
-          <div className="sm-grid sm-stack-4">
-            <Field label="Domain">
-              {(props) => (
-                <Input
-                  {...props}
-                  value={clockDomain}
-                  onChange={(e) => {
-                    setClockDomain(e.target.value)
-                    setDirty(true)
-                  }}
-                />
-              )}
-            </Field>
-            <Field label="How you know">
-              {(props) => (
-                <Input
-                  {...props}
-                  value={clockDomainProvenance}
-                  onChange={(e) => {
-                    setClockDomainProvenance(e.target.value)
-                    setDirty(true)
-                  }}
-                />
-              )}
-            </Field>
-          </div>
-        </div>
       </Section>
 
       <Section id="st-output-latency" title="Output latency">

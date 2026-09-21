@@ -42,11 +42,9 @@ import (
 func putAudioNodeNoLTCForTest(t *testing.T, st *store.Store, nodeID string) {
 	t.Helper()
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
-		ProgramRoute:          "usb-interface",
-		ProgramChannels:       []int{1, 2},
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "single interface, both routes on it",
-		Role:                  config.AudioNodeRoleProgram,
+		ProgramRoute:    "usb-interface",
+		ProgramChannels: []int{1, 2},
+		Role:            config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)

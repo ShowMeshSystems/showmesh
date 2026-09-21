@@ -498,8 +498,6 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "single interface, both routes on it",
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)

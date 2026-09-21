@@ -24,11 +24,9 @@ func TestNodeHoldsMediaClockUsesDeclaredRoleNotLTCRoute(t *testing.T) {
 	ctx := context.Background()
 
 	holderNoLTC, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
-		ProgramRoute:          "usb-interface",
-		ProgramChannels:       []int{1, 2},
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "program+ltc role, ltc route not yet declared",
-		Role:                  config.AudioNodeRoleProgramLTC,
+		ProgramRoute:    "usb-interface",
+		ProgramChannels: []int{1, 2},
+		Role:            config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode holder-no-ltc payload: %v", err)
@@ -46,9 +44,7 @@ func TestNodeHoldsMediaClockUsesDeclaredRoleNotLTCRoute(t *testing.T) {
 	nonHolderWithLTC, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "role program, ltcRoute set anyway",
-		Role:                  config.AudioNodeRoleProgram,
+		Role: config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode non-holder-with-ltc payload: %v", err)
@@ -77,8 +73,6 @@ func TestNodeHoldsMediaClockDefaultRoleIsProgramLTC(t *testing.T) {
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "single interface, both routes on it",
 		// Role deliberately left unset.
 	})
 	if err != nil {
@@ -110,11 +104,9 @@ func TestProgramLTCNodeWithoutLTCRouteIsSelectedAsClockHolderByAudiosched(t *tes
 	ctx := context.Background()
 
 	holder, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
-		ProgramRoute:          "usb-interface",
-		ProgramChannels:       []int{1, 2},
-		ClockDomain:           "single-interface",
-		ClockDomainProvenance: "program+ltc role, ltc route not yet declared",
-		Role:                  config.AudioNodeRoleProgramLTC,
+		ProgramRoute:    "usb-interface",
+		ProgramChannels: []int{1, 2},
+		Role:            config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode holder payload: %v", err)
@@ -122,11 +114,9 @@ func TestProgramLTCNodeWithoutLTCRouteIsSelectedAsClockHolderByAudiosched(t *tes
 	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "holder-no-ltc", holder)
 
 	second, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
-		ProgramRoute:          "scarlett",
-		ProgramChannels:       []int{1, 2},
-		ClockDomain:           "scarlett-domain",
-		ClockDomainProvenance: "two-channel interface, program only",
-		Role:                  config.AudioNodeRoleProgram,
+		ProgramRoute:    "scarlett",
+		ProgramChannels: []int{1, 2},
+		Role:            config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode second-node payload: %v", err)

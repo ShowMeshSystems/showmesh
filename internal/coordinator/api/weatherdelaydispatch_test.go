@@ -77,7 +77,6 @@ func TestWeatherDelayStartPublishesNodeCommandWhileResolumeBlocked(t *testing.T)
 
 	nodePayload, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
 		ProgramRoute: "usb-interface", ProgramChannels: []int{1, 2},
-		ClockDomain: "single-interface", ClockDomainProvenance: "test fixture",
 	})
 	if err != nil {
 		t.Fatalf("encode audio node payload: %v", err)

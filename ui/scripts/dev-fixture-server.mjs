@@ -377,7 +377,7 @@ createServer((req, res) => {
     const id = p.split('/').pop()
     return json(res, {
       serverTime: NOW(), kind: 'audio.node', id, revision: 4,
-      payload: { programRoute: 'hw:CARD=USB,DEV=0', ltcRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], ltcChannel: 3, clockDomain: 'usb-audio-0', clockDomainProvenance: 'Declared by erbartos after checking the interface clock on 22 Aug.' },
+      payload: { programRoute: 'hw:CARD=USB,DEV=0', ltcRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], ltcChannel: 3 },
       updatedAt: ago(950_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
     })
   }
