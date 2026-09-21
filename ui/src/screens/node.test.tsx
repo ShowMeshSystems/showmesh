@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
-import type { ConfigObjectSummary, Model, Node, NodeAssetManifest, SessionResponse, ShowSurfaceConfigResponse } from '../api'
+import type { ConfigObjectSummary, Model, Node, NodeAssetManifest, ObservationEntry, SessionResponse, ShowSurfaceConfigResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { formatDateClock } from '../domain/time'
@@ -759,6 +759,66 @@ describe('Node detail · Drift recording', () => {
 
     const expectedStart = formatDateClock('2026-08-30T20:00:00Z')
     await waitFor(() => expect(screen.getByText(new RegExp(expectedStart!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument())
+  })
+})
+
+describe('Node detail · Sync status', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.listShowSurfacesForNode = () => new Promise(() => {})
+    stubs.getShowSurface = () => new Promise(() => {})
+    stubs.getNodeAssetManifest = () => new Promise(() => {})
+  })
+
+  function evidence(signal: string, overrides: Partial<ObservationEntry> = {}): ObservationEntry {
+    return {
+      resource: { kind: 'node', id: 'media-garage' },
+      signal,
+      value: null,
+      unit: null,
+      state: 'current',
+      reason: null,
+      observedAt: '2026-08-30T20:41:00Z',
+      collectedAt: '2026-08-30T20:41:00Z',
+      source: 'test',
+      quality: 'direct',
+      validForSeconds: 30,
+      ...overrides,
+    }
+  }
+
+  function audioNodeWithSync(overrides: Partial<Node> = {}) {
+    return node({
+      capabilities: [{ id: 'audio.output.local', version: 1, attributes: {} }],
+      audio: [
+        evidence('node.audio.clock.local', { value: 'usb-audio-0' }),
+        evidence('node.audio.clock.local.source', { value: 'derived' }),
+        evidence('node.audio.sync.state', { value: 'locked' }),
+        evidence('node.audio.sync.follows', { value: 'PTP 000fd4fffe06553a:0' }),
+        evidence('node.audio.sync.offset_ns', { value: 200 }),
+        evidence('node.audio.sync.rate_ppm', { state: 'not_collected', reason: 'this node does not measure the rate adjustment applied to its output interface' }),
+      ],
+      clock: [evidence('node.clock.ptp.frequency_ppm', { value: 15.29 })],
+      ...overrides,
+    })
+  }
+
+  it('shows the sync block for a node that carries the audio capability', async () => {
+    renderScreen([audioNodeWithSync()])
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Clock and sync' })
+    const section = heading.closest('section')!
+    expect(within(section).getByText('Sync: Locked. Follows PTP 000fd4fffe06553a:0, δ 0.2 µs')).toBeInTheDocument()
+    expect(within(section).getByText('Clock steered +15.29 ppm')).toBeInTheDocument()
+    expect(within(section).getByText('usb-audio-0')).toBeInTheDocument()
+  })
+
+  it('shows nothing for a node with no audio capability', async () => {
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Identity' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'Clock and sync' })).not.toBeInTheDocument()
   })
 })
 
