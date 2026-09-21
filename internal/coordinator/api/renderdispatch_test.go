@@ -12,10 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -39,6 +41,17 @@ type fakeRenderPublisher struct {
 	// publish would have already reached the wire, without a real
 	// broker.
 	onPublish func()
+
+	// awaitResult and awaitErr, when set, are what AwaitResponse returns
+	// after recording the publish exactly as Publish does — a test's way
+	// to simulate render.surface.blackout's own direct command result
+	// (build item 4) arriving, without a real broker. Neither set means
+	// "published, but no direct result ever arrived," matching
+	// [broker.ErrResponseDeadlineExceeded], the default for every
+	// existing blackout test that confirms through the observation poll
+	// instead.
+	awaitResult *broker.Message
+	awaitErr    error
 }
 
 // mqttCmdEnvelopeForTest decodes just enough of the published envelope for
@@ -74,6 +87,56 @@ func (f *fakeRenderPublisher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.topics)
+}
+
+// AwaitResponse satisfies [RenderPublisher]'s own publish-and-await
+// capability, exercised only by render.surface.blackout's fast path
+// (build item 4). It records the publish exactly as Publish does — every
+// existing assertion against pub.payload/pub.count keeps working whether a
+// blackout went through Publish or AwaitResponse — then returns
+// awaitResult/awaitErr, or [broker.ErrResponseDeadlineExceeded] when
+// neither is set.
+func (f *fakeRenderPublisher) AwaitResponse(ctx context.Context, req broker.ResponseRequest) (broker.Message, error) {
+	if err := f.Publish(ctx, req.PublishTopic, req.PublishQoS, req.PublishRetain, req.PublishPayload); err != nil {
+		return broker.Message{}, broker.ErrResponseFailedBeforePublish
+	}
+	f.mu.Lock()
+	result, err := f.awaitResult, f.awaitErr
+	f.mu.Unlock()
+	if err != nil {
+		return broker.Message{}, err
+	}
+	if result != nil {
+		return *result, nil
+	}
+	return broker.Message{}, broker.ErrResponseDeadlineExceeded
+}
+
+// renderBlackoutResultMessage builds a real showmesh.node.result/v1
+// envelope carrying render.surface.blackout's own Evidence.Value, "running"
+// set to running — the direct command result build item 4's fast path
+// reads, so a test can prove prompt confirmation without a real node.
+func renderBlackoutResultMessage(t *testing.T, nodeID string, running bool) broker.Message {
+	t.Helper()
+	now := time.Now().UTC()
+	payload := mqttproto.ResultPayload{
+		CommandID: "test-command", IdempotencyKey: "test-idempotency-key", Action: "render.surface.blackout",
+		Outcome: mqttproto.OutcomeConfirmed, ReceivedAt: now, RespondedAt: now,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal:      "node.render.surface_state",
+			Value:       map[string]any{"surfaceId": "surface-1", "heldBlack": true, "running": running},
+			CollectedAt: now,
+		},
+	}
+	env, err := mqttproto.NewResultEnvelope(func() time.Time { return now }, nodeID, payload)
+	if err != nil {
+		t.Fatalf("build result envelope: %v", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal result envelope: %v", err)
+	}
+	return broker.Message{Payload: raw}
 }
 
 type renderDispatchTestSetup struct {
@@ -1908,5 +1971,88 @@ func TestRenderTransportProbeNotReachableByGET(t *testing.T) {
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 — a GET must never dispatch a command", setup.pub.count())
+	}
+}
+
+// TestRenderSurfaceBlackoutConfirmsPromptlyWhenNothingIsRunning proves
+// build item 4: a blackout dispatched to a surface with no running frame
+// writer confirms from the node's own direct command result, not from a
+// surface.output.mode reading a silent surface will never produce, and
+// does it well under renderCommandConfirmDeadline.
+func TestRenderSurfaceBlackoutConfirmsPromptlyWhenNothingIsRunning(t *testing.T) {
+	renderCommandConfirmDeadline = 5 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	msg := renderBlackoutResultMessage(t, "media-01", false)
+	setup.pub.awaitResult = &msg
+	// Deliberately no surface.output.mode observation at all: the poll
+	// path this test must never reach would time out with nothing to find.
+
+	h := &handlers{deps: setup.deps(), clock: fixedClock(testNow), logger: testLogger()}
+
+	start := time.Now()
+	outcome, problem, err := h.executeRenderDispatch(context.Background(), testNow, renderDispatchInput{
+		Action: "render.surface.blackout", NodeID: "media-01", SurfaceID: "wall-1",
+		Params:         map[string]any{"surfaceId": "wall-1"},
+		IdempotencyKey: "key-1", DesiredState: "blackout",
+		IssuerID: "operator-1", IssuerName: "operator",
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("executeRenderDispatch: %v", err)
+	}
+	if problem != nil {
+		t.Fatalf("problem: %+v", problem)
+	}
+	if outcome.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed; reason: %s", outcome.Outcome, outcome.OutcomeReason)
+	}
+	if elapsed >= renderBlackoutResultAwaitDeadline {
+		t.Fatalf("executeRenderDispatch took %s, want well under renderBlackoutResultAwaitDeadline (%s): a surface with nothing running must confirm from the direct result, not wait on the observation poll", elapsed, renderBlackoutResultAwaitDeadline)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+}
+
+// TestRenderSurfaceBlackoutFallsBackToPollWhenRunning proves the fast path
+// never short-circuits a surface that IS running: the direct result names
+// running=true, no surface.output.mode observation ever arrives, and the
+// dispatch still runs out its own poll and reports unconfirmed — a running
+// writer's blackout still needs the real draw-state reading, not a bare
+// "the command was accepted."
+func TestRenderSurfaceBlackoutFallsBackToPollWhenRunning(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	msg := renderBlackoutResultMessage(t, "media-01", true)
+	setup.pub.awaitResult = &msg
+
+	h := &handlers{deps: setup.deps(), clock: fixedClock(testNow), logger: testLogger()}
+
+	outcome, problem, err := h.executeRenderDispatch(context.Background(), testNow, renderDispatchInput{
+		Action: "render.surface.blackout", NodeID: "media-01", SurfaceID: "wall-1",
+		Params:         map[string]any{"surfaceId": "wall-1"},
+		IdempotencyKey: "key-2", DesiredState: "blackout",
+		IssuerID: "operator-1", IssuerName: "operator",
+	})
+	if err != nil {
+		t.Fatalf("executeRenderDispatch: %v", err)
+	}
+	if problem != nil {
+		t.Fatalf("problem: %+v", problem)
+	}
+	if outcome.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed: a running writer's blackout still needs a real surface.output.mode reading", outcome.Outcome)
 	}
 }

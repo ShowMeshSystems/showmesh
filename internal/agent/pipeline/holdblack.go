@@ -61,10 +61,20 @@ func (h *HoldBlackStore) Load() (map[string]bool, error) {
 // Set records surfaceID's held-black flag and persists the result. Not safe
 // to call concurrently from multiple goroutines against the same store,
 // matching [AssignmentStore.Upsert]'s identical read-modify-write contract.
+//
+// An existing file this call cannot read starts the write from an empty
+// set rather than failing: Set is how a node recovers from exactly a
+// corrupt or unreadable file, one surface at a time (a caller such as
+// [renderOperations] already defaults every surface with no explicit entry
+// to held black in memory for this process's lifetime — see its own
+// holdBlackDefaultAll), and refusing every future write while the old file
+// stays unreadable would make that recovery permanently impossible. [Load]
+// itself keeps reporting the real error to a caller that needs to know
+// honestly, such as a fresh process reading this store at startup.
 func (h *HoldBlackStore) Set(surfaceID string, held bool) error {
 	existing, err := h.Load()
 	if err != nil {
-		return err
+		existing = map[string]bool{}
 	}
 	if held {
 		existing[surfaceID] = true

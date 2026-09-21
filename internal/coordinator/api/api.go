@@ -1327,6 +1327,10 @@ func (noRenderPublisher) Publish(context.Context, string, byte, bool, []byte) er
 	return errRenderPublisherNotConfigured
 }
 
+func (noRenderPublisher) AwaitResponse(context.Context, broker.ResponseRequest) (broker.Message, error) {
+	return broker.Message{}, errRenderPublisherNotConfigured
+}
+
 type noCommandStore struct{}
 
 func (noCommandStore) InsertCommand(context.Context, store.CommandRecord) (store.CommandRecord, error) {

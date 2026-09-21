@@ -14,6 +14,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -113,8 +114,16 @@ func renderHandlerWriteDeadline() time.Duration {
 // depends on, declared here at the consumer exactly as
 // assetsync.Publisher is declared at its own consumer — *broker.
 // BrokerManager already satisfies this with no adapter.
+//
+// AwaitResponse is render.surface.blackout's own fast path (build item 4,
+// dispatchRenderCommand's blackout branch): the same publish-and-wait
+// capability [AudioSessionPublisher] and [WeatherDelayPublisher] already
+// declare, and the identical *broker.BrokerManager already satisfies it.
+// Every other render.* action still confirms by polling an observation, as
+// before; only blackout ever calls AwaitResponse.
 type RenderPublisher interface {
 	Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error
+	AwaitResponse(ctx context.Context, req broker.ResponseRequest) (broker.Message, error)
 }
 
 // renderIssuerPrincipalIDMissing is never a real value — every dispatch
@@ -754,7 +763,43 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	bgCtx := context.WithoutCancel(ctx)
 
 	dispatchedAt := now
-	if err := h.deps.RenderPublisher.Publish(bgCtx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, rawEnv); err != nil {
+
+	// blackoutRunning is build item 4's fast path, populated only for
+	// render.surface.blackout: whether the node's own direct command
+	// result named a running frame writer for this surface. nil means no
+	// usable direct result arrived (AwaitResponse timed out, or this is
+	// any other action), and confirmation falls back to the ordinary
+	// surface.output.mode poll below.
+	var blackoutRunning *bool
+	if in.Action == "render.surface.blackout" {
+		resultTopic, rterr := mqttproto.ResultTopic(in.NodeID, commandID)
+		if rterr != nil {
+			return v1.RenderCommandResult{}, nil, fmt.Errorf("build result topic: %w", rterr)
+		}
+		msg, awaitErr := h.deps.RenderPublisher.AwaitResponse(bgCtx, broker.ResponseRequest{
+			PublishTopic: topic, PublishPayload: rawEnv,
+			PublishQoS: mqttproto.CmdDeliveryPolicy.QoS, PublishRetain: mqttproto.CmdDeliveryPolicy.Retain,
+			ResponseTopic: resultTopic, ResponseQoS: mqttproto.ResultDeliveryPolicy.QoS,
+			Deadline: renderBlackoutResultAwaitDeadline,
+			Match: func(m broker.Message) bool {
+				return renderResultCorrelates(m.Payload, in.NodeID, commandID, in.IdempotencyKey, in.Action)
+			},
+		})
+		switch {
+		case awaitErr == nil:
+			blackoutRunning = renderBlackoutRunningFromResult(msg.Payload)
+		case errors.Is(awaitErr, broker.ErrResponseFailedBeforePublish):
+			// Nothing reached the wire at all — the same real dispatch
+			// failure the plain Publish branch below reports.
+			h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "publish failed: "+awaitErr.Error())
+			return v1.RenderCommandResult{}, nil, fmt.Errorf("publish command: %w", awaitErr)
+		default:
+			// The command WAS published; only its direct result is
+			// missing (deadline exceeded, or an undecodable reply).
+			// blackoutRunning stays nil, and confirmation falls back to
+			// the ordinary surface.output.mode poll below.
+		}
+	} else if err := h.deps.RenderPublisher.Publish(bgCtx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, rawEnv); err != nil {
 		// The command row already exists (state "pending", never
 		// dispatched) — that is an honest record of an attempted dispatch
 		// that could not reach the broker, not something to unwind.
@@ -780,12 +825,21 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		// as one that reports it present — see confirmRenderTransportProbe.
 		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
 	case "render.surface.blackout":
-		// A blackout never changes surface.pipeline.state (build item 2: no
-		// pipeline restart on either path), so confirmRenderCommand's own
-		// signal is the wrong evidence to poll here — this is confirmed by
-		// surface.output.mode instead, the same evidence the node's own
-		// frame writer reports its forced black through.
-		confirmed, outcomeState, outcomeReason = h.confirmRenderBlackout(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
+		if blackoutRunning != nil && !*blackoutRunning {
+			// No render pipeline is running on this surface, so it is
+			// already dark: nothing will ever tick out a fresh
+			// surface.output.mode reading to poll for, and no stop may
+			// wait on one.
+			confirmed, outcomeState, outcomeReason = true, string(observation.StateCurrent), "no render pipeline is running on this surface, so it is already dark"
+		} else {
+			// A blackout never changes surface.pipeline.state (build item
+			// 2: no pipeline restart on either path), so
+			// confirmRenderCommand's own signal is the wrong evidence to
+			// poll here — this is confirmed by surface.output.mode
+			// instead, the same evidence the node's own frame writer
+			// reports its forced black through.
+			confirmed, outcomeState, outcomeReason = h.confirmRenderBlackout(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
+		}
 	default:
 		// render.pipeline.restart's wantState "running" is what the surface
 		// already was before this command (that is the whole point of a
@@ -1133,6 +1187,57 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
 }
 
+// renderBlackoutResultAwaitDeadline bounds how long dispatchRenderCommand's
+// blackout branch waits for the node's own direct command result before
+// falling back to the ordinary surface.output.mode poll — generous margin
+// over one MQTT round trip, far short of renderCommandConfirmDeadline: the
+// node's blackoutSurface operation is synchronous (renderops.go's own doc
+// comment), so a healthy node's result arrives almost immediately.
+const renderBlackoutResultAwaitDeadline = 2 * time.Second
+
+// renderResultCorrelates mirrors audiodispatch.go's identical
+// audioResultCorrelates one file over: the result topic already names this
+// command's id, but decoding and checking node/commandId/idempotencyKey/
+// action keeps a message on the right topic with the wrong content from
+// ever being mistaken for this command's own result.
+func renderResultCorrelates(payload []byte, nodeID, commandID, idempotencyKey, action string) bool {
+	env, err := mqttproto.DecodeEnvelope(payload)
+	if err != nil || env.NodeID != nodeID {
+		return false
+	}
+	res, err := mqttproto.DecodeResultPayload(env)
+	if err != nil {
+		return false
+	}
+	return res.CommandID == commandID && res.IdempotencyKey == idempotencyKey && res.Action == action
+}
+
+// renderBlackoutRunningFromResult decodes payload as render.surface.
+// blackout's own direct result and reports the "running" field its
+// Evidence.Value carries (renderops.go's blackoutSurface), or nil when the
+// payload does not decode or carries no such field — a caller that gets
+// nil falls back to polling for real evidence rather than trusting an
+// absent or malformed direct result.
+func renderBlackoutRunningFromResult(payload []byte) *bool {
+	env, err := mqttproto.DecodeEnvelope(payload)
+	if err != nil {
+		return nil
+	}
+	res, err := mqttproto.DecodeResultPayload(env)
+	if err != nil || res.Evidence == nil {
+		return nil
+	}
+	v, ok := res.Evidence.Value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	running, ok := v["running"].(bool)
+	if !ok {
+		return nil
+	}
+	return &running
+}
+
 // renderSignalOutputMode mirrors internal/coordinator/collector/noderender's
 // own SignalSurfaceOutputMode ("surface.output.mode") wire spelling,
 // independently reproduced for the identical each-side-of-a-layering-
@@ -1202,18 +1307,18 @@ func (h *handlers) evaluateRenderOutputMode(ctx context.Context, nodeID, surface
 	}
 	if o.ObservedAt == nil {
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.output.mode evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+			"surface.output.mode from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.output.mode reading has arrived since this command was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
+			"no surface.output.mode reading has arrived since this command was dispatched at %s; the most recent reading was observed at %s, via %s, and predates dispatch",
 			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
 	}
 	state := o.StateAt(h.now())
 	if state != observation.StateCurrent {
 		reason := o.Reason
 		if reason == "" {
-			reason = fmt.Sprintf("surface.output.mode evidence state is %s", state)
+			reason = fmt.Sprintf("surface.output.mode reading state is %s", state)
 		}
 		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
 	}

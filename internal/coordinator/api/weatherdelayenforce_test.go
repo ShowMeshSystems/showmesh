@@ -450,6 +450,56 @@ func resolumeActiveClipObservation(instanceID, layerID, value string, collectedA
 	}
 }
 
+// renderSurfaceOutputModeObservation mirrors resolumeActiveClipObservation
+// one resource kind over: a render surface's own surface.output.mode
+// reading, the signal weatherDelayRenderMemberDark resolves against
+// [observation.ResourceSurface].
+func renderSurfaceOutputModeObservation(surfaceID, value string, collectedAt time.Time) observation.Observation {
+	observedAt := collectedAt
+	return observation.Observation{
+		Resource: observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		Signal:   observation.SignalID(weatherDelaySurfaceOutputModeSignal), Value: value,
+		ObservedAt: &observedAt, CollectedAt: collectedAt, Source: "node-render:media-01",
+		Quality: observation.QualityDirect, ValidFor: time.Minute,
+	}
+}
+
+// TestWeatherDelayEnforceGroupConfirmsDarkOnHeldBlackRenderSurface proves
+// build item 1: since render.surface.blackout now holds a surface black
+// without ever reporting surface.output.mode back to "idle", a power group
+// with a render node member must confirm dark on the blackout drawing
+// value directly, and the group's dark heartbeat must publish while a
+// delay is active. Before the fix this never confirmed at all, both
+// because the check compared against "idle" only and because it resolved
+// evidence against the wrong resource kind (observation.ResourceFPP,
+// never observation.ResourceSurface).
+func TestWeatherDelayEnforceGroupConfirmsDarkOnHeldBlackRenderSurface(t *testing.T) {
+	h := newEnforceHarness(t, nil)
+	h.setState(true, 5)
+	setWeatherDelayPowerGroupsForTest(t, h.st, []config.WeatherDelayPowerGroupPayload{{
+		ID: "group-a", Label: "Front Yard", FPPInstanceIDs: []string{}, ResolumeInstanceIDs: []string{},
+		RenderNodeIDs: []string{"wall-1"},
+		Heartbeat:     config.WeatherDelayHeartbeatPayload{Enabled: true, IntervalSeconds: 30},
+	}})
+	h.obs.set([]observation.Observation{renderSurfaceOutputModeObservation("wall-1", mqttproto.RenderDrawingBlackout, h.now)})
+
+	e := h.enforcer()
+	e.tick(context.Background(), h.now)
+
+	hs := h.handlers()
+	payload, _, _, _, err := resolveWeatherDelayConfig(context.Background(), hs.deps.Config)
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+	dark, members := hs.weatherDelayGroupDarkness(context.Background(), h.now, payload.PowerGroups[0])
+	if !dark {
+		t.Fatalf("group not confirmed dark on a held-black render surface: %+v", members)
+	}
+	if got := h.pub.darkPublishCount("group-a"); got != 1 {
+		t.Fatalf("dark heartbeat publish count = %d, want 1 while active, dark, and enabled", got)
+	}
+}
+
 func setWeatherDelayPowerGroupsForTest(t *testing.T, st *store.Store, groups []config.WeatherDelayPowerGroupPayload) {
 	t.Helper()
 	payload, err := config.EncodeWeatherDelayPayload(config.WeatherDelayPayload{

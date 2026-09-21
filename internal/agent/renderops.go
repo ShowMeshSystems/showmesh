@@ -258,8 +258,19 @@ type renderOperations struct {
 	// set, loaded once at construction (before any frame writer starts, so
 	// boot resume comes up black) and read fresh, at the point of decision,
 	// by every frame writer's own [surfaceHoldBlackSource] on every tick.
-	// Guarded by mu, alongside writers/timelineStepOwner.
+	// Guarded by mu, alongside writers/timelineStepOwner. An entry present
+	// here always wins over holdBlackDefaultAll, explicit true or explicit
+	// false alike.
 	holdBlack map[string]bool
+
+	// holdBlackDefaultAll is true only when holdBlackStore.Load failed at
+	// construction (an unreadable or corrupt file): every surface with no
+	// explicit entry in holdBlack is then held black, because black is the
+	// safe direction for a stop and this node cannot honestly say which
+	// surfaces the lost file held black. Cleared per surface the moment
+	// that surface gets an explicit entry (blackoutSurface or
+	// clearHeldBlack); never reset as a whole.
+	holdBlackDefaultAll bool
 
 	// timelineStepOwner and timelineStepMS record which surface last set
 	// o.timeline's shared step time, and to what value — see
@@ -284,9 +295,16 @@ type renderOperations struct {
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, holdBlackStore *pipeline.HoldBlackStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
 	holdBlack, err := holdBlackStore.Load()
+	holdBlackDefaultAll := false
 	if err != nil {
-		logger.Warn("failed to load persisted held-black state at startup; assuming no surface is held black", "error", err)
+		// Black is the safe direction for a stop, and this node cannot
+		// honestly say which surfaces the lost file held black — so every
+		// surface with no explicit entry comes up held black, not lit,
+		// until an authorized cue.activate or render.surface.apply clears
+		// it per surface (see holdBlackDefaultAll's own doc comment).
+		logger.Warn("failed to load persisted held-black state at startup; holding every surface black until it is explicitly cleared, because black is the safe direction for a stop", "error", err)
 		holdBlack = map[string]bool{}
+		holdBlackDefaultAll = true
 	}
 	return &renderOperations{
 		sup:                 sup,
@@ -299,15 +317,21 @@ func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentSto
 		logger:              logger,
 		writers:             make(map[string]*frameWriterHandle),
 		holdBlack:           holdBlack,
+		holdBlackDefaultAll: holdBlackDefaultAll,
 	}
 }
 
 // isHeldBlack reports whether surfaceID currently has an active
-// render.surface.blackout in effect.
+// render.surface.blackout in effect: an explicit entry always wins, and a
+// surface never explicitly touched falls back to holdBlackDefaultAll (see
+// its own doc comment).
 func (o *renderOperations) isHeldBlack(surfaceID string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.holdBlack[surfaceID]
+	if v, ok := o.holdBlack[surfaceID]; ok {
+		return v
+	}
+	return o.holdBlackDefaultAll
 }
 
 // setHeldBlack updates surfaceID's in-memory held-black flag. Callers
@@ -946,6 +970,16 @@ func (o *renderOperations) clearSurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: removing persisted assignment: %w", action, err)
 	}
 
+	// A cleared surface has no assignment left to resume rendering onto,
+	// so a held-black flag from before this clear must not survive it and
+	// come back on a later, unrelated assignment. Logged, never returned:
+	// the clear itself (stop the pipeline, remove the assignment) already
+	// succeeded by this point, matching cue.activate (render)'s identical
+	// reasoning for its own held-black bookkeeping write.
+	if err := o.clearHeldBlack(surfaceID); err != nil {
+		o.logger.Warn("render.surface.clear: failed to clear held-black flag", "surface_id", surfaceID, "error", err)
+	}
+
 	// No generation floor here (-1): cmdClear always synchronously calls
 	// setState(Stopped, ...) as part of processing this exact command, so
 	// ObservedAt freshness alone already proves the evidence postdates it —
@@ -980,10 +1014,25 @@ func (o *renderOperations) blackoutSurface(ctx context.Context, params map[strin
 
 	executedAt := now()
 
-	if err := o.holdBlackStore.Set(surfaceID, true); err != nil {
-		return OperationResult{}, fmt.Errorf("%s: persisting held-black flag: %w", action, err)
-	}
+	// The in-memory flag is set FIRST, always, before persistence is even
+	// attempted: a running frame writer reads it fresh on its very next
+	// tick (surfaceHoldBlackSource), so the surface is already drawing
+	// black by the time this function does anything else. Persisting it
+	// can still fail, but that must never leave the flag unset — a stop
+	// that fails lit because its own bookkeeping write failed is the exact
+	// hazard this ordering closes.
 	o.setHeldBlack(surfaceID, true)
+	if err := o.holdBlackStore.Set(surfaceID, true); err != nil {
+		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be persisted: %w", action, err)
+	}
+
+	// running names whether a frame writer is currently on this surface:
+	// build item 4 (coordinator side, renderdispatch.go) reads this off the
+	// command's own direct result to confirm promptly when it is false —
+	// nothing is drawing, so the surface is already dark, and no emergency
+	// stop should burn a full confirmation deadline waiting for a periodic
+	// report that a silent surface will never produce.
+	running := o.hasRunningFrameWriter(surfaceID)
 
 	observedAt := now()
 	return OperationResult{
@@ -992,6 +1041,7 @@ func (o *renderOperations) blackoutSurface(ctx context.Context, params map[strin
 		Value: map[string]any{
 			"surfaceId": surfaceID,
 			"heldBlack": true,
+			"running":   running,
 		},
 		ExecutedAt: executedAt,
 		ObservedAt: observedAt,
