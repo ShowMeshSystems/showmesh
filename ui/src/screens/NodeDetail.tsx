@@ -49,6 +49,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration } from '../domain/time'
 import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
+import { nodeSyncStatus, type SignalFact } from './nodeSyncModel'
 import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
 
@@ -288,6 +289,38 @@ function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType
   }
   const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
   return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><ButtonRow><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={() => deploy()}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button>{conflictDetail !== null && <Button variant="danger" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={deployAnyway}>Deploy anyway</Button>}</ButtonRow></>}{conflictDetail !== null && <p className="sm-outcome__detail">Refused: {conflictDetail}</p>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p>{result.overriddenConditions !== undefined && result.overriddenConditions.length > 0 && <p className="sm-outcome__detail">Deployed with operator override: {result.overriddenConditions.map((c) => c.claim).join('; ')}</p>}</div>}<ConfirmDialog open={confirmingOverride} title="Deploy anyway?" detail={<><p className="sm-body">{conflictDetail}</p><p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed revision.</p></>} confirmLabel="Deploy anyway" onConfirm={confirmDeployAnyway} onCancel={() => setConfirmingOverride(false)} /></div>
+}
+
+function FactLine({ fact, className }: { fact: SignalFact<string>; className: string }) {
+  if (fact.kind === 'absent') return <RuledStrip absence={fact.absence} label={fact.label} fact={fact.fact} />
+  return <p className={className}>{fact.value}</p>
+}
+
+/** ADR-052 decision 6: the local clock, the sync line, and the PTP steer, for a node that already carries the audio capability. */
+function SyncStatusSection({ node }: { node: Node }) {
+  const status = nodeSyncStatus(node)
+  return (
+    <Section id="nd-sync" title="Clock and sync">
+      <DefinitionStrip
+        items={[
+          {
+            term: 'Local clock',
+            value:
+              status.localClock.kind === 'value' ? (
+                <span className="sm-data">
+                  {status.localClock.value.name}
+                  {status.localClock.value.setByOperator ? ' (set by the operator)' : ''}
+                </span>
+              ) : (
+                <RuledStrip absence={status.localClock.absence} label={status.localClock.label} fact={status.localClock.fact} />
+              ),
+          },
+        ]}
+      />
+      <FactLine fact={status.syncLine} className="sm-data" />
+      <FactLine fact={status.steer} className="sm-small sm-muted" />
+    </Section>
+  )
 }
 
 type RunsState = { kind: 'loading' } | { kind: 'loaded'; runs: AudioAlignmentRun[] } | { kind: 'failed'; reason: string }
@@ -738,6 +771,8 @@ export function NodeDetail() {
           </section>
         ))}
       </Section>
+
+      {hasAudioCapability && <SyncStatusSection node={node} />}
 
       <DriftRecordingSection nodeId={node.nodeId} hasAudioCapability={hasAudioCapability} gate={audioGate} />
 
