@@ -109,8 +109,8 @@ func TestCueSequenceWithDistinctHandlesThenReleaseAllLeavesNoLiveBranch(t *testi
 	if err != nil {
 		t.Fatalf("ReleaseAll: %v", err)
 	}
-	if released != 2 {
-		t.Fatalf("ReleaseAll released %d branch(es), want 2", released)
+	if len(released) != 2 {
+		t.Fatalf("ReleaseAll released %d branch(es), want 2", len(released))
 	}
 	live, err := e.LiveHandles(ctx)
 	if err != nil {
@@ -147,8 +147,8 @@ func TestReleaseAllTearsDownEveryBranchExceptTheNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReleaseAll: %v", err)
 	}
-	if released != 2 {
-		t.Fatalf("ReleaseAll released %d branch(es), want 2", released)
+	if len(released) != 2 {
+		t.Fatalf("ReleaseAll released %d branch(es), want 2", len(released))
 	}
 
 	live, err := e.LiveHandles(ctx)
@@ -193,8 +193,8 @@ func TestReleaseAllWithNoExceptionsReleasesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReleaseAll: %v", err)
 	}
-	if released != 1 {
-		t.Fatalf("ReleaseAll released %d branch(es), want 1", released)
+	if len(released) != 1 {
+		t.Fatalf("ReleaseAll released %d branch(es), want 1", len(released))
 	}
 
 	live, err := e.LiveHandles(ctx)

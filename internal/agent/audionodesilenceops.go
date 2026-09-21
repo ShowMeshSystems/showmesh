@@ -60,6 +60,10 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		observedAt := now()
 
 		confirmed := sweepConfirmed
+		reason := ""
+		if !sweepConfirmed {
+			reason = "This node's audio engine was not connected when the stop's final sweep ran, so some audio may still be playing. Retry the stop once the engine reconnects."
+		}
 		sessions := make([]map[string]any, 0, len(results))
 		for _, r := range results {
 			if !outcomeConfirmed(r.Outcome) {
@@ -74,6 +78,7 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 
 		return OperationResult{
 			Confirmed: confirmed,
+			Reason:    reason,
 			Signal:    "node.audio.silence",
 			Value: map[string]any{
 				"sessionsFound": len(results),

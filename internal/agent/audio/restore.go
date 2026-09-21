@@ -535,6 +535,7 @@ func (m *Manager) watchTick(ctx context.Context) {
 	var completed []pkgaudio.SessionID
 	for _, s := range sessions {
 		s.mu.Lock()
+		stateBeforeTick := s.state
 		s.checkFadeCompletionLocked(ctx)
 		s.checkStopCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
@@ -598,6 +599,15 @@ func (m *Manager) watchTick(ctx context.Context) {
 		// longer running.
 		m.evaluateTimelineLocked(ctx, s)
 		if s.state == pkgaudio.StateCompleted {
+			completed = append(completed, s.id)
+		} else if s.state == pkgaudio.StateStopped && stateBeforeTick != pkgaudio.StateStopped {
+			// checkFadeCompletionLocked/checkStopCompletionLocked can also
+			// resolve a session straight to Stopped this same tick, when
+			// the handle it was tracking already vanished from the engine
+			// (see both their own doc comments): that leaves Playing
+			// exactly as reaching StateCompleted does, so it must release
+			// duck/interrupt membership the same way, not leave a session
+			// it was ducking stuck ducked with no visible cause.
 			completed = append(completed, s.id)
 		}
 		s.mu.Unlock()

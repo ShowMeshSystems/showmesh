@@ -38,8 +38,8 @@ func TestSwitchableEngineReleaseAllReportsUnboundRatherThanACleanSweep(t *testin
 	if err == nil {
 		t.Fatal("ReleaseAll on an unbound SwitchableEngine returned nil error, want the unbound reason")
 	}
-	if released != 0 {
-		t.Errorf("released = %d, want 0", released)
+	if len(released) != 0 {
+		t.Errorf("released = %v, want none", released)
 	}
 
 	// After a real bind and an intervening detach (Set(nil), matching a

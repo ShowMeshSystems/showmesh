@@ -151,12 +151,16 @@ type Engine interface {
 	LiveHandles(ctx context.Context) ([]EngineHandle, error)
 
 	// ReleaseAll tears down every live branch this Engine holds except the
-	// handles named in except, and reports how many it released. It exists
-	// for [Manager.SilenceAll]/[Manager.SilenceAllExcept]'s own final sweep:
-	// that call must reach a branch even when the session layer's own
-	// per-session accounting missed it, so an emergency stop never leaves
-	// audio playing because one session's own bookkeeping lost track of it.
-	ReleaseAll(ctx context.Context, except ...EngineHandle) (released int, err error)
+	// handles named in except, and reports exactly which ones it
+	// released -- never just a count, so a caller reporting how many is
+	// reporting len(released) of the same list it can also name, not a
+	// second, independently computed number that can drift from it. It
+	// exists for [Manager.SilenceAll]/[Manager.SilenceAllExcept]'s own
+	// final sweep: that call must reach a branch even when the session
+	// layer's own per-session accounting missed it, so an emergency stop
+	// never leaves audio playing because one session's own bookkeeping
+	// lost track of it.
+	ReleaseAll(ctx context.Context, except ...EngineHandle) (released []EngineHandle, err error)
 }
 
 // ErrHandleNotLoaded is the error class an [Engine] wraps its own "no such

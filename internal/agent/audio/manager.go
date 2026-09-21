@@ -648,7 +648,8 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	// Interrupt resolution and restoring a duck applied before a start
 	// that did not end Playing both need to lock OTHER sessions, so they
 	// must run after s.mu is released — see [Manager.duckLowerPriority]'s
-	// doc comment on why this can never hold two sessions' locks at once.
+	// doc comment; this path, like that one, never holds two sessions'
+	// locks at once.
 	started := res.executed && s.state == pkgaudio.StatePlaying
 	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
@@ -886,7 +887,8 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 	// Interrupt resolution and restoring a duck applied before a promote
 	// that did not end Playing both need to lock OTHER sessions, so they
 	// must run after to.mu is released — see [Manager.duckLowerPriority]'s
-	// doc comment on why this can never hold two sessions' locks at once.
+	// doc comment; this path, like that one, never holds two sessions'
+	// locks at once.
 	// The same shape Start's own tail uses: read to's own state/desired
 	// here, while to.mu is still held, never after Unlock.
 	started := res.executed && to.state == pkgaudio.StatePlaying

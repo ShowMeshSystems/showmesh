@@ -129,6 +129,30 @@ func TestSilenceNodeReportsUnclaimedBranchesReleased(t *testing.T) {
 	}
 }
 
+// TestSilenceNodeReportsUnconfirmedWithAPlainReasonWhenTheSweepCannotRun
+// proves an unbound engine (a rebind window, most likely) reports the
+// silence outcome as unconfirmed, with a plain operator sentence naming
+// why, not the generic post-write read-back mismatch text every other
+// unconfirmed operation gets: a sweep that never ran is a different
+// fact from a write whose evidence disagreed with it.
+func TestSilenceNodeReportsUnconfirmedWithAPlainReasonWhenTheSweepCannotRun(t *testing.T) {
+	dir := t.TempDir()
+	engine := audio.NewSwitchableEngine() // never bound to a real engine
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	op := silenceNode(mgr)
+
+	result, err := op(context.Background(), map[string]any{}, time.Now)
+	if err != nil {
+		t.Fatalf("silenceNode: unexpected error %v", err)
+	}
+	if result.Confirmed {
+		t.Fatal("Confirmed = true, want false: the sweep could not run with no engine ever bound")
+	}
+	if result.Reason == "" {
+		t.Fatal("Reason is empty, want a plain sentence naming why the sweep could not run")
+	}
+}
+
 // TestSilenceNodeNotWired proves the not-wired error names the action.
 func TestSilenceNodeNotWired(t *testing.T) {
 	op := silenceNode(nil)

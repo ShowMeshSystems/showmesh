@@ -346,6 +346,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return
@@ -550,8 +551,12 @@ func (m *Manager) waitDuckFade(ctx context.Context, fadeMs int) error {
 // role priority is strictly lower, skipping a session already ducked by
 // someone else. It is called with no session lock held — each target's
 // own mu is acquired and released in turn, one session at a time, so
-// this can never hold two sessions' locks simultaneously (the deadlock a
-// duck and a counter-duck racing each other would otherwise risk).
+// duckLowerPriority itself never holds two sessions' locks
+// simultaneously (the deadlock a duck and a counter-duck racing each
+// other would otherwise risk). Not a package-wide invariant: [Manager.
+// releaseEveryEngineBranchExceptSessions] deliberately holds every
+// excluded session's lock at once, sorted into a fixed order instead,
+// since nothing there ever locks a session this one also locks.
 func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.SessionID, duckerRole pkgaudio.SourceRole) {
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()

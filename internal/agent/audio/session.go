@@ -1108,6 +1108,7 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return

@@ -266,21 +266,21 @@ func (e *FakeEngine) get(handle EngineHandle) (*fakeHandle, error) {
 }
 
 // ReleaseAll drops every handle this fake holds except those named in
-// except, reporting how many it released.
-func (e *FakeEngine) ReleaseAll(_ context.Context, except ...EngineHandle) (int, error) {
+// except, reporting exactly which ones it released.
+func (e *FakeEngine) ReleaseAll(_ context.Context, except ...EngineHandle) ([]EngineHandle, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	skip := make(map[EngineHandle]struct{}, len(except))
 	for _, h := range except {
 		skip[h] = struct{}{}
 	}
-	released := 0
+	var released []EngineHandle
 	for h := range e.handles {
 		if _, ok := skip[h]; ok {
 			continue
 		}
 		delete(e.handles, h)
-		released++
+		released = append(released, h)
 	}
 	return released, nil
 }

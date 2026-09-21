@@ -18,7 +18,7 @@ type releaseAllWedgeEngine struct {
 	proceed chan struct{}
 }
 
-func (e *releaseAllWedgeEngine) ReleaseAll(ctx context.Context, except ...EngineHandle) (int, error) {
+func (e *releaseAllWedgeEngine) ReleaseAll(ctx context.Context, except ...EngineHandle) ([]EngineHandle, error) {
 	close(e.entered)
 	<-e.proceed
 	return e.FakeEngine.ReleaseAll(ctx, except...)

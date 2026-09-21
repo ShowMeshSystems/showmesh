@@ -123,51 +123,23 @@ func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, id
 // currently bound, mid-rebind): the released count is then a floor, not
 // proof nothing else was left playing.
 //
-// When it releases at least one branch, it also logs one WARN naming the
-// count and the released handles' own names, taken from a [Engine.
-// LiveHandles] read before the sweep minus one after it: an orphaned
-// branch no session accounted for must be findable in the node's own
-// log, even though [pkg/audio]'s wire evidence today only carries the
-// count.
+// The returned count is len of the exact handles [Engine.ReleaseAll]
+// itself reports releasing, never a second, independently computed
+// number: when it is nonzero, this also logs one WARN naming every one
+// of those handles, so an orphan no session accounted for is findable in
+// the node's own log, even though [pkg/audio]'s wire evidence today
+// carries only the count.
 func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) (int, bool) {
-	liveCtx, liveCancel := boundedEngineCallContext(ctx)
-	before, beforeErr := m.engine.LiveHandles(liveCtx)
-	liveCancel()
-
 	relCtx, relCancel := boundedEngineCallContext(ctx)
 	released, err := m.engine.ReleaseAll(relCtx, except...)
 	relCancel()
 	if err != nil {
 		m.logf("audio: an emergency stop's final engine sweep did not complete; some branches may still be playing: %v", err)
 	}
-
-	if released > 0 && beforeErr == nil {
-		afterCtx, afterCancel := boundedEngineCallContext(ctx)
-		after, afterErr := m.engine.LiveHandles(afterCtx)
-		afterCancel()
-		if afterErr == nil {
-			m.logf("audio: an emergency stop released %d engine branch(es) no session had already accounted for: %v", released, releasedHandleNames(before, after))
-		}
+	if len(released) > 0 {
+		m.logf("audio: an emergency stop released %d engine branch(es) no session had already accounted for: %v", len(released), released)
 	}
-
-	return released, err == nil
-}
-
-// releasedHandleNames returns every handle present in before but not in
-// after, so [Manager.releaseEveryEngineBranchExcept] can name what an
-// unaccounted-for release actually tore down.
-func releasedHandleNames(before, after []EngineHandle) []EngineHandle {
-	still := make(map[EngineHandle]struct{}, len(after))
-	for _, h := range after {
-		still[h] = struct{}{}
-	}
-	var out []EngineHandle
-	for _, h := range before {
-		if _, ok := still[h]; !ok {
-			out = append(out, h)
-		}
-	}
-	return out
+	return len(released), err == nil
 }
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,

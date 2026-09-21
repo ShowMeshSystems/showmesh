@@ -98,8 +98,8 @@ func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error)
 
 // ReleaseAll always fails: this build has no GStreamer backend and so
 // holds no branches to release.
-func (e *Engine) ReleaseAll(context.Context, ...agentaudio.EngineHandle) (int, error) {
-	return 0, e.unavailable()
+func (e *Engine) ReleaseAll(context.Context, ...agentaudio.EngineHandle) ([]agentaudio.EngineHandle, error) {
+	return nil, e.unavailable()
 }
 
 // Close is a no-op: this build holds no pipeline and no device.

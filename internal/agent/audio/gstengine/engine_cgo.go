@@ -63,15 +63,22 @@ type Engine struct {
 
 	// inFlightReplacements holds every swap replacement built but not
 	// yet swapped into handles or torn down, never reachable through
-	// handles, so Close must sweep it too, keyed to the handle the swap
-	// is replacing so [Engine.ReleaseAll] can honor its own except list
-	// against a swap still in flight. Guarded by e.mu.
-	inFlightReplacements map[*branch]agentaudio.EngineHandle
+	// handles, so Close must sweep it too. Guarded by e.mu.
+	inFlightReplacements map[*branch]*inFlightReplacement
 
 	// retiringBranches holds every branch a swap has already muted and
 	// re-pointed handles away from, whose teardown is still running on
 	// its own goroutine (see retireAsync). Guarded by e.mu.
 	retiringBranches map[*branch]struct{}
+
+	// releaseAllMu serializes every ReleaseAll call against every other
+	// one, end to end: two ReleaseAll calls each sequentially tearing
+	// down their own batch is still two goroutines issuing GStreamer
+	// state changes against this one shared pipeline at once, the exact
+	// contention [Engine.ReleaseAll]'s own doc comment exists to avoid.
+	// Never taken by anything else; e.mu alone still guards every field
+	// above.
+	releaseAllMu sync.Mutex
 
 	// elementIndex maps every one of a branch's own element names (all
 	// eight from [branch.elements], not only filesrc/decodebin — every
@@ -172,7 +179,7 @@ func New(cfg Config) (*Engine, error) {
 	e := &Engine{
 		cfg:                  cfg,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
-		inFlightReplacements: make(map[*branch]agentaudio.EngineHandle),
+		inFlightReplacements: make(map[*branch]*inFlightReplacement),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
@@ -242,7 +249,7 @@ func NewUnavailable(reason string) *Engine {
 	return &Engine{
 		availReason:          reason,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
-		inFlightReplacements: make(map[*branch]agentaudio.EngineHandle),
+		inFlightReplacements: make(map[*branch]*inFlightReplacement),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
@@ -390,7 +397,13 @@ func (e *Engine) Close() error {
 				if obj, ok := e.pipeline.(gobject.Object); ok {
 					gobject.UnsafeObjectUnref(obj)
 				}
+				// Under e.mu: watchBus's own startup read (see its doc
+				// comment) is the only other goroutine that ever reads
+				// e.pipeline outside this single-execution (closeOnce)
+				// function, and it must never observe a half-written value.
+				e.mu.Lock()
 				e.pipeline = nil
+				e.mu.Unlock()
 			}
 		}
 		if e.ltc != nil {
@@ -959,8 +972,27 @@ func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int, sampleRate int) e
 	return nil
 }
 
+// watchBus watches e.pipeline's bus until Close signals e.done. New
+// starts this on its own goroutine as its very last step, so a caller
+// that calls Close immediately after New returns can run Close to
+// completion, including nilling e.pipeline (see Close's own doc comment
+// on that write), before this goroutine ever gets scheduled: reading
+// e.pipeline once, under the same e.mu Close's write uses, and checking
+// e.done, both before ever touching the pipeline, is what keeps that
+// window from reaching a nil (or freed) pipeline.
 func (e *Engine) watchBus() {
-	bus := e.pipeline.GetBus()
+	select {
+	case <-e.done:
+		return
+	default:
+	}
+	e.mu.Lock()
+	pipeline := e.pipeline
+	e.mu.Unlock()
+	if pipeline == nil {
+		return
+	}
+	bus := pipeline.GetBus()
 	defer releaseBus(bus)
 	for {
 		select {
@@ -1145,13 +1177,30 @@ func (e *Engine) unindexBranch(b *branch) {
 	}
 }
 
+// inFlightReplacement is one swap replacement's entry in
+// inFlightReplacements: handle is what its swap is replacing, so
+// [Engine.ReleaseAll] can honor its own except list against a swap still
+// in flight. handoff, set only by ReleaseAll itself, under e.mu, is
+// where [Engine.commitSwap] deposits the branch when it discovers that
+// exact ReleaseAll already overtook its swap, instead of tearing the
+// branch down itself: see ReleaseAll's own doc comment for why one
+// goroutine must own every teardown this sweep causes.
+type inFlightReplacement struct {
+	handle  agentaudio.EngineHandle
+	handoff chan *branch
+}
+
 // trackReplacement and untrackReplacement add and remove b from
-// inFlightReplacements, keyed to the handle its swap is replacing; see
-// that field's doc comment for why Close and [Engine.ReleaseAll] both
-// need this set.
+// inFlightReplacements; see that field's doc comment for why Close and
+// [Engine.ReleaseAll] both need this set. commitSwap also removes its
+// own entry directly, under the same lock as the decision that makes it,
+// so untrackReplacement's own removal here is a harmless no-op by the
+// time it runs in the common case; it stays the one path that always
+// runs, so a swap that returns early (a build or prepare failure, never
+// reaching commitSwap at all) still cleans up its own entry.
 func (e *Engine) trackReplacement(b *branch, handle agentaudio.EngineHandle) {
 	e.mu.Lock()
-	e.inFlightReplacements[b] = handle
+	e.inFlightReplacements[b] = &inFlightReplacement{handle: handle}
 	e.mu.Unlock()
 }
 
