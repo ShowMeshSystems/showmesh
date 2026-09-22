@@ -822,6 +822,73 @@ describe('Node detail · Sync status', () => {
   })
 })
 
+describe('Node detail · Now playing', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.listShowSurfacesForNode = () => new Promise(() => {})
+    stubs.getShowSurface = () => new Promise(() => {})
+    stubs.getNodeAssetManifest = () => new Promise(() => {})
+  })
+
+  function sessionEvidence(sessionId: string, signal: string, overrides: Partial<ObservationEntry> = {}): ObservationEntry {
+    return {
+      resource: { kind: 'audio_session', id: sessionId },
+      signal,
+      value: null,
+      unit: null,
+      state: 'current',
+      reason: null,
+      observedAt: '2026-08-30T21:06:55Z',
+      collectedAt: '2026-08-30T21:06:55Z',
+      source: 'test',
+      quality: 'direct',
+      validForSeconds: 30,
+      ...overrides,
+    }
+  }
+
+  function audioNodeWithSession(overrides: Partial<Node> = {}) {
+    return node({
+      capabilities: [{ id: 'audio.output.local', version: 1, attributes: {} }],
+      audio: [
+        sessionEvidence('background', 'audio_session.source_role', { value: 'background' }),
+        sessionEvidence('background', 'audio_session.playlist.item_id', { value: 'song-42' }),
+        sessionEvidence('background', 'audio_session.state', { value: 'playing' }),
+        sessionEvidence('background', 'audio_session.position_ms', { value: 10_000 }),
+      ],
+      ...overrides,
+    })
+  }
+
+  it('renders the section for a node with the audio capability, showing item, state and position', async () => {
+    renderScreen([audioNodeWithSession()])
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Now playing' })
+    const section = heading.closest('section')!
+    expect(within(section).getByText('background')).toBeInTheDocument()
+    expect(within(section).getByText('background bed')).toBeInTheDocument()
+    expect(within(section).getByText('song-42')).toBeInTheDocument()
+    expect(within(section).getByText('playing')).toBeInTheDocument()
+    expect(within(section).getByText(/0:15\.0/)).toBeInTheDocument()
+  })
+
+  it('shows nothing for a node with no audio capability', async () => {
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Identity' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'Now playing' })).not.toBeInTheDocument()
+  })
+
+  it('shows the no-session absence for an audio node reporting no session', async () => {
+    renderScreen([audioNodeWithSession({ audio: [] })])
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Now playing' })
+    const section = heading.closest('section')!
+    expect(within(section).getByText('No audio session is running on this node.')).toBeInTheDocument()
+  })
+})
+
 describe('Node detail · Cue catalog override', () => {
   afterEach(() => {
     cleanup()
