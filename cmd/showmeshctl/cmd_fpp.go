@@ -54,6 +54,11 @@ var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Write
 	// dispatch shape and its fpp:command scope - see
 	// cmd_fpp_republish_playlist_definitions.go.
 	"republish-playlist-definitions": cmdFPPRepublishPlaylistDefinitions,
+	// pair and set-brightness-ceiling share this map's dispatch shape.
+	// pair is behind principal:write, not fpp:command: opening a pairing
+	// creates a principal and mints it a token.
+	"pair":                   cmdFPPPair,
+	"set-brightness-ceiling": cmdFPPSetBrightnessCeiling,
 }
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -85,6 +90,11 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		if args[0] == "playlist-readiness" {
 			return cmdFPPPlaylistReadiness(args[1:], stdout, stderr, clock)
 		}
+		// "pairing" is the read half of pairing, dispatched here for the
+		// identical reason the three read-only verbs above are.
+		if args[0] == "pairing" {
+			return cmdFPPPairing(args[1:], stdout, stderr, clock)
+		}
 	}
 
 	fs, g := newFlagSet("showmeshctl fpp", stderr)
@@ -107,6 +117,9 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  acknowledge-instance-uuid-change --confirm <instance-id> ")
 		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <instance-id> <percent 0-100> [--fade-seconds N] [--request-id KEY]")
 		_, _ = fmt.Fprintln(stderr, "  republish-playlist-definitions <instance-id> [--request-id KEY]")
+		_, _ = fmt.Fprintln(stderr, "  set-brightness-ceiling     <instance-id> <ceiling 0-100> [--request-id KEY]")
+		_, _ = fmt.Fprintln(stderr, "  pair                       <instance-id> <code XXXX-XXXX>")
+		_, _ = fmt.Fprintln(stderr, "  pairing                    <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-definitions dispatches FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's")
 		_, _ = fmt.Fprintln(stderr, "read-only playlist definition surface:")
 		_, _ = fmt.Fprintln(stderr, "  playlist-definitions list")

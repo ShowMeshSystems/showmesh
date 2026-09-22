@@ -513,6 +513,7 @@ the wrong device, because every collector shares one
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 | `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
 | `node-clock` | reserved | Track I seam I1 (`collector/nodeclock`) |
+| `fpp-brightness` | shipped | `collector/fppbrightness`, the plugin's own brightness route. Its `collector.Runner` key is `fpp-brightness:<instanceId>`, never the bare instance id the FPP REST collector already holds on the same Runner |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -644,6 +645,8 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.decision` | shipped | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
+| `fpp.pair` | shipped | FPP plugin pairing: the dispatch entry when an operator opens a pairing, and the outcome entry when the plugin claims its token |
+| `fpp.set_brightness_ceiling` | shipped | the operator write of one FPP host's brightness ceiling, dispatching the plugin's own FPP command |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -739,6 +742,17 @@ and the night controller's cue tolerance is finer than a second.
 | Signal | Status | Owner |
 |---|---|---|
 | `fpp.position.elapsed.ms` | reserved | Track F (night-session cue timing) |
+
+**Four `fpp.brightness.*` signals**, written from the code that emits them
+(`internal/coordinator/collector/fppbrightness`). The resource is the FPP
+endpoint id, not the plugin, because a host serves one brightness state.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `fpp.brightness.ceiling` | shipped | plugin brightness readout |
+| `fpp.brightness.transition_gain` | shipped | plugin brightness readout |
+| `fpp.brightness.effective_output` | shipped | plugin brightness readout |
+| `fpp.brightness.fade_active` | shipped | plugin brightness readout |
 
 Track F seam F3 built against the existing whole-second signal rather than
 minting this one, and **reported the need instead of inventing the name**,

@@ -657,6 +657,172 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /fpp/{instanceId}/brightness/ceiling:
+    parameters:
+      - name: instanceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Same ID syntax as a node ID (contract section 7).
+    post:
+      operationId: setFPPBrightnessCeiling
+      summary: Write one FPP host's brightness ceiling
+      description: >-
+        Behind `fpp:command`, the scope an operator write to one FPP host
+        already needs. Dispatches FPP's own
+        `ShowMesh: Set Brightness Ceiling` command, registered by the
+        resident ShowMesh plugin, through the same FPP command client
+        every other command goes through. This writes the CEILING; the
+        transition gain is a separate value with its own route and is
+        never written from here.
+
+        FPP answering `200` is never confirmation on its own: `ceiling` is
+        present, and `command.outcome` is `confirmed`, only when the
+        plugin's own brightness route reported the new value within the
+        read-back window. Otherwise the command still reached FPP and
+        `command.outcome` is `unconfirmed`.
+
+        An out-of-range `ceiling` is refused with `400`, never clamped. An
+        instance id that names no configured `fpp.endpoints` entry is
+        `404`. A command that did not reach the host is `502`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPBrightnessCeilingRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPBrightnessCeilingResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the authenticated principal does not hold `fpp:command`
+            (ADR-024 decision 4, `detail` names the missing scope), or a
+            cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          description: >-
+            The request was valid and the instance is configured, but the
+            command did not reach the FPP host. `type` is
+            `https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /fpp/{instanceId}/pairing:
+    parameters:
+      - name: instanceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Same ID syntax as a node ID (contract section 7).
+    get:
+      operationId: getFPPPairing
+      summary: Show whether one FPP host's plugin is paired
+      description: >-
+        Behind `fpp:read`, like every other FPP read surface. `none` means
+        no pairing is open and none is remembered; `waiting` means a
+        pairing is open and the plugin has not finished it yet; `paired`
+        means the plugin claimed its token. Paired state is remembered for
+        this coordinator process's lifetime, so a plugin that is still
+        working may read as `none` after a coordinator restart.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPairingStateResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: startFPPPairing
+      summary: Start pairing one FPP host's plugin with this coordinator
+      description: >-
+        Behind `principal:write`, which is admin-only: opening a pairing
+        creates or reuses the machine principal
+        `fpp-plugin-{instanceId}` with the `scheduler` role and mints it a
+        fresh API token. That token is never in this response and is never
+        shown to an operator - it is held in memory for ten minutes and
+        handed only to a plugin that presents the secret this code was
+        derived from. An earlier open pairing for the same instance is
+        replaced.
+
+        A code that is not in `XXXX-XXXX` form is a `400`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPPairingRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPairingResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the authenticated principal does not hold
+            `principal:write`, or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/playlist-definitions/republish:
     parameters:
       - name: instanceId
@@ -8469,6 +8635,82 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /integrations/fpp/pairing/claim:
+    post:
+      operationId: claimFPPPairing
+      summary: Finish pairing, presenting the plugin's own secret
+      description: >-
+        The only unauthenticated write route in this API, and deliberately
+        so: the secret in the body IS the credential. A plugin that holds
+        it is the plugin the operator started a pairing for, and it has
+        nothing else it could present, because it has no token yet. The
+        coordinator derives the displayed code from the secret the same
+        way the plugin did; it never accepts a code here.
+
+        A successful claim consumes the pairing (it is used once) and
+        returns the token minted when the operator opened it. Every
+        refusal - a wrong secret, an expired pairing, one that was never
+        opened - is the identical `404` with the identical text, so an
+        unauthenticated caller learns nothing from the difference. At most
+        30 claims per minute per client address are accepted; over that is
+        `429`. A body larger than 4 KiB is `413`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPPairingClaimRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPairingClaimResponse"
+        "404":
+          description: >-
+            No pairing is waiting for this plugin. `type` is
+            `https://showmesh.dev/problems/fpp-pairing-not-waiting`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          description: >-
+            The request body is larger than this endpoint accepts. `type`
+            is `https://showmesh.dev/problems/payload-too-large`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: >-
+            Too many claims from this client address in the last minute.
+            `type` is `https://showmesh.dev/problems/too-many-requests`
+            and `Retry-After` carries the wait in seconds.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /integrations/fpp/playlist-entry-observations:
     post:
       operationId: postFPPPlaylistEntryObservation
@@ -11096,6 +11338,150 @@ components:
             `round(ceiling * gain / 100)`, the value actually reaching the
             channels. Carried because the gain alone does not say what the
             audience sees.
+    FPPBrightnessCeilingRequest:
+      description: >-
+        The body of POST /fpp/{instanceId}/brightness/ceiling. Out of
+        range is refused, never clamped.
+      type: object
+      additionalProperties: false
+      required: [ceiling]
+      properties:
+        ceiling:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >-
+            The brightness ceiling, the limit the host's output is held
+            under. Required; an explicit `null` is a `400`, distinct from
+            omitting it, and `0` is a real value (blackout) rather than a
+            missing one.
+        requestId:
+          type: string
+          minLength: 1
+          description: >-
+            Caller-minted idempotency key, echoed on the response. Omit it
+            and the coordinator mints one. Present but empty is a `400`.
+    FPPBrightnessCeilingResponse:
+      description: >-
+        The body of a successful (200) response from
+        POST /fpp/{instanceId}/brightness/ceiling: the dispatched
+        command's own result, plus the ceiling the plugin read back.
+      type: object
+      required: [serverTime, command]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/FPPCommandResult"
+        ceiling:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >-
+            Present only when the plugin's own brightness route reported
+            the new value within the read-back window. Absent means the
+            value was not read back in time, never that the write failed:
+            `command.outcome` is then `unconfirmed`.
+    FPPPairingRequest:
+      description: >-
+        The body of POST /fpp/{instanceId}/pairing: the code the FPP
+        plugin's own page displays. The coordinator derives the same code
+        from the secret the plugin presents later, so a code alone never
+        proves anything.
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+          description: >-
+            Eight Crockford base32 characters written `XXXX-XXXX`. A code
+            in any other form is a `400`.
+    FPPPairingResponse:
+      description: >-
+        The body of a successful (200) response from
+        POST /fpp/{instanceId}/pairing. The minted token is deliberately
+        absent: only the plugin that holds the matching secret ever
+        receives it.
+      type: object
+      required: [serverTime, instanceId, code, principalId, state, expiresAt]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instanceId:
+          type: string
+        code:
+          type: string
+        principalId:
+          type: string
+          description: >-
+            The machine principal this instance's plugin will authenticate
+            as, created on the first pairing and reused afterwards.
+        state:
+          type: string
+          enum: ["waiting"]
+        expiresAt:
+          type: string
+          format: date-time
+          description: The pairing is used once and expires ten minutes after it opened.
+    FPPPairingStateResponse:
+      description: >-
+        The body of GET /fpp/{instanceId}/pairing. `paired` is remembered
+        for this coordinator process's lifetime; after a restart a plugin
+        that is still working may read as `none`.
+      type: object
+      required: [serverTime, state, code, expiresAt, pairedAt, principalId]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: ["none", "waiting", "paired"]
+        code:
+          type: string
+          description: The open pairing's code, or empty in every other state.
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the open pairing expires, or null in every other state.
+        pairedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the plugin claimed its token, or null in every other state.
+        principalId:
+          type: string
+    FPPPairingClaimRequest:
+      description: >-
+        The body of POST /integrations/fpp/pairing/claim. The secret is
+        the credential: this route is unauthenticated because the plugin
+        has no token yet, and has nothing else it could present.
+      type: object
+      additionalProperties: false
+      required: [secret]
+      properties:
+        secret:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The plugin's own 32 random bytes as lower-case hex. Never
+            logged, never audited, never returned.
+    FPPPairingClaimResponse:
+      description: >-
+        The body of a successful (200) claim: the only time the minted
+        token appears on the wire.
+      type: object
+      required: [token, principalId, instanceId]
+      properties:
+        token:
+          type: string
+        principalId:
+          type: string
+        instanceId:
+          type: string
     FPPDefinitionRepublishRequest:
       description: >-
         The body of
@@ -16260,6 +16646,8 @@ components:
             - https://showmesh.dev/problems/fpp-start-playlist-busy
             - https://showmesh.dev/problems/fpp-transition-gain-write-failed
             - https://showmesh.dev/problems/fpp-definition-republish-failed
+            - https://showmesh.dev/problems/fpp-pairing-not-waiting
+            - https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed
             - https://showmesh.dev/problems/show-config-body-invalid
             - https://showmesh.dev/problems/show-config-field-required
             - https://showmesh.dev/problems/show-config-field-null

@@ -232,6 +232,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/brightness/ceiling": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write one FPP host's brightness ceiling
+         * @description Behind `fpp:command`, the scope an operator write to one FPP host already needs. Dispatches FPP's own `ShowMesh: Set Brightness Ceiling` command, registered by the resident ShowMesh plugin, through the same FPP command client every other command goes through. This writes the CEILING; the transition gain is a separate value with its own route and is never written from here.
+         *     FPP answering `200` is never confirmation on its own: `ceiling` is present, and `command.outcome` is `confirmed`, only when the plugin's own brightness route reported the new value within the read-back window. Otherwise the command still reached FPP and `command.outcome` is `unconfirmed`.
+         *     An out-of-range `ceiling` is refused with `400`, never clamped. An instance id that names no configured `fpp.endpoints` entry is `404`. A command that did not reach the host is `502`.
+         */
+        post: operations["setFPPBrightnessCeiling"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fpp/{instanceId}/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Show whether one FPP host's plugin is paired
+         * @description Behind `fpp:read`, like every other FPP read surface. `none` means no pairing is open and none is remembered; `waiting` means a pairing is open and the plugin has not finished it yet; `paired` means the plugin claimed its token. Paired state is remembered for this coordinator process's lifetime, so a plugin that is still working may read as `none` after a coordinator restart.
+         */
+        get: operations["getFPPPairing"];
+        put?: never;
+        /**
+         * Start pairing one FPP host's plugin with this coordinator
+         * @description Behind `principal:write`, which is admin-only: opening a pairing creates or reuses the machine principal `fpp-plugin-{instanceId}` with the `scheduler` role and mints it a fresh API token. That token is never in this response and is never shown to an operator - it is held in memory for ten minutes and handed only to a plugin that presents the secret this code was derived from. An earlier open pairing for the same instance is replaced.
+         *     A code that is not in `XXXX-XXXX` form is a `400`.
+         */
+        post: operations["startFPPPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/playlist-definitions/republish": {
         parameters: {
             query?: never;
@@ -2882,6 +2935,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/fpp/pairing/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish pairing, presenting the plugin's own secret
+         * @description The only unauthenticated write route in this API, and deliberately so: the secret in the body IS the credential. A plugin that holds it is the plugin the operator started a pairing for, and it has nothing else it could present, because it has no token yet. The coordinator derives the displayed code from the secret the same way the plugin did; it never accepts a code here.
+         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 30 claims per minute per client address are accepted; over that is `429`. A body larger than 4 KiB is `413`.
+         */
+        post: operations["claimFPPPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/integrations/fpp/playlist-entry-observations": {
         parameters: {
             query?: never;
@@ -3713,6 +3787,73 @@ export interface components {
             ceiling: number;
             /** @description `round(ceiling * gain / 100)`, the value actually reaching the channels. Carried because the gain alone does not say what the audience sees. */
             effectiveOutput: number;
+        };
+        /** @description The body of POST /fpp/{instanceId}/brightness/ceiling. Out of range is refused, never clamped. */
+        FPPBrightnessCeilingRequest: {
+            /** @description The brightness ceiling, the limit the host's output is held under. Required; an explicit `null` is a `400`, distinct from omitting it, and `0` is a real value (blackout) rather than a missing one. */
+            ceiling: number;
+            /** @description Caller-minted idempotency key, echoed on the response. Omit it and the coordinator mints one. Present but empty is a `400`. */
+            requestId?: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/brightness/ceiling: the dispatched command's own result, plus the ceiling the plugin read back. */
+        FPPBrightnessCeilingResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["FPPCommandResult"];
+            /** @description Present only when the plugin's own brightness route reported the new value within the read-back window. Absent means the value was not read back in time, never that the write failed: `command.outcome` is then `unconfirmed`. */
+            ceiling?: number;
+        };
+        /** @description The body of POST /fpp/{instanceId}/pairing: the code the FPP plugin's own page displays. The coordinator derives the same code from the secret the plugin presents later, so a code alone never proves anything. */
+        FPPPairingRequest: {
+            /** @description Eight Crockford base32 characters written `XXXX-XXXX`. A code in any other form is a `400`. */
+            code: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/pairing. The minted token is deliberately absent: only the plugin that holds the matching secret ever receives it. */
+        FPPPairingResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            instanceId: string;
+            code: string;
+            /** @description The machine principal this instance's plugin will authenticate as, created on the first pairing and reused afterwards. */
+            principalId: string;
+            /** @enum {string} */
+            state: "waiting";
+            /**
+             * Format: date-time
+             * @description The pairing is used once and expires ten minutes after it opened.
+             */
+            expiresAt: string;
+        };
+        /** @description The body of GET /fpp/{instanceId}/pairing. `paired` is remembered for this coordinator process's lifetime; after a restart a plugin that is still working may read as `none`. */
+        FPPPairingStateResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            state: "none" | "waiting" | "paired";
+            /** @description The open pairing's code, or empty in every other state. */
+            code: string;
+            /**
+             * Format: date-time
+             * @description When the open pairing expires, or null in every other state.
+             */
+            expiresAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the plugin claimed its token, or null in every other state.
+             */
+            pairedAt: string | null;
+            principalId: string;
+        };
+        /** @description The body of POST /integrations/fpp/pairing/claim. The secret is the credential: this route is unauthenticated because the plugin has no token yet, and has nothing else it could present. */
+        FPPPairingClaimRequest: {
+            /** @description The plugin's own 32 random bytes as lower-case hex. Never logged, never audited, never returned. */
+            secret: string;
+        };
+        /** @description The body of a successful (200) claim: the only time the minted token appears on the wire. */
+        FPPPairingClaimResponse: {
+            token: string;
+            principalId: string;
+            instanceId: string;
         };
         /** @description The body of POST /fpp/{instanceId}/playlist-definitions/republish (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). Every field is optional, so the body itself may be omitted entirely: a republish is all of that host's definitions or none, and has no parameters. */
         FPPDefinitionRepublishRequest: {
@@ -5654,7 +5795,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/fpp-pairing-not-waiting" | "https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
             title: string;
             status: number;
             detail: string;
@@ -8147,6 +8288,129 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    setFPPBrightnessCeiling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPBrightnessCeilingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPBrightnessCeilingResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The request was valid and the instance is configured, but the command did not reach the FPP host. `type` is `https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed`. */
+            502: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getFPPPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPairingStateResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startFPPPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPPairingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPairingResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `principal:write`, or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     republishFPPPlaylistDefinitions: {
@@ -13482,6 +13746,64 @@ export interface operations {
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    claimFPPPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPPairingClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPairingClaimResponse"];
+                };
+            };
+            /** @description No pairing is waiting for this plugin. `type` is `https://showmesh.dev/problems/fpp-pairing-not-waiting`. */
+            404: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description The request body is larger than this endpoint accepts. `type` is `https://showmesh.dev/problems/payload-too-large`. */
+            413: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many claims from this client address in the last minute. `type` is `https://showmesh.dev/problems/too-many-requests` and `Retry-After` carries the wait in seconds. */
+            429: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content: {

@@ -170,12 +170,16 @@ func reconcileFPPCollectors(
 	interval time.Duration,
 	logger *slog.Logger,
 ) {
-	live := map[string]string{} // id -> url currently being polled
+	live := map[string]string{}            // endpoint id -> url currently being polled
+	liveCollectorID := map[string]string{} // endpoint id -> the Runner key its collector was added under
 
 	// Seed from what the caller already registered before Run started, so
 	// the first pass does not tear down and rebuild the whole fleet.
 	for _, ep := range source.Current(ctx) {
 		live[ep.ID] = ep.URL
+		if c, err := newCollector(ep.ID, ep.URL); err == nil {
+			liveCollectorID[ep.ID] = c.ID()
+		}
 	}
 
 	ticker := time.NewTicker(interval)
@@ -198,7 +202,11 @@ func reconcileFPPCollectors(
 			if still && want == url {
 				continue
 			}
-			if runner.Remove(id) {
+			collectorID, known := liveCollectorID[id]
+			if !known {
+				collectorID = id
+			}
+			if runner.Remove(collectorID) {
 				if still {
 					logger.Info("fpp endpoint url changed; restarting its collector", "instance_id", id, "old_url", url, "new_url", want)
 				} else {
@@ -206,6 +214,7 @@ func reconcileFPPCollectors(
 				}
 			}
 			delete(live, id)
+			delete(liveCollectorID, id)
 		}
 
 		for id, url := range desired {
@@ -222,9 +231,27 @@ func reconcileFPPCollectors(
 				logger.Error("failed to construct a collector for a configured fpp endpoint", "instance_id", id, "error", err)
 				continue
 			}
-			runner.Add(c, fpp.DefaultPollInterval)
+			runner.Add(c, collectorPollInterval(c))
 			live[id] = url
+			liveCollectorID[id] = c.ID()
 			logger.Info("fpp endpoint added to configuration; started its collector", "instance_id", id)
 		}
 	}
+}
+
+// selfPacedCollector is a collector that names its own cadence. The FPP
+// REST collector does not; the brightness collector does.
+type selfPacedCollector interface {
+	PollInterval() time.Duration
+}
+
+// collectorPollInterval is the cadence a reconciled collector is added
+// with: its own when it states one, the FPP REST cadence otherwise.
+func collectorPollInterval(c collector.Collector) time.Duration {
+	if sp, ok := c.(selfPacedCollector); ok {
+		if d := sp.PollInterval(); d > 0 {
+			return d
+		}
+	}
+	return fpp.DefaultPollInterval
 }

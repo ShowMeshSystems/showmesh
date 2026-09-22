@@ -929,3 +929,49 @@ type issueTokenResponse struct {
 	Token      tokenObject `json:"token"`
 	Value      string      `json:"value"`
 }
+
+// fppPairingRequest is the body of POST /api/v1/fpp/{instanceId}/pairing:
+// the code the plugin displayed, read off its own page.
+type fppPairingRequest struct {
+	Code string `json:"code"`
+}
+
+// fppPairingResponse is the body of a successful POST
+// /api/v1/fpp/{instanceId}/pairing. No token appears here: only the
+// plugin that holds the matching secret ever receives one.
+type fppPairingResponse struct {
+	ServerTime  time.Time `json:"serverTime"`
+	InstanceID  string    `json:"instanceId"`
+	Code        string    `json:"code"`
+	PrincipalID string    `json:"principalId"`
+	State       string    `json:"state"`
+	ExpiresAt   string    `json:"expiresAt"`
+}
+
+// fppPairingStateResponse is the body of GET
+// /api/v1/fpp/{instanceId}/pairing.
+type fppPairingStateResponse struct {
+	ServerTime  time.Time `json:"serverTime"`
+	State       string    `json:"state"`
+	Code        string    `json:"code"`
+	ExpiresAt   *string   `json:"expiresAt"`
+	PairedAt    *string   `json:"pairedAt"`
+	PrincipalID string    `json:"principalId"`
+}
+
+// fppBrightnessCeilingRequest is the body of POST
+// /api/v1/fpp/{instanceId}/brightness/ceiling. RequestID is minted per
+// invocation, for [fppTransitionGainRequest]'s reason.
+type fppBrightnessCeilingRequest struct {
+	Ceiling   int    `json:"ceiling"`
+	RequestID string `json:"requestId"`
+}
+
+// fppBrightnessCeilingResponse is the body of a successful ceiling write.
+// Ceiling is absent when the plugin did not report the new value in time,
+// which is not a failure: the command still reached FPP.
+type fppBrightnessCeilingResponse struct {
+	ServerTime time.Time        `json:"serverTime"`
+	Command    fppCommandResult `json:"command"`
+	Ceiling    *int             `json:"ceiling"`
+}

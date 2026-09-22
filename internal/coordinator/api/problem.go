@@ -205,6 +205,19 @@ const (
 	// a coordinator defect.
 	ProblemTypeFPPDefinitionRepublishFailed = problemBaseURI + "fpp-definition-republish-failed"
 
+	// ProblemTypeFPPPairingNotWaiting is the claim route's only refusal.
+	// One type and one wording serve a wrong secret, an expired pairing
+	// and one that was never opened: the route is unauthenticated, so any
+	// difference between those three would tell an unauthenticated caller
+	// which guess was closer.
+	ProblemTypeFPPPairingNotWaiting = problemBaseURI + "fpp-pairing-not-waiting"
+
+	// ProblemTypeFPPBrightnessCeilingWriteFailed is
+	// POST /fpp/{instanceId}/brightness/ceiling's own upstream failure,
+	// for [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the command
+	// was valid and the instance configured, but FPP did not accept it.
+	ProblemTypeFPPBrightnessCeilingWriteFailed = problemBaseURI + "fpp-brightness-ceiling-write-failed"
+
 	// ProblemTypeSequenceFilenameClaimDuplicate is
 	// [sequenceFilenameClaimConflictProblem]'s own type (ADR-051 decision
 	// 2): a show.playlist write whose entries[].fpp.expectedSequenceFilename
@@ -780,5 +793,40 @@ func fppDefinitionRepublishFailedProblem(instanceID string, err error) v1.Proble
 		Title:  "FPP playlist definition republish failed",
 		Status: http.StatusBadGateway,
 		Detail: fmt.Sprintf("the playlist definition republish request to FPP instance %q did not produce a usable result: %v", instanceID, err),
+	}
+}
+
+// fppPairingNotWaitingProblem is the claim route's single refusal. The
+// text names no instance, no code and no reason: see
+// [ProblemTypeFPPPairingNotWaiting].
+func fppPairingNotWaitingProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPPairingNotWaiting,
+		Title:  "No pairing is waiting",
+		Status: http.StatusNotFound,
+		Detail: "no pairing is waiting for this plugin. Start a pairing from the FPP instance's page and let the plugin try again.",
+	}
+}
+
+// fppPairingClaimTooLargeProblem reuses the generic payload-too-large
+// type every other 413 in this API already uses.
+func fppPairingClaimTooLargeProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeResolumeCompositionTooLarge,
+		Title:  "Payload too large",
+		Status: http.StatusRequestEntityTooLarge,
+		Detail: "the request body is larger than this endpoint accepts. A pairing request carries one secret and nothing else.",
+	}
+}
+
+// fppBrightnessCeilingWriteFailedProblem reports a ceiling write that did
+// not reach the FPP host. The host's own error text is carried verbatim,
+// for [fppTransitionGainWriteFailedProblem]'s reason.
+func fppBrightnessCeilingWriteFailedProblem(instanceID string, err error) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPBrightnessCeilingWriteFailed,
+		Title:  "FPP brightness ceiling write failed",
+		Status: http.StatusBadGateway,
+		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %v", instanceID, err),
 	}
 }

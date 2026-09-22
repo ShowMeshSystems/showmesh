@@ -26,6 +26,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/audioalignment"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppbrightness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppplugin"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
@@ -1193,6 +1194,19 @@ func Run() int {
 			return 1
 		}
 		fppRunner.Add(fppCollector, fpp.DefaultPollInterval)
+
+		// The plugin's own brightness route, polled alongside the REST
+		// collector on its own faster cadence. It is registered under its
+		// own Runner key, never the bare endpoint id the REST collector
+		// already holds.
+		brightnessCollector, err := fppbrightness.New(ep.ID, ep.URL, fppbrightness.Options{HTTPClient: fppHTTPClient})
+		if err != nil {
+			logger.Error("failed to construct fpp brightness collector", "instance_id", ep.ID, "error", err)
+			_ = bm.Disconnect(ctx)
+			_ = st.Close()
+			return 1
+		}
+		fppRunner.Add(brightnessCollector, fppbrightness.DefaultPollInterval)
 	}
 
 	// Keep that set matching the configuration while this process runs, so
@@ -1206,6 +1220,15 @@ func Run() int {
 		return fpp.New(id, url, fpp.Options{HTTPClient: fppHTTPClient})
 	}
 	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, fppCollectorReconcileInterval, logger)
+
+	// The brightness collectors follow the same endpoint list through a
+	// second pass of the same loop: it keys everything by the collector id
+	// its own factory produced, so the two passes never remove each
+	// other's registrations.
+	newFPPBrightnessCollector := func(id, url string) (collector.Collector, error) {
+		return fppbrightness.New(id, url, fppbrightness.Options{HTTPClient: fppHTTPClient})
+	}
+	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPBrightnessCollector, fppCollectorReconcileInterval, logger)
 
 	// Track G seam G-3 (ADR-039): fppMQTTMgr already constructed and
 	// registered its collector, if configured, in its first synchronous
