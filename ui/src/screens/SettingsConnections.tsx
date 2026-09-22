@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   getFPPEndpointsConfig,
@@ -7,22 +7,29 @@ import {
   getFPPMQTTConfigRevisions,
   getFPPConnectSettingsConfig,
   getFPPConnectSettingsConfigRevisions,
+  getFPPPairing,
   getResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
+  postFPPBrightnessCeiling,
+  postFPPPairing,
   putFPPEndpointsConfig,
   putFPPMQTTConfig,
   putFPPConnectSettingsConfig,
   putResolumeInstancesConfig,
   type ConfigFPPEndpoint,
   type ConfigResolumeInstance,
+  type Evidence,
+  type FPPBrightnessCeilingResponse,
+  type FPPPairingStateResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, DefinitionStrip, Drawer, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
 import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
+import { brightnessReadout, normalizePairingCode, pairingSentence, type SignalFact } from './fppPairingModel'
 
 type Load<R> = { kind: 'loading' } | { kind: 'loaded'; response: R } | { kind: 'notConfigured'; detail: string } | { kind: 'failed'; reason: string }
 
@@ -62,6 +69,7 @@ export function SettingsConnections() {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [attempt, setAttempt] = useState(0)
   const reloadAll = () => setAttempt((n) => n + 1)
+  const [detailInstanceId, setDetailInstanceId] = useState<string | null>(null)
 
   const fppLoad = useConfigLoad(getFPPEndpointsConfig, attempt)
   const resolumeLoad = useConfigLoad(getResolumeInstancesConfig, attempt)
@@ -318,6 +326,13 @@ export function SettingsConnections() {
                       </NotWired>
                       <Button
                         variant="quiet"
+                        onClick={() => setDetailInstanceId(endpoint.id)}
+                        disabled={endpoint.id === ''}
+                      >
+                        Pairing and brightness
+                      </Button>
+                      <Button
+                        variant="quiet"
                         onClick={() => {
                           setEndpoints(endpoints.filter((_, i) => i !== index))
                           setEndpointsDirty(true)
@@ -570,7 +585,193 @@ export function SettingsConnections() {
           Discard changes
         </Button>
       </ButtonRow>
+
+      <Drawer open={detailInstanceId !== null} onClose={() => setDetailInstanceId(null)} labelledBy="fpp-instance-detail-title" width="wide">
+        {detailInstanceId !== null && <FPPInstanceDetail instanceId={detailInstanceId} />}
+      </Drawer>
     </>
+  )
+}
+
+/** The FPP endpoint detail (Settings > Connections > the FPP instance): pairing (contract section 1) and the brightness ceiling (contract section 3). */
+function FPPInstanceDetail({ instanceId }: { instanceId: string }) {
+  const model = useModelContext()
+  const instance = fppHealthFor(model.fpp, instanceId)
+  return (
+    <div className="sm-stack-5">
+      <h2 id="fpp-instance-detail-title" className="sm-heading">{instanceId}</h2>
+      <PairingSection instanceId={instanceId} />
+      <BrightnessSection instanceId={instanceId} observations={instance?.observations ?? []} />
+    </div>
+  )
+}
+
+function PairingSection({ instanceId }: { instanceId: string }) {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'principal:write')
+  const [state, setState] = useState<FPPPairingStateResponse | null>(null)
+  const [readError, setReadError] = useState<string | null>(null)
+  const [code, setCode] = useState('')
+  const [pairing, setPairing] = useState(false)
+  const [pairError, setPairError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const read = () => {
+      getFPPPairing(instanceId)
+        .then((response) => {
+          if (!cancelled) setState(response)
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setReadError(describeApiError(err))
+        })
+    }
+    read()
+    const interval = setInterval(() => {
+      if (state?.state === 'waiting') read()
+    }, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [instanceId, state?.state])
+
+  const startPairing = () => {
+    setPairing(true)
+    setPairError(null)
+    postFPPPairing(instanceId, normalizePairingCode(code))
+      .then((response) => {
+        setState({ serverTime: response.serverTime, state: response.state, code: response.code, expiresAt: response.expiresAt, pairedAt: null, principalId: response.principalId })
+        setCode('')
+      })
+      .catch((err: unknown) => setPairError(describeApiError(err)))
+      .finally(() => setPairing(false))
+  }
+
+  return (
+    <section aria-labelledby="fpp-instance-pairing-title" className="sm-stack-3">
+      <h3 id="fpp-instance-pairing-title" className="sm-subhead">Pairing</h3>
+      {readError !== null ? (
+        <RuledStrip absence="failed" label="Read failed" fact={readError} />
+      ) : state === null ? (
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for this instance's pairing state." />
+      ) : (
+        <p className="sm-body">{pairingSentence(state)}</p>
+      )}
+      <div className="sm-inline-row">
+        <Input
+          aria-label="Pairing code"
+          placeholder="XXXX-XXXX"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          className="sm-input--narrow"
+        />
+        <Button
+          variant="primary"
+          onClick={startPairing}
+          disabled={pairing || code.trim() === '' || !gate.allowed}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {pairing ? 'Pairing…' : 'Pair'}
+        </Button>
+      </div>
+      {pairError !== null && <RuledStrip absence="failed" label="Pairing failed" fact={pairError} />}
+    </section>
+  )
+}
+
+function FactCell<T>({ fact, render }: { fact: SignalFact<T>; render: (value: T) => string }) {
+  if (fact.kind === 'absent') return <RuledStrip absence={fact.absence} label={fact.label} fact={fact.fact} />
+  return <span className="sm-data">{render(fact.value)}</span>
+}
+
+const BRIGHTNESS_DEBOUNCE_MS = 250
+
+type CeilingOutcome = { kind: 'ok'; sentence: string } | { kind: 'failed'; reason: string }
+
+/** The write's own sentence: the plugin's read-back wins, an unconfirmed or refused command reports the coordinator's own reason, never a generic "sent" line that outruns what the response actually said. */
+function ceilingOutcome(response: FPPBrightnessCeilingResponse): CeilingOutcome {
+  if (response.command.outcome === 'unconfirmed') return { kind: 'failed', reason: response.command.outcomeReason }
+  if (response.ceiling !== undefined) return { kind: 'ok', sentence: `Ceiling set to ${response.ceiling}%.` }
+  return { kind: 'ok', sentence: "Sent to the plugin; the new ceiling wasn't read back in time." }
+}
+
+function BrightnessSection({ instanceId, observations }: { instanceId: string; observations: readonly Evidence[] }) {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
+  const readout = brightnessReadout(observations)
+
+  const [sliderValue, setSliderValue] = useState<number | null>(null)
+  const [outcome, setOutcome] = useState<CeilingOutcome | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inFlightRef = useRef(false)
+  const pendingRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (sliderValue === null && readout.ceiling.kind === 'value') setSliderValue(readout.ceiling.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readout.ceiling.kind])
+
+  const sendCeiling = (value: number) => {
+    if (inFlightRef.current) {
+      pendingRef.current = value
+      return
+    }
+    inFlightRef.current = true
+    postFPPBrightnessCeiling(instanceId, value)
+      .then((response) => setOutcome(ceilingOutcome(response)))
+      .catch((err: unknown) => setOutcome({ kind: 'failed', reason: describeApiError(err) }))
+      .finally(() => {
+        inFlightRef.current = false
+        if (pendingRef.current !== null) {
+          const next = pendingRef.current
+          pendingRef.current = null
+          sendCeiling(next)
+        }
+      })
+  }
+
+  const onChange = (value: number) => {
+    setSliderValue(value)
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => sendCeiling(value), BRIGHTNESS_DEBOUNCE_MS)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
+  const displayed = sliderValue ?? (readout.ceiling.kind === 'value' ? readout.ceiling.value : 0)
+
+  return (
+    <section aria-labelledby="fpp-instance-brightness-title" className="sm-stack-3">
+      <h3 id="fpp-instance-brightness-title" className="sm-subhead">Brightness</h3>
+      <Slider
+        label="Ceiling"
+        value={displayed}
+        min={0}
+        max={100}
+        valueLabel={`${displayed}%`}
+        onChange={(e) => onChange(Number(e.target.value))}
+        disabled={!gate.allowed}
+        title={gate.allowed ? undefined : gate.reason}
+      />
+      {outcome !== null && (outcome.kind === 'ok' ? (
+        <p className="sm-small sm-muted">{outcome.sentence}</p>
+      ) : (
+        <RuledStrip absence="failed" label="Ceiling write failed" fact={outcome.reason} />
+      ))}
+      <DefinitionStrip
+        items={[
+          { term: 'Ceiling', value: <FactCell fact={readout.ceiling} render={(v) => `${v}%`} /> },
+          { term: 'Transition gain', value: <FactCell fact={readout.transitionGain} render={(v) => `${v}%`} /> },
+          { term: 'Effective output', value: <FactCell fact={readout.effectiveOutput} render={(v) => `${v}%`} /> },
+          { term: 'Fade', value: <FactCell fact={readout.fadeActive} render={(v) => (v ? 'Fading' : 'Not fading')} /> },
+        ]}
+      />
+    </section>
   )
 }
 

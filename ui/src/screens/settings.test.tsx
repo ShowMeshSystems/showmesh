@@ -3,9 +3,10 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
-import { makeNode } from '../api/test-support/fixtures'
+import { makeEvidence, makeFPPInstance, makeNode } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
 import { WeatherDelayProvider } from '../app/WeatherDelayContext'
+import { normalizePairingCode, pairingSentence } from './fppPairingModel'
 
 const stubs = vi.hoisted(() => ({
   getFPPEndpointsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -44,6 +45,9 @@ const stubs = vi.hoisted(() => ({
   getNodeClockConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getServiceDescriptor: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getCurrentNightSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  postFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  postFPPBrightnessCeiling: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -86,6 +90,9 @@ vi.mock('../api', async () => {
     getNodeClockConfigRevisions: (...args: never[]) => stubs.getNodeClockConfigRevisions(...args),
     getServiceDescriptor: (...args: never[]) => stubs.getServiceDescriptor(...args),
     getCurrentNightSession: (...args: never[]) => stubs.getCurrentNightSession(...args),
+    getFPPPairing: (...args: never[]) => stubs.getFPPPairing(...args),
+    postFPPPairing: (...args: never[]) => stubs.postFPPPairing(...args),
+    postFPPBrightnessCeiling: (...args: never[]) => stubs.postFPPBrightnessCeiling(...args),
   }
 })
 
@@ -347,6 +354,201 @@ describe('Settings › Connections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
 
     await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ hosts: { 'shed-player': 'FPP-Shed' } })))
+  })
+})
+
+describe('normalizePairingCode', () => {
+  it('accepts the code with or without the dash, in any case', () => {
+    expect(normalizePairingCode('ab12cd34')).toBe('AB12-CD34')
+    expect(normalizePairingCode('AB12-CD34')).toBe('AB12-CD34')
+    expect(normalizePairingCode('ab12-cd34')).toBe('AB12-CD34')
+    expect(normalizePairingCode('  ab12 cd34  ')).toBe('AB12-CD34')
+  })
+
+  it('drops anything past eight alphanumeric characters and never over-runs the dash', () => {
+    expect(normalizePairingCode('ab')).toBe('AB')
+    expect(normalizePairingCode('ab12cd34ef56')).toBe('AB12-CD34')
+  })
+})
+
+describe('pairingSentence', () => {
+  it('states none, waiting, and paired in plain English', () => {
+    expect(pairingSentence({ serverTime: '2026-09-22T00:00:00Z', state: 'none', code: '', expiresAt: null, pairedAt: null, principalId: '' })).toBe(
+      'Not paired with the plugin.',
+    )
+    expect(
+      pairingSentence({ serverTime: '2026-09-22T00:00:00Z', state: 'waiting', code: 'AB12-CD34', expiresAt: '2026-09-22T00:10:00Z', pairedAt: null, principalId: '' }),
+    ).toMatch(/^Waiting for the plugin: code AB12-CD34, expires \d{2}:\d{2}\.$/)
+    expect(
+      pairingSentence({ serverTime: '2026-09-22T00:00:00Z', state: 'paired', code: '', expiresAt: null, pairedAt: '2026-09-22T00:05:00Z', principalId: 'p2' }),
+    ).toMatch(/^Paired at \d{2}:\d{2}\.$/)
+  })
+})
+
+describe('Settings › Connections › FPP instance detail', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  function fppEndpointsResponse(ids: string[]) {
+    return Promise.resolve({
+      serverTime: '2026-09-22T00:00:00Z',
+      kind: 'fpp.endpoints',
+      revision: 1,
+      payload: { endpoints: ids.map((id) => ({ id, url: `http://${id}.example.invalid` })) },
+      updatedAt: '2026-09-22T00:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+      restartRequired: false,
+      restartRequiredReason: '',
+    })
+  }
+
+  function pairingNone() {
+    return { serverTime: '2026-09-22T00:00:00Z', state: 'none' as const, code: '', expiresAt: null, pairedAt: null, principalId: '' }
+  }
+
+  function openDetail() {
+    fireEvent.click(screen.getByRole('button', { name: 'Pairing and brightness' }))
+  }
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('shows the waiting and paired pairing sentences read from the coordinator', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () =>
+      Promise.resolve({ serverTime: '2026-09-22T00:00:00Z', state: 'waiting', code: 'AB12-CD34', expiresAt: '2026-09-22T00:10:00Z', pairedAt: null, principalId: '' })
+
+    renderAt('/settings/connections')
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    expect(await screen.findByText(/^Waiting for the plugin: code AB12-CD34, expires \d{2}:\d{2}\.$/)).toBeInTheDocument()
+  })
+
+  it('normalizes a typed pairing code before sending it', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    const postFPPPairing = vi.fn(() =>
+      Promise.resolve({ serverTime: '2026-09-22T00:00:00Z', instanceId: 'barn-player', code: 'AB12-CD34', principalId: 'p2', state: 'waiting' as const, expiresAt: '2026-09-22T00:10:00Z' }),
+    )
+    stubs.postFPPPairing = postFPPPairing
+
+    renderAt('/settings/connections', { session: signedIn(['config:write', 'principal:write']) })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    const codeInput = await screen.findByLabelText('Pairing code')
+    fireEvent.change(codeInput, { target: { value: 'ab12cd34' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }))
+
+    await waitFor(() => expect(postFPPPairing).toHaveBeenCalledWith('barn-player', 'AB12-CD34'))
+  })
+
+  it("renders the kit's absence treatment for a brightness signal this instance has never reported", async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+
+    renderAt('/settings/connections', { fpp: [makeFPPInstance('barn-player')] })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    await waitFor(() => expect(screen.getAllByText('Unobserved')).toHaveLength(4))
+  })
+
+  it('debounces the ceiling write and keeps one write in flight at a time', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+
+    let resolveFirst!: (value: unknown) => void
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const postFPPBrightnessCeiling = vi.fn().mockReturnValueOnce(first).mockResolvedValue({
+      serverTime: '2026-09-22T00:00:00Z',
+      command: { id: 'c1', idempotencyKey: 'k1', action: 'setBrightnessCeiling', instanceId: 'barn-player', params: {}, replay: false, outcome: 'confirmed', outcomeState: 'current', outcomeReason: 'ok', attributionDegraded: false, dispatchedAt: null, resolvedAt: null },
+      ceiling: 60,
+    })
+    stubs.postFPPBrightnessCeiling = postFPPBrightnessCeiling
+
+    renderAt('/settings/connections', {
+      session: signedIn(['config:write', 'fpp:command']),
+      fpp: [makeFPPInstance('barn-player', { observations: [makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })] })],
+    })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    const slider = await screen.findByLabelText('Ceiling')
+    fireEvent.change(slider, { target: { value: '55' } })
+    await sleep(300)
+    expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
+    expect(postFPPBrightnessCeiling).toHaveBeenCalledWith('barn-player', 55)
+
+    // A second change while the first write is still in flight is held, not sent alongside it.
+    fireEvent.change(slider, { target: { value: '60' } })
+    await sleep(300)
+    expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
+
+    resolveFirst({
+      serverTime: '2026-09-22T00:00:00Z',
+      command: { id: 'c0', idempotencyKey: 'k0', action: 'setBrightnessCeiling', instanceId: 'barn-player', params: {}, replay: false, outcome: 'confirmed', outcomeState: 'current', outcomeReason: 'ok', attributionDegraded: false, dispatchedAt: null, resolvedAt: null },
+      ceiling: 55,
+    })
+
+    await waitFor(() => expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(2))
+    expect(postFPPBrightnessCeiling).toHaveBeenLastCalledWith('barn-player', 60)
+  })
+
+  it("renders the coordinator's own reason as a failed strip when the ceiling write comes back unconfirmed, not as a generic 'sent' line", async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    stubs.postFPPBrightnessCeiling = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-09-22T00:00:00Z',
+        command: {
+          id: 'c1',
+          idempotencyKey: 'k1',
+          action: 'setBrightnessCeiling',
+          instanceId: 'barn-player',
+          params: {},
+          replay: false,
+          outcome: 'unconfirmed',
+          outcomeState: 'not_collected',
+          outcomeReason: 'FPP answered "OK" and the plugin did not report a ceiling of 55 in time',
+          attributionDegraded: false,
+          dispatchedAt: null,
+          resolvedAt: null,
+        },
+      }),
+    )
+
+    renderAt('/settings/connections', {
+      session: signedIn(['config:write', 'fpp:command']),
+      fpp: [makeFPPInstance('barn-player', { observations: [makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })] })],
+    })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    const slider = await screen.findByLabelText('Ceiling')
+    fireEvent.change(slider, { target: { value: '55' } })
+    await sleep(300)
+
+    const strip = await screen.findByText('FPP answered "OK" and the plugin did not report a ceiling of 55 in time')
+    expect(strip.closest('.sm-strip')).not.toBeNull()
+    expect(screen.getByText('Ceiling write failed')).toBeInTheDocument()
+    expect(screen.queryByText(/wasn't read back in time/)).not.toBeInTheDocument()
   })
 })
 

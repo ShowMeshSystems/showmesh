@@ -10,6 +10,7 @@ export {
   type WeatherDelayGroupView,
 } from './WeatherDelayBanner'
 export { Choice, ChoiceGroup, ChoiceRow, Field, FieldGrid, Input, Select, Textarea, type ChoiceGroupOption } from './Field'
+export { Slider } from './Slider'
 export { Freshness, SelectableRow, Table, TableWrap } from './Table'
 export { LifecycleCommands, type LifecycleCommandGroup, type LifecycleCommandSpec } from './LifecycleCommands'
 export { Segmented } from './Segmented'

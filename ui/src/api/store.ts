@@ -104,6 +104,12 @@ type SchemaEvent = components['schemas']['Event']
 type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
+// Pairing an FPP plugin by code, and writing its brightness ceiling.
+type SchemaFPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
+type SchemaFPPPairingRequest = components['schemas']['FPPPairingRequest']
+type SchemaFPPPairingResponse = components['schemas']['FPPPairingResponse']
+type SchemaFPPBrightnessCeilingRequest = components['schemas']['FPPBrightnessCeilingRequest']
+type SchemaFPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
 // Track G seam G-2 (ADR-039).
 type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
@@ -711,6 +717,59 @@ export class ApiStore {
       return await this.client.putJson<SchemaFPPEndpointsConfigResponse>(
         '/config/fpp.endpoints',
         payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/fpp/{instanceId}/pairing`. Behind `fpp:read`. */
+  async getFPPPairing(instanceId: string): Promise<SchemaFPPPairingStateResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPairingStateResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/pairing`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/fpp/{instanceId}/pairing`. Behind
+   * `principal:write`: opening a pairing mints a fresh API token for the
+   * instance's machine principal. The token itself is never in this
+   * response.
+   */
+  async postFPPPairing(instanceId: string, code: string): Promise<SchemaFPPPairingResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaFPPPairingRequest = { code }
+      return await this.client.postJson<SchemaFPPPairingResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/pairing`,
+        body,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/fpp/{instanceId}/brightness/ceiling` (contract section
+   * 3). Behind `fpp:command`. Refused, not clamped, on an out-of-range
+   * value; `ceiling` on the response is present only when the plugin's
+   * own route read the new value back within the coordinator's window.
+   */
+  async postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<SchemaFPPBrightnessCeilingResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaFPPBrightnessCeilingRequest = { ceiling }
+      return await this.client.postJson<SchemaFPPBrightnessCeilingResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/brightness/ceiling`,
+        body,
         controller.signal,
       )
     } finally {

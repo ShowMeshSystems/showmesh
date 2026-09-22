@@ -127,6 +127,11 @@ export type ConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssets
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
+// Pairing an FPP plugin by code, and the brightness ceiling write's own
+// response shape (the dispatched command plus the plugin's read-back).
+export type FPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
+export type FPPPairingResponse = components['schemas']['FPPPairingResponse']
+export type FPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints' own
 // response shape, aliased for the identical reason.
 export type RenderCommandResult = components['schemas']['RenderCommandResult']

@@ -180,6 +180,11 @@
   font: var(--t-body);
 }
 
+/* A short, fixed-format value next to a button in an inline row: a pairing code, an id. Never for a field that can hold an operator-length string. */
+.sm-input--narrow {
+  max-width: 160px;
+}
+
 .sm-textarea {
   height: auto;
   min-height: 88px;
@@ -213,6 +218,64 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--s-5);
+}
+
+.sm-slider__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.sm-slider {
+  width: 100%;
+  height: var(--ctrl-h);
+  padding: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.sm-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-card);
+  background: var(--border-strong);
+}
+
+.sm-slider::-moz-range-track {
+  height: 4px;
+  border-radius: var(--r-card);
+  background: var(--border-strong);
+}
+
+.sm-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--surface);
+}
+
+.sm-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--surface);
+}
+
+.sm-slider:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sm-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* A single 240px column overflows the 122px content width available at

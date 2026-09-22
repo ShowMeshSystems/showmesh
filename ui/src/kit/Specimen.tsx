@@ -32,6 +32,7 @@ import {
   Section,
   Segmented,
   Select,
+  Slider,
   StatusPair,
   Table,
   TableWrap,
@@ -140,6 +141,7 @@ export function Specimen() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
+  const [sliderValue, setSliderValue] = useState(72)
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -287,6 +289,22 @@ export function Specimen() {
             Two nodes sharing one route: the identity is the primary line, the route a muted secondary one, so the
             same route on two hosts never reads as one option. The route itself is a real, unbreakable device
             string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
+          </p>
+          <Slider
+            label="Brightness ceiling"
+            value={sliderValue}
+            min={0}
+            max={100}
+            valueLabel={`${sliderValue}%`}
+            onChange={(e) => setSliderValue(Number(e.target.value))}
+          />
+          <div className="sm-inline-row">
+            <Input aria-label="Pairing code" placeholder="XXXX-XXXX" defaultValue="AB12-CD34" className="sm-input--narrow" />
+            <Button variant="primary">Pair</Button>
+          </div>
+          <p className="sm-small sm-muted">
+            <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
+            inline row, such as a pairing code. Never for a field that can hold an operator-length string.
           </p>
         </SpecSection>
 
