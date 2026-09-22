@@ -266,7 +266,7 @@ describe('Show Night', () => {
     observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'current', resource: { kind: 'fpp', id: 'main' } }],
   } as unknown as FPPInstance
 
-  it('reports the boundary armed from session.boundary, not from an empty cue list', () => {
+  it('shows only the countdown for an armed boundary, not a second headline or its derivation', () => {
     renderScreen({
       nightSession: session({
         boundary: { state: 'armed', expectedAt: '2026-08-28T21:10:00Z', reason: 'derived from millisecond-precision position' },
@@ -275,12 +275,12 @@ describe('Show Night', () => {
       fpp: [knownPositionInstance],
     })
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText(/^Next transition armed for /)).toBeInTheDocument()
-    expect(within(boundary).getByText('derived from millisecond-precision position')).toBeInTheDocument()
+    expect(within(boundary).queryByText(/^Next transition armed for /)).not.toBeInTheDocument()
+    expect(within(boundary).queryByText('derived from millisecond-precision position')).not.toBeInTheDocument()
     expect(screen.queryByText('No Transition Step is armed')).not.toBeInTheDocument()
   })
 
-  it('shows no boundary and no contradiction when live playback carries no boundary at all', () => {
+  it('shows nothing about the boundary when live playback carries no boundary at all', () => {
     renderScreen({
       nightSession: session({
         state: 'live',
@@ -289,9 +289,8 @@ describe('Show Night', () => {
       }),
       fpp: [knownPositionInstance],
     })
-    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText('No transition for this purpose')).toBeInTheDocument()
-    expect(within(boundary).queryByText(/^Next transition armed/)).not.toBeInTheDocument()
+    expect(screen.queryByText('No transition for this purpose')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Next transition armed/)).not.toBeInTheDocument()
   })
 
   it('shows the per-cue armed count as its own line when cues exist', () => {
@@ -306,7 +305,7 @@ describe('Show Night', () => {
     expect(within(boundary).getByText('2 cues armed this cycle')).toBeInTheDocument()
   })
 
-  it('still shows the armed boundary when the FPP position is stale, not hidden behind Unknown', () => {
+  it('shows Unknown for a stale FPP position without repeating the armed boundary beneath it', () => {
     const staleInstance = {
       instanceId: 'main',
       observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'stale', resource: { kind: 'fpp', id: 'main' } }],
@@ -320,7 +319,7 @@ describe('Show Night', () => {
     })
     expect(screen.getByText('Unknown')).toBeInTheDocument()
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText(/^Next transition armed for \d{2}:\d{2}$/)).toBeInTheDocument()
+    expect(within(boundary).queryByText(/^Next transition armed for /)).not.toBeInTheDocument()
   })
 
   it('renders each earlier cycle from its finished-cycle record, and the live one for the current cycle', () => {
