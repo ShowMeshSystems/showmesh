@@ -464,6 +464,54 @@ func renderSurfaceOutputModeObservation(surfaceID, value string, collectedAt tim
 	}
 }
 
+// renderSurfaceOutputIdleModeObservation mirrors
+// renderSurfaceOutputModeObservation for surface.output.idle_mode, the
+// signal weatherDelayRenderMemberDark consults before trusting an idle
+// reading as dark.
+func renderSurfaceOutputIdleModeObservation(surfaceID, value string, collectedAt time.Time) observation.Observation {
+	observedAt := collectedAt
+	return observation.Observation{
+		Resource: observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		Signal:   observation.SignalID(weatherDelaySurfaceOutputIdleModeSignal), Value: value,
+		ObservedAt: &observedAt, CollectedAt: collectedAt, Source: "node-render:media-01",
+		Quality: observation.QualityDirect, ValidFor: time.Minute,
+	}
+}
+
+// TestWeatherDelayRenderMemberDarkIdleModeMatrix proves idle alone is not
+// enough to count a render surface dark: a surface reporting idle output
+// is dark only when its own configured idle mode is black. hold (holds the
+// last frame) and diagnostic (draws the diagnostic pattern) are both real,
+// documented idle modes and neither is dark while idle. Before the fix,
+// this counted every idle reading as dark regardless of idle_mode, so a
+// weather delay could confirm a power group dark with a wall still showing
+// the diagnostic pattern or a frozen last frame.
+func TestWeatherDelayRenderMemberDarkIdleModeMatrix(t *testing.T) {
+	tests := []struct {
+		name     string
+		idleMode string
+		wantDark bool
+	}{
+		{"black", mqttproto.RenderIdleOutputBlack, true},
+		{"hold", mqttproto.RenderIdleOutputHold, false},
+		{"diagnostic", mqttproto.RenderIdleOutputDiagnostic, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newEnforceHarness(t, nil)
+			h.obs.set([]observation.Observation{
+				renderSurfaceOutputModeObservation("wall-1", weatherDelaySurfaceOutputModeIdle, h.now),
+				renderSurfaceOutputIdleModeObservation("wall-1", tt.idleMode, h.now),
+			})
+
+			dark, reason := h.handlers().weatherDelayRenderMemberDark(context.Background(), h.now, "wall-1")
+			if dark != tt.wantDark {
+				t.Fatalf("dark = %v, want %v; reason: %q", dark, tt.wantDark, reason)
+			}
+		})
+	}
+}
+
 // TestWeatherDelayEnforceGroupConfirmsDarkOnHeldBlackRenderSurface proves
 // build item 1: since render.surface.blackout now holds a surface black
 // without ever reporting surface.output.mode back to "idle", a power group

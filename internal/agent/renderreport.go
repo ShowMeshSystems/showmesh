@@ -136,7 +136,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 			surfaces = append(surfaces, mqttproto.RenderSurfaceReport{
 				SurfaceID:     id,
 				PipelineState: mqttproto.RenderPipelineStateStopped,
-				Reason:        "this surface is held black with no frame writer currently running",
+				Reason:        "this surface is held black, and nothing is currently drawing on it",
 				Drawing:       mqttproto.RenderDrawingBlackout,
 				ObservedAt:    nowAt,
 				// The draw-state group (collector.go's surfaceDrawStateObservations)

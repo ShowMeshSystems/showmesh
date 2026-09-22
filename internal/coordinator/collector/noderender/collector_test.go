@@ -805,7 +805,7 @@ func TestPollBlackedOutSurfaceWithNoFrameWriterRendersCurrentBlackoutOutputMode(
 		Surfaces: []mqttproto.RenderSurfaceReport{{
 			SurfaceID:        "wall-1",
 			PipelineState:    mqttproto.RenderPipelineStateStopped,
-			Reason:           "this surface is held black with no frame writer currently running",
+			Reason:           "this surface is held black, and nothing is currently drawing on it",
 			Drawing:          mqttproto.RenderDrawingBlackout,
 			ObservedAt:       sampleObservedAt,
 			FramesObservedAt: sampleObservedAt,
