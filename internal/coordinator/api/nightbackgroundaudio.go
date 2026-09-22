@@ -853,6 +853,9 @@ func nightBackgroundApplyParams(ctx context.Context, nodes NodeLister, now time.
 // refused) entirely on that node's own step history - a refused or
 // stalled node can never block another's.
 func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if !h.nightSessionUnchanged(ctx, rec) {
+		return
+	}
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read pinned payload", "sessionId", rec.ID, "error", err)
