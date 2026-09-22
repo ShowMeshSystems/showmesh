@@ -19,6 +19,7 @@ import {
   type ConfigFPPEndpoint,
   type ConfigResolumeInstance,
   type Evidence,
+  type FPPBrightnessCeilingResponse,
   type FPPPairingStateResponse,
 } from '../api'
 import { Button, ButtonRow, Choice, DefinitionStrip, Drawer, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
@@ -663,7 +664,7 @@ function PairingSection({ instanceId }: { instanceId: string }) {
           placeholder="XXXX-XXXX"
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          style={{ maxWidth: 160 }}
+          className="sm-input--narrow"
         />
         <Button
           variant="primary"
@@ -686,13 +687,22 @@ function FactCell<T>({ fact, render }: { fact: SignalFact<T>; render: (value: T)
 
 const BRIGHTNESS_DEBOUNCE_MS = 250
 
+type CeilingOutcome = { kind: 'ok'; sentence: string } | { kind: 'failed'; reason: string }
+
+/** The write's own sentence: the plugin's read-back wins, an unconfirmed or refused command reports the coordinator's own reason, never a generic "sent" line that outruns what the response actually said. */
+function ceilingOutcome(response: FPPBrightnessCeilingResponse): CeilingOutcome {
+  if (response.command.outcome === 'unconfirmed') return { kind: 'failed', reason: response.command.outcomeReason }
+  if (response.ceiling !== undefined) return { kind: 'ok', sentence: `Ceiling set to ${response.ceiling}%.` }
+  return { kind: 'ok', sentence: "Sent to the plugin; the new ceiling wasn't read back in time." }
+}
+
 function BrightnessSection({ instanceId, observations }: { instanceId: string; observations: readonly Evidence[] }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
   const readout = brightnessReadout(observations)
 
   const [sliderValue, setSliderValue] = useState<number | null>(null)
-  const [outcome, setOutcome] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<CeilingOutcome | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlightRef = useRef(false)
   const pendingRef = useRef<number | null>(null)
@@ -709,10 +719,8 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
     }
     inFlightRef.current = true
     postFPPBrightnessCeiling(instanceId, value)
-      .then((response) => {
-        setOutcome(response.ceiling !== undefined ? `Ceiling set to ${response.ceiling}%.` : "Sent to the plugin; the new ceiling wasn't read back in time.")
-      })
-      .catch((err: unknown) => setOutcome(describeApiError(err)))
+      .then((response) => setOutcome(ceilingOutcome(response)))
+      .catch((err: unknown) => setOutcome({ kind: 'failed', reason: describeApiError(err) }))
       .finally(() => {
         inFlightRef.current = false
         if (pendingRef.current !== null) {
@@ -750,7 +758,11 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
         disabled={!gate.allowed}
         title={gate.allowed ? undefined : gate.reason}
       />
-      {outcome !== null && <p className="sm-small sm-muted">{outcome}</p>}
+      {outcome !== null && (outcome.kind === 'ok' ? (
+        <p className="sm-small sm-muted">{outcome.sentence}</p>
+      ) : (
+        <RuledStrip absence="failed" label="Ceiling write failed" fact={outcome.reason} />
+      ))}
       <DefinitionStrip
         items={[
           { term: 'Ceiling', value: <FactCell fact={readout.ceiling} render={(v) => `${v}%`} /> },

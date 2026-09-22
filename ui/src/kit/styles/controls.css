@@ -180,6 +180,11 @@
   font: var(--t-body);
 }
 
+/* A short, fixed-format value next to a button in an inline row: a pairing code, an id. Never for a field that can hold an operator-length string. */
+.sm-input--narrow {
+  max-width: 160px;
+}
+
 .sm-textarea {
   height: auto;
   min-height: 88px;

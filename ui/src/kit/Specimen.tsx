@@ -298,6 +298,14 @@ export function Specimen() {
             valueLabel={`${sliderValue}%`}
             onChange={(e) => setSliderValue(Number(e.target.value))}
           />
+          <div className="sm-inline-row">
+            <Input aria-label="Pairing code" placeholder="XXXX-XXXX" defaultValue="AB12-CD34" className="sm-input--narrow" />
+            <Button variant="primary">Pair</Button>
+          </div>
+          <p className="sm-small sm-muted">
+            <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
+            inline row, such as a pairing code. Never for a field that can hold an operator-length string.
+          </p>
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">

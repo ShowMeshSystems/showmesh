@@ -508,6 +508,48 @@ describe('Settings › Connections › FPP instance detail', () => {
     await waitFor(() => expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(2))
     expect(postFPPBrightnessCeiling).toHaveBeenLastCalledWith('barn-player', 60)
   })
+
+  it("renders the coordinator's own reason as a failed strip when the ceiling write comes back unconfirmed, not as a generic 'sent' line", async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    stubs.postFPPBrightnessCeiling = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-09-22T00:00:00Z',
+        command: {
+          id: 'c1',
+          idempotencyKey: 'k1',
+          action: 'setBrightnessCeiling',
+          instanceId: 'barn-player',
+          params: {},
+          replay: false,
+          outcome: 'unconfirmed',
+          outcomeState: 'not_collected',
+          outcomeReason: 'FPP answered "OK" and the plugin did not report a ceiling of 55 in time',
+          attributionDegraded: false,
+          dispatchedAt: null,
+          resolvedAt: null,
+        },
+      }),
+    )
+
+    renderAt('/settings/connections', {
+      session: signedIn(['config:write', 'fpp:command']),
+      fpp: [makeFPPInstance('barn-player', { observations: [makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })] })],
+    })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    const slider = await screen.findByLabelText('Ceiling')
+    fireEvent.change(slider, { target: { value: '55' } })
+    await sleep(300)
+
+    const strip = await screen.findByText('FPP answered "OK" and the plugin did not report a ceiling of 55 in time')
+    expect(strip.closest('.sm-strip')).not.toBeNull()
+    expect(screen.getByText('Ceiling write failed')).toBeInTheDocument()
+    expect(screen.queryByText(/wasn't read back in time/)).not.toBeInTheDocument()
+  })
 })
 
 describe('Settings › Content delivery', () => {
