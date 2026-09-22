@@ -36,6 +36,7 @@ import {
   ConfirmDialog,
   DefinitionStrip,
   Field,
+  Freshness,
   Input,
   RuledStrip,
   Section,
@@ -47,8 +48,9 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration } from '../domain/time'
+import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration, parseIsoMs } from '../domain/time'
 import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
+import { nodePlaybackStatus, type FreshReading } from './nodePlaybackModel'
 import { nodeSyncStatus, type SignalFact } from './nodeSyncModel'
 import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
@@ -323,6 +325,65 @@ function SyncStatusSection({ node }: { node: Node }) {
   )
 }
 
+/** A fresh reading's value plus its own age, shown with the kit's usual age treatment; an absent reading falls back to a RuledStrip. */
+function PositionCell({ fact }: { fact: SignalFact<FreshReading> }) {
+  if (fact.kind === 'absent') return <RuledStrip absence={fact.absence} label={fact.label} fact={fact.fact} />
+  return (
+    <span className="sm-data">
+      {fact.value.text} <Freshness text={`${formatDuration(fact.value.ageMs)} old`} />
+    </span>
+  )
+}
+
+/** What each audio session this node reports is playing and where it is, advancing between reports (BUILD-PLAN). */
+function PlaybackSection({ node, nowMs }: { node: Node; nowMs: number }) {
+  const status = nodePlaybackStatus(node, nowMs)
+  return (
+    <Section id="nd-playback" title="Now playing">
+      {status.sessions.length === 0 ? (
+        <RuledStrip absence="empty" label="None" fact="No audio session is running on this node." />
+      ) : (
+        <TableWrap label="Audio sessions on this node, scrollable">
+          <Table minWidth={620}>
+            <thead>
+              <tr>
+                <th scope="col">Session</th>
+                <th scope="col">Playing</th>
+                <th scope="col">State</th>
+                <th scope="col">Position</th>
+              </tr>
+            </thead>
+            <tbody>
+              {status.sessions.map((row) => (
+                <tr key={row.sessionId}>
+                  <td>
+                    <strong>{row.sessionId}</strong>
+                    <br />
+                    <FactLine fact={row.sourceRole} className="sm-small sm-muted" />
+                  </td>
+                  <td>
+                    <FactLine fact={row.item} className="sm-data" />
+                  </td>
+                  <td>
+                    <FactLine fact={row.state} className="sm-data" />
+                  </td>
+                  <td>
+                    <PositionCell fact={row.position} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+      )}
+      <div className="sm-small sm-muted">
+        <span>LTC timecode: </span>
+        <PositionCell fact={status.ltcTimecode} />
+      </div>
+    </Section>
+  )
+}
+
 type RunsState = { kind: 'loading' } | { kind: 'loaded'; runs: AudioAlignmentRun[] } | { kind: 'failed'; reason: string }
 type RunDetailState = { kind: 'loading' } | { kind: 'loaded'; summary: AudioAlignmentRunSummary } | { kind: 'failed'; reason: string }
 
@@ -508,7 +569,13 @@ export function NodeDetail() {
   const { nodeId = '' } = useParams<{ nodeId: string }>()
   const model = useModelContext()
   const navigate = useNavigate()
+  const [, setPlaybackTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setPlaybackTick((tick) => tick + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
+  const nowMs = parseIsoMs(nowIso) ?? Date.now()
   const node = model.nodes.find((candidate) => candidate.nodeId === nodeId)
 
   const { state: surfacesState, reload: reloadSurfaces } = useNodeSurfaces(nodeId)
@@ -771,6 +838,8 @@ export function NodeDetail() {
           </section>
         ))}
       </Section>
+
+      {hasAudioCapability && <PlaybackSection node={node} nowMs={nowMs} />}
 
       {hasAudioCapability && <SyncStatusSection node={node} />}
 
