@@ -125,7 +125,9 @@ function Rail({ title, steps }: { title: string; steps: readonly RailStep[] }) {
             </span>
             {step.label}
           </p>
-          <p className="sm-rail-strip__detail">{step.detail}</p>
+          <p className="sm-rail-strip__detail" title={step.title}>
+            {step.detail}
+          </p>
         </div>
       ))}
     </div>
