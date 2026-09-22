@@ -71,14 +71,19 @@ type Engine struct {
 	// its own goroutine (see retireAsync). Guarded by e.mu.
 	retiringBranches map[*branch]struct{}
 
-	// releaseAllMu serializes every ReleaseAll call against every other
-	// one, end to end: two ReleaseAll calls each sequentially tearing
-	// down their own batch is still two goroutines issuing GStreamer
-	// state changes against this one shared pipeline at once, the exact
-	// contention [Engine.ReleaseAll]'s own doc comment exists to avoid.
-	// Never taken by anything else; e.mu alone still guards every field
-	// above.
-	releaseAllMu sync.Mutex
+	// releaseGate admits one [Engine.ReleaseAll] sweep at a time, and is
+	// a channel rather than a mutex so waiting for it honours the
+	// caller's ctx: a second emergency stop must never be held past its
+	// own budget by the first. It is taken only after that call has
+	// already muted everything it targets.
+	releaseGate chan struct{}
+
+	// teardownTurn admits one branch teardown at a time on this shared
+	// pipeline. Two GStreamer state changes in flight at once against
+	// sibling elements of the same pipeline were observed deferring
+	// behind each other past their own bounds; every teardown caller
+	// passes through here, so that can never happen.
+	teardownTurn chan struct{}
 
 	// elementIndex maps every one of a branch's own element names (all
 	// eight from [branch.elements], not only filesrc/decodebin — every
@@ -182,6 +187,8 @@ func New(cfg Config) (*Engine, error) {
 		inFlightReplacements: make(map[*branch]*inFlightReplacement),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
+		releaseGate:          make(chan struct{}, 1),
+		teardownTurn:         make(chan struct{}, 1),
 		done:                 make(chan struct{}),
 		startedAt:            time.Now(),
 	}
@@ -252,6 +259,8 @@ func NewUnavailable(reason string) *Engine {
 		inFlightReplacements: make(map[*branch]*inFlightReplacement),
 		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
+		releaseGate:          make(chan struct{}, 1),
+		teardownTurn:         make(chan struct{}, 1),
 		done:                 make(chan struct{}),
 	}
 }
@@ -394,14 +403,13 @@ func (e *Engine) Close() error {
 				// does) sees a released pipeline as absent rather than
 				// touching a freed object.
 				e.pipelineStateAtClose, _, _ = e.pipeline.GetState(0)
+				// Unref and nil under one hold of e.mu: watchBus reads
+				// e.pipeline under the same lock, and must never see a
+				// reference this function has already released.
+				e.mu.Lock()
 				if obj, ok := e.pipeline.(gobject.Object); ok {
 					gobject.UnsafeObjectUnref(obj)
 				}
-				// Under e.mu: watchBus's own startup read (see its doc
-				// comment) is the only other goroutine that ever reads
-				// e.pipeline outside this single-execution (closeOnce)
-				// function, and it must never observe a half-written value.
-				e.mu.Lock()
 				e.pipeline = nil
 				e.mu.Unlock()
 			}
@@ -1012,6 +1020,14 @@ func (e *Engine) watchBus() {
 				gst.UnsafeMessageUnref(msg)
 				continue
 			}
+			// An error a torn-down branch posted can still be queued here
+			// after its elements left the pipeline. Only a fault in an
+			// element still attached to this pipeline breaks the engine;
+			// a stop must never break it for the next show.
+			if src, obj := msg.Source(), gst.Object(pipeline); src != nil && !src.HasAsAncestor(obj) {
+				gst.UnsafeMessageUnref(msg)
+				continue
+			}
 			e.markBroken(fmt.Sprintf("output pipeline error: %s", text))
 		case gst.MessageWarning:
 			// Counts unconditionally; classifyWarningDomain and
@@ -1206,8 +1222,15 @@ func (e *Engine) trackReplacement(b *branch, handle agentaudio.EngineHandle) {
 
 func (e *Engine) untrackReplacement(b *branch) {
 	e.mu.Lock()
+	entry := e.inFlightReplacements[b]
 	delete(e.inFlightReplacements, b)
 	e.mu.Unlock()
+	// A claimed swap must answer its claim on every exit path, commit or
+	// not: a nil answer tells the waiting stop there is no replacement to
+	// take over, rather than leaving it waiting out its whole budget.
+	if entry != nil && entry.handoff != nil {
+		entry.handoff <- nil
+	}
 }
 
 // classifyBranchError maps a branch-scoped GStreamer error onto this

@@ -69,14 +69,14 @@ func TestSilenceAllExceptDoesNotRaceAnExcludedSessionAcquiringItsHandle(t *testi
 	}
 
 	type silenceResult struct {
-		outcomes []SessionSilenceOutcome
-		released int
-		sweepOK  bool
+		outcomes    []SessionSilenceOutcome
+		released    int
+		sweepReason string
 	}
 	silenceDone := make(chan silenceResult, 1)
 	go func() {
-		outcomes, released, sweepOK := m.SilenceAllExcept(ctx, excluded)
-		silenceDone <- silenceResult{outcomes, released, sweepOK}
+		outcomes, released, sweepReason := m.SilenceAllExcept(ctx, excluded)
+		silenceDone <- silenceResult{outcomes, released, sweepReason}
 	}()
 
 	select {
@@ -101,8 +101,8 @@ func TestSilenceAllExceptDoesNotRaceAnExcludedSessionAcquiringItsHandle(t *testi
 
 	select {
 	case res := <-silenceDone:
-		if !res.sweepOK {
-			t.Fatalf("SilenceAllExcept sweep confirmed = false, want true")
+		if res.sweepReason != "" {
+			t.Fatalf("SilenceAllExcept sweep reported %q, want a clean sweep", res.sweepReason)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("SilenceAllExcept never returned after its sweep was unblocked")
@@ -155,9 +155,9 @@ func TestSilenceAllExceptSurvivesTheExcludedSessionsStagedHandle(t *testing.T) {
 	s.stage = &itemStage{index: 1, handle: stagedHandle, ready: true}
 	s.mu.Unlock()
 
-	if _, released, sweepOK := m.SilenceAllExcept(ctx, excluded); released != 0 || !sweepOK {
-		t.Fatalf("SilenceAllExcept(except excluded) released=%d sweepOK=%v, want released=0 sweepOK=true "+
-			"(both the excluded session's loaded and staged handles must survive)", released, sweepOK)
+	if _, released, sweepReason := m.SilenceAllExcept(ctx, excluded); released != 0 || sweepReason != "" {
+		t.Fatalf("SilenceAllExcept(except excluded) released=%d sweepReason=%q, want released=0 and a clean sweep "+
+			"(both the excluded session's loaded and staged handles must survive)", released, sweepReason)
 	}
 
 	if _, err := m.engine.Observe(ctx, stagedHandle); err != nil {

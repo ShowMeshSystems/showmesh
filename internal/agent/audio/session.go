@@ -1103,6 +1103,8 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 		// stop instead of leaving the session stuck behind a handle no
 		// later Observe can ever find again. Matches [Manager.
 		// stopExecLocked]'s identical branch.
+		s.schedule = nil
+		s.discardStageLocked(ctx)
 		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 		s.handleLoaded = false
 		s.loadedIdentity = ""

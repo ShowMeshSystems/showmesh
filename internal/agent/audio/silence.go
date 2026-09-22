@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -38,15 +39,15 @@ type SessionSilenceOutcome struct {
 // stop above failed or blocked, so an emergency stop never leaves a
 // branch playing merely because one session lost track of it.
 //
-// The third return is false when that final sweep itself could not run
-// to completion (for example, an engine rebind window with no engine
-// currently bound): the count above is then a floor, not a clean sweep,
-// and the caller must not report this operation as confirmed on the
-// strength of the per-session outcomes alone.
-func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int, bool) {
+// The third return is empty when that final sweep ran to completion, and
+// otherwise carries the operator sentence saying what it could not
+// finish: the count above is then a floor, not a clean sweep, and the
+// caller must not report this operation as confirmed on the strength of
+// the per-session outcomes alone.
+func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int, string) {
 	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept())
-	released, sweepConfirmed := m.releaseEveryEngineBranchExcept(ctx)
-	return outcomes, released, sweepConfirmed
+	released, sweepReason := m.releaseEveryEngineBranchExcept(ctx)
+	return outcomes, released, sweepReason
 }
 
 // SilenceAllExcept is [Manager.SilenceAll] for every session other than
@@ -56,10 +57,10 @@ func (m *Manager) SilenceAll(ctx context.Context) ([]SessionSilenceOutcome, int,
 // (loaded and staged) those excluded sessions currently own, so their
 // audio survives it exactly as their own per-session stop above was
 // never run against them.
-func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) ([]SessionSilenceOutcome, int, bool) {
+func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.SessionID) ([]SessionSilenceOutcome, int, string) {
 	outcomes := m.silenceSessions(ctx, m.liveSessionsExcept(excludeIDs...))
-	released, sweepConfirmed := m.releaseEveryEngineBranchExceptSessions(ctx, excludeIDs...)
-	return outcomes, released, sweepConfirmed
+	released, sweepReason := m.releaseEveryEngineBranchExceptSessions(ctx, excludeIDs...)
+	return outcomes, released, sweepReason
 }
 
 // releaseEveryEngineBranchExceptSessions is [Manager.
@@ -73,7 +74,7 @@ func (m *Manager) SilenceAllExcept(ctx context.Context, excludeIDs ...pkgaudio.S
 // except. ids are locked in a fixed order (sorted), not the order the
 // caller gave them, so two overlapping calls naming the same sessions in
 // different orders cannot deadlock each other.
-func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, ids ...pkgaudio.SessionID) (int, bool) {
+func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, ids ...pkgaudio.SessionID) (int, string) {
 	seen := make(map[pkgaudio.SessionID]bool, len(ids))
 	sorted := make([]pkgaudio.SessionID, 0, len(ids))
 	for _, id := range ids {
@@ -118,10 +119,12 @@ func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, id
 // handles, and logs rather than fails on an engine error, since this is
 // already the last-resort sweep behind the per-session outcomes those
 // callers report. Bounded like every other engine call SilenceAll makes.
-// The second return is false when the sweep itself did not run to
-// completion (for example [SwitchableEngine.ReleaseAll] with no engine
-// currently bound, mid-rebind): the released count is then a floor, not
-// proof nothing else was left playing.
+// The second return is empty when the sweep ran to completion, and
+// otherwise carries the sentence an operator is shown: the released
+// count is then a floor, not proof nothing else was left playing. An
+// engine that was not bound at all and one whose shutdown overran are
+// different facts and read differently, so neither is reported as the
+// other.
 //
 // The returned count is len of the exact handles [Engine.ReleaseAll]
 // itself reports releasing, never a second, independently computed
@@ -129,7 +132,7 @@ func (m *Manager) releaseEveryEngineBranchExceptSessions(ctx context.Context, id
 // of those handles, so an orphan no session accounted for is findable in
 // the node's own log, even though [pkg/audio]'s wire evidence today
 // carries only the count.
-func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) (int, bool) {
+func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...EngineHandle) (int, string) {
 	relCtx, relCancel := boundedEngineCallContext(ctx)
 	released, err := m.engine.ReleaseAll(relCtx, except...)
 	relCancel()
@@ -139,8 +142,25 @@ func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...
 	if len(released) > 0 {
 		m.logf("audio: an emergency stop released %d engine branch(es) no session had already accounted for: %v", len(released), released)
 	}
-	return len(released), err == nil
+	switch {
+	case err == nil:
+		return len(released), ""
+	case errors.Is(err, ErrNoEngineBinding), errors.Is(err, pkgaudio.ErrEngineRouteChanged):
+		return len(released), SilenceSweepNoEngineReason
+	default:
+		return len(released), SilenceSweepUnfinishedReason
+	}
 }
+
+// SilenceSweepNoEngineReason and SilenceSweepUnfinishedReason are the two
+// sentences an operator is shown when an emergency stop's final engine
+// sweep does not come back clean. Rendered verbatim by the API, the CLI
+// and the UI, so the wording is fixed here.
+const (
+	SilenceSweepNoEngineReason = "This node's audio engine was not connected when the stop's final sweep ran, so some audio may still be playing. Retry the stop once the engine reconnects."
+
+	SilenceSweepUnfinishedReason = "Some of this node's audio did not finish shutting down in time. It is already silenced, and the node keeps working to shut it down."
+)
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,
 // whatever its state and revision, and reports false when it does not exist.

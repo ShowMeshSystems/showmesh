@@ -43,9 +43,9 @@ func audioNodeSilenceOperations(mgr *audio.Manager) map[string]OperationFunc {
 // error. Confirmed is true only when every session genuinely stopped,
 // matching [sessionOp]'s computation for audio.session.stop, AND the
 // final engine-wide sweep itself ran to completion: a sweep that could
-// not run (an engine rebind window, most likely) must never let a
-// node full of stopped sessions read as a clean stop when the sweep
-// behind them never actually happened.
+// not run, or one that ran out of time, must never let a node full of
+// stopped sessions read as a clean stop. The sweep's own sentence is
+// rendered verbatim, never re-worded here.
 func silenceNode(mgr *audio.Manager) OperationFunc {
 	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 		if mgr == nil {
@@ -56,14 +56,11 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		}
 
 		executedAt := now()
-		results, unclaimedReleased, sweepConfirmed := mgr.SilenceAll(ctx)
+		results, unclaimedReleased, sweepReason := mgr.SilenceAll(ctx)
 		observedAt := now()
 
-		confirmed := sweepConfirmed
-		reason := ""
-		if !sweepConfirmed {
-			reason = "This node's audio engine was not connected when the stop's final sweep ran, so some audio may still be playing. Retry the stop once the engine reconnects."
-		}
+		confirmed := sweepReason == ""
+		reason := sweepReason
 		sessions := make([]map[string]any, 0, len(results))
 		for _, r := range results {
 			if !outcomeConfirmed(r.Outcome) {
