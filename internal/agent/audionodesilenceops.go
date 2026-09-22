@@ -40,9 +40,12 @@ func audioNodeSilenceOperations(mgr *audio.Manager) map[string]OperationFunc {
 // silenceNode returns the OperationFunc for "audio.node.silence": never
 // refused, and idempotent, silencing an already-silent node is a
 // success reporting zero or more already-stopped sessions, not an
-// error. Confirmed is computed from each session's own outcome exactly
-// as [sessionOp] computes it for audio.session.stop, true only when
-// every session genuinely stopped.
+// error. Confirmed is true only when every session genuinely stopped,
+// matching [sessionOp]'s computation for audio.session.stop, AND the
+// final engine-wide sweep itself ran to completion: a sweep that could
+// not run, or one that ran out of time, must never let a node full of
+// stopped sessions read as a clean stop. The sweep's own sentence is
+// rendered verbatim, never re-worded here.
 func silenceNode(mgr *audio.Manager) OperationFunc {
 	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 		if mgr == nil {
@@ -53,10 +56,11 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		}
 
 		executedAt := now()
-		results := mgr.SilenceAll(ctx)
+		results, unclaimedReleased, sweepReason := mgr.SilenceAll(ctx)
 		observedAt := now()
 
-		confirmed := true
+		confirmed := sweepReason == ""
+		reason := sweepReason
 		sessions := make([]map[string]any, 0, len(results))
 		for _, r := range results {
 			if !outcomeConfirmed(r.Outcome) {
@@ -71,10 +75,20 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 
 		return OperationResult{
 			Confirmed: confirmed,
+			Reason:    reason,
 			Signal:    "node.audio.silence",
 			Value: map[string]any{
 				"sessionsFound": len(results),
 				"sessions":      sessions,
+				// unclaimedBranchesReleased is the final engine-wide sweep's
+				// own count (audio.Manager.SilenceAll): branches it released
+				// that no session above already accounted for. Carried in
+				// this node-side evidence and, when nonzero, in one WARN
+				// this node's own log names by handle (audio.Manager.
+				// releaseEveryEngineBranchExcept) -- not yet surfaced
+				// through the coordinator's own audio.node.silence API
+				// result, which is a later change.
+				"unclaimedBranchesReleased": unclaimedReleased,
 			},
 			ExecutedAt: executedAt,
 			ObservedAt: observedAt,

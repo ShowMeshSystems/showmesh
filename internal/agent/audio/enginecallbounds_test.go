@@ -370,8 +370,11 @@ func TestRemoveInterrupterLockedBoundsAWedgedStart(t *testing.T) {
 	bg.loadedIdentity = "stale-identity" // force removeInterrupterLocked's stale-handle route.
 	bg.mu.Unlock()
 
-	nextHandle := bg.engineHandleFor("item-a")
-	engine.arm(hangStart, nextHandle)
+	// "" matches every handle: the coming Start is against a freshly
+	// minted handle (removeInterrupterLocked re-prepares the stale
+	// identity), whose exact name this test cannot predict since every
+	// [Session.engineHandleFor] call now mints a unique one.
+	engine.arm(hangStart, "")
 
 	done := make(chan struct{})
 	go func() {

@@ -654,10 +654,11 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 // branch's audio actually starts reaching the mix. join calls it right
 // after resyncMixerPads, before its mixer pad can carry any buffer.
 func (b *branch) armFirstMixedProbe() {
-	if len(b.channelMixerPads) == 0 || b.channelMixerPads[0] == nil {
+	pads := b.mixerPads()
+	if len(pads) == 0 || pads[0] == nil {
 		return
 	}
-	b.channelMixerPads[0].AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	pads[0].AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		b.mu.Lock()
 		if b.firstMixedAt.IsZero() {
 			b.firstMixedAt = time.Now()
@@ -736,17 +737,29 @@ func (b *branch) awaitHeldOrEOS(ctx context.Context, beforeHeld, beforeEOS uint6
 func (b *branch) join(atPos time.Duration, releaseHold bool) error {
 	e := b.engine
 	n := len(e.cfg.ProgramChannels)
+	pads := make([]gst.Pad, n)
+	var requestErr error
 	for k := 0; k < n; k++ {
 		pad := e.channelMixers[k].RequestPadSimple("sink_%u")
 		if pad == nil {
-			return fmt.Errorf("gstengine: channel mixer %d refused a sink pad request during join", k)
+			requestErr = fmt.Errorf("gstengine: channel mixer %d refused a sink pad request during join", k)
+			break
 		}
-		b.channelMixerPads[k] = pad
+		pads[k] = pad
+	}
+	// Published under mu before any early return, so a teardown can still
+	// release whatever pads this call did obtain, and so muteBranch can
+	// reach them from another goroutine.
+	b.mu.Lock()
+	copy(b.channelMixerPads, pads)
+	b.mu.Unlock()
+	if requestErr != nil {
+		return requestErr
 	}
 	b.resyncMixerPads(atPos)
 	b.armFirstMixedProbe()
 	for k := 0; k < n; k++ {
-		if b.deinterleaveSrcPads[k].Link(b.channelMixerPads[k]) != gst.PadLinkOK {
+		if b.deinterleaveSrcPads[k].Link(pads[k]) != gst.PadLinkOK {
 			return fmt.Errorf("gstengine: could not link deinterleave output %d to its channel mixer during join", k)
 		}
 	}
@@ -757,6 +770,15 @@ func (b *branch) join(atPos time.Duration, releaseHold bool) error {
 	b.joined = true
 	b.mu.Unlock()
 	return nil
+}
+
+// mixerPads copies this branch's channel mixer request pads. join
+// writes them under mu, so every reader outside join's own goroutine
+// goes through here.
+func (b *branch) mixerPads() []gst.Pad {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]gst.Pad(nil), b.channelMixerPads...)
 }
 
 // removeHold detaches the hold probe join installed at build, letting

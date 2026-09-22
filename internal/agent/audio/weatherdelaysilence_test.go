@@ -149,7 +149,7 @@ func TestSilenceAllExceptLeavesTheExcludedSessionPlaying(t *testing.T) {
 	startPlaying(t, m, ctx, other, otherRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
 	startPlaying(t, m, ctx, excluded, excludedRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyMix)
 
-	results := m.SilenceAllExcept(ctx, excluded)
+	results, _, _ := m.SilenceAllExcept(ctx, excluded)
 	if len(results) != 1 || results[0].ID != other {
 		t.Fatalf("SilenceAllExcept results = %+v, want exactly one result for %q", results, other)
 	}

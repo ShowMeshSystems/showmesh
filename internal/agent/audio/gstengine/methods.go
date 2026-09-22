@@ -95,7 +95,7 @@ func (e *Engine) branchFor(handle agentaudio.EngineHandle) (*branch, error) {
 	defer e.mu.Unlock()
 	b, ok := e.handles[handle]
 	if !ok {
-		return nil, fmt.Errorf("gstengine: no loaded handle %q", handle)
+		return nil, fmt.Errorf("%w: gstengine: no loaded handle %q", agentaudio.ErrHandleNotLoaded, handle)
 	}
 	return b, nil
 }
@@ -150,6 +150,18 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 	}
 
 	e.mu.Lock()
+	if _, exists := e.handles[handle]; exists {
+		e.mu.Unlock()
+		// A live branch already answers to this name: taking it over here
+		// would orphan whatever the existing branch holds, unaddressable by
+		// any later call against the same handle (this package's own
+		// handle-uniqueness contract, see agentaudio.Session.engineHandleFor,
+		// is what a caller relies on instead of ever reaching this path in
+		// production). The newly built branch, never indexed, is torn down
+		// rather than leaked.
+		_ = b.teardown(ctx)
+		return agentaudio.EngineObservation{}, fmt.Errorf("gstengine: a live branch is already loaded under handle %q", handle)
+	}
 	e.handles[handle] = b
 	e.mu.Unlock()
 
@@ -264,6 +276,16 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 // rather than flush-seeking it in place. A failed preparation tears
 // down only the replacement; old and its anchoring stay untouched.
 func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHandle, old *branch, position time.Duration, targetState pkgaudio.State) (agentaudio.EngineObservation, error) {
+	// Refused before a single element is built when handle no longer
+	// names old: a stop already took it, and everything built here would
+	// only have to be torn down again behind that stop.
+	e.mu.Lock()
+	current := e.handles[handle]
+	e.mu.Unlock()
+	if current != old {
+		return agentaudio.EngineObservation{}, fmt.Errorf("%w: gstengine: handle was released while its swap was still in flight", agentaudio.ErrHandleNotLoaded)
+	}
+
 	old.mu.Lock()
 	fadeActive := old.fadeActive
 	fadeStartPos, fadeStartGain := old.fadeStartPos, old.fadeStartGain
@@ -281,7 +303,7 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 	// Tracked only once build has actually created replacement's
 	// elements: Close's fan-out would otherwise reach a branch whose
 	// element fields are still nil.
-	e.trackReplacement(replacement)
+	e.trackReplacement(replacement, handle)
 	defer e.untrackReplacement(replacement)
 	cleanup := func() { _ = bestEffortTeardown(replacement) }
 
@@ -319,7 +341,7 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		// position landed at or past EOS: swap the handle to the
 		// replacement anyway, so it correctly reports Completed, but
 		// there is nothing left to play or join.
-		return e.commitSwap(handle, old, replacement, replacement.observe(e.cfg.now())), nil
+		return e.commitSwap(handle, old, replacement, replacement.observe(e.cfg.now()))
 	}
 	if targetState != pkgaudio.StatePlaying {
 		// blockFlow is for API consistency (blockProbeID reads blocked);
@@ -340,45 +362,104 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 	// live query racing however far decode buffered ahead during join's
 	// own setup window. unfreeze runs after, once this swap is done.
 	obs := replacement.observe(e.cfg.now())
-	return e.commitSwap(handle, old, replacement, obs), nil
+	return e.commitSwap(handle, old, replacement, obs)
+}
+
+// muteBranch mutes every one of b's channel mixer pads: a property set,
+// never a GStreamer state change, so it can run synchronously without
+// ever blocking on the pipeline. The pads are read under b.mu, which
+// join also writes them under, so this is safe against a branch another
+// goroutine is still joining. A branch never joined has nothing to mute:
+// it cannot already be audible.
+func muteBranch(b *branch) {
+	for _, pad := range b.mixerPads() {
+		if pad != nil {
+			pad.SetObjectProperty("mute", true)
+		}
+	}
 }
 
 // commitSwap mutes old's mixer pads, re-points handle to replacement,
 // unfreezes it if it is Playing, and retires old in the background.
 // Shared by swapToPosition's playing/paused path and its EOS shortcut.
-func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *branch, obs agentaudio.EngineObservation) agentaudio.EngineObservation {
+//
+// Refuses to publish replacement when e.handles[handle] no longer names
+// old: the only way that happens is a concurrent Release or [Engine.
+// ReleaseAll] already tearing old down and forgetting handle while this
+// swap was still building its replacement (a released handle's name is
+// never reused -- every handle is minted fresh, and [Engine.Load]
+// refuses to overwrite a live branch). Without this check, an emergency
+// stop that overtakes a swap already in flight would otherwise be
+// silently undone the moment that swap committed, re-arming a branch the
+// caller already believes was released.
+//
+// replacement is muted immediately, on this goroutine, the only one that
+// may safely touch its still-possibly-unfinished elements: it may
+// already be joined and flowing (join releases queue's hold before this
+// runs, for a Playing target), so refusing to publish it is not enough
+// on its own to guarantee silence. Its own inFlightReplacements entry is
+// removed here too, under the same lock as this whole decision, so a
+// ReleaseAll snapshotting after this point can never claim a branch
+// whose fate this call already decided.
+//
+// Torn down next -- by this goroutine directly, UNLESS a ReleaseAll had
+// already claimed this exact branch (entry.handoff set, under e.mu,
+// before this check ran), in which case the branch is handed off
+// instead: that ReleaseAll is waiting to tear it down itself, one branch
+// at a time across its whole sweep, never contending with whatever this
+// goroutine might still be doing to the same elements. See [Engine.
+// ReleaseAll]'s own doc comment for why concurrent teardown on this
+// shared pipeline must never happen at all.
+func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *branch, obs agentaudio.EngineObservation) (agentaudio.EngineObservation, error) {
 	e.mu.Lock()
-	for _, pad := range old.channelMixerPads {
-		if pad != nil {
-			pad.SetObjectProperty("mute", true)
-		}
+	entry := e.inFlightReplacements[replacement]
+	delete(e.inFlightReplacements, replacement)
+	var handoff chan *branch
+	if entry != nil {
+		handoff = entry.handoff
 	}
+	if e.handles[handle] != old {
+		muteBranch(replacement)
+		e.mu.Unlock()
+		if handoff != nil {
+			handoff <- replacement
+		} else {
+			_ = bestEffortTeardown(replacement)
+		}
+		return agentaudio.EngineObservation{}, fmt.Errorf("%w: gstengine: handle was released while its swap was still in flight", agentaudio.ErrHandleNotLoaded)
+	}
+	muteBranch(old)
 	e.handles[handle] = replacement
 	e.mu.Unlock()
+	if handoff != nil {
+		handoff <- nil
+	}
 
 	if obs.State == pkgaudio.StatePlaying {
 		replacement.unfreeze()
 	}
 	e.retireAsync(old)
-	return obs
+	return obs, nil
 }
 
 // retireAsync tears old down in the background, since it is already
-// muted and unreachable. Tracked so Close can still find and finish it;
-// branch.teardown's own gate makes a concurrent Close safe.
+// muted and unreachable. It is also the reaper [Engine.ReleaseAll] hands
+// a branch it could not finish inside its own budget. old stays in
+// retiringBranches until a teardown actually succeeds, so a branch that
+// never finishes is still reachable by Close and by a later stop rather
+// than dropped.
 func (e *Engine) retireAsync(old *branch) {
 	e.mu.Lock()
 	e.retiringBranches[old] = struct{}{}
 	e.mu.Unlock()
 	go func() {
-		defer func() {
-			e.mu.Lock()
-			delete(e.retiringBranches, old)
-			e.mu.Unlock()
-		}()
 		if err := bestEffortTeardown(old); err != nil {
 			slog.Warn("gstengine: retired branch teardown after a swap did not complete cleanly", "branch", old.id, "error", err)
+			return
 		}
+		e.mu.Lock()
+		delete(e.retiringBranches, old)
+		e.mu.Unlock()
 	}()
 }
 
@@ -477,6 +558,236 @@ func (e *Engine) LiveHandles(context.Context) ([]agentaudio.EngineHandle, error)
 		out = append(out, h)
 	}
 	return out, nil
+}
+
+// branchStopBudget is one branch's share of an emergency stop: its wait
+// for an in-flight swap to settle, and its own teardown. A branch that
+// overruns is left muted and parked for the background reaper so the
+// sweep moves on, which is what keeps a stop's whole cost proportional
+// to how many branches it has rather than hostage to the worst one.
+var branchStopBudget = 1500 * time.Millisecond // var, not const: shrunk by tests exercising the bound itself
+
+// ReleaseAll silences, then tears down, every branch this pipeline
+// currently holds except the handles named in except, and reports
+// exactly which ones it released: never a count computed separately from
+// what it can also name, so the two can never drift apart. except also
+// covers a swap still in flight, by the handle it is replacing, so a
+// replacement swapping in for an excepted handle is left to complete
+// rather than silenced and torn down out from under it.
+//
+// Ordered in three passes, all required by this pipeline's own shape --
+// every branch is flat elements sharing ONE GStreamer pipeline, so a
+// GStreamer state change against one branch's elements can contend with
+// another's on the same underlying pipeline, and two branches with a
+// state change in flight at once were observed to do exactly that,
+// deferring behind each other for the length of their own bound,
+// repeatedly, well past any single branch's own timeout. old and its own
+// in-flight replacement are two SEPARATE branch objects, so this applies
+// even to a single swap: tearing old down while its own replacement is
+// still being built contends exactly the same way.
+//
+//  1. Silence first, under e.mu alone, waiting on nothing. Every
+//     targeted branch in e.handles (minus except) is muted right here
+//     before anything else runs: a property set, never a state change,
+//     so it can never itself contend or block. Each is also taken out of
+//     e.handles and parked in retiringBranches in the same step, so a
+//     branch this call cannot finish is still reachable by Close and by
+//     the next stop. A swap already in flight targeting an excepted
+//     handle is left alone; one that is not is claimed, so [Engine.
+//     commitSwap] knows this call is waiting for it. By the time this
+//     method returns, nothing it targeted can be heard, whatever the two
+//     passes below still have left to do.
+//  2. Wait for every claimed swap to settle on its OWN goroutine, the
+//     only one that may safely touch its still-being-built elements.
+//     Each wait has its own budget; one that overruns is handed to a
+//     collector goroutine so its branch is still reaped later, and this
+//     pass moves on.
+//  3. Tear branches down, each with its own budget: e.handles' own
+//     branches first, then the ones handed over in pass 2, then whatever
+//     was already parked. A branch that overruns stays muted and parked,
+//     is reported in the error, and is left to the background reaper;
+//     the sweep moves on to the next one either way.
+//
+// The teardowns themselves are serialized against every other teardown
+// on this pipeline by [branch.teardown], not by this method, so a swap
+// or a Close running alongside this sweep can never have a state change
+// in flight at the same time as it.
+//
+// Worst case, this returns within the caller's own ctx, and no later
+// than roughly the number of claimed swaps, targeted branches, handed
+// over replacements and already-parked branches, multiplied by
+// [branchStopBudget], plus however long a sweep already in progress
+// holds releaseGate.
+//
+// Only what was genuinely in e.handles, not excepted, and actually torn
+// down counts toward the return value: an in-flight or retiring leftover
+// of an ordinary Seek, Resume, or Start is normal bookkeeping, not an
+// orphan, and is never counted, whether or not this call happens to
+// touch it.
+func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHandle) ([]agentaudio.EngineHandle, error) {
+	skip := make(map[agentaudio.EngineHandle]struct{}, len(except))
+	for _, h := range except {
+		skip[h] = struct{}{}
+	}
+
+	type target struct {
+		handle agentaudio.EngineHandle
+		branch *branch
+	}
+	e.mu.Lock()
+	var toRelease []target
+	for h, b := range e.handles {
+		if _, ok := skip[h]; ok {
+			continue
+		}
+		toRelease = append(toRelease, target{h, b})
+	}
+	var handoffs []chan *branch
+	for _, entry := range e.inFlightReplacements {
+		if _, ok := skip[entry.handle]; ok {
+			continue
+		}
+		if entry.handoff != nil {
+			// Another sweep already claimed this swap and owns it.
+			continue
+		}
+		entry.handoff = make(chan *branch, 1)
+		handoffs = append(handoffs, entry.handoff)
+	}
+	// Silence first: every branch below is either fully joined already
+	// or was never joined at all (nothing to mute either way), and no
+	// other goroutine can be concurrently building it -- unlike a
+	// claimed in-flight replacement, which only its own swap goroutine
+	// may safely touch (see commitSwap's own muting of it).
+	targeted := make(map[*branch]struct{}, len(toRelease))
+	for _, t := range toRelease {
+		muteBranch(t.branch)
+		delete(e.handles, t.handle)
+		e.retiringBranches[t.branch] = struct{}{}
+		targeted[t.branch] = struct{}{}
+	}
+	var parked []*branch
+	for b := range e.retiringBranches {
+		if _, own := targeted[b]; own {
+			continue
+		}
+		parked = append(parked, b)
+	}
+	e.mu.Unlock()
+
+	var firstErr error
+	setErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	// collect keeps a claim this call can no longer wait for: the branch
+	// is still answered for and still reaped, never left muted in a
+	// channel nobody reads.
+	collect := func(handoff chan *branch) {
+		go func() {
+			if b := <-handoff; b != nil {
+				e.retireAsync(b)
+			}
+		}()
+	}
+	select {
+	case e.releaseGate <- struct{}{}:
+	case <-ctx.Done():
+		// Everything targeted is already silent and already parked, so a
+		// caller out of budget here loses only the teardown, never the
+		// stop. Only a claimed swap still needs answering.
+		for _, handoff := range handoffs {
+			collect(handoff)
+		}
+		return nil, ctx.Err()
+	}
+	defer func() { <-e.releaseGate }()
+
+	// Pass 2: let every claimed swap resolve before this call ever
+	// touches the pipeline itself.
+	var handedOff []*branch
+	for _, handoff := range handoffs {
+		wait, cancel := context.WithTimeout(ctx, branchStopBudget)
+		select {
+		case b := <-handoff:
+			if b != nil {
+				e.mu.Lock()
+				e.retiringBranches[b] = struct{}{}
+				e.mu.Unlock()
+				handedOff = append(handedOff, b)
+			}
+		case <-wait.Done():
+			collect(handoff)
+			if ctx.Err() != nil {
+				setErr(ctx.Err())
+			} else {
+				setErr(fmt.Errorf("gstengine: a swap still in flight did not settle within this stop's per-branch budget"))
+			}
+		}
+		cancel()
+	}
+
+	// Pass 3: one branch at a time, each on its own budget, moving on
+	// past whatever it cannot finish.
+	tearDown := func(b *branch) error {
+		branchCtx, cancel := context.WithTimeout(ctx, branchStopBudget)
+		defer cancel()
+		if err := b.teardown(branchCtx); err != nil {
+			return err
+		}
+		e.mu.Lock()
+		delete(e.retiringBranches, b)
+		e.mu.Unlock()
+		return nil
+	}
+	// Only a branch whose teardown was actually attempted and overran is
+	// reaped, and only once the sweep is over: a reaper started mid-sweep
+	// would hold the teardown turn on that very branch and stall every
+	// branch behind it. One never reached stays parked for Close or the
+	// next stop, already silent either way.
+	var reap []*branch
+	defer func() {
+		for _, b := range reap {
+			e.retireAsync(b)
+		}
+	}()
+
+	var released []agentaudio.EngineHandle
+	for _, t := range toRelease {
+		if ctx.Err() != nil {
+			setErr(ctx.Err())
+			break
+		}
+		if err := tearDown(t.branch); err != nil {
+			setErr(err)
+			reap = append(reap, t.branch)
+			continue
+		}
+		released = append(released, t.handle)
+	}
+	for _, b := range handedOff {
+		if ctx.Err() != nil {
+			setErr(ctx.Err())
+			break
+		}
+		if err := tearDown(b); err != nil {
+			setErr(err)
+			reap = append(reap, b)
+		}
+	}
+	// Already-parked branches are not this call's own targets: they never
+	// count toward released or firstErr, and a reaper already owns each
+	// of them. They are attempted here so a stop that overran last time
+	// is finished by the next one.
+	for _, b := range parked {
+		if ctx.Err() != nil {
+			break
+		}
+		_ = tearDown(b)
+	}
+
+	return released, firstErr
 }
 
 // seekTo issues a flushing, accurate seek on the branch and re-anchors
@@ -592,6 +903,20 @@ func (b *branch) teardown(ctx context.Context) error {
 	}
 	defer func() { <-gate }()
 
+	// The same two-step against the engine's own turn: every teardown
+	// caller passes through here, so this pipeline never has two
+	// teardowns changing element state at once.
+	select {
+	case b.engine.teardownTurn <- struct{}{}:
+	default:
+		select {
+		case b.engine.teardownTurn <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer func() { <-b.engine.teardownTurn }()
+
 	b.mu.Lock()
 	if b.released {
 		b.mu.Unlock()
@@ -629,7 +954,13 @@ func (b *branch) doTeardown(ctx context.Context) error {
 		return errTeardownDeferredForRace
 	}
 
-	if err := b.setElementsState(ctx, gst.StateNull); err != nil {
+	// teardownTimeout as well as ctx, never ctx alone: a caller with no
+	// deadline of its own would otherwise wait out a GStreamer NULL
+	// transition that never returns, and hold this pipeline's teardown
+	// turn with it.
+	stateCtx, cancel := context.WithTimeout(ctx, teardownTimeout)
+	defer cancel()
+	if err := b.setElementsState(stateCtx, gst.StateNull); err != nil {
 		slog.Warn("gstengine: branch teardown did not reach NULL in time; leaving its elements in the pipeline rather than removing them concurrently with the abandoned state change", "branch", b.id, "error", err)
 		b.engine.markTeardownDeferred()
 		b.silenceDeferredBranch()
@@ -643,11 +974,9 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	// (a harmless no-op via reportLoadError, nothing reads loadErrCh once
 	// Release has returned) instead of falling through to
 	// [Engine.markBroken] and poisoning every other branch's next Load.
-	b.engine.unindexBranch(b)
-
 	bin, ok := b.engine.pipeline.(gst.Bin)
 	if ok {
-		for k, pad := range b.channelMixerPads {
+		for k, pad := range b.mixerPads() {
 			if pad == nil {
 				continue
 			}
@@ -659,6 +988,10 @@ func (b *branch) doTeardown(ctx context.Context) error {
 			}
 		}
 	}
+	// Unindexed only once the elements are out of the pipeline: until
+	// then a bus error they posted must still attribute back to this
+	// branch rather than reading as the shared pipeline's own fault.
+	b.engine.unindexBranch(b)
 
 	b.mu.Lock()
 	b.released = true

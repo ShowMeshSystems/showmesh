@@ -95,6 +95,64 @@ func TestSilenceNodeReportsSessionsFoundAndConfirmed(t *testing.T) {
 	}
 }
 
+// TestSilenceNodeReportsUnclaimedBranchesReleased proves a branch no
+// session ever owned -- loaded straight onto the engine, bypassing every
+// session -- is still swept up by the final unconditional ReleaseAll and
+// counted in unclaimedBranchesReleased, so an orphan a per-session stop
+// could never reach on its own is visible in this result rather than
+// silently surviving.
+func TestSilenceNodeReportsUnclaimedBranchesReleased(t *testing.T) {
+	dir := t.TempDir()
+	engine := audio.NewFakeEngine(time.Now)
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	op := silenceNode(mgr)
+
+	ctx := context.Background()
+	orphan := audio.EngineHandle("orphan/never-owned/1")
+	if _, err := engine.Load(ctx, orphan, pkgaudio.MediaRef{AssetID: "orphan-asset", ContentHash: "orphan-hash"}, time.Second); err != nil {
+		t.Fatalf("load an orphan handle directly on the engine: %v", err)
+	}
+
+	result, err := op(ctx, map[string]any{}, time.Now)
+	if err != nil {
+		t.Fatalf("silenceNode: unexpected error %v", err)
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Value = %v (%T), want map[string]any", result.Value, result.Value)
+	}
+	if val["sessionsFound"] != 0 {
+		t.Errorf("sessionsFound = %v, want 0 (the orphan was never owned by any session)", val["sessionsFound"])
+	}
+	if val["unclaimedBranchesReleased"] != 1 {
+		t.Fatalf("unclaimedBranchesReleased = %v, want 1 (the orphan handle no session ever owned)", val["unclaimedBranchesReleased"])
+	}
+}
+
+// TestSilenceNodeReportsUnconfirmedWithAPlainReasonWhenTheSweepCannotRun
+// proves an unbound engine (a rebind window, most likely) reports the
+// silence outcome as unconfirmed, with a plain operator sentence naming
+// why, not the generic post-write read-back mismatch text every other
+// unconfirmed operation gets: a sweep that never ran is a different
+// fact from a write whose evidence disagreed with it.
+func TestSilenceNodeReportsUnconfirmedWithAPlainReasonWhenTheSweepCannotRun(t *testing.T) {
+	dir := t.TempDir()
+	engine := audio.NewSwitchableEngine() // never bound to a real engine
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	op := silenceNode(mgr)
+
+	result, err := op(context.Background(), map[string]any{}, time.Now)
+	if err != nil {
+		t.Fatalf("silenceNode: unexpected error %v", err)
+	}
+	if result.Confirmed {
+		t.Fatal("Confirmed = true, want false: the sweep could not run with no engine ever bound")
+	}
+	if result.Reason == "" {
+		t.Fatal("Reason is empty, want a plain sentence naming why the sweep could not run")
+	}
+}
+
 // TestSilenceNodeNotWired proves the not-wired error names the action.
 func TestSilenceNodeNotWired(t *testing.T) {
 	op := silenceNode(nil)

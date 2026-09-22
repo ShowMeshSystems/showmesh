@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,7 +255,10 @@ func TestAdvanceLockedPersistsBeforeTellingTheEngine(t *testing.T) {
 
 	var sawPersistedItem string
 	engine := &checkpointEngine{FakeEngine: fake, onLoad: func(handle EngineHandle) {
-		if handle != EngineHandle(string(id)+"/item-b") {
+		// Prefix, not exact equality: every handle now carries a unique,
+		// unpredictable per-manager sequence number (see
+		// [Session.engineHandleFor]) after the item id.
+		if !strings.HasPrefix(string(handle), string(id)+"/item-b/") {
 			return
 		}
 		rec, ok, err := store.Load(id)

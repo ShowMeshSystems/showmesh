@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -148,4 +149,25 @@ type Engine interface {
 	// regardless of whether any session still references it — see
 	// [Manager]'s own watcher, which sweeps whatever this reports orphaned.
 	LiveHandles(ctx context.Context) ([]EngineHandle, error)
+
+	// ReleaseAll tears down every live branch this Engine holds except the
+	// handles named in except, and reports exactly which ones it
+	// released -- never just a count, so a caller reporting how many is
+	// reporting len(released) of the same list it can also name, not a
+	// second, independently computed number that can drift from it. It
+	// exists for [Manager.SilenceAll]/[Manager.SilenceAllExcept]'s own
+	// final sweep: that call must reach a branch even when the session
+	// layer's own per-session accounting missed it, so an emergency stop
+	// never leaves audio playing because one session's own bookkeeping
+	// lost track of it.
+	ReleaseAll(ctx context.Context, except ...EngineHandle) (released []EngineHandle, err error)
 }
+
+// ErrHandleNotLoaded is the error class an [Engine] wraps its own "no such
+// handle" error with, so a caller can tell "this session's handle is
+// genuinely gone" apart from every other engine failure via errors.Is,
+// without matching on backend-specific error text. See
+// [Manager.stopExecLocked]'s own use: a commanded stop against a handle
+// the engine no longer holds resolves the session exactly as a
+// successful stop, rather than sticking it in StateStopping forever.
+var ErrHandleNotLoaded = errors.New("audio: engine holds no such handle")

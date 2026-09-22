@@ -18,21 +18,28 @@ import (
 type hangingStartEngine struct {
 	*FakeEngine
 
-	mu         sync.Mutex
-	hangHandle EngineHandle
-	release    chan struct{}
+	mu      sync.Mutex
+	armed   bool
+	prefix  string // hang any handle with this prefix, once armed.
+	release chan struct{}
 }
 
 func newHangingStartEngine(now func() time.Time) *hangingStartEngine {
 	return &hangingStartEngine{FakeEngine: NewFakeEngine(now), release: make(chan struct{})}
 }
 
-// armHang makes the NEXT Start against handle block until releaseHang is
-// called (or ctx is done). Only one handle is ever armed at a time.
-func (e *hangingStartEngine) armHang(handle EngineHandle) {
+// armHang makes the NEXT Start against a handle with prefix block until
+// releaseHang is called (or ctx is done). A prefix, not an exact handle:
+// every handle now carries a unique, unpredictable per-manager sequence
+// number after its item id (see [Session.engineHandleFor]), so a caller
+// arms "<sessionId>/<itemId>/" instead of guessing the exact name, still
+// precise, since no other session ever shares that prefix. Only one
+// prefix is ever armed at a time.
+func (e *hangingStartEngine) armHang(prefix string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.hangHandle = handle
+	e.armed = true
+	e.prefix = prefix
 }
 
 // releaseHang lets every currently-blocked and future Start proceed
@@ -50,7 +57,7 @@ func (e *hangingStartEngine) releaseHang() {
 
 func (e *hangingStartEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
 	e.mu.Lock()
-	hang := handle == e.hangHandle && e.hangHandle != ""
+	hang := e.armed && strings.HasPrefix(string(handle), e.prefix)
 	release := e.release
 	e.mu.Unlock()
 	if hang {
@@ -100,8 +107,11 @@ func wedgedAdvanceSetup(t *testing.T) (m *Manager, id pkgaudio.SessionID) {
 	if state != pkgaudio.StatePlaying {
 		t.Fatalf("precondition: session not playing item-a: state=%s", state)
 	}
-	hangHandle := s.engineHandleFor("item-b")
-	engine.armHang(hangHandle)
+	// Arm by prefix, not exact handle: item-b's Start will run against a
+	// freshly minted handle whose own trailing sequence number cannot be
+	// predicted here, but "<id>/item-b/" is still precise, since no other
+	// session ever shares this session's id.
+	engine.armHang(string(id) + "/item-b/")
 
 	// Past item-a's 50ms known duration: the next Observe reports
 	// Completed and watchTick's own advanceLocked call takes over.
@@ -320,19 +330,23 @@ func TestAdvanceLockedBoundsItsOwnEngineCalls(t *testing.T) {
 type hangingLoadEngine struct {
 	*FakeEngine
 
-	mu         sync.Mutex
-	hangHandle EngineHandle
-	release    chan struct{}
+	mu      sync.Mutex
+	armed   bool
+	prefix  string // hang any handle with this prefix, once armed.
+	release chan struct{}
 }
 
 func newHangingLoadEngine(now func() time.Time) *hangingLoadEngine {
 	return &hangingLoadEngine{FakeEngine: NewFakeEngine(now), release: make(chan struct{})}
 }
 
-func (e *hangingLoadEngine) armHang(handle EngineHandle) {
+// armHang arms the next Load against a handle with prefix, matching
+// [hangingStartEngine.armHang]'s identical prefix convention.
+func (e *hangingLoadEngine) armHang(prefix string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.hangHandle = handle
+	e.armed = true
+	e.prefix = prefix
 }
 
 func (e *hangingLoadEngine) releaseHang() {
@@ -347,7 +361,7 @@ func (e *hangingLoadEngine) releaseHang() {
 
 func (e *hangingLoadEngine) Load(ctx context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
 	e.mu.Lock()
-	hang := handle == e.hangHandle && e.hangHandle != ""
+	hang := e.armed && strings.HasPrefix(string(handle), e.prefix)
 	release := e.release
 	e.mu.Unlock()
 	if hang {
@@ -392,7 +406,9 @@ func TestAdvanceLockedBoundsItsOwnLoadCall(t *testing.T) {
 	if state != pkgaudio.StatePlaying {
 		t.Fatalf("precondition: session not playing item-a: state=%s", state)
 	}
-	engine.armHang(s.engineHandleFor("item-b"))
+	// Arm by prefix, since the trailing sequence number a fresh
+	// [Session.engineHandleFor] call mints cannot be predicted here.
+	engine.armHang(string(id) + "/item-b/")
 	c.advance(200 * time.Millisecond)
 
 	done := make(chan struct{})

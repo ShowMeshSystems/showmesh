@@ -215,6 +215,23 @@ func (e *SwitchableEngine) LiveHandles(ctx context.Context) ([]EngineHandle, err
 	return cur.LiveHandles(ctx)
 }
 
+// ReleaseAll forwards to whatever engine is currently bound. Unlike
+// Release, an unbound engine reports its own unbound error rather than a
+// silent (nil, nil): Release's empty result is genuinely idempotent
+// (there was never anything to release under that one handle), but
+// ReleaseAll's would otherwise read as "nothing was left playing", which
+// is never true evidence during a rebind window -- there may be a branch
+// still live on the engine this one is about to replace, and no caller
+// here can tell the difference between that and a genuinely empty node.
+func (e *SwitchableEngine) ReleaseAll(ctx context.Context, except ...EngineHandle) ([]EngineHandle, error) {
+	cur, ok := e.get()
+	if !ok {
+		_, err := e.unbound()
+		return nil, err
+	}
+	return cur.ReleaseAll(ctx, except...)
+}
+
 // StartLTC, StopLTC, and ObserveLTC forward to whatever engine is
 // currently bound, so an [LTCGenerator] assertion against this value
 // survives every rebind. A never-bound engine, or a bound one that cannot

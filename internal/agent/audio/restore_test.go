@@ -284,8 +284,17 @@ func TestRestoreAllIsIdempotent(t *testing.T) {
 	if state2 != pkgaudio.StatePlaying {
 		t.Fatalf("state after the second RestoreAll = %q, want Playing", state2)
 	}
-	if handle2 != handle1 {
-		t.Fatalf("handle identity changed across restores: %q vs %q, want the same logical handle key", handle1, handle2)
+	// handle2 need not equal handle1: every [Session.engineHandleFor] call
+	// mints a unique name (a per-manager counter, never persisted), so the
+	// second restore's own fresh prepareLocked call is expected to load
+	// under a different one. What must hold is that handle1 is genuinely
+	// gone (proving the release above was real, not merely counted) and
+	// handle2 is genuinely loaded and addressable, not stale.
+	if _, err := m2.engine.Observe(ctx, handle1); err == nil {
+		t.Fatalf("the first call's handle %q is still live after the second RestoreAll released it", handle1)
+	}
+	if _, err := m2.engine.Observe(ctx, handle2); err != nil {
+		t.Fatalf("Observe on the session's handle after the second RestoreAll: %v", err)
 	}
 
 	m2.mu.Lock()
@@ -879,23 +888,38 @@ func TestStartDuringBootWindowRefusesRatherThanFails(t *testing.T) {
 }
 
 // startAlwaysFailsEngine wraps [FakeEngine] so Load succeeds normally
-// (registering the handle) but Start for one specific handle always
-// fails with a fixed, non-sentinel error — modeling a genuine engine
-// refusal during a retry, as opposed to [ErrNoEngineBinding].
-// [FakeEngine.InjectFailure] cannot express this on its own: it is a
-// one-shot arm-on-any-call, and Load (which restoreOne calls first)
-// would consume it before Start ever ran.
+// (registering the handle) but every Start always fails with a fixed,
+// non-sentinel error, modeling a genuine engine refusal during a retry,
+// as opposed to [ErrNoEngineBinding]. [FakeEngine.InjectFailure] cannot
+// express this on its own: it is a one-shot arm-on-any-call, and Load
+// (which restoreOne calls first) would consume it before Start ever ran.
+// Unconditional on the handle: both this type's callers restore exactly
+// one session, so there is never a second handle whose Start must
+// succeed, and the exact handle name is not predictable here since every
+// [Session.engineHandleFor] call now mints a unique one.
 type startAlwaysFailsEngine struct {
 	*FakeEngine
-	handle EngineHandle
-	err    error
+	err error
 }
 
 func (e *startAlwaysFailsEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
-	if handle == e.handle {
-		return EngineObservation{}, e.err
-	}
-	return e.FakeEngine.Start(ctx, handle, position)
+	return EngineObservation{}, e.err
+}
+
+// loadAlwaysFailsEngine wraps [FakeEngine] so every Load always fails
+// with a fixed error, modeling a real engine that refuses to build (no
+// advertised probe evidence, say) regardless of which handle it is asked
+// to load. Unconditional on the handle for the same reason
+// [startAlwaysFailsEngine] is: its callers each restore exactly one
+// session, and the exact handle name is not predictable here since every
+// [Session.engineHandleFor] call now mints a unique one.
+type loadAlwaysFailsEngine struct {
+	*FakeEngine
+	err error
+}
+
+func (e *loadAlwaysFailsEngine) Load(ctx context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
+	return EngineObservation{}, e.err
 }
 
 // TestRebindEngineRetryStartFailureRequeuesInsteadOfFailing proves
@@ -927,7 +951,6 @@ func TestRebindEngineRetryStartFailureRequeuesInsteadOfFailing(t *testing.T) {
 
 	failingEngine := &startAlwaysFailsEngine{
 		FakeEngine: NewFakeEngine(c.now),
-		handle:     EngineHandle(string(id) + "/media"),
 		err:        errWrap(pkgaudio.ErrEngineFreeze),
 	}
 	m2.RebindEngine(ctx, switchable, failingEngine, "binding with a broken engine")
@@ -982,7 +1005,6 @@ func TestRestoreAllPlayingStartFailureRecordsAFault(t *testing.T) {
 
 	failingEngine := &startAlwaysFailsEngine{
 		FakeEngine: NewFakeEngine(c.now),
-		handle:     EngineHandle(string(id) + "/media"),
 		err:        errWrap(pkgaudio.ErrEngineFreeze),
 	}
 	m2 := NewManager(failingEngine, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
@@ -1099,9 +1121,10 @@ func TestDeferredRestoreSurvivesAnEngineThatRefusesToBuild(t *testing.T) {
 	// The retained audio.node binding is redelivered before discovery
 	// has published probe evidence: the newly bound engine correctly
 	// refuses to build.
-	handle := EngineHandle(string(id) + "/item-a")
-	unavailable := NewFakeEngine(c.now)
-	unavailable.InjectFailure(handle, fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"))
+	unavailable := &loadAlwaysFailsEngine{
+		FakeEngine: NewFakeEngine(c.now),
+		err:        fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"),
+	}
 	m2.RebindEngine(ctx, switchable, unavailable, "audio.node binding delivered before probe evidence")
 
 	rec, ok, err := store.Load(id)
@@ -1200,9 +1223,10 @@ func TestDeferredRestoreOfAPausedSessionSurvivesAnEngineThatRefusesToBuild(t *te
 	// The retained audio.node binding is redelivered before discovery
 	// has published probe evidence: the newly bound engine correctly
 	// refuses to build.
-	handle := EngineHandle(string(id) + "/item-a")
-	unavailable := NewFakeEngine(c.now)
-	unavailable.InjectFailure(handle, fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"))
+	unavailable := &loadAlwaysFailsEngine{
+		FakeEngine: NewFakeEngine(c.now),
+		err:        fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"),
+	}
 	m2.RebindEngine(ctx, switchable, unavailable, "audio.node binding delivered before probe evidence")
 
 	rec2, ok, err := store.Load(id)

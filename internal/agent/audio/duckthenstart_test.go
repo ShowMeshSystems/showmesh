@@ -60,7 +60,6 @@ func TestDuckThenStartUnscheduledWaitsForTheBedBeforeEngineStart(t *testing.T) {
 		t.Fatalf("apply refused: %+v", r)
 	}
 	ann, _ := m.get("ann")
-	annHandle := ann.engineHandleFor(nonPlaylistItemID)
 
 	var hookCalled bool
 	m.duckFadeWait = func(_ context.Context, d time.Duration) error {
@@ -72,6 +71,15 @@ func TestDuckThenStartUnscheduledWaitsForTheBedBeforeEngineStart(t *testing.T) {
 		if !obs.FadeActive || obs.Gain == duckDepth(m) {
 			t.Fatalf("bed not mid-fade when the duck fade wait began: %+v", obs)
 		}
+		// Read ann's own handle field directly, with no lock: this hook runs
+		// from inside Manager.start while ann.mu (== s.mu there, since this
+		// call is Starting ann itself) is already held by this same
+		// goroutine, so re-locking it here would self-deadlock. prepareLocked
+		// (which mints the handle) has already run by the time this hook
+		// fires, since the duck-then-start wait sits strictly after it in
+		// [Manager.start]; reading it earlier would race a fresh, unique
+		// [Session.engineHandleFor] mint.
+		annHandle := ann.handle
 		if annObs, err := m.engine.Observe(ctx, annHandle); err == nil && annObs.State == pkgaudio.StatePlaying {
 			t.Fatal("announcement's own handle is already Playing before the duck fade wait completed")
 		}

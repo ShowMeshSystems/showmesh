@@ -143,8 +143,7 @@ func (m *Manager) maybeStageNextItemLocked(ctx context.Context, s *Session) {
 	}
 
 	s.discardStageLocked(ctx)
-	s.stageSeq++
-	handle := EngineHandle(fmt.Sprintf("%s/stage/%d", s.id, s.stageSeq))
+	handle := EngineHandle(fmt.Sprintf("%s/stage/%d", s.id, m.handleSeq.Add(1)))
 
 	probe := ProbeAsset(ctx, m.assetDir, item.Media, m.decoder)
 	switch {

@@ -100,6 +100,15 @@ type OperationResult struct {
 	// OutcomeFailed.
 	Confirmed bool
 
+	// Reason, when Confirmed is false, is the plain operator sentence
+	// HandleMessage carries onto the wire as ResultPayload.Reason instead
+	// of its own generic read-back mismatch text: an OperationFunc that
+	// knows a more specific fact (a sweep that could not run, say) states
+	// it here rather than leaving the operator with a sentence that does
+	// not name what actually happened. Ignored when Confirmed is true, or
+	// left empty to keep the generic text.
+	Reason string
+
 	// Signal names what was observed, matching
 	// mqttproto.ResultEvidence.Signal.
 	Signal string
@@ -691,6 +700,9 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	if !opResult.Confirmed {
 		outcome = mqttproto.OutcomeUnconfirmed
 		reason = "operation applied, but the post-write read-back evidence did not match the requested value"
+		if opResult.Reason != "" {
+			reason = opResult.Reason
+		}
 	}
 	result := mqttproto.ResultPayload{
 		CommandID:      cmd.CommandID,

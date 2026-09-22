@@ -8,6 +8,39 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
+// TestFakeEngineLoadRefusesToOverwriteALiveHandle proves FakeEngine's
+// Load, like gstengine's, never silently takes over a handle a live
+// branch already answers to: a second Load under the same name must
+// fail, and the branch already there must survive it untouched, so a
+// fake-engine test can catch a regression that reintroduces the silent
+// overwrite the session layer's handle-uniqueness guarantee exists to
+// prevent from ever being reached in production.
+func TestFakeEngineLoadRefusesToOverwriteALiveHandle(t *testing.T) {
+	c := newClock(time.Now())
+	e := NewFakeEngine(c.now)
+	ctx := context.Background()
+	const handle = EngineHandle("dup")
+
+	if _, err := e.Load(ctx, handle, pkgaudio.MediaRef{}, 10*time.Second); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, err := e.Load(ctx, handle, pkgaudio.MediaRef{}, 10*time.Second); err == nil {
+		t.Fatal("second Load under the same handle succeeded, want a refusal: this would silently orphan the first branch")
+	}
+
+	obs, err := e.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe after the refused second Load: %v", err)
+	}
+	if obs.State != pkgaudio.StatePlaying {
+		t.Fatalf("state after the refused second Load = %q, want playing (the first branch must survive)", obs.State)
+	}
+}
+
 // TestFakeEnginePauseFreezesFadeGain proves FakeEngine's Pause halts an
 // in-progress fade's own ramp exactly as the real engine's genuine flow
 // block does (see gstengine's blockFlow): wall-clock time spent paused

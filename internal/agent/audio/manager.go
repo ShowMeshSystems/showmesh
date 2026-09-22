@@ -125,6 +125,11 @@ type Manager struct {
 	// previous tick. Only RunWatcher's single goroutine ever touches it.
 	lastTickUnownedHandles map[EngineHandle]struct{}
 
+	// handleSeq is the monotonically increasing counter [Session.
+	// engineHandleFor] appends to every handle name it mints. Atomic
+	// because sessions mint handles under their own lock, never m.mu.
+	handleSeq atomic.Uint64
+
 	// duckFadeWait, when set, replaces [Manager.waitDuckFade]'s own real,
 	// context-cancelable timer with a test's own function, so a test can
 	// observe or deterministically control the duck-then-start wait
@@ -643,7 +648,8 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	// Interrupt resolution and restoring a duck applied before a start
 	// that did not end Playing both need to lock OTHER sessions, so they
 	// must run after s.mu is released — see [Manager.duckLowerPriority]'s
-	// doc comment on why this can never hold two sessions' locks at once.
+	// doc comment; this path, like that one, never holds two sessions'
+	// locks at once.
 	started := res.executed && s.state == pkgaudio.StatePlaying
 	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
@@ -881,7 +887,8 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 	// Interrupt resolution and restoring a duck applied before a promote
 	// that did not end Playing both need to lock OTHER sessions, so they
 	// must run after to.mu is released — see [Manager.duckLowerPriority]'s
-	// doc comment on why this can never hold two sessions' locks at once.
+	// doc comment; this path, like that one, never holds two sessions'
+	// locks at once.
 	// The same shape Start's own tail uses: read to's own state/desired
 	// here, while to.mu is still held, never after Unlock.
 	started := res.executed && to.state == pkgaudio.StatePlaying
@@ -1317,6 +1324,19 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 	stopCtx, stopCancel := bound(ctx)
 	_, stopErr := s.mgr.engine.Stop(stopCtx, s.handle)
 	stopCancel()
+	if errors.Is(stopErr, ErrHandleNotLoaded) {
+		// The engine holds nothing under this name already, so there is
+		// nothing left to Release either: resolve exactly as a successful
+		// stop rather than leaving the session in StateStopping behind a
+		// handle no later Observe can ever confirm again.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.handleLoaded = false
+		s.loadedIdentity = ""
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+	}
 	var releaseErr error
 	if stopErr == nil {
 		relCtx, relCancel := bound(ctx)

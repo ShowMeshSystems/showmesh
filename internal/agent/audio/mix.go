@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -334,6 +335,24 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	obsCtx, cancel := boundedObserveContext(ctx)
 	obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
 	cancel()
+	if errors.Is(err, ErrHandleNotLoaded) {
+		// The engine already discarded this handle (an emergency stop's
+		// ReleaseAll sweep, most likely): resolve to stopped and resolve
+		// the pending fade, so the next Start re-prepares instead of
+		// wedging behind a handle no later Observe can ever find again.
+		// Matches [Manager.stopExecLocked]'s identical branch.
+		s.schedule = nil
+		s.discardStageLocked(ctx)
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.handleLoaded = false
+		s.loadedIdentity = ""
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
+		s.mgr.stopLTCLocked(ctx, s)
+		s.persistBestEffortLocked("state change")
+		return
+	}
 	if err != nil {
 		// A failing Observe here is the same class of evidence
 		// [Manager.watchTick]'s identical poll already treats as a fault:
@@ -534,8 +553,12 @@ func (m *Manager) waitDuckFade(ctx context.Context, fadeMs int) error {
 // role priority is strictly lower, skipping a session already ducked by
 // someone else. It is called with no session lock held — each target's
 // own mu is acquired and released in turn, one session at a time, so
-// this can never hold two sessions' locks simultaneously (the deadlock a
-// duck and a counter-duck racing each other would otherwise risk).
+// duckLowerPriority itself never holds two sessions' locks
+// simultaneously (the deadlock a duck and a counter-duck racing each
+// other would otherwise risk). Not a package-wide invariant: [Manager.
+// releaseEveryEngineBranchExceptSessions] deliberately holds every
+// excluded session's lock at once, sorted into a fixed order instead,
+// since nothing there ever locks a session this one also locks.
 func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.SessionID, duckerRole pkgaudio.SourceRole) {
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()

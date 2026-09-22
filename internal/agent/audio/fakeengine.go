@@ -245,6 +245,12 @@ func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio
 	if err := e.takeFailure(handle); err != nil {
 		return EngineObservation{}, err
 	}
+	if _, exists := e.handles[handle]; exists {
+		// A live branch already answers to this name: silently overwriting
+		// it would orphan whatever it holds, unaddressable by any later
+		// call against the same handle. Matches gstengine's own Load.
+		return EngineObservation{}, fmt.Errorf("audio: fake engine already holds a live handle %q", handle)
+	}
 	h := &fakeHandle{media: media, duration: duration, state: pkgaudio.StateReady, gain: 1}
 	e.handles[handle] = h
 	e.lastLoadedHandle, e.lastLoadedHandleKnown = handle, true
@@ -254,9 +260,29 @@ func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio
 func (e *FakeEngine) get(handle EngineHandle) (*fakeHandle, error) {
 	h, ok := e.handles[handle]
 	if !ok {
-		return nil, fmt.Errorf("audio: fake engine has no loaded handle %q", handle)
+		return nil, fmt.Errorf("%w: fake engine has no loaded handle %q", ErrHandleNotLoaded, handle)
 	}
 	return h, nil
+}
+
+// ReleaseAll drops every handle this fake holds except those named in
+// except, reporting exactly which ones it released.
+func (e *FakeEngine) ReleaseAll(_ context.Context, except ...EngineHandle) ([]EngineHandle, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	skip := make(map[EngineHandle]struct{}, len(except))
+	for _, h := range except {
+		skip[h] = struct{}{}
+	}
+	var released []EngineHandle
+	for h := range e.handles {
+		if _, ok := skip[h]; ok {
+			continue
+		}
+		delete(e.handles, h)
+		released = append(released, h)
+	}
+	return released, nil
 }
 
 func (e *FakeEngine) Start(_ context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
