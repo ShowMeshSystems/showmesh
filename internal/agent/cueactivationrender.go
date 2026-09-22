@@ -114,6 +114,20 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// surfaceAlreadyActivated's own doc comment for why a dark surface
 	// whose store already names the right file must still be repaired.
 	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID)) {
+		// Build item 2: this branch is only reached with a CONFIRMED
+		// running writer (surfaceAlreadyActivated requires it), so the
+		// surface is already resuming content and render.surface.blackout's
+		// held-black flag clears here. Cleared no earlier than this: an
+		// activation that fails before reaching this point (a missing
+		// FSEQ, a hash mismatch) must leave a blacked-out surface black,
+		// with its flag still set, rather than relight whatever the OLD
+		// frame writer was holding. A failure to persist the clear is
+		// logged, never returned: the activation itself already succeeded
+		// by this point, and refusing it over a held-black bookkeeping
+		// write would turn a working activation into a reported failure.
+		if err := o.clearHeldBlack(a.SurfaceID); err != nil {
+			o.logger.Warn("cue.activate (render): failed to clear held-black flag", "surface_id", a.SurfaceID, "error", err)
+		}
 		// surfaceAlreadyActivated deliberately ignores CatalogRevision, so
 		// this branch can be reached under a NEWER revision than the one
 		// persisted. If we simply returned nil here, the persisted
@@ -186,6 +200,17 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// every surface on this node, applyTimelineStepTime's own "SHARED-
 	// TIMELINE DECISION" doc comment, renderops.go).
 	o.applyTimelineStepTime(a.SurfaceID, f.StepTimeMS())
+
+	// Build item 2: the new writer is confirmed running now, so this swap
+	// resumes content and render.surface.blackout's held-black flag clears
+	// here — only here, not before the swap: a failure above (missing
+	// FSEQ, hash mismatch) returns before this point, leaving whatever was
+	// held black still black and the flag still set. A failure to persist
+	// the clear is logged, never returned, matching the already-activated
+	// branch's identical reasoning above.
+	if err := o.clearHeldBlack(a.SurfaceID); err != nil {
+		o.logger.Warn("cue.activate (render): failed to clear held-black flag", "surface_id", a.SurfaceID, "error", err)
+	}
 	return nil
 }
 

@@ -535,6 +535,7 @@ after shipping a breaking change to stored history.
 | `asset.inventory.request` | shipped | SM-521: no params; ask a node to republish its asset inventory immediately rather than waiting for its own next scheduled interval. The coordinator dispatches this once, fire and forget, to every declared node from `internal/coordinator/broker/broker.go`'s own reconnect handling, so a node that rode out a broker outage cleanly gets to prove its inventory is current sooner than the ordinary tick would. Result signal `node.asset.inventory_requested` is not its own register row, matching `asset.remove`'s identical reasoning for `node.asset.removed` immediately above |
 | `render.surface.apply` | shipped | Track B seam B2 |
 | `render.surface.clear` | shipped | Track B seam B2 |
+| `render.surface.blackout` | shipped | This PR (ADR-053 decision 6, amended 2026-09-21): forces black on a surface without touching its assignment, pipeline, or NDI source |
 | `render.pipeline.restart` | shipped | Track B seam B2 |
 | `render.transport.probe` | shipped | Track B seam B4 |
 | `audio.session.apply` | reserved | Track C seam C3 |
@@ -1177,6 +1178,15 @@ idle black. `surface.output.mode` now carries a third value, `failure`, and
 this signal says which fallback that failure actually put on the wire:
 `alert` in Program Mode, `black` in Show Mode. It is `not_collected` with a
 stated reason for every other drawing state.
+
+**`surface.output.mode` gains a fifth value, `blackout`, shipped in this
+PR** (ADR-053 decision 6, amended 2026-09-21): what a surface reports while
+render.surface.blackout's own held-black flag is set, or while a weather
+delay is active, and forced black outranks the surface's configured idle
+output, whatever MultiSync reports, and whether or not content is
+available. Distinct from `idle`: an idle surface may still be drawing its
+last held content (`surface.output.idle_mode` = `hold`), and `blackout`
+never is.
 
 **`surface.pipeline.state` gains a `superseded` member, and that is a
 value not a signal.** ADR-043's H0.7 transition policy says a render held

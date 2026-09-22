@@ -392,7 +392,7 @@ func TestRunRenderReportPublishesRemainingSurfacesWhenOneAssignmentHasAnEmptyHas
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, store, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, store, nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -477,7 +477,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -561,7 +561,7 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -671,7 +671,7 @@ func TestRunRenderReportSetsFPPConnectHeldEventsTotalWhenEventsAreDroppedForSize
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -765,7 +765,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *te
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -838,7 +838,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry(t *test
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -927,7 +927,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals(t *testin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -974,7 +974,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -1031,7 +1031,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), nil, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {

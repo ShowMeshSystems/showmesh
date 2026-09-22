@@ -442,11 +442,67 @@ const weatherDelaySurfaceOutputModeSignal = "surface.output.mode"
 // weatherDelaySurfaceOutputModeIdle is that signal's "cleared" value.
 const weatherDelaySurfaceOutputModeIdle = "idle"
 
+// weatherDelaySurfaceOutputIdleModeSignal copies the render collector's
+// "surface.output.idle_mode" literal rather than importing it, matching
+// weatherDelaySurfaceOutputModeSignal's identical reasoning one const up.
+const weatherDelaySurfaceOutputIdleModeSignal = "surface.output.idle_mode"
+
+// weatherDelayRenderSurfaceEvidence resolves surfaceID's own signal the
+// same way [resolveConfirmationEvidence] resolves one for an FPP instance
+// (ResolveObservations' documented multi-source precedence, current as of
+// now), but against [observation.ResourceSurface]: a render surface is
+// never an FPP resource, so reusing resolveConfirmationEvidence's own
+// hardcoded ResourceFPP kind here would match nothing and read this signal
+// as never current, no matter what a render node actually reports.
+func weatherDelayRenderSurfaceEvidence(ctx context.Context, lister ObservationLister, surfaceID, signal string, now time.Time) (value any, current bool) {
+	kind := observation.ResourceSurface
+	sig := observation.SignalID(signal)
+	obs, err := lister.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return nil, false
+	}
+	var candidates []observation.Observation
+	for _, o := range obs {
+		if o.Resource.Kind != kind || o.Resource.ID != surfaceID || o.Signal != sig {
+			continue
+		}
+		candidates = append(candidates, o)
+	}
+	if len(candidates) == 0 {
+		return nil, false
+	}
+	o := ResolveObservations(candidates)[0]
+	if o.StateAt(now) != observation.StateCurrent {
+		return o.Value, false
+	}
+	return o.Value, true
+}
+
+// weatherDelayRenderMemberDark reports a render surface dark on either a
+// held-black report or idle output whose configured idle mode is actually
+// black: build item 4 routes a weather delay through the same forced-black
+// path render.surface.blackout uses, and a surface holding that flag is
+// drawing the strongest dark this project can report. Idle alone is NOT
+// enough: a surface configured to hold its last frame or draw the
+// diagnostic pattern while idle (both real, documented idle modes) is lit
+// while idle, so idle only counts as dark when surface.output.idle_mode
+// itself reports black.
 func (h *handlers) weatherDelayRenderMemberDark(ctx context.Context, now time.Time, surfaceID string) (bool, string) {
-	value, _, current, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, surfaceID, weatherDelaySurfaceOutputModeSignal, time.Time{}, now)
+	value, current := weatherDelayRenderSurfaceEvidence(ctx, h.deps.Observations, surfaceID, weatherDelaySurfaceOutputModeSignal, now)
 	status, _ := value.(string)
-	if !current || status != weatherDelaySurfaceOutputModeIdle {
-		return false, fmt.Sprintf("Render surface %s has not reported cleared output yet.", surfaceID)
+	if !current {
+		return false, fmt.Sprintf("Render surface %s has not reported cleared or blacked-out output yet.", surfaceID)
+	}
+	if status == mqttproto.RenderDrawingBlackout {
+		return true, ""
+	}
+	if status != weatherDelaySurfaceOutputModeIdle {
+		return false, fmt.Sprintf("Render surface %s has not reported cleared or blacked-out output yet.", surfaceID)
+	}
+	idleValue, idleCurrent := weatherDelayRenderSurfaceEvidence(ctx, h.deps.Observations, surfaceID, weatherDelaySurfaceOutputIdleModeSignal, now)
+	idleMode, _ := idleValue.(string)
+	if !idleCurrent || idleMode != mqttproto.RenderIdleOutputBlack {
+		return false, fmt.Sprintf("Render surface %s is idle but not drawing black.", surfaceID)
 	}
 	return true, ""
 }

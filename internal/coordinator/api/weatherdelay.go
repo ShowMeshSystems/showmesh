@@ -449,7 +449,7 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 	}()
 	go func() {
 		defer wg.Done()
-		renderOutcomes = weatherDelayWireOutcomes(h.clearAllRenderSurfaces(ctx, now, idempotencyKey, issuerID, ac.result.Principal.Name, ac.result.Form, ac.result.CredentialID, clientAddr))
+		renderOutcomes = weatherDelayWireOutcomes(h.blackoutAllRenderSurfaces(ctx, now, idempotencyKey, issuerID, ac.result.Principal.Name, ac.result.Form, ac.result.CredentialID, clientAddr))
 	}()
 	go func() {
 		defer wg.Done()

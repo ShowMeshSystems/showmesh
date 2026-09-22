@@ -786,6 +786,55 @@ func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
 	}
 }
 
+// TestPollBlackedOutSurfaceWithNoFrameWriterRendersCurrentBlackoutOutputMode
+// proves the fix for a surface render.surface.blackout holds black with no
+// current assignment (build item 1): such a surface has no FrameWriter, so
+// the node's own render report now carries a synthetic row for it (Drawing
+// = RenderDrawingBlackout, PipelineState = stopped, no frame-writer-only
+// fields) rather than omitting it — see internal/agent/renderreport.go's
+// own doc comment on why. This proves the coordinator's collector renders
+// that exact wire shape as a CURRENT surface.output.mode = "blackout"
+// observation, not [observation.StateNotCollected], so a weather delay
+// power group containing this surface can confirm dark from it exactly as
+// it already does for a surface whose running FrameWriter reports
+// blackout directly (weatherdelayenforce_test.go's
+// TestWeatherDelayEnforceGroupConfirmsDarkOnHeldBlackRenderSurface).
+func TestPollBlackedOutSurfaceWithNoFrameWriterRendersCurrentBlackoutOutputMode(t *testing.T) {
+	st := NewStore()
+	payload := mqttproto.RenderPayload{
+		Surfaces: []mqttproto.RenderSurfaceReport{{
+			SurfaceID:        "wall-1",
+			PipelineState:    mqttproto.RenderPipelineStateStopped,
+			Reason:           "this surface is held black, and nothing is currently drawing on it",
+			Drawing:          mqttproto.RenderDrawingBlackout,
+			ObservedAt:       sampleObservedAt,
+			FramesObservedAt: sampleObservedAt,
+		}},
+	}
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	mode := findObs(t, obs, SignalSurfaceOutputMode)
+	if mode.Absence != "" {
+		t.Fatalf("surface.output.mode: Absence = %q, want empty (a current value, not not_collected)", mode.Absence)
+	}
+	if v, ok := mode.Value.(string); !ok || v != mqttproto.RenderDrawingBlackout {
+		t.Fatalf("surface.output.mode: Value = %v, want %q", mode.Value, mqttproto.RenderDrawingBlackout)
+	}
+	if mode.StateAt(sampleObservedAt) != observation.StateCurrent {
+		t.Fatalf("surface.output.mode: StateAt = %q, want %q", mode.StateAt(sampleObservedAt), observation.StateCurrent)
+	}
+	// An offline node stops refreshing this report entirely: the same
+	// ValidFor staleness window every other draw-state signal uses already
+	// rejects it once the node stops reporting, with no special-casing
+	// needed here.
+	if mode.StateAt(sampleObservedAt.Add(24*time.Hour)) == observation.StateCurrent {
+		t.Fatalf("surface.output.mode a day after the last report must not still read current: an offline node's last synthetic row must go stale like any other draw-state signal")
+	}
+}
+
 // TestPollDrawStateSignalsAgeFromTheirOwnObservedAtNotPipelineState is this
 // issue's regression test: TimelineState/Drawing (and the rest of the
 // draw-state group) must be judged for staleness against sf.FramesObservedAt,

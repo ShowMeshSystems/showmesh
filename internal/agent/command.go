@@ -209,9 +209,9 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // asset, the counterpart asset.fetch never had), "asset.inventory.request"
 // (no params: republish this node's asset inventory immediately, see
 // assetInventoryRequestOperation), "audio.device.probe"
-// (Track C seam C1a), "audio.media.probe" (Track C seam C2), Track B's four
+// (Track C seam C1a), "audio.media.probe" (Track C seam C2), Track B's five
 // render.* operations (seam B2a's apply/clear/restart, seam B4's
-// transport.probe), "cuecatalog.deploy" (Track H seam H3: the coordinator
+// transport.probe, and blackout), "cuecatalog.deploy" (Track H seam H3: the coordinator
 // pushing a resolved Cue catalog onto this node, see cuecatalogops.go),
 // "cue.activate" (Track H seam H4: a runner-neutral Cue activation,
 // authorized against the held catalog and applied to rendering, audio, and
@@ -223,7 +223,7 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // HandleMessage] refuses any Action that is not a key here, never executes
 // it, and never silently ignores it. assetDir and assetAPIToken configure
 // "asset.fetch" (see assets.go); assetDir alone configures "asset.remove";
-// render configures the four render.* operations (see renderops.go);
+// render configures the five render.* operations (see renderops.go);
 // nodeID and catalogStore configure "cuecatalog.deploy"; clockBind
 // configures "node.clock.configure". Adding a further allowlisted
 // operation later means adding a further entry to this map, not building a
@@ -249,6 +249,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	if render != nil {
 		ops["render.surface.apply"] = render.applySurface
 		ops["render.surface.clear"] = render.clearSurface
+		ops["render.surface.blackout"] = render.blackoutSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
 		ops["render.transport.probe"] = render.probeTransport
 	}
@@ -489,7 +490,7 @@ type CommandHandler struct {
 
 // newCommandHandler builds a CommandHandler for nodeID, wiring
 // [newOperationRegistry]'s allowlist (configured with assetDir and
-// assetAPIToken for "asset.fetch", render for the four render.*
+// assetAPIToken for "asset.fetch", render for the five render.*
 // operations, and catalogStore for "cuecatalog.deploy" — nil/nil disables
 // what they configure, which every test in this package that does not
 // exercise rendering or the held catalog does) and a fresh

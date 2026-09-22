@@ -126,7 +126,7 @@ func (o *renderOperations) StartDiagnosticSurface(d config.DiagnosticSurface, no
 	}
 	o.recordDegradedTransportEvidence(d.SurfaceID, sinkOutcome, now())
 
-	fw, err := pipeline.NewDiagnosticFrameWriter(o.sup, d.SurfaceID, d.Width, d.Height, diagnosticBytesPerPixel, d.FrameRate, o.logger)
+	fw, err := pipeline.NewDiagnosticFrameWriter(o.sup, d.SurfaceID, d.Width, d.Height, diagnosticBytesPerPixel, d.FrameRate, surfaceHoldBlackSource{o: o, surfaceID: d.SurfaceID}, o.logger)
 	if err != nil {
 		return fmt.Errorf("%s: %w", action, err)
 	}

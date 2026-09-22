@@ -40,6 +40,15 @@ type ShowModeSource interface {
 	BehavesAsShow() bool
 }
 
+// HoldBlackSource answers, at the point of decision, whether a surface must
+// draw forced black on this tick regardless of its idle output, whatever
+// MultiSync reports, and whether or not content is available (build item 1:
+// render.surface.blackout, and build item 4: a weather delay routed through
+// the same path). A nil source never holds black.
+type HoldBlackSource interface {
+	HoldBlack() bool
+}
+
 // idleContentStates is the set of [multisync.State] values for which the
 // frame writer draws the idle output rather than content — build contract
 // ruling 3's table. Playing, Unsynchronized, and Stopping are deliberately
@@ -180,6 +189,10 @@ type FrameWriter struct {
 	// Mode, the same conservative answer an unknown mode gets.
 	showMode ShowModeSource
 
+	// holdBlack is read fresh on every tick, before anything else about
+	// this tick is decided; see [HoldBlackSource]. nil never holds black.
+	holdBlack HoldBlackSource
+
 	// buf, idleBuf, and diagBuf are all reused every frame (never
 	// (re)allocated on the hot path) — see build contract's "avoid an
 	// allocation per frame" rule. idleBuf is all-zero and never written to
@@ -290,6 +303,8 @@ type FrameWriter struct {
 //
 // showMode may be nil, which behaves as Show Mode; see [ShowModeSource].
 //
+// holdBlack may be nil, which never holds black; see [HoldBlackSource].
+//
 // width and height are the surface's own show.surface.geometry — used only
 // to give [IdleOutputDiagnostic]'s moving bar row/column coordinates (see
 // resolveGeometry); every other idle mode and the content path ignore them
@@ -299,7 +314,7 @@ type FrameWriter struct {
 // sequenceFilename is the bare runtime filename source was opened from —
 // see [FrameWriter.sequenceFilename] for what it is compared against and
 // why.
-func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, idleOutput string, showMode ShowModeSource, logger Logger) (*FrameWriter, error) {
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, idleOutput string, showMode ShowModeSource, holdBlack HoldBlackSource, logger Logger) (*FrameWriter, error) {
 	// A source with no frames cannot cover any channel range, so the
 	// construction-time probe below has nothing to prove and every tick
 	// this writer would ever run is already known to fail. Refused here,
@@ -329,7 +344,7 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		idleOutput = IdleOutputBlack
 	}
 
-	return newFrameWriter(sup, surfaceID, source, timeline, sequenceFilename, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, logger), nil
+	return newFrameWriter(sup, surfaceID, source, timeline, sequenceFilename, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, holdBlack, logger), nil
 }
 
 // unknownTimeline is the [TimelineSource] a writer with no timeline of its
@@ -371,7 +386,7 @@ func (emptyFrameSource) ChannelRange(frame, start, count int, dst []byte) error 
 // caller is responsible for having built a pipeline [Spec] that expects
 // exactly width*height*bytesPerPixel bytes per frame. frameRate sets the
 // tick period, since there is no FSEQ file to read a step time from.
-func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, bytesPerPixel, frameRate int, logger Logger) (*FrameWriter, error) {
+func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, bytesPerPixel, frameRate int, holdBlack HoldBlackSource, logger Logger) (*FrameWriter, error) {
 	if width < 1 || height < 1 || bytesPerPixel < 1 {
 		return nil, fmt.Errorf("pipeline: surface %q: diagnostic geometry %dx%d at %d bytes per pixel is invalid", surfaceID, width, height, bytesPerPixel)
 	}
@@ -380,7 +395,7 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 	}
 	channelCount := width * height * bytesPerPixel
 	stepTime := time.Second / time.Duration(frameRate)
-	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, holdBlack, logger), nil
 }
 
 // NewIdleFrameWriter builds a frame writer for a real show surface whose
@@ -398,7 +413,7 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 // operator-configured idle output (black, hold, or diagnostic), so this
 // constructor takes pixelFormat and idleOutput directly rather than a
 // pre-computed bytesPerPixel and a hardcoded pattern.
-func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pixelFormat string, frameRate int, idleOutput string, logger Logger) (*FrameWriter, error) {
+func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pixelFormat string, frameRate int, idleOutput string, holdBlack HoldBlackSource, logger Logger) (*FrameWriter, error) {
 	bytesPerPixel, ok := gstBytesPerPixelForPixelFormat(pixelFormat)
 	if !ok {
 		return nil, fmt.Errorf("pipeline: surface %q: pixel format %q is not recognized", surfaceID, pixelFormat)
@@ -411,7 +426,7 @@ func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pi
 	}
 	channelCount := width * height * bytesPerPixel
 	stepTime := time.Second / time.Duration(frameRate)
-	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, idleOutput, nil, logger), nil
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, idleOutput, nil, holdBlack, logger), nil
 }
 
 // newFrameWriter allocates the writer both constructors above share: every
@@ -421,7 +436,7 @@ func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pi
 // loop dereferences them every tick and has no absence branch (see
 // [emptyFrameSource] and [unknownTimeline] for what a writer with neither
 // of its own passes instead).
-func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, logger Logger) *FrameWriter {
+func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, holdBlack HoldBlackSource, logger Logger) *FrameWriter {
 	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
 	alertBuf := make([]byte, channelCount)
 	fillAlert(alertBuf, diagBPP)
@@ -450,6 +465,7 @@ func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		diagBuf:           diagBuf,
 		alertBuf:          alertBuf,
 		showMode:          showMode,
+		holdBlack:         holdBlack,
 		diagWidth:         diagW,
 		diagHeight:        diagH,
 		diagRowBytes:      diagW * diagBPP,
@@ -559,7 +575,16 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	drawing := DrawingContent
 	idleMode := ""
 	failureOutput := ""
-	if idleContentStates[snap.State] {
+	if fw.holdBlack != nil && fw.holdBlack.HoldBlack() {
+		// Forced black outranks everything else this tick would otherwise
+		// draw: not the surface's configured idle output (a [IdleOutputHold]
+		// writer's fw.buf may hold real content), not whatever MultiSync
+		// reports, and not whether content is actually available. Checked
+		// first, before the timeline is even consulted for content or
+		// staleness, so none of that logic can override it.
+		drawing = DrawingBlackout
+		outBuf = fw.idleBuf
+	} else if idleContentStates[snap.State] {
 		drawing = DrawingIdle
 		idleMode = fw.idleOutput
 		outBuf = fw.idleOutputFor(tickTime)

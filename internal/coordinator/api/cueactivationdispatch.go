@@ -83,7 +83,7 @@ const cueActivationWireDeadline = 60 * time.Second
 const cueActivationNodeOutcomeAuthorized = "authorized"
 
 // cueActivationIssuer identifies who a cue.activate (or a blackAndSilence
-// mismatch effect's render.surface.clear) dispatch is attributed to, in
+// mismatch effect's render.surface.blackout) dispatch is attributed to, in
 // its audit entry and command envelope — mirrors FPPCommandIssuer's own
 // doc comment (fppcommand_dispatch.go) one seam over: never a degraded
 // "system" identity, always the real principal whose OWN authenticated

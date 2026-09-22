@@ -23,7 +23,7 @@ import (
 // Three emergency-stop levels, each dispatching CONCURRENTLY, immediately,
 // to four target kinds - stopPlaylist to every configured FPP instance,
 // audio.node.silence to every declared audio.node, resolume.blackout to
-// every configured Resolume instance, and render.surface.clear to every
+// every configured Resolume instance, and render.surface.blackout to every
 // declared render surface (ADR-053 decision 6; see
 // [v1.EmergencyStopTargetKindFPP] and its siblings) - each with its own
 // OPTIONAL, best-effort follow-up
@@ -518,7 +518,7 @@ func (h *handlers) emergencyStopDispatchAllTargets(ctx context.Context, now time
 	}()
 	go func() {
 		defer wg.Done()
-		renderOutcomes = h.clearAllRenderSurfaces(ctx, now, idempotencyKey, ac.result.Principal.ID, ac.result.Principal.Name, ac.result.Form, ac.result.CredentialID, clientAddr)
+		renderOutcomes = h.blackoutAllRenderSurfaces(ctx, now, idempotencyKey, ac.result.Principal.ID, ac.result.Principal.Name, ac.result.Form, ac.result.CredentialID, clientAddr)
 	}()
 	wg.Wait()
 

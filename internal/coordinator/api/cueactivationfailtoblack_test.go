@@ -103,7 +103,7 @@ func putFailToBlackObservation(t *testing.T, st *store.Store, f failToBlackFixtu
 
 // --- Problem 1: an audio-only refusal must not black a render surface ---
 
-// TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface
+// TestCueActivationTickOneAudioOnlyAssetMissingNeverBlacksOutRenderSurface
 // proves problem 1's fix through the composed path: node "audio-01" holds
 // BOTH a declared audio.node object AND a show.surface (so it renders for
 // OTHER cues in this Show) and this Show's one Cue declares audio only.
@@ -111,12 +111,12 @@ func putFailToBlackObservation(t *testing.T, st *store.Store, f failToBlackFixtu
 // coordinator's own pre-dispatch Authorize refuses asset-missing, and the
 // resulting fail-to-black must stop only [cueactivation.AudioSessionID]
 // (the session THIS Cue's own audio output actually runs in) and must
-// dispatch NO render.surface.clear at all and NO
+// dispatch NO render.surface.blackout at all and NO
 // [cueactivation.BackgroundSessionID]/[cueactivation.AnnouncementSessionID]
 // stop — the exact node-wide blast radius the reviewer demonstrated
 // before this fix (an audio-only refused cue blacking both of the node's
 // render surfaces).
-func TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface(t *testing.T) {
+func TestCueActivationTickOneAudioOnlyAssetMissingNeverBlacksOutRenderSurface(t *testing.T) {
 	now := testNow
 	setup := newFailToBlackComposedSetup(t, fixedClock(now))
 	const showID, cueID, playlistID, instanceUUID, entryID, nodeID = "halloween-2026", "cue-1", "playlist-1", "inst-1", "entry-1", "audio-01"
@@ -202,7 +202,7 @@ func TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface(t *te
 	}
 
 	if got := setup.renderPub.count(); got != 0 {
-		t.Fatalf("render.surface.clear was dispatched %d time(s), want 0: an audio-only Cue's refusal must never touch a render surface (problem 1)", got)
+		t.Fatalf("render.surface.blackout was dispatched %d time(s), want 0: an audio-only Cue's refusal must never touch a render surface (problem 1)", got)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface(t *te
 // composed-path regression proof for the owner's own ruling this branch
 // must not disturb: in setup/program mode an asset-missing refusal stays
 // loud (the existing log line and audit entry) and dispatches NOTHING —
-// zero render.surface.clear, zero audio.session.stop — the reviewer's own
+// zero render.surface.blackout, zero audio.session.stop — the reviewer's own
 // verified "0 clears" baseline for program mode, now proven through the
 // full composed path rather than only the pure [assetMissingFailToBlack]
 // helper.
@@ -269,7 +269,7 @@ func TestCueActivationTickOneAssetMissingNeverBlacksInProgramMode(t *testing.T) 
 		t.Fatalf("audio publish count = %d, want 0: setup/program mode must never black (the owner's own ruling)", got)
 	}
 	if got := setup.renderPub.count(); got != 0 {
-		t.Fatalf("render.surface.clear dispatched %d time(s), want 0: setup/program mode must never black (the owner's own ruling)", got)
+		t.Fatalf("render.surface.blackout dispatched %d time(s), want 0: setup/program mode must never black (the owner's own ruling)", got)
 	}
 }
 
@@ -372,7 +372,7 @@ func putRenderOnlyCueForTest(t *testing.T, st *store.Store, id, showID string) {
 // even though the scoped fail-to-black dispatch it triggers awaits real
 // node confirmation (renderCommandConfirmDeadline) that, in this test (an
 // Observations source that never reports the surface as cleared), never
-// arrives before the deadline. Before this fix, the render.surface.clear
+// arrives before the deadline. Before this fix, the render.surface.blackout
 // this Cue's own refusal triggers was dispatched synchronously, in-line,
 // inside this exact method — so a bad node's refusal stalled
 // cueActivationTick's own sequential loop over EVERY OTHER FPP instance
@@ -449,12 +449,12 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 	// The dispatch must still actually happen — just off the tick's own
 	// critical path. Poll (bounded well past renderCommandConfirmDeadline,
 	// since the real clear-and-timeout round trip must complete) for the
-	// render.surface.clear this refusal must still produce.
+	// render.surface.blackout this refusal must still produce.
 	deadline := time.After(2 * time.Second)
 	for setup.renderPub.count() == 0 {
 		select {
 		case <-deadline:
-			t.Fatal("render.surface.clear was never dispatched within 2s: the async fail-to-black dispatch must still run, just off the tick's own critical path")
+			t.Fatal("render.surface.blackout was never dispatched within 2s: the async fail-to-black dispatch must still run, just off the tick's own critical path")
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -482,7 +482,7 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 // audio session this Cue's own audio output runs in — never a render
 // clear (this Cue declares none), never the background bed or
 // announcement session, mirroring
-// TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface's
+// TestCueActivationTickOneAudioOnlyAssetMissingNeverBlacksOutRenderSurface's
 // own per-cue-scoping proof one mechanism over.
 func TestCueActivationTickOneEvidenceBrokenStopsOnlyThisCuesOwnAudio(t *testing.T) {
 	now := testNow
@@ -554,7 +554,7 @@ func TestCueActivationTickOneEvidenceBrokenStopsOnlyThisCuesOwnAudio(t *testing.
 	}
 
 	if got := setup.renderPub.count(); got != 0 {
-		t.Fatalf("render.surface.clear was dispatched %d time(s), want 0: an audio-only Cue's evidence-broken stop must never touch a render surface", got)
+		t.Fatalf("render.surface.blackout was dispatched %d time(s), want 0: an audio-only Cue's evidence-broken stop must never touch a render surface", got)
 	}
 }
 
@@ -718,13 +718,13 @@ func TestCueActivationTickOneFollowStopDispatchesToBothNodesNeverTheBed(t *testi
 	}
 }
 
-// TestCueActivationTickOneFollowStopNeverClearsSurfaceForAnAudioOnlyCue
+// TestCueActivationTickOneFollowStopNeverBlacksOutSurfaceForAnAudioOnlyCue
 // proves a FollowStop-triggered cue-scoped stop never dispatches
-// render.surface.clear for a Cue that declares no render output at all,
+// render.surface.blackout for a Cue that declares no render output at all,
 // even though the node itself also has a show.surface assigned (for some
-// OTHER Cue) — mirroring TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface's
+// OTHER Cue) — mirroring TestCueActivationTickOneAudioOnlyAssetMissingNeverBlacksOutRenderSurface's
 // own proof one mechanism over.
-func TestCueActivationTickOneFollowStopNeverClearsSurfaceForAnAudioOnlyCue(t *testing.T) {
+func TestCueActivationTickOneFollowStopNeverBlacksOutSurfaceForAnAudioOnlyCue(t *testing.T) {
 	now := testNow
 	setup := newFailToBlackComposedSetup(t, fixedClock(now))
 	const showID, cueID, playlistID, instanceUUID, entryID, nodeID = "halloween-2026", "wake-up", "playlist-1", "inst-1", "entry-1", "audio-01"
@@ -776,19 +776,19 @@ func TestCueActivationTickOneFollowStopNeverClearsSurfaceForAnAudioOnlyCue(t *te
 	h.cueActivationFailToBlackWG.Wait()
 
 	if got := setup.renderPub.count(); got != 0 {
-		t.Fatalf("render.surface.clear was dispatched %d time(s), want 0: an audio-only Cue's FollowStop must never touch a render surface", got)
+		t.Fatalf("render.surface.blackout was dispatched %d time(s), want 0: an audio-only Cue's FollowStop must never touch a render surface", got)
 	}
 }
 
-// TestCueActivationTickOneFollowStopClearsSurfaceWithSurfaceIDWhenCueHasRenderOutput
+// TestCueActivationTickOneFollowStopBlacksOutSurfaceWithSurfaceIDWhenCueHasRenderOutput
 // proves defect 2's own fix: a Cue that declares BOTH audio and render
 // output on the held node must, on its FollowStop-triggered cue-scoped
-// stop, dispatch render.surface.clear carrying a real, non-empty
-// params.surfaceId — before this fix, dispatchBlackAndSilenceClearSurfaces
+// stop, dispatch render.surface.blackout carrying a real, non-empty
+// params.surfaceId — before this fix, dispatchBlackAndSilenceBlackoutSurfaces
 // built its renderDispatchInput with no Params at all, so the command
 // reached the wire as "params":null and the node refused it
-// ("render.surface.clear: params.surfaceId is required").
-func TestCueActivationTickOneFollowStopClearsSurfaceWithSurfaceIDWhenCueHasRenderOutput(t *testing.T) {
+// ("render.surface.blackout: params.surfaceId is required").
+func TestCueActivationTickOneFollowStopBlacksOutSurfaceWithSurfaceIDWhenCueHasRenderOutput(t *testing.T) {
 	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
 	renderCommandConfirmDeadline = 300 * time.Millisecond
 	renderCommandPollInterval = 10 * time.Millisecond
@@ -856,14 +856,14 @@ func TestCueActivationTickOneFollowStopClearsSurfaceWithSurfaceIDWhenCueHasRende
 	h.cueActivationFailToBlackWG.Wait()
 
 	if got := setup.renderPub.count(); got != 1 {
-		t.Fatalf("render.surface.clear was dispatched %d time(s), want exactly 1", got)
+		t.Fatalf("render.surface.blackout was dispatched %d time(s), want exactly 1", got)
 	}
 	env := setup.renderPub.payload[0]
-	if env.Payload.Action != "render.surface.clear" {
-		t.Fatalf("dispatched action = %q, want render.surface.clear", env.Payload.Action)
+	if env.Payload.Action != "render.surface.blackout" {
+		t.Fatalf("dispatched action = %q, want render.surface.blackout", env.Payload.Action)
 	}
 	if got, _ := env.Payload.Params["surfaceId"].(string); got != surfaceID {
-		t.Fatalf("render.surface.clear params.surfaceId = %q, want %q (the node refuses a missing surfaceId)", got, surfaceID)
+		t.Fatalf("render.surface.blackout params.surfaceId = %q, want %q (the node refuses a missing surfaceId)", got, surfaceID)
 	}
 
 	setup.audioPub.mu.Lock()
@@ -892,6 +892,186 @@ func TestCueActivationTickOneFollowStopClearsSurfaceWithSurfaceIDWhenCueHasRende
 // refused" log spam). Many ticks, each with its own later `now` exactly as
 // [CueActivationLoop.Run]'s own periodic ticker would produce, must
 // dispatch the stop exactly once.
+// putAuthorizedRenderAndAudioAssetsForTest creates a real, node-inventoried
+// asset for both a render sequence ("seq-"+cueID) and an audio sequence
+// ("asset-"+cueID), naming both in one ReplaceNodeAssetInventory call —
+// mirrors putAuthorizedAudioAssetForTest one output over, combined so a
+// Cue declaring both outputs resolves both as present.
+func putAuthorizedRenderAndAudioAssetsForTest(t *testing.T, st *store.Store, showID, cueID, nodeID string, now time.Time) {
+	t.Helper()
+	renderHash := "sha256:authorized-render-" + cueID
+	renderFilename := "Authorized-" + cueID + ".fseq"
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: renderHash + "-node-" + nodeID, ShowID: showID, SequenceID: "seq-" + cueID,
+		TargetKind: store.AssetTargetKindNode, TargetID: nodeID, MediaType: "fseq",
+		ContentHash: renderHash, RuntimeFilename: renderFilename,
+		SizeBytes: 1024, Backend: "volume", StorageKey: renderHash,
+	}); err != nil {
+		t.Fatalf("create authorized render asset for %q: %v", cueID, err)
+	}
+	audioHash := "sha256:authorized-audio-" + cueID
+	audioFilename := "Authorized-" + cueID + ".wav"
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: audioHash + "-node-" + nodeID, ShowID: showID, SequenceID: "asset-" + cueID,
+		TargetKind: store.AssetTargetKindNode, TargetID: nodeID, MediaType: "audio",
+		ContentHash: audioHash, RuntimeFilename: audioFilename,
+		SizeBytes: 1024, Backend: "volume", StorageKey: audioHash,
+	}); err != nil {
+		t.Fatalf("create authorized audio asset for %q: %v", cueID, err)
+	}
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID,
+		[]store.NodeAssetInventoryRecord{
+			{NodeID: nodeID, ContentHash: renderHash, RuntimeFilename: renderFilename, SizeBytes: 1024, VerifiedAt: now},
+			{NodeID: nodeID, ContentHash: audioHash, RuntimeFilename: audioFilename, SizeBytes: 1024, VerifiedAt: now},
+		},
+		store.NodeAssetReportRecord{NodeID: nodeID, ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory for %q: %v", nodeID, err)
+	}
+}
+
+// TestBlackoutThenCueActivateBothDispatchNoAssignmentTornDown is the
+// rehearsal-stack regression this build closes: FPP song entry activates a
+// Cue with a render output (held here, mirroring this file's own
+// FollowStop tests' established pattern for "already active" prior state),
+// FPP moves to a resting entry the coordinator cannot bind, and the loop's
+// blackAndSilence effect fires. Before this build, that effect dispatched
+// render.surface.clear, which deletes the surface's persisted assignment
+// on the node (internal/agent/renderops.go's clearSurface removes it from
+// the AssignmentStore); the very next cue.activate for that surface then
+// found no assignment to swap content onto and reported apply-failed
+// (internal/agent/cueactivationrender.go's activateRender: "no surface is
+// assigned on this node"). This test fails on main: the render dispatch
+// this test asserts is "render.surface.blackout" is literally
+// "render.surface.clear" there. render.surface.blackout never touches the
+// assignment (internal/agent/renderops.go's blackoutSurface only sets a
+// flag, proven directly at the agent layer by renderops_test.go), so the
+// following cue.activate for the next song still has an assignment to
+// swap content onto and dispatches and confirms normally.
+func TestBlackoutThenCueActivateBothDispatchNoAssignmentTornDown(t *testing.T) {
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline = 300 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	now := testNow
+	setup := newFailToBlackComposedSetup(t, fixedClock(now))
+	const showID, cueID, playlistID, instanceUUID, entryID, nodeID, surfaceID = "halloween-2026", "wake-up", "playlist-1", "inst-1", "entry-1", "audio-01", "surface-1"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putShowModeForTest(t, setup.st, config.ShowModeShow)
+	putAudioNodeForTest(t, setup.st, nodeID)
+	renderPutSurface(t, setup.st, surfaceID, showID, nodeID)
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: cueID,
+		Outputs: config.ShowCueOutputs{
+			Audio:  &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Targets: []string{nodeID}},
+			Render: &config.ShowCueRenderOutput{Sequence: "seq-" + cueID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, cueID, cuePayload)
+
+	playlist := config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: entryID, Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylistForTest(t, setup.st, playlistID, playlist)
+	putActiveShowForTest(t, setup.st, showID)
+
+	// Step 1: the song entry already activated this Cue's render output,
+	// held from a prior tick this test does not otherwise need to replay
+	// (mirrors TestCueActivationTickOneFollowStopBlacksOutSurfaceWithSurfaceIDWhenCueHasRenderOutput's
+	// own seeding).
+	held := &cueHeldTracker{}
+	held.observe(instanceUUID, cueactivate.Decision{
+		State: cueactivate.StateActivated,
+		Activations: map[string]cueactivation.Activation{
+			nodeID: {Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-old-1", Show: showID, Generation: 1, CueID: cueID, CueRevision: 1},
+		},
+	})
+
+	// Step 2: FPP moves to a resting entry the coordinator cannot bind,
+	// resolving StateMismatched under the blackAndSilence policy.
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: instanceUUID, SchemaVersion: 1, Sequence: 2, Action: "playing",
+		PlaylistName: "resting-halloween", PlaylistHash: hash64ForTest("b2"),
+		Section: "mainPlaylist", Position: 0, EntryKey: "unrelated-entry-key",
+		EntryOccurrenceSequence: 2, ObservedAt: now, ReceivedAt: now,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	obs, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), instanceUUID)
+	if err != nil {
+		t.Fatalf("get fpp playlist entry observation: %v", err)
+	}
+
+	h.cueActivationTickOne(context.Background(), now, obs, nil, held)
+	h.cueActivationFailToBlackWG.Wait()
+
+	if got := setup.renderPub.count(); got != 1 {
+		t.Fatalf("render dispatch count after the resting entry = %d, want exactly 1", got)
+	}
+	if got := setup.renderPub.payload[0].Payload.Action; got != "render.surface.blackout" {
+		t.Fatalf("render dispatch for the resting entry = %q, want render.surface.blackout (a clear would tear down surface %q's assignment before the next song)", got, surfaceID)
+	}
+
+	// Step 3: FPP moves to the next song, activating the same Cue again.
+	// This dispatch is coordinator-side only (dispatchOneCueActivation,
+	// bypassing the tick's own Reconcile/Decide for a direct, minimal
+	// Activation); it does not itself prove the node still holds the
+	// assignment (that is renderops_test.go's job, at the agent layer) but
+	// it does prove the coordinator's own dispatch path is unaffected by
+	// which render action just ran.
+	// Both of this Cue's outputs must resolve a real, node-inventoried
+	// asset for Authorize to pass — a single ReplaceNodeAssetInventory
+	// call naming both, since a second call would overwrite the first's
+	// item rather than add to it.
+	putAuthorizedRenderAndAudioAssetsForTest(t, setup.st, showID, cueID, nodeID, now)
+
+	issuer := cueActivationIssuer{PrincipalID: cueActivationSystemPrincipalID(instanceUUID)}
+	act := cueactivation.Activation{
+		Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-new-2",
+		Show: showID, Generation: 1, CatalogRevision: resolvedCatalogRevisionForTest(t, setup.st, showID, nodeID),
+		CueID: cueID, CueRevision: 1, PositionMS: 0,
+		EvidenceAt: now,
+	}
+	setup.audioPub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation for the next song: %v", outcome.Err)
+	}
+	if outcome.AuthorizeOutcome != "" {
+		t.Fatalf("cue.activate for the next song was refused: outcome=%q reason=%q", outcome.AuthorizeOutcome, outcome.AuthorizeReason)
+	}
+	if !outcome.Dispatched || !outcome.Confirmed {
+		t.Fatalf("cue.activate for the next song: Dispatched=%v Confirmed=%v, want both true", outcome.Dispatched, outcome.Confirmed)
+	}
+
+	// The one render dispatch this whole sequence ever made stays a
+	// blackout — never a clear, at any point.
+	setup.renderPub.mu.Lock()
+	defer setup.renderPub.mu.Unlock()
+	for i, p := range setup.renderPub.payload {
+		if p.Payload.Action != "render.surface.blackout" {
+			t.Fatalf("render dispatch %d = %q, want render.surface.blackout", i, p.Payload.Action)
+		}
+	}
+}
+
 func TestCueActivationTickOneFollowStopDispatchesExactlyOnceAcrossManyTicks(t *testing.T) {
 	now := testNow
 	setup := newFailToBlackComposedSetup(t, fixedClock(now))

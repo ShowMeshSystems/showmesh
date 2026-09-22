@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -195,13 +196,13 @@ func rejectUnknownKeys(action string, params map[string]any, known map[string]bo
 	return nil
 }
 
-// isRenderAction reports whether action is one of this seam's four
+// isRenderAction reports whether action is one of this seam's five
 // allowlisted render.* operations — used by command.go's HandleMessage to
 // decide whether to signal renderTrigger after a genuinely-executed
 // command.
 func isRenderAction(action string) bool {
 	switch action {
-	case "render.surface.apply", "render.surface.clear", "render.pipeline.restart", "render.transport.probe":
+	case "render.surface.apply", "render.surface.clear", "render.surface.blackout", "render.pipeline.restart", "render.transport.probe":
 		return true
 	default:
 		return false
@@ -245,8 +246,42 @@ type renderOperations struct {
 	// configuration, never something a command changes. See idleOutputFor.
 	diagnosticSurfaceID string
 
+	// holdBlackStore persists which surfaces currently have an active
+	// render.surface.blackout (build item 3), separately from
+	// AssignmentStore since a surface may be held black with no assignment
+	// at all — see [pipeline.HoldBlackStore]'s own doc comment.
+	holdBlackStore *pipeline.HoldBlackStore
+
 	mu      sync.Mutex
 	writers map[string]*frameWriterHandle
+
+	// holdBlack is the in-memory mirror of holdBlackStore's own persisted
+	// set, loaded once at construction (before any frame writer starts, so
+	// boot resume comes up black) and read fresh, at the point of decision,
+	// by every frame writer's own [surfaceHoldBlackSource] on every tick.
+	// Guarded by mu, alongside writers/timelineStepOwner. An entry present
+	// here always wins over holdBlackDefaultAll, explicit true or explicit
+	// false alike.
+	holdBlack map[string]bool
+
+	// holdBlackDefaultAll is true only when holdBlackStore.Load failed at
+	// construction (an unreadable or corrupt file): every surface with no
+	// explicit entry in holdBlack is then held black, because black is the
+	// safe direction for a stop and this node cannot honestly say which
+	// surfaces the lost file held black. Cleared per surface the moment
+	// that surface gets an explicit entry (blackoutSurface or
+	// clearHeldBlack); never reset as a whole.
+	holdBlackDefaultAll bool
+
+	// holdBlackDefaultMaterialized is true once
+	// materializeHeldBlackDefaultOnFirstWrite has already run, so a later
+	// write does not repeat persisting every currently assigned surface's
+	// default truth. Meaningless (and left false) when holdBlackDefaultAll
+	// is false. Deliberately separate from holdBlackDefaultAll itself:
+	// materializing is a one-time disk backfill, never a reason to lift
+	// the in-memory default for a surface this node still has no explicit
+	// entry for — see holdBlackDefaultAll's own "never reset as a whole".
+	holdBlackDefaultMaterialized bool
 
 	// timelineStepOwner and timelineStepMS record which surface last set
 	// o.timeline's shared step time, and to what value — see
@@ -269,17 +304,158 @@ type renderOperations struct {
 	weatherDelay *WeatherDelayHolder
 }
 
-func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
+func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, holdBlackStore *pipeline.HoldBlackStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
+	holdBlack, err := holdBlackStore.Load()
+	holdBlackDefaultAll := false
+	if err != nil {
+		// Black is the safe direction for a stop, and this node cannot
+		// honestly say which surfaces the lost file held black — so every
+		// surface with no explicit entry comes up held black, not lit,
+		// until an authorized cue.activate or render.surface.apply clears
+		// it per surface (see holdBlackDefaultAll's own doc comment).
+		logger.Warn("failed to load persisted held-black state at startup; holding every surface black until it is explicitly cleared, because black is the safe direction for a stop", "error", err)
+		holdBlack = map[string]bool{}
+		holdBlackDefaultAll = true
+	}
 	return &renderOperations{
 		sup:                 sup,
 		store:               store,
+		holdBlackStore:      holdBlackStore,
 		assetDir:            assetDir,
 		timeline:            timeline,
 		showMode:            showMode,
 		diagnosticSurfaceID: diagnosticSurfaceID,
 		logger:              logger,
 		writers:             make(map[string]*frameWriterHandle),
+		holdBlack:           holdBlack,
+		holdBlackDefaultAll: holdBlackDefaultAll,
 	}
+}
+
+// isHeldBlack reports whether surfaceID currently has an active
+// render.surface.blackout in effect: an explicit entry always wins, and a
+// surface never explicitly touched falls back to holdBlackDefaultAll (see
+// its own doc comment).
+func (o *renderOperations) isHeldBlack(surfaceID string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if v, ok := o.holdBlack[surfaceID]; ok {
+		return v
+	}
+	return o.holdBlackDefaultAll
+}
+
+// knownHeldBlackSurfaceIDs returns every surface id this node currently
+// holds an explicit held-black entry for (blackoutSurface has run against
+// it), sorted. It does not include a surface only defaulted black by
+// holdBlackDefaultAll with no explicit entry yet, or already lit
+// (explicit false): a surface with an explicit true entry is exactly the
+// set publishOneRenderReport (renderreport.go) needs to synthesize a
+// "blacked out" report row for when that surface has no FrameWriter to
+// report it through — render.surface.blackout on a surface with no
+// current assignment (build item 1) never starts one.
+func (o *renderOperations) knownHeldBlackSurfaceIDs() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make([]string, 0, len(o.holdBlack))
+	for id, held := range o.holdBlack {
+		if held {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// setHeldBlack updates surfaceID's in-memory held-black flag. Callers
+// persist through holdBlackStore themselves first (blackoutSurface,
+// clearHeldBlack) so disk and memory never disagree about which surface
+// this call is even for.
+func (o *renderOperations) setHeldBlack(surfaceID string, held bool) {
+	o.mu.Lock()
+	o.holdBlack[surfaceID] = held
+	o.mu.Unlock()
+}
+
+// materializeHeldBlackDefaultOnFirstWrite persists this node's actual
+// held-black truth for every surface it knows about, the first time
+// anything writes to holdBlackStore after a corrupt or unreadable file
+// forced holdBlackDefaultAll at construction: every surface named in the
+// assignment store is written held black, except one that already has an
+// explicit in-memory entry (set true by an earlier blackoutSurface this
+// session, or cleared false by an earlier clearHeldBlack). Without this,
+// the FIRST write after a corrupt file (a single-surface Set call) is the
+// only chance to record every OTHER surface's default-black truth:
+// holdBlackStore.Set's own recovery starts from an EMPTY set on a load
+// failure, so that first write would otherwise persist a file naming only
+// the one surface just touched, silently losing every other surface's
+// black default the moment the corrupt file is overwritten. A no-op once
+// holdBlackDefaultAll is false (the file loaded cleanly at construction)
+// or holdBlackDefaultMaterialized is already true (this already ran once
+// this process's lifetime) — it never clears holdBlackDefaultAll itself,
+// only backfills the disk record while that default stays in force for
+// any surface this node still has no explicit entry for.
+func (o *renderOperations) materializeHeldBlackDefaultOnFirstWrite() error {
+	o.mu.Lock()
+	if !o.holdBlackDefaultAll || o.holdBlackDefaultMaterialized {
+		o.mu.Unlock()
+		return nil
+	}
+	alreadyExplicit := make(map[string]bool, len(o.holdBlack))
+	for id := range o.holdBlack {
+		alreadyExplicit[id] = true
+	}
+	o.mu.Unlock()
+
+	assignments, err := o.store.Load()
+	if err != nil {
+		return fmt.Errorf("materializing held-black default: loading assignments: %w", err)
+	}
+	for _, a := range assignments {
+		if alreadyExplicit[a.SurfaceID] {
+			continue
+		}
+		o.setHeldBlack(a.SurfaceID, true)
+		if err := o.holdBlackStore.Set(a.SurfaceID, true); err != nil {
+			return fmt.Errorf("materializing held-black default for surface %q: %w", a.SurfaceID, err)
+		}
+	}
+
+	o.mu.Lock()
+	o.holdBlackDefaultMaterialized = true
+	o.mu.Unlock()
+	return nil
+}
+
+// clearHeldBlack persists and records surfaceID as no longer held black —
+// build item 2's two clearing paths (an authorized cue.activate swap or
+// confirmation, and render.surface.apply) both call this.
+func (o *renderOperations) clearHeldBlack(surfaceID string) error {
+	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
+		return fmt.Errorf("clearing held-black flag for surface %q: %w", surfaceID, err)
+	}
+	if err := o.holdBlackStore.Set(surfaceID, false); err != nil {
+		return err
+	}
+	o.setHeldBlack(surfaceID, false)
+	return nil
+}
+
+// surfaceHoldBlackSource implements [pipeline.HoldBlackSource] for one
+// surface: held black either by an explicit render.surface.blackout, or
+// because a weather delay is currently active (build item 4 — the same
+// forced-black path, never refused for a weather delay and never routed
+// around it).
+type surfaceHoldBlackSource struct {
+	o         *renderOperations
+	surfaceID string
+}
+
+func (s surfaceHoldBlackSource) HoldBlack() bool {
+	if s.o.isHeldBlack(s.surfaceID) {
+		return true
+	}
+	return s.o.weatherDelay != nil && s.o.weatherDelay.Current().Active
 }
 
 // frameTimeline is the timeline a frame writer reads.
@@ -808,6 +984,14 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: starting frame writer: %w", action, err)
 	}
 
+	// Build item 2: render.surface.apply clears a held-black flag, alongside
+	// an authorized cue.activate swap or confirmation (cueactivationrender.go).
+	// No restart follows this: the frame writer just started above already
+	// draws whatever this apply assigned.
+	if err := o.clearHeldBlack(surfaceID); err != nil {
+		return OperationResult{}, fmt.Errorf("%s: clearing held-black flag: %w", action, err)
+	}
+
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateRunning}, executedAt, baseline)
 }
 
@@ -826,12 +1010,13 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 		o.logger.Info("this node's locally configured diagnostic idle output is overriding the surface's assigned one",
 			"surface_id", surfaceID, "assigned_idle_output", a.idleOutput, "using", idleOutput)
 	}
+	holdBlack := surfaceHoldBlackSource{o: o, surfaceID: surfaceID}
 	var fw *pipeline.FrameWriter
 	var err error
 	if f != nil {
-		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.frameTimeline(), a.fseqFilename, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
+		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.frameTimeline(), a.fseqFilename, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, holdBlack, o.logger)
 	} else {
-		fw, err = pipeline.NewIdleFrameWriter(o.sup, surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, idleOutput, o.logger)
+		fw, err = pipeline.NewIdleFrameWriter(o.sup, surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, idleOutput, holdBlack, o.logger)
 	}
 	if err != nil {
 		return err
@@ -871,11 +1056,91 @@ func (o *renderOperations) clearSurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: removing persisted assignment: %w", action, err)
 	}
 
+	// A cleared surface has no assignment left to resume rendering onto,
+	// so a held-black flag from before this clear must not survive it and
+	// come back on a later, unrelated assignment. Logged, never returned:
+	// the clear itself (stop the pipeline, remove the assignment) already
+	// succeeded by this point, matching cue.activate (render)'s identical
+	// reasoning for its own held-black bookkeeping write.
+	if err := o.clearHeldBlack(surfaceID); err != nil {
+		o.logger.Warn("render.surface.clear: failed to clear held-black flag", "surface_id", surfaceID, "error", err)
+	}
+
 	// No generation floor here (-1): cmdClear always synchronously calls
 	// setState(Stopped, ...) as part of processing this exact command, so
 	// ObservedAt freshness alone already proves the evidence postdates it —
 	// see [pipeline.Supervisor.AwaitState]'s doc comment.
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateStopped}, executedAt, -1)
+}
+
+// blackoutSurface is the OperationFunc for "render.surface.blackout": set a
+// hold-black flag for surfaceID so its frame writer, if one is running,
+// draws forced black on every tick from here on (build item 1) — the
+// assignment, the pipeline process, and the NDI source are all left
+// untouched, and no restart happens. Idempotent, and succeeds identically
+// for a surface with no current assignment at all: there is nothing to draw
+// yet, but the flag is still recorded, so a later apply or cue activation
+// comes up black until something clears it (build items 2 and 3). Never
+// refused for a weather delay: this operation touches nothing decision 3 or
+// 4 of ADR-053 already gates.
+//
+// Synchronous, like probeTransport: setting the flag has no asynchronous
+// pipeline state to await, so Confirmed reports true as soon as it is
+// durably recorded.
+func (o *renderOperations) blackoutSurface(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	const action = "render.surface.blackout"
+
+	surfaceID, err := parseSurfaceID(action, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := rejectUnknownKeys(action, params, renderSurfaceKnownKeys); err != nil {
+		return OperationResult{}, err
+	}
+
+	executedAt := now()
+
+	// The in-memory flag is set FIRST, always, before persistence is even
+	// attempted: a running frame writer reads it fresh on its very next
+	// tick (surfaceHoldBlackSource), so the surface is already drawing
+	// black by the time this function does anything else. Persisting it
+	// can still fail, but that must never leave the flag unset — a stop
+	// that fails lit because its own bookkeeping write failed is the exact
+	// hazard this ordering closes.
+	o.setHeldBlack(surfaceID, true)
+	// materializeHeldBlackDefaultOnFirstWrite runs AFTER the target
+	// surface's own in-memory flag is already set (never fails lit), but
+	// BEFORE persisting it: it is the one chance to persist every OTHER
+	// surface's corrupt-file default truth before that default is lost —
+	// see its own doc comment. This surface is already in o.holdBlack by
+	// now, so it skips re-persisting it here; the call below still does.
+	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
+		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be fully persisted: %w", action, err)
+	}
+	if err := o.holdBlackStore.Set(surfaceID, true); err != nil {
+		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be persisted: %w", action, err)
+	}
+
+	// running names whether a frame writer is currently on this surface:
+	// build item 4 (coordinator side, renderdispatch.go) reads this off the
+	// command's own direct result to confirm promptly when it is false —
+	// nothing is drawing, so the surface is already dark, and no emergency
+	// stop should burn a full confirmation deadline waiting for a periodic
+	// report that a silent surface will never produce.
+	running := o.hasRunningFrameWriter(surfaceID)
+
+	observedAt := now()
+	return OperationResult{
+		Confirmed: true,
+		Signal:    "node.render.surface_state",
+		Value: map[string]any{
+			"surfaceId": surfaceID,
+			"heldBlack": true,
+			"running":   running,
+		},
+		ExecutedAt: executedAt,
+		ObservedAt: observedAt,
+	}, nil
 }
 
 // restartPipeline is the OperationFunc for "render.pipeline.restart":

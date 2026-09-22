@@ -76,9 +76,22 @@ alert.
    The plugin reports its effective output level, and that report is how dark
    is confirmed for a player.
 
-6. **Projection is cleared, not faded.** Every Resolume layer is cleared, and
-   every render surface is cleared. Emergency stop gains the render surface
-   clear as well.
+6. **Projection is cleared, not faded (amended 2026-09-21).** Every Resolume
+   layer is cleared. Every render surface is blacked out, keeping its
+   assignment, its pipeline, and its NDI source, so the source never
+   disappears mid-night; the operator's own clear route is unchanged and
+   keeps clearing. Emergency stop gains the render surface blackout as well.
+
+   **AMENDED 2026-09-21, owner decision.** As originally accepted, this
+   decision cleared every render surface, the same effect an operator's
+   manual clear has. On a real node, clearing deletes the surface's
+   assignment and tears down its pipeline, and `cue.activate` never learns
+   to create one, so the first weather delay or emergency stop of the
+   night left every later cue activation on that surface refused with no
+   assignment to swap content onto. A forced-black flag draws black on
+   every frame without touching the assignment, the pipeline, or the NDI
+   source, closing that gap; it clears on the next authorized
+   `cue.activate` or `render.surface.apply`.
 
 7. **The alert does not wait.** A node runs one command in this order: set
    every other session's mixer level to zero, start the alert, then stop the

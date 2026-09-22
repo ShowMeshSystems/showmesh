@@ -16,7 +16,7 @@ func TestDiagnosticFrameWriterDrawsWithNoSourceAndNoTimeline(t *testing.T) {
 	const surfaceID = "surface-diagnostic"
 	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
 
-	fw, err := NewDiagnosticFrameWriter(sup, surfaceID, 64, 4, 3, 40, testLogger{})
+	fw, err := NewDiagnosticFrameWriter(sup, surfaceID, 64, 4, 3, 40, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewDiagnosticFrameWriter: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestNewDiagnosticFrameWriterRejectsInvalidGeometryAndRate(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewDiagnosticFrameWriter(sup, "surface-diagnostic", c[0], c[1], c[2], c[3], testLogger{}); err == nil {
+			if _, err := NewDiagnosticFrameWriter(sup, "surface-diagnostic", c[0], c[1], c[2], c[3], nil, testLogger{}); err == nil {
 				t.Fatal("accepted an invalid diagnostic writer configuration")
 			}
 		})
