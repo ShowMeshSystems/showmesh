@@ -240,23 +240,6 @@ function phaseLabel(name: string, state: string): string {
   return `${name} ${state.replace('_', ' ')}`
 }
 
-/**
- * The next-transition box's own headline, keyed on `session.boundary.state`
- * directly, never inferred from `transition`'s reason string.
- */
-export function boundaryHeadline(boundary: NightSessionState['boundary']): string {
-  switch (boundary.state) {
-    case 'armed':
-      return `Next transition armed for ${formatClock(boundary.expectedAt) ?? 'an unrecorded time'}`
-    case 'invalid':
-      return 'Next transition invalidated'
-    case 'none':
-      return 'No transition for this purpose'
-    default:
-      return 'Next transition unknown'
-  }
-}
-
 /** Anything not observed says so, and none of these readouts is inferred. */
 export function evidenceReadouts(session: NightSessionState, nowIso: string | null): EvidenceReadout[] {
   const readiness = session.readiness

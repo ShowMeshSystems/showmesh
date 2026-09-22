@@ -70,7 +70,6 @@ import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
-  boundaryHeadline,
   cycleRail,
   evidenceReadouts,
   nextTransition,
@@ -436,10 +435,6 @@ export function ShowNight() {
             <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} detail="Derived from observed playback, not a clock." />
           )}
           <div className="sm-nownext__boundary">
-            <p>{boundaryHeadline(session.boundary)}</p>
-            <p className="sm-small sm-muted">
-              {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this transition.'}
-            </p>
             {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
           </div>
         </section>
