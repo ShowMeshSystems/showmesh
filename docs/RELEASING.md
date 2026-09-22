@@ -11,23 +11,39 @@ and versions in its own repository, `ShowMeshSystems/fpp-showmesh`.
 1. **One version for the triad.** The coordinator, operator UI, and node agent
    ship as a single version, cut from a single commit. They are never
    versioned independently of each other.
-2. **The FPP plugin versions on its own.** It lives in
-   `ShowMeshSystems/fpp-showmesh`, is currently at `0.1.2`, and its number has
-   no fixed relationship to this repository's version beyond both currently
-   being on a `0.1.x` line.
-3. **Format.** `MAJOR.MINOR.PATCH`, semver, written bare in the root `VERSION`
-   file (the same shape as the plugin repository's root `VERSION` file, which
-   contains `0.1.2`). The git tag is `v` followed by the `VERSION` content,
-   for example `v0.1.0`. Pre-release suffixes use the semver form `-rc.N`.
-4. **The first ShowMesh Core pre-release is `0.1.0`.**
-5. **0.x means no compatibility promise between releases.** A `0.x` version
-   bump may change or remove behavior without notice; nothing about the
-   `VERSION` number implies migration support between two `0.x` releases.
-6. **The release version is not the public API version.** `/api/v1` is versioned
-   and moves independently of the `VERSION` file. Do not read a `VERSION` bump
-   as an API change, and do not read an API version as a release number. This
-   distinction is the reason this scheme exists: conflating the two is the
-   mistake it prevents.
+2. **Format.** `MAJOR.MINOR.PATCH`, semver, written bare in the root `VERSION`
+   file. The git tag is `v` followed by the `VERSION` content, for example
+   `v0.1.0`.
+3. **MAJOR is the show season.** ShowMesh ships one supported line per holiday
+   season, and the major number names the season: `0.x` is the 2026 season,
+   the first and unofficial one; `1.x` is the 2027 season; and so on. A new
+   major is a new line, installed fresh, with no compatibility or migration
+   promise from the previous season's line.
+4. **MINOR is a feature drop within the season.** Each planned set of features
+   for the season (for example the pre-release set, the Halloween set, the
+   Christmas set) raises MINOR. A MINOR bump may change or remove behavior.
+5. **PATCH is a fix on a running line.** A PATCH release carries fixes only and
+   is what gets deployed to a fleet mid-season without taking new features.
+6. **The `-rc.N` suffix is allowed only on a season's opening `MAJOR.0.0`.** It
+   means the new season's line exists and can be installed, but has not yet
+   run a show on the rehearsal rig. Work on the next season starts while the
+   current one is still running, so `1.0.0-rc.1` may exist during the 2026
+   Christmas run for anyone who wants to try it. Once the line has run a show,
+   the suffix comes off. No other version carries a suffix.
+7. **A fix for the running season lands on the running line first.** While
+   `0.3.x` is what the fleet runs, a fix ships as `0.3.1` and is carried
+   forward to `1.0.0-rc.N` if it applies there. Never the other way round.
+8. **The FPP plugin versions on its own.** It lives in
+   `ShowMeshSystems/fpp-showmesh` with its own root `VERSION` file (currently
+   `0.1.4`). It follows the same season rule for MAJOR, so a plugin and a
+   coordinator from the same season share a major number, but MINOR and PATCH
+   move independently.
+9. **The first ShowMesh Core pre-release is `0.1.0`.**
+10. **The release version is not the public API version.** `/api/v1` is
+    versioned and moves independently of the `VERSION` file. Do not read a
+    `VERSION` bump as an API change, and do not read an API version as a
+    release number. This distinction is the reason this scheme exists:
+    conflating the two is the mistake it prevents.
 
 ## What a pre-release cut produces
 

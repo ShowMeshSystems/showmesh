@@ -4,9 +4,10 @@ All notable changes to ShowMesh Core (coordinator, operator UI, and node agent) 
 recorded here. The format is one bullet per line, grouped under short headings,
 newest release first.
 
-This project is pre-1.0. See [`docs/RELEASING.md`](docs/RELEASING.md) for the
-versioning scheme; 0.x carries no compatibility promise between releases, and the
-release version is not the public API version (`/api/v1` moves independently).
+The major version names the show season (`0.x` is the 2026 season). See
+[`docs/RELEASING.md`](docs/RELEASING.md) for the versioning scheme; a new season is
+a new line with no compatibility promise from the last, and the release version is
+not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
