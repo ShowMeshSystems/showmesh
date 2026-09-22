@@ -833,8 +833,10 @@ func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.R
 	clientAddr := h.clientAddr(r)
 	issuer := h.emergencyStopIssuer(now, ac, clientAddr)
 
-	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
+	// The night session changes first so the night loop cannot see the
+	// stopped player as a finished show and start the next thing.
 	nightOutcome := h.nightEmergencyPowerDown(ctx, now, issuer)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.StopPowerDown.Actions, ac, clientAddr)
 
@@ -944,8 +946,10 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 	// Past this point nothing may refuse the request: the token is spent,
 	// and every remaining step degrades rather than aborting.
 	ctx := context.WithoutCancel(r.Context())
-	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, top.IdempotencyKey, ac, clientAddr)
+	// The session ends first so the night loop cannot see the stopped
+	// player as a finished show and restart the resting playlist.
 	nightOutcome := h.nightEmergencyEndSession(ctx, now, issuer)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, top.IdempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, top.IdempotencyKey, payload.HardStop.Actions, ac, clientAddr)
 

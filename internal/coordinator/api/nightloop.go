@@ -344,6 +344,22 @@ func (h *handlers) nightCommit(ctx context.Context, now time.Time, sessionID, ex
 	}
 }
 
+// nightSessionUnchanged re-reads the session immediately before the loop
+// starts output: a tick that read rec seconds ago may be racing an
+// operator stop that has since ended or moved the session.
+func (h *handlers) nightSessionUnchanged(ctx context.Context, rec store.NightSessionRecord) bool {
+	cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		h.logWarn("night loop: failed to re-read the night session before starting output; not starting it", "sessionId", rec.ID, "error", err)
+		return false
+	}
+	if !ok || cur.ID != rec.ID || cur.State != rec.State {
+		h.logWarn("night loop: the night session changed under this tick; not starting output", "sessionId", rec.ID, "state", rec.State)
+		return false
+	}
+	return true
+}
+
 func (h *handlers) nightCommitAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor, boundary nightBoundary) {
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
@@ -1188,6 +1204,9 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 	// failed dispatch (err != nil, nothing persisted) legitimately mints
 	// a new key and retries on a later tick.
 	idemKey := fmt.Sprintf("night:%s:%d:%s:%d", rec.ID, rec.Cycle, purpose, now.UnixNano())
+	if !h.nightSessionUnchanged(ctx, rec) {
+		return nightContentAnchor{}, false, false
+	}
 	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
 		InstanceID:                  instanceID,
 		Action:                      "startPlaylist",
