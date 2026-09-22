@@ -38,7 +38,12 @@ func cmdFPPPair(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		fs.Usage()
 		return exitUsage
 	}
-	instanceID, code := rest[0], strings.ToUpper(strings.TrimSpace(rest[1]))
+	instanceID := rest[0]
+	code, ok := normalizePairingCode(rest[1])
+	if !ok {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp pair: invalid code %q: must be eight characters from the plugin's own alphabet, written XXXX-XXXX\n", rest[1])
+		return exitUsage
+	}
 
 	c, err := newRequestClient(g)
 	if err != nil {
@@ -63,6 +68,34 @@ func cmdFPPPair(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	_, _ = fmt.Fprintf(stdout, "waiting: %s is waiting for the plugin to finish pairing with code %s; it expires at %s\n",
 		resp.InstanceID, resp.Code, resp.ExpiresAt)
 	return exitOK
+}
+
+// pairingCodeAlphabet is the code alphabet the plugin displays in: upper
+// case, with no I, L, O or U, so the characters most often misread cannot
+// occur.
+const pairingCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// normalizePairingCode turns what an operator typed into the one written
+// form. Letter case, a missing dash and stray spaces are all accepted:
+// the code is read off a screen and typed by hand, and refusing it over
+// punctuation would only teach an operator that pairing is flaky.
+func normalizePairingCode(code string) (string, bool) {
+	var body strings.Builder
+	for _, r := range strings.ToUpper(code) {
+		switch {
+		case r == '-' || r == ' ' || r == '\t':
+			continue
+		case strings.ContainsRune(pairingCodeAlphabet, r):
+			body.WriteRune(r)
+		default:
+			return "", false
+		}
+	}
+	if body.Len() != 8 {
+		return "", false
+	}
+	out := body.String()
+	return out[:4] + "-" + out[4:], true
 }
 
 // cmdFPPPairing implements "showmeshctl fpp pairing <instance-id>":

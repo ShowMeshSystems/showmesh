@@ -207,6 +207,63 @@ func TestBrightnessCeilingReportsAHostThatRefusedTheCommand(t *testing.T) {
 	}
 }
 
+// TestBrightnessCeilingCarriesFPPsOwnRefusalText: an FPP without the
+// plugin installed answers 500 "No Command", and an operator needs that
+// sentence, not a coordinator paraphrase.
+func TestBrightnessCeilingCarriesFPPsOwnRefusalText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("No Command: ShowMesh: Set Brightness Ceiling"))
+	}))
+	t.Cleanup(srv.Close)
+	api, setup, token := ceilingAPI(t, srv.URL)
+
+	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":50}`, token))
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "No Command") {
+		t.Fatalf("the refusal did not carry FPP's own text: %s", body)
+	}
+
+	entries, err := setup.svc.ListAuditNewestFirst(t.Context(), 0, 10)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == auditActionFPPSetBrightnessCeiling && e.Kind == identity.AuditOutcome {
+			found = true
+			if e.Outcome != outcomeWordFailed {
+				t.Errorf("audited outcome = %q, want failed", e.Outcome)
+			}
+			if !strings.Contains(e.OutcomeReason, "No Command") {
+				t.Errorf("audited reason = %q, want FPP's own text", e.OutcomeReason)
+			}
+		}
+	}
+	if !found {
+		t.Error("no outcome audit entry was written for a refused ceiling write")
+	}
+}
+
+// TestBrightnessCeilingReportsWhatFPPActuallyAnswered when the plugin
+// never reports the value back: FPP's own answer is evidence the command
+// ran, and it is not evidence the ceiling changed.
+func TestBrightnessCeilingReportsWhatFPPActuallyAnswered(t *testing.T) {
+	srv, _ := newFakeCeilingFPP(t, nil, false)
+	api, _, token := ceilingAPI(t, srv.URL)
+
+	_, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":40}`, token))
+	got := decodeCeiling(t, body)
+	if !strings.Contains(got.Command.OutcomeReason, "Brightness Ceiling Set") {
+		t.Fatalf("outcomeReason = %q, want FPP's own answer quoted", got.Command.OutcomeReason)
+	}
+	if !strings.Contains(got.Command.OutcomeReason, "40") {
+		t.Fatalf("outcomeReason = %q, want the ceiling that was not read back", got.Command.OutcomeReason)
+	}
+}
+
 // TestBrightnessCeilingNeverTouchesTheTransitionGainRoute: the two
 // values have separate writers and this one must not reach the other.
 func TestBrightnessCeilingNeverTouchesTheTransitionGainRoute(t *testing.T) {

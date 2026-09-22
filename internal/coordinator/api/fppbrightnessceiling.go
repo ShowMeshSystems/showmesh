@@ -200,17 +200,17 @@ func (h *handlers) handleFPPBrightnessCeiling(w http.ResponseWriter, r *http.Req
 		write = writeFPPBrightnessCeiling
 	}
 	dispatchedAt := h.now()
-	_, readBack, writeErr := write(ctx, baseURL, ceiling)
+	dispatched, readBack, writeErr := write(ctx, baseURL, ceiling)
 	resolvedAt := h.now()
 
-	outcome, outcomeState, outcomeReason := fppBrightnessCeilingOutcome(ceiling, readBack, writeErr)
+	outcome, outcomeState, outcomeReason := fppBrightnessCeilingOutcome(ceiling, dispatched, readBack, writeErr)
 	h.auditFPPBrightnessCeilingOutcome(r, ac, commandID, instanceID, params, outcome, outcomeState, outcomeReason)
 	if writeErr != nil {
-		writeProblem(w, h.logger, h.now(), fppBrightnessCeilingWriteFailedProblem(instanceID, writeErr))
+		writeProblem(w, h.logger, h.now(), fppBrightnessCeilingWriteFailedProblem(instanceID, outcomeReason))
 		return
 	}
 
-	dispatched, resolved := formatTime(dispatchedAt), formatTime(resolvedAt)
+	dispatchedStamp, resolvedStamp := formatTime(dispatchedAt), formatTime(resolvedAt)
 	jsonWrite(w, v1.FPPBrightnessCeilingResponse{
 		ServerTime: formatTime(h.now()),
 		Command: v1.FPPCommandResult{
@@ -218,25 +218,40 @@ func (h *handlers) handleFPPBrightnessCeiling(w http.ResponseWriter, r *http.Req
 			Action: fppBrightnessCeilingAction, InstanceID: instanceID,
 			Params: params, Replay: false,
 			Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
-			DispatchedAt: &dispatched, ResolvedAt: &resolved,
+			DispatchedAt: &dispatchedStamp, ResolvedAt: &resolvedStamp,
 		},
 		Ceiling: readBack,
 	})
 }
 
 // fppBrightnessCeilingOutcome decides what this write is allowed to
-// claim. FPP answering 200 is never confirmation on its own: only the
-// plugin's own read-back of the new value confirms anything.
-func fppBrightnessCeilingOutcome(ceiling int, readBack *int, writeErr error) (outcome, outcomeState, outcomeReason string) {
+// claim, from FPP's own answer and the plugin's read-back together.
+//
+// FPP's command endpoint builds a cheerful success body without
+// consulting whether the command did anything (see fppcommand.Outcome),
+// so a 2xx alone is only ever "FPP ran something". An unknown command
+// name is a 500 carrying FPP's own refusal text, which arrives here as
+// writeErr and must be reported as the refusal it is, not as a
+// coordinator fault. Only the plugin reporting the new value confirms
+// anything.
+func fppBrightnessCeilingOutcome(ceiling int, dispatched fppcommand.Outcome, readBack *int, writeErr error) (outcome, outcomeState, outcomeReason string) {
 	switch {
 	case writeErr != nil:
-		return outcomeWordUnconfirmed, string(observation.StateCollectionFailed), writeErr.Error()
+		reason := writeErr.Error()
+		if body := strings.TrimSpace(dispatched.Body); body != "" {
+			reason = fmt.Sprintf("FPP answered %d: %s", dispatched.StatusCode, body)
+		}
+		return outcomeWordFailed, string(observation.StateCollectionFailed), reason
 	case readBack != nil:
 		return outcomeWordConfirmed, string(observation.StateCurrent),
 			fmt.Sprintf("the plugin reports a ceiling of %d", *readBack)
 	default:
+		answer := strings.TrimSpace(dispatched.Body)
+		if answer == "" {
+			answer = fmt.Sprintf("status %d", dispatched.StatusCode)
+		}
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected),
-			fmt.Sprintf("FPP accepted the command; the plugin did not report a ceiling of %d in time", ceiling)
+			fmt.Sprintf("FPP answered %q and the plugin did not report a ceiling of %d in time", answer, ceiling)
 	}
 }
 

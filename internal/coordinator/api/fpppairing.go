@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,14 +39,24 @@ const auditActionFPPPair = "fpp.pair"
 // it, matching the plugin worker's own expiry.
 const fppPairingTTL = 10 * time.Minute
 
+// fppPairingTokenMargin is how long past the pairing's own expiry the
+// minted token stays valid. It bounds the leak if a revoke fails: an
+// unclaimed token dies on its own rather than living forever. The margin
+// exists only so a plugin that claims in the last second of the window
+// does not receive a credential that is already dead.
+const fppPairingTokenMargin = 2 * time.Minute
+
 // maxFPPPairingRequestBodyBytes bounds both pairing bodies: a code and a
 // hex secret have no legitimate reason to be large.
 const maxFPPPairingRequestBodyBytes = 4 << 10 // 4 KiB
 
 // fppPairingClaimsPerMinute is the per-client-address claim ceiling. A
-// waiting plugin polls every three seconds, so this leaves an order of
-// magnitude of headroom while still bounding a guessing run.
-const fppPairingClaimsPerMinute = 30
+// waiting plugin polls every three seconds, so a ceiling near one
+// plugin's own rate would lock two plugins behind one NAT or proxy out of
+// each other's pairings; this leaves room for several of them and still
+// bounds a guessing run to a rate no attacker can exhaust an 8-character
+// code space with.
+const fppPairingClaimsPerMinute = 120
 
 // fppPairingPrincipalPrefix names the machine principal one FPP plugin
 // authenticates as.
@@ -60,9 +69,13 @@ const (
 	fppPairingStatePaired  = "paired"
 )
 
+// crockfordAlphabet is the code alphabet, upper case, with no I, L, O or
+// U, so the characters an operator most often misreads cannot occur.
+const crockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
 // crockfordBase32 is the alphabet the plugin and the coordinator both
 // derive a pairing code with. Upper case, no I, L, O or U.
-var crockfordBase32 = base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
+var crockfordBase32 = base32.NewEncoding(crockfordAlphabet).WithPadding(base32.NoPadding)
 
 // fppPairingCodeFromSecret derives the displayed code from the plugin's
 // own secret: the first eight Crockford base32 characters of the
@@ -77,21 +90,28 @@ func fppPairingCodeFromSecret(secretHex string) (string, bool) {
 	return encoded[:4] + "-" + encoded[4:8], true
 }
 
-// validFPPPairingCode reports whether code is syntactically a pairing
-// code. It says nothing about whether a pairing is open for it.
-func validFPPPairingCode(code string) bool {
-	if len(code) != 9 || code[4] != '-' {
-		return false
-	}
-	for i, r := range code {
-		if i == 4 {
+// normalizeFPPPairingCode turns what an operator typed into the one
+// written form, or reports ok false. Letter case, a missing dash and
+// stray spaces are all accepted: the code is read off a screen and typed
+// by hand, and refusing it over punctuation would only teach an operator
+// that pairing is flaky.
+func normalizeFPPPairingCode(code string) (string, bool) {
+	var body strings.Builder
+	for _, r := range strings.ToUpper(code) {
+		switch {
+		case r == '-' || r == ' ' || r == '\t':
 			continue
-		}
-		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", r) {
-			return false
+		case strings.ContainsRune(crockfordAlphabet, r):
+			body.WriteRune(r)
+		default:
+			return "", false
 		}
 	}
-	return true
+	if body.Len() != 8 {
+		return "", false
+	}
+	out := body.String()
+	return out[:4] + "-" + out[4:], true
 }
 
 // fppPendingPairing is one open pairing, held in memory only. Token is
@@ -102,6 +122,7 @@ type fppPendingPairing struct {
 	instanceID  string
 	principalID string
 	token       string
+	tokenID     string
 	expiresAt   time.Time
 }
 
@@ -129,35 +150,72 @@ func newFPPPairingStore() *fppPairingStore {
 	}
 }
 
-// open records a pending pairing, replacing any earlier one for the same
-// instance.
-func (s *fppPairingStore) open(p fppPendingPairing) {
+// open records a pending pairing and returns the earlier one for the same
+// instance, if any, for its caller to revoke: a replaced pairing's token
+// was minted and never handed out, so nothing should still accept it.
+func (s *fppPairingStore) open(p fppPendingPairing) (replaced []fppPendingPairing) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if old, ok := s.pending[p.instanceID]; ok {
+		replaced = append(replaced, old)
+	}
 	s.pending[p.instanceID] = p
+	return replaced
+}
+
+// sweepExpired drops every pending pairing that has expired and returns
+// them, so their unclaimed tokens can be revoked. Called from every
+// pairing route, so an abandoned pairing is cleaned up by the next one
+// rather than waiting for its own instance to be asked about.
+func (s *fppPairingStore) sweepExpired(now time.Time) []fppPendingPairing {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropExpiredLocked(now)
+}
+
+// drain removes every pending pairing and returns them. Used at
+// coordinator shutdown: a token nothing will ever claim must not outlive
+// the process that minted it.
+func (s *fppPairingStore) drain() []fppPendingPairing {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]fppPendingPairing, 0, len(s.pending))
+	for id, p := range s.pending {
+		out = append(out, p)
+		delete(s.pending, id)
+	}
+	return out
+}
+
+func (s *fppPairingStore) dropExpiredLocked(now time.Time) []fppPendingPairing {
+	var dropped []fppPendingPairing
+	for id, p := range s.pending {
+		if !now.Before(p.expiresAt) {
+			dropped = append(dropped, p)
+			delete(s.pending, id)
+		}
+	}
+	return dropped
 }
 
 // claim consumes the unexpired pending pairing whose code matches, and
 // records the instance as paired. A code that matches nothing, or matches
 // an expired entry, reports ok false and changes nothing an attacker can
 // observe.
-func (s *fppPairingStore) claim(code string, now time.Time) (fppPendingPairing, bool) {
+func (s *fppPairingStore) claim(code string, now time.Time) (claimed fppPendingPairing, ok bool, expired []fppPendingPairing) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	expired = s.dropExpiredLocked(now)
 	for instanceID, p := range s.pending {
-		if !now.Before(p.expiresAt) {
-			delete(s.pending, instanceID)
-			continue
-		}
 		if subtle.ConstantTimeCompare([]byte(p.code), []byte(code)) != 1 {
 			continue
 		}
 		delete(s.pending, instanceID)
 		s.paired[instanceID] = fppPairedRecord{principalID: p.principalID, pairedAt: now}
-		return p, true
+		return p, true, expired
 	}
-	return fppPendingPairing{}, false
+	return fppPendingPairing{}, false, expired
 }
 
 // state reports one instance's pairing state, dropping an expired pending
@@ -166,11 +224,8 @@ func (s *fppPairingStore) state(instanceID string, now time.Time) (state string,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if p, ok := s.pending[instanceID]; ok {
-		if now.Before(p.expiresAt) {
-			return fppPairingStateWaiting, p, fppPairedRecord{}
-		}
-		delete(s.pending, instanceID)
+	if p, ok := s.pending[instanceID]; ok && now.Before(p.expiresAt) {
+		return fppPairingStateWaiting, p, fppPairedRecord{}
 	}
 	if rec, ok := s.paired[instanceID]; ok {
 		return fppPairingStatePaired, fppPendingPairing{}, rec
@@ -197,12 +252,22 @@ func (l *fppPairingClaimLimiter) allow(source string, now time.Time) bool {
 	defer l.mu.Unlock()
 
 	cutoff := now.Add(-time.Minute)
-	kept := l.hits[source][:0]
-	for _, t := range l.hits[source] {
-		if t.After(cutoff) {
-			kept = append(kept, t)
+
+	// Every source is swept, not only this one: a map keyed by client
+	// address that is only ever appended to grows without bound on a
+	// route anyone on the network can reach.
+	for other, times := range l.hits {
+		if other == source {
+			continue
+		}
+		if kept := keepAfter(times, cutoff); len(kept) == 0 {
+			delete(l.hits, other)
+		} else {
+			l.hits[other] = kept
 		}
 	}
+
+	kept := keepAfter(l.hits[source], cutoff)
 	if len(kept) >= fppPairingClaimsPerMinute {
 		l.hits[source] = kept
 		return false
@@ -211,16 +276,16 @@ func (l *fppPairingClaimLimiter) allow(source string, now time.Time) bool {
 	return true
 }
 
-// claimSource is the client address a claim is rate limited by. It is
-// never the audit client address: h.clientAddr is empty unless a trusted
-// proxy is configured, and a rate limit keyed on "" would pool every
-// plugin on the network into one bucket.
-func claimSource(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// keepAfter returns the timestamps in times that are still inside the
+// window, reusing times' own backing array.
+func keepAfter(times []time.Time, cutoff time.Time) []time.Time {
+	kept := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
 	}
-	return host
+	return kept
 }
 
 // handleStartFPPPairing serves POST /api/v1/fpp/{instanceId}/pairing.
@@ -243,12 +308,14 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be JSON matching {"code":"XXXX-XXXX"}`))
 		return
 	}
-	code := strings.ToUpper(strings.TrimSpace(req.Code))
-	if !validFPPPairingCode(code) {
+	code, ok := normalizeFPPPairingCode(req.Code)
+	if !ok {
 		writeProblem(w, h.logger, now, invalidParameterProblem(
-			"the pairing code is not in the form XXXX-XXXX. Read the code off the plugin's own page and enter it again."))
+			"the pairing code is not eight characters from the plugin's own alphabet. Read the code off the plugin's page and enter it again."))
 		return
 	}
+
+	h.revokePendingFPPPairings(ctx, h.fppPairings.sweepExpired(now))
 
 	ac := authFromContext(ctx)
 	if !h.writeAuditOrFail(ctx, w, now, identity.AuditEntry{
@@ -261,22 +328,32 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	principal, err := h.ensureFPPPluginPrincipal(ctx, instanceID)
+	principal, problem, err := h.ensureFPPPluginPrincipal(ctx, instanceID)
 	if err != nil {
 		h.writeInternalError(w, now, "ensure the fpp plugin principal for a pairing", err)
 		return
 	}
-	token, err := h.deps.Identity.IssueToken(ctx, principal.ID, "pairing "+formatTime(now), nil)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	// The token expires on its own shortly after the pairing does, so a
+	// pairing nobody claims cannot leave a credential alive even if the
+	// revoke below never runs.
+	expiresAt := now.Add(fppPairingTTL)
+	tokenExpiry := expiresAt.Add(fppPairingTokenMargin)
+	token, err := h.deps.Identity.IssueToken(ctx, principal.ID, "pairing "+formatTime(now), &tokenExpiry)
 	if err != nil {
 		h.writeInternalError(w, now, "issue the fpp plugin token for a pairing", err)
 		return
 	}
 
-	expiresAt := now.Add(fppPairingTTL)
-	h.fppPairings.open(fppPendingPairing{
+	replaced := h.fppPairings.open(fppPendingPairing{
 		code: code, instanceID: instanceID, principalID: principal.ID,
-		token: token.Value, expiresAt: expiresAt,
+		token: token.Value, tokenID: token.ID, expiresAt: expiresAt,
 	})
+	h.revokePendingFPPPairings(ctx, replaced)
 
 	jsonWrite(w, v1.FPPPairingResponse{
 		ServerTime:  formatTime(now),
@@ -292,22 +369,66 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 // plugin authenticates as, creating it when it does not exist yet. A
 // pairing repeated after a coordinator restart reuses the same principal
 // rather than accumulating one per attempt.
-func (h *handlers) ensureFPPPluginPrincipal(ctx context.Context, instanceID string) (identity.Principal, error) {
+func (h *handlers) ensureFPPPluginPrincipal(ctx context.Context, instanceID string) (identity.Principal, *v1.Problem, error) {
 	name := fppPairingPrincipalPrefix + instanceID
 	existing, err := h.deps.Identity.ListPrincipals(ctx)
 	if err != nil {
-		return identity.Principal{}, fmt.Errorf("api: listing principals for a pairing: %w", err)
+		return identity.Principal{}, nil, fmt.Errorf("api: listing principals for a pairing: %w", err)
 	}
 	for _, p := range existing {
-		if p.Name == name {
-			return p, nil
+		if p.Name != name {
+			continue
 		}
+		// A name match is not enough to mint a credential against. A
+		// disabled account was switched off deliberately, and one whose
+		// role or kind was changed is no longer the machine account this
+		// route owns, so re-crediting either would quietly undo a
+		// decision an administrator made.
+		switch {
+		case p.Disabled:
+			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
+				fmt.Sprintf("the account this plugin signs in as, %q, is switched off. Turn it back on, or delete it and pair again.", name))), nil
+		case p.Role != identity.RoleScheduler:
+			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
+				fmt.Sprintf("the account this plugin signs in as, %q, has the %q role instead of scheduler. Set it back to scheduler, or delete it and pair again.", name, p.Role))), nil
+		case p.Kind != identity.KindMachine:
+			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
+				fmt.Sprintf("the account this plugin signs in as, %q, is a person's account, not a machine's. Rename or delete it and pair again.", name))), nil
+		}
+		return p, nil, nil
 	}
 	p, err := h.deps.Identity.CreatePrincipal(ctx, name, identity.KindMachine, identity.RoleScheduler, "")
 	if err != nil {
-		return identity.Principal{}, fmt.Errorf("api: creating the principal for a pairing: %w", err)
+		return identity.Principal{}, nil, fmt.Errorf("api: creating the principal for a pairing: %w", err)
 	}
-	return p, nil
+	return p, nil, nil
+}
+
+// problemPtr exists because a switch arm cannot take the address of a
+// function's return value.
+func problemPtr(p v1.Problem) *v1.Problem { return &p }
+
+// revokePendingFPPPairings revokes the tokens of pairings that were
+// dropped without ever being claimed. Best effort and never fatal: the
+// token carries its own expiry, so a failure here shortens nothing an
+// operator relies on and bounds the leak anyway.
+func (h *handlers) revokePendingFPPPairings(ctx context.Context, dropped []fppPendingPairing) {
+	for _, p := range dropped {
+		if p.tokenID == "" {
+			continue
+		}
+		if err := h.deps.Identity.RevokeToken(ctx, p.tokenID); err != nil {
+			h.logWarn("failed to revoke the token of an unclaimed fpp pairing",
+				"instanceId", p.instanceID, "error", err)
+		}
+	}
+}
+
+// RevokeUnclaimedFPPPairings revokes every open pairing's unclaimed
+// token. The coordinator calls it while shutting down: a credential
+// nothing will ever claim must not outlive the process that minted it.
+func (a *API) RevokeUnclaimedFPPPairings(ctx context.Context) {
+	a.h.revokePendingFPPPairings(ctx, a.h.fppPairings.drain())
 }
 
 // handleGetFPPPairing serves GET /api/v1/fpp/{instanceId}/pairing.
@@ -319,6 +440,8 @@ func (h *handlers) handleGetFPPPairing(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem("instanceId is not a syntactically valid instance ID: "+err.Error()))
 		return
 	}
+
+	h.revokePendingFPPPairings(r.Context(), h.fppPairings.sweepExpired(now))
 
 	state, pending, paired := h.fppPairings.state(instanceID, now)
 	resp := v1.FPPPairingStateResponse{ServerTime: formatTime(now), State: state}
@@ -350,7 +473,7 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, fppPairingClaimTooLargeProblem())
 		return
 	}
-	if !h.fppPairingClaims.allow(claimSource(r), now) {
+	if !h.fppPairingClaims.allow(loginSource(r), now) {
 		w.Header().Set("Retry-After", "60")
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
 			"this plugin has asked to finish pairing too many times in the last minute. Wait a minute and let it try again."))
@@ -377,7 +500,8 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, fppPairingNotWaitingProblem())
 		return
 	}
-	pending, ok := h.fppPairings.claim(code, now)
+	pending, ok, expired := h.fppPairings.claim(code, now)
+	h.revokePendingFPPPairings(ctx, expired)
 	if !ok {
 		writeProblem(w, h.logger, now, fppPairingNotWaitingProblem())
 		return

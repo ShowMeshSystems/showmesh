@@ -1482,6 +1482,12 @@ func Run() int {
 		logger.Warn("http server shutdown error", "error", err)
 	}
 
+	// An FPP pairing nobody finished holds a minted token this process is
+	// the only holder of. Revoke those before the store closes, so a
+	// restart does not leave a live credential behind that no operator can
+	// see to revoke.
+	apiInst.RevokeUnclaimedFPPPairings(shutdownCtx)
+
 	// ctx is already cancelled by this point (it is the same signal-derived
 	// context that made the select above wake up), so hub.Run and
 	// fppRunner.Run are already unwinding; this blocks only long enough for

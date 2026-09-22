@@ -821,6 +821,20 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            The account this plugin signs in as exists but is switched off,
+            or is no longer a machine account with the `scheduler` role. A
+            pairing never re-credentials it: `detail` names the account and
+            what to do. `type` is
+            `https://showmesh.dev/problems/conflict`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/playlist-definitions/republish:
@@ -8652,8 +8666,10 @@ paths:
         refusal - a wrong secret, an expired pairing, one that was never
         opened - is the identical `404` with the identical text, so an
         unauthenticated caller learns nothing from the difference. At most
-        30 claims per minute per client address are accepted; over that is
-        `429`. A body larger than 4 KiB is `413`.
+        120 claims per minute per client address are accepted; over that is
+        `429`. The ceiling is well above one plugin's own three-second poll,
+        so several plugins behind one NAT or proxy do not lock each other
+        out. A body larger than 4 KiB is `413`.
       requestBody:
         required: true
         content:
@@ -11395,10 +11411,14 @@ components:
       properties:
         code:
           type: string
-          pattern: "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+          pattern: "^[ \t]*[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{4}[-  \t]?[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{4}[ \t]*$"
           description: >-
-            Eight Crockford base32 characters written `XXXX-XXXX`. A code
-            in any other form is a `400`.
+            Eight characters from the plugin's own alphabet (Crockford
+            base32: no I, L, O or U), normally written `XXXX-XXXX`. The
+            code is read off a screen and typed by hand, so letter case, a
+            missing dash and stray spaces are all accepted and normalized;
+            anything else is a `400`. The response echoes the one written
+            form.
     FPPPairingResponse:
       description: >-
         The body of a successful (200) response from

@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -251,7 +252,7 @@ func TestClaimBodyOverTheLimitIs413(t *testing.T) {
 // TestStartPairingRefusesAMalformedCode.
 func TestStartPairingRefusesAMalformedCode(t *testing.T) {
 	api, _, token := pairingAPI(t, fixedClock(testNow))
-	for _, code := range []string{"", "ABCD1234", "ABCD-123", "ABCI-LOUV", "ABCD-EFGH-IJKL"} {
+	for _, code := range []string{"", "ABCD123", "ABCI-LOUV", "ABCD-EFGH-IJKL"} {
 		resp, body := doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+code+`"}`, token))
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("code %q status = %d, want 400; body: %s", code, resp.StatusCode, body)
@@ -317,24 +318,212 @@ func TestStartPairingRequiresPrincipalWrite(t *testing.T) {
 	}
 }
 
-// TestStartPairingAcceptsALowerCaseCode: an operator typing the code by
-// hand should not be refused over letter case.
-func TestStartPairingAcceptsALowerCaseCode(t *testing.T) {
-	api, _, token := pairingAPI(t, fixedClock(testNow))
-	secret := pairingSecret(12)
-	code := pairingCodeFor(t, secret)
+// TestStartPairingAcceptsEveryWrittenFormOfOneCode: the code is read off
+// a screen and typed by hand, so case, the dash and stray spaces must not
+// decide whether pairing works.
+func TestStartPairingAcceptsEveryWrittenFormOfOneCode(t *testing.T) {
+	seed := byte(12)
+	for _, form := range []func(code string) string{
+		func(c string) string { return c },
+		strings.ToLower,
+		func(c string) string { return strings.ReplaceAll(c, "-", "") },
+		func(c string) string { return strings.ToLower(strings.ReplaceAll(c, "-", "")) },
+		func(c string) string { return " " + strings.ReplaceAll(c, "-", " ") + " " },
+	} {
+		api, _, token := pairingAPI(t, fixedClock(testNow))
+		secret := pairingSecret(seed)
+		seed++
+		code := pairingCodeFor(t, secret)
 
-	resp, body := doRawRequest(t, api.Handler,
-		startPairingRequest(t, "bench-fpp", `{"code":"`+strings.ToLower(code)+`"}`, token))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("lower-case code status = %d, want 200; body: %s", resp.StatusCode, body)
+		typed := form(code)
+		resp, body := doRawRequest(t, api.Handler,
+			startPairingRequest(t, "bench-fpp", `{"code":"`+typed+`"}`, token))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("code %q status = %d, want 200; body: %s", typed, resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), `"code":"`+code+`"`) {
+			t.Fatalf("code %q was not normalized to %s: %s", typed, code, body)
+		}
+		if resp, _ := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`)); resp.StatusCode != http.StatusOK {
+			t.Fatalf("a pairing started as %q was not claimable: status %d", typed, resp.StatusCode)
+		}
 	}
-	if !strings.Contains(string(body), `"code":"`+code+`"`) {
-		t.Fatalf("response did not normalize the code to upper case: %s", body)
+}
+
+// TestReplacingAPairingRevokesTheUnclaimedToken: the first pairing's
+// token was minted and never handed out, so nothing must still accept it.
+func TestReplacingAPairingRevokesTheUnclaimedToken(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(40))+`"}`, token))
+	first := onlyPairingTokenID(t, setup)
+
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(41))+`"}`, token))
+
+	if live := livePairingTokenIDs(t, setup); len(live) != 1 || live[0] == first {
+		t.Fatalf("live pairing tokens = %v, want only the replacement (not %s)", live, first)
 	}
-	if resp, _ := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`)); resp.StatusCode != http.StatusOK {
-		t.Fatalf("a pairing started with a lower-case code was not claimable: status %d", resp.StatusCode)
+}
+
+// TestAnExpiredPairingRevokesItsUnclaimedToken: the sweep every pairing
+// route runs must clear a pairing nobody finished, not only forget it.
+func TestAnExpiredPairingRevokesItsUnclaimedToken(t *testing.T) {
+	now := testNow
+	api, setup, token := pairingAPI(t, func() time.Time { return now })
+
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(42))+`"}`, token))
+	if len(livePairingTokenIDs(t, setup)) != 1 {
+		t.Fatal("the pairing did not mint a token")
 	}
+
+	now = testNow.Add(fppPairingTTL + time.Second)
+	doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+pairingSecret(43)+`"}`))
+
+	if live := livePairingTokenIDs(t, setup); len(live) != 0 {
+		t.Fatalf("live pairing tokens after expiry = %v, want none", live)
+	}
+}
+
+// TestAPairingTokenCarriesItsOwnExpiry bounds the leak if a revoke ever
+// fails: the credential dies on its own.
+func TestAPairingTokenCarriesItsOwnExpiry(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(44))+`"}`, token))
+
+	tokens := pairingTokens(t, setup)
+	if len(tokens) != 1 {
+		t.Fatalf("got %d pairing tokens, want 1", len(tokens))
+	}
+	if tokens[0].ExpiresAt == nil {
+		t.Fatal("the pairing token never expires; an unclaimed pairing would leave a live credential behind")
+	}
+	if want := testNow.Add(fppPairingTTL + fppPairingTokenMargin); !tokens[0].ExpiresAt.Equal(want) {
+		t.Fatalf("token expiry = %v, want %v", tokens[0].ExpiresAt, want)
+	}
+}
+
+// TestShutdownRevokesEveryUnclaimedPairingToken.
+func TestShutdownRevokesEveryUnclaimedPairingToken(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(45))+`"}`, token))
+
+	api.RevokeUnclaimedFPPPairings(t.Context())
+
+	if live := livePairingTokenIDs(t, setup); len(live) != 0 {
+		t.Fatalf("live pairing tokens after shutdown = %v, want none", live)
+	}
+}
+
+// TestAClaimedPairingKeepsItsToken: the revoke sweeps must never touch a
+// credential a plugin is actually using.
+func TestAClaimedPairingKeepsItsToken(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	secret := pairingSecret(46)
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, token))
+	_, body := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`))
+
+	var claimed pairingClaimForTest
+	if err := json.Unmarshal(body, &claimed); err != nil {
+		t.Fatalf("decode claim: %v", err)
+	}
+	api.RevokeUnclaimedFPPPairings(t.Context())
+
+	if _, err := setup.svc.AuthenticateToken(t.Context(), claimed.Token); err != nil {
+		t.Fatalf("the claimed token stopped working: %v", err)
+	}
+}
+
+// TestStartPairingRefusesADisabledOrRepurposedPrincipal: a name match is
+// not enough to mint a credential against.
+func TestStartPairingRefusesADisabledOrRepurposedPrincipal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, setup *fppCommandTestSetup, id string)
+	}{
+		{"disabled", func(t *testing.T, setup *fppCommandTestSetup, id string) {
+			if _, err := setup.svc.SetDisabled(t.Context(), id, true); err != nil {
+				t.Fatalf("disable: %v", err)
+			}
+		}},
+		{"role changed", func(t *testing.T, setup *fppCommandTestSetup, id string) {
+			if _, err := setup.svc.SetRole(t.Context(), id, identity.RoleViewer); err != nil {
+				t.Fatalf("set role: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, setup, token := pairingAPI(t, fixedClock(testNow))
+			existing := mustCreatePrincipal(t, setup.svc, "fpp-plugin-bench-fpp", identity.RoleScheduler)
+			tc.prepare(t, setup, existing.ID)
+
+			resp, body := doRawRequest(t, api.Handler,
+				startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(47))+`"}`, token))
+			if resp.StatusCode != http.StatusConflict {
+				t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+			}
+			if len(livePairingTokenIDs(t, setup)) != 0 {
+				t.Fatal("a refused pairing still minted a token")
+			}
+		})
+	}
+}
+
+// TestClaimLimiterForgetsASourceThatWentQuiet: this map is keyed by an
+// address anyone on the network can supply, so it must not grow forever.
+func TestClaimLimiterForgetsASourceThatWentQuiet(t *testing.T) {
+	l := newFPPPairingClaimLimiter()
+	now := testNow
+
+	for i := 0; i < 50; i++ {
+		l.allow(fmt.Sprintf("198.51.100.%d", i), now)
+	}
+	if len(l.hits) != 50 {
+		t.Fatalf("tracked %d sources, want 50", len(l.hits))
+	}
+
+	l.allow("203.0.113.1", now.Add(2*time.Minute))
+	if len(l.hits) != 1 {
+		t.Fatalf("tracked %d sources after the window passed, want only the current one", len(l.hits))
+	}
+}
+
+// pairingTokens returns every token the pairing principal currently
+// holds, revoked ones excluded.
+func pairingTokens(t *testing.T, setup *fppCommandTestSetup) []identity.TokenInfo {
+	t.Helper()
+	principals, err := setup.svc.ListPrincipals(t.Context())
+	if err != nil {
+		t.Fatalf("list principals: %v", err)
+	}
+	for _, p := range principals {
+		if p.Name != "fpp-plugin-bench-fpp" {
+			continue
+		}
+		tokens, err := setup.svc.ListTokens(t.Context(), p.ID)
+		if err != nil {
+			t.Fatalf("list tokens: %v", err)
+		}
+		return tokens
+	}
+	return nil
+}
+
+func livePairingTokenIDs(t *testing.T, setup *fppCommandTestSetup) []string {
+	t.Helper()
+	var out []string
+	for _, tok := range pairingTokens(t, setup) {
+		out = append(out, tok.ID)
+	}
+	return out
+}
+
+func onlyPairingTokenID(t *testing.T, setup *fppCommandTestSetup) string {
+	t.Helper()
+	ids := livePairingTokenIDs(t, setup)
+	if len(ids) != 1 {
+		t.Fatalf("got %d live pairing tokens, want 1", len(ids))
+	}
+	return ids[0]
 }
 
 func pairingState(t *testing.T, api *API, token string) string {

@@ -820,13 +820,29 @@ func fppPairingClaimTooLargeProblem() v1.Problem {
 }
 
 // fppBrightnessCeilingWriteFailedProblem reports a ceiling write that did
-// not reach the FPP host. The host's own error text is carried verbatim,
-// for [fppTransitionGainWriteFailedProblem]'s reason.
-func fppBrightnessCeilingWriteFailedProblem(instanceID string, err error) v1.Problem {
+// not take. reason carries the host's own answer verbatim when there was
+// one, for [fppTransitionGainWriteFailedProblem]'s reason: an FPP with no
+// ShowMesh plugin installed says so in its own words, and paraphrasing
+// that would cost the operator the only description of what is wrong.
+func fppBrightnessCeilingWriteFailedProblem(instanceID, reason string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeFPPBrightnessCeilingWriteFailed,
 		Title:  "FPP brightness ceiling write failed",
 		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %v", instanceID, err),
+		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %s", instanceID, reason),
+	}
+}
+
+// fppPairingPrincipalUnusableProblem refuses a pairing whose machine
+// account exists but is no longer the account this route owns: switched
+// off, or given a different role or kind. Minting a token against it
+// would quietly undo whatever an administrator did to it, so this is a
+// 409 naming the account and what to do, never a silent repair.
+func fppPairingPrincipalUnusableProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Conflict",
+		Status: http.StatusConflict,
+		Detail: detail,
 	}
 }

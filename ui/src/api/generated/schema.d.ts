@@ -2947,7 +2947,7 @@ export interface paths {
         /**
          * Finish pairing, presenting the plugin's own secret
          * @description The only unauthenticated write route in this API, and deliberately so: the secret in the body IS the credential. A plugin that holds it is the plugin the operator started a pairing for, and it has nothing else it could present, because it has no token yet. The coordinator derives the displayed code from the secret the same way the plugin did; it never accepts a code here.
-         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 30 claims per minute per client address are accepted; over that is `429`. A body larger than 4 KiB is `413`.
+         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 120 claims per minute per client address are accepted; over that is `429`. The ceiling is well above one plugin's own three-second poll, so several plugins behind one NAT or proxy do not lock each other out. A body larger than 4 KiB is `413`.
          */
         post: operations["claimFPPPairing"];
         delete?: never;
@@ -3805,7 +3805,7 @@ export interface components {
         };
         /** @description The body of POST /fpp/{instanceId}/pairing: the code the FPP plugin's own page displays. The coordinator derives the same code from the secret the plugin presents later, so a code alone never proves anything. */
         FPPPairingRequest: {
-            /** @description Eight Crockford base32 characters written `XXXX-XXXX`. A code in any other form is a `400`. */
+            /** @description Eight characters from the plugin's own alphabet (Crockford base32: no I, L, O or U), normally written `XXXX-XXXX`. The code is read off a screen and typed by hand, so letter case, a missing dash and stray spaces are all accepted and normalized; anything else is a `400`. The response echoes the one written form. */
             code: string;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/pairing. The minted token is deliberately absent: only the plugin that holds the matching secret ever receives it. */
@@ -8410,6 +8410,16 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            /** @description The account this plugin signs in as exists but is switched off, or is no longer a machine account with the `scheduler` role. A pairing never re-credentials it: `detail` names the account and what to do. `type` is `https://showmesh.dev/problems/conflict`. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };
