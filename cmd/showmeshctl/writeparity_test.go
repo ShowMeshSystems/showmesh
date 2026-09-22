@@ -50,6 +50,14 @@ var exemptWritePaths = map[string]string{
 		"/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash} — IS covered: " +
 		"cmd_fpp_playlist_definition.go (showmeshctl fpp playlist-definitions list|get). TRACK-H-H2-SPEC.md " +
 		"section 7 is the stated reason to grow it, exactly as this file's own comment anticipated.",
+	"/integrations/fpp/pairing/claim": "POST is the installed FPP plugin finishing its own pairing, and it " +
+		"is unauthenticated by design: the 32-byte secret in the body IS the credential, held only in the " +
+		"plugin worker's memory and never written to any file, log or audit entry. An operator does not " +
+		"have that secret and must never be given a way to type one, because a claim is what hands out the " +
+		"plugin's token: a verb here would turn a code the operator already sees into a way to take the " +
+		"credential the pairing exists to keep away from them. The operator's own half IS covered: " +
+		"showmeshctl fpp pair (POST /fpp/{instanceId}/pairing) opens the pairing, and showmeshctl fpp " +
+		"pairing (GET the same path) reads its state.",
 	"/fallback-programs/{fppInstanceId}/acknowledge": "POST is the installed FPP plugin's own evidence " +
 		"about itself, the package id, revision, verification result, and installed time of the fallback " +
 		"program it actually holds (ADR-048 decision 1), not an operator capability, the identical shape " +

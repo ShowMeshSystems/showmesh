@@ -144,6 +144,19 @@ type handlers struct {
 	// comment. Nil in production.
 	fppDefinitionRepublisher fppDefinitionRepublisher
 
+	// fppCeilingWriter substitutes the brightness ceiling write - see
+	// [fppBrightnessCeilingWriter] (fppbrightnessceiling.go). Nil in
+	// production; only a test ever sets it.
+	fppCeilingWriter fppBrightnessCeilingWriter
+
+	// fppPairings holds open and completed FPP plugin pairings for this
+	// process's lifetime, and fppPairingClaims bounds how often one
+	// client address may try to finish one. Both are in-memory and
+	// per-*handlers, for the reason discoveryRunInFlight above is
+	// (ADR-012, one coordinator process).
+	fppPairings      *fppPairingStore
+	fppPairingClaims *fppPairingClaimLimiter
+
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process
