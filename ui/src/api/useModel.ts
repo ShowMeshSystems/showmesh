@@ -48,9 +48,12 @@ import type {
   CurrentRunsResponse,
   EmergencyStopArmResponse,
   EmergencyStopResult,
+  FPPBrightnessCeilingResponse,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
+  FPPPairingResponse,
+  FPPPairingStateResponse,
   IssueTokenRequest,
   IssueTokenResponse,
   Model,
@@ -197,6 +200,20 @@ export function putFPPEndpointsConfig(
   payload: ConfigFPPEndpointsPayload,
 ): Promise<FPPEndpointsConfigResponse> {
   return store.putFPPEndpointsConfig(payload)
+}
+
+// Pairing an FPP plugin by code, and writing its brightness ceiling.
+// Same thin pass-through pattern as every method above.
+export function getFPPPairing(instanceId: string): Promise<FPPPairingStateResponse> {
+  return store.getFPPPairing(instanceId)
+}
+
+export function postFPPPairing(instanceId: string, code: string): Promise<FPPPairingResponse> {
+  return store.postFPPPairing(instanceId, code)
+}
+
+export function postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<FPPBrightnessCeilingResponse> {
+  return store.postFPPBrightnessCeiling(instanceId, ceiling)
 }
 
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation recovery
