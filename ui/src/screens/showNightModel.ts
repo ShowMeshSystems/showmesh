@@ -15,15 +15,17 @@ export type RailStep = {
   key: string
   label: string
   detail: string
+  /** Hover text when the strip has room for one word only. */
+  title?: string
   status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired' | 'error' | 'stopped'
 }
 
-/** The word each finished-cycle outcome states before its reason, verbatim from the API otherwise. */
+/** The one word the cycle strip has room for; the reason lives in the coordinator log. */
 const CYCLE_OUTCOME_LABEL: Record<NightCycleOutcome['outcome'], string> = {
   completed: 'Complete',
   stopped: 'Stopped',
-  interrupted: 'Error',
-  unknown: 'Not confirmed',
+  interrupted: 'Interrupted',
+  unknown: 'Unconfirmed',
 }
 
 const CYCLE_OUTCOME_STATUS: Record<NightCycleOutcome['outcome'], RailStep['status']> = {
@@ -89,11 +91,11 @@ export function nightRail(session: NightSessionState): RailStep[] {
           status: 'unknown',
         })
       } else {
-        const label = CYCLE_OUTCOME_LABEL[finished.outcome]
         cycleSteps.push({
           key: `cycle-${cycle}`,
           label: `Cycle ${cycle}`,
-          detail: finished.reason !== undefined && finished.reason !== '' ? `${label}: ${finished.reason}` : label,
+          detail: CYCLE_OUTCOME_LABEL[finished.outcome],
+          title: `Check the coordinator log for cycle ${cycle}.`,
           status: CYCLE_OUTCOME_STATUS[finished.outcome],
         })
       }
