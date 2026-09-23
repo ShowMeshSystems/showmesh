@@ -907,8 +907,9 @@ func TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled(t *testing.T) 
 // node that has never had an engine problem (samplePayload's own
 // EngineRestoreState left at its Go zero value, matching an older
 // agent's omitted field) reads "idle" -- never "exhausted" and never an
-// empty string -- with attempts/next_attempt_ms/last_reason all
-// not_collected rather than a fabricated zero.
+// empty string -- with attempts a real 0, last_reason a real empty
+// string (no attempt has been made, so there is nothing to explain), and
+// next_attempt_ms not_collected rather than a fabricated zero.
 func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload()
@@ -928,11 +929,16 @@ func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
 	if v, ok := attempts.Value.(int64); !ok || v != 0 {
 		t.Errorf("engine restore attempts = %v, want int64(0)", attempts.Value)
 	}
-	for _, sig := range []observation.SignalID{SignalEngineRestoreNextAttemptMs, SignalEngineRestoreLastReason} {
-		o := findObs(t, obs, sig)
-		if o.Absence != observation.StateNotCollected {
-			t.Errorf("%s absence on an idle node = %q, want %q", sig, o.Absence, observation.StateNotCollected)
-		}
+	lastReason := findObs(t, obs, SignalEngineRestoreLastReason)
+	if lastReason.Absence != "" {
+		t.Errorf("engine restore last_reason absence on an idle node = %q, want a current value", lastReason.Absence)
+	}
+	if lastReason.Value != "" {
+		t.Errorf("engine restore last_reason value on an idle node = %v, want empty string", lastReason.Value)
+	}
+	nextAttempt := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
+	if nextAttempt.Absence != observation.StateNotCollected {
+		t.Errorf("engine restore next_attempt_ms absence on an idle node = %q, want %q", nextAttempt.Absence, observation.StateNotCollected)
 	}
 }
 
@@ -1066,8 +1072,8 @@ func TestPollSettingsSubstitutedJoinsMultipleFieldNames(t *testing.T) {
 // never substituted a field (samplePayload's own SettingsState left at
 // its Go zero value, matching an older agent's omitted field) reads
 // "accepted" -- never an empty string -- with substituted_fields/reason
-// both not_collected rather than a fabricated absence of a substitution
-// that was never named.
+// both a current empty value (no substitution to name, applied as
+// written) rather than not_collected.
 func TestPollSettingsAcceptedReportsStateNeverEmpty(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload()
@@ -1085,8 +1091,11 @@ func TestPollSettingsAcceptedReportsStateNeverEmpty(t *testing.T) {
 	}
 	for _, sig := range []observation.SignalID{SignalSettingsSubstitutedFields, SignalSettingsReason} {
 		o := findObs(t, obs, sig)
-		if o.Absence != observation.StateNotCollected {
-			t.Errorf("%s absence on an accepted node = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		if o.Absence != "" {
+			t.Errorf("%s absence on an accepted node = %q, want a current value", sig, o.Absence)
+		}
+		if o.Value != "" {
+			t.Errorf("%s value on an accepted node = %v, want empty string", sig, o.Value)
 		}
 	}
 }

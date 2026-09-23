@@ -1,6 +1,6 @@
 import type { AuditEntry, Capability, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
-import { countSignals, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { countSignals, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
 
 /** Connection state, in the terms Monitor's own pill labels use. */
@@ -202,7 +202,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       return {
         key: `${prefix}:${entry.signal}:${index}`,
         label: entry.signal,
-        value: entry.value === null ? 'no value' : String(entry.value),
+        value: entry.value === null ? 'no value' : displayValue(entry.value),
         state:
           alignmentLabel !== null
             ? alignmentLabel
@@ -406,7 +406,7 @@ export type SignalRow = {
 
 function signalValue(entry: Evidence): string {
   if (entry.value === null) return 'not reported'
-  return entry.unit === null || entry.unit === '' ? String(entry.value) : `${entry.value} ${entry.unit}`
+  return entry.unit === null || entry.unit === '' ? displayValue(entry.value) : `${entry.value} ${entry.unit}`
 }
 
 function signalObserved(entry: Evidence, nowIso: string | null): string {
