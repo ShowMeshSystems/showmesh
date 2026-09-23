@@ -72,3 +72,7 @@ test/integration/assets/
 
 # Track H chain bench captures (evidence from a local run, never committed)
 bench/track-h-chain/captures/
+
+# Python bytecode from bench helper scripts
+__pycache__/
+*.pyc
