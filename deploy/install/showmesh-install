@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Installs this machine as a ShowMesh coordinator, render node, audio node, or coordinator and node.
+# Safe to run again: a second run upgrades in place and keeps configuration and state.
+set -euo pipefail
+
+BUNDLE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=deploy/install/lib/common.sh
+. "$BUNDLE_DIR/lib/common.sh"
+# shellcheck source=deploy/install/lib/node.sh
+. "$BUNDLE_DIR/lib/node.sh"
+# shellcheck source=deploy/install/lib/ndi.sh
+. "$BUNDLE_DIR/lib/ndi.sh"
+# shellcheck source=deploy/install/lib/audio.sh
+. "$BUNDLE_DIR/lib/audio.sh"
+# shellcheck source=deploy/install/lib/coordinator.sh
+. "$BUNDLE_DIR/lib/coordinator.sh"
+# shellcheck source=deploy/install/lib/party.sh
+. "$BUNDLE_DIR/lib/party.sh"
+
+SHOWMESH_VERSION=dev
+SHOWMESH_COMMIT=unknown
+SHOWMESH_BUILD_DATE=unknown
+if [ -r "$BUNDLE_DIR/BUILD-INFO" ]; then
+  # shellcheck disable=SC1091
+  . "$BUNDLE_DIR/BUILD-INFO"
+fi
+RELEASE_BASE="${SHOWMESH_RELEASE_BASE:-https://github.com/ShowMeshSystems/showmesh/releases/download/v$SHOWMESH_VERSION}"
+
+usage() {
+  cat <<EOF
+showmesh-install $SHOWMESH_VERSION: install this machine as part of a ShowMesh system.
+
+Usage: sudo showmesh-install [options]
+With no options it asks what this machine is and walks you through it.
+
+  --role ROLE               coordinator, render, audio or coordinator-node
+  --coordinator URL         the coordinator a node joins, for example http://192.168.1.10:8080
+  --code CODE               the enrollment code from: showmeshctl node enroll <node-id>
+  --reenroll                enroll a node again even though it is already enrolled
+  --ndi FILE                install the NDI runtime from the NDI SDK download
+  --skip-ndi                leave out the NDI runtime on a render node
+  --broker builtin|external the coordinator's broker (default builtin)
+  --broker-url URL          the external broker's address, for example tcp://192.168.1.5:1883
+  --broker-username NAME    the external broker's login
+  --broker-password PASS    the external broker's password
+  --address ADDRESS         the address nodes use to reach this coordinator (default: detected)
+  --admin-name NAME         the first administrator's name, for an unattended coordinator install
+  --admin-password-file F   a file holding that administrator's password
+  --node-role render|audio  the node half of a coordinator-node install
+  --node-id ID              the node ID of a coordinator-node install (default: this host's name)
+  --ptp-interface IFACE     the network interface for the audio node's PTP clock
+  --ptp-domain N            the PTP domain (default 0)
+  --ptp-role ROLE           follower, grandmaster or auto (default follower)
+  --audio-card NAME         part of the sound card's name
+  --agent-package FILE      use a node agent package on disk instead of downloading it
+  --yes                     never ask; take everything from options
+  --version                 print the installer's version
+  --party                   add colour and animation to the opening and success screens
+  --help                    print this help
+EOF
+}
+
+OPT_ROLE=""; OPT_COORDINATOR=""; OPT_CODE=""; OPT_REENROLL=0; OPT_NDI=""; OPT_SKIP_NDI=0
+OPT_BROKER=""; OPT_BROKER_URL=""; OPT_ADDRESS=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
+OPT_NODE_ROLE=""; OPT_NODE_ID=""; OPT_PTP_INTERFACE=""; OPT_PTP_DOMAIN=""; OPT_PTP_ROLE=""
+OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_YES=0; OPT_PARTY=0; PARTY_EGG=""
+unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
+
+need_value() {
+  [ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'The option %s needs a value. Run showmesh-install --help for the list.\n' "$1" >&2; exit 2; }
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --role) need_value "$@"; OPT_ROLE="$2"; shift ;;
+    --coordinator) need_value "$@"; OPT_COORDINATOR="$2"; shift ;;
+    --code) need_value "$@"; OPT_CODE="$2"; shift ;;
+    --reenroll) OPT_REENROLL=1 ;;
+    --ndi) need_value "$@"; OPT_NDI="$2"; shift ;;
+    --skip-ndi) OPT_SKIP_NDI=1 ;;
+    --broker) need_value "$@"; OPT_BROKER="$2"; shift ;;
+    --broker-url) need_value "$@"; OPT_BROKER_URL="$2"; shift ;;
+    --broker-username) need_value "$@"; OPT_BROKER_USERNAME="$2"; shift ;;
+    --broker-password) need_value "$@"; OPT_BROKER_PASSWORD="$2"; shift ;;
+    --address) need_value "$@"; OPT_ADDRESS="$2"; shift ;;
+    --admin-name) need_value "$@"; OPT_ADMIN_NAME="$2"; shift ;;
+    --admin-password-file) need_value "$@"; OPT_ADMIN_PASSWORD_FILE="$2"; shift ;;
+    --node-role) need_value "$@"; OPT_NODE_ROLE="$2"; shift ;;
+    --node-id) need_value "$@"; OPT_NODE_ID="$2"; shift ;;
+    --ptp-interface) need_value "$@"; OPT_PTP_INTERFACE="$2"; shift ;;
+    --ptp-domain) need_value "$@"; OPT_PTP_DOMAIN="$2"; shift ;;
+    --ptp-role) need_value "$@"; OPT_PTP_ROLE="$2"; shift ;;
+    --audio-card) need_value "$@"; OPT_AUDIO_CARD="$2"; shift ;;
+    --agent-package) need_value "$@"; OPT_AGENT_PACKAGE="$2"; shift ;;
+    --yes|-y) OPT_YES=1 ;;
+    --version) printf 'showmesh-install %s (%s, %s)\n' "$SHOWMESH_VERSION" "$SHOWMESH_COMMIT" "$SHOWMESH_BUILD_DATE"; exit 0 ;;
+    --party) OPT_PARTY=1 ;;
+    --fast) PARTY_FAST=1 ;;
+    --loud) PARTY_LOUD=1 ;;
+    --disco|--rave|--matrix|--fireworks|--credits|--karaoke|--boss|--konami|--alive|--projector|--fortune)
+      PARTY_EGG="${1#--}" ;;
+    --help|-h) usage; exit 0 ;;
+    *) printf 'The option %s is not one showmesh-install knows. Run showmesh-install --help for the list.\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ -n "$PARTY_EGG" ]; then
+  if [ "$OPT_PARTY" -ne 1 ]; then
+    printf 'The option --%s is not one showmesh-install knows. Run showmesh-install --help for the list.\n' "$PARTY_EGG" >&2
+    exit 2
+  fi
+  party_colors
+  party_mode "$PARTY_EGG"
+  exit 0
+fi
+
+normalize_role() {
+  case "$1" in
+    1|coordinator) printf coordinator ;;
+    2|render|render-node) printf render ;;
+    3|audio|audio-node) printf audio ;;
+    4|coordinator-node|both) printf coordinator-node ;;
+    *) printf '' ;;
+  esac
+}
+
+choose_role() {
+  local saved pick
+  saved="$(env_get "$INSTALLER_STATE" ROLE)"
+  if [ -n "$OPT_ROLE" ]; then
+    ROLE="$(normalize_role "$OPT_ROLE")"
+    [ -n "$ROLE" ] || fail "The role $OPT_ROLE is not coordinator, render, audio or coordinator-node." "showmesh-install --role render"
+    return
+  fi
+  if ! can_prompt; then
+    [ -n "$saved" ] && { ROLE="$saved"; return; }
+    need_answer "to know what this machine is" "--role coordinator|render|audio|coordinator-node"
+  fi
+  printf '\nWhat is this machine?\n'
+  printf '  1) Coordinator\n  2) Render node\n  3) Audio node\n  4) Coordinator and node on this machine\n'
+  local def=""
+  case "$saved" in coordinator) def=1 ;; render) def=2 ;; audio) def=3 ;; coordinator-node) def=4 ;; esac
+  ask pick "Pick 1 to 4" "$def"
+  ROLE="$(normalize_role "$pick")"
+  [ -n "$ROLE" ] || fail "The answer $pick is not 1, 2, 3 or 4." "showmesh-install --role render"
+}
+
+role_label() {
+  case "$1" in
+    coordinator) printf 'coordinator' ;;
+    render) printf 'render node' ;;
+    audio) printf 'audio node' ;;
+    coordinator-node) printf 'coordinator and node' ;;
+  esac
+}
+
+# mint_local_code enrolls this host with its own coordinator and sets OPT_CODE.
+mint_local_code() {
+  local node_id="$OPT_NODE_ID" out
+  if [ -z "$node_id" ]; then
+    node_id="$(hostname | tr 'A-Z_.' 'a-z--' | sed 's/^-*//; s/-*$//')"
+    can_prompt && ask node_id "Node ID for this machine" "$node_id"
+  fi
+  step "Creating an enrollment code for node $node_id"
+  if ! out="$(showmeshctl node enroll "$node_id" 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    fail "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
+  fi
+  OPT_CODE="$(printf '%s\n' "$out" | grep -Eo '\b[A-Za-z0-9]{4}-[A-Za-z0-9]{4}\b' | head -n 1)"
+  [ -n "$OPT_CODE" ] || fail "showmeshctl did not print an enrollment code." "sudo showmeshctl node enroll $node_id"
+  ok "enrollment code created"
+}
+
+run_coordinator_node() {
+  local kind="$OPT_NODE_ROLE"
+  if [ -z "$kind" ]; then
+    kind="$(env_get "$INSTALLER_STATE" NODE_ROLE)"
+  fi
+  if [ -z "$kind" ]; then
+    can_prompt || need_answer "the node half of this install" "--node-role render|audio"
+    local pick
+    ask pick "Is the node half a render node or an audio node? (render/audio)" "render"
+    kind="$pick"
+  fi
+  case "$kind" in render|audio) ;; *) fail "The node role $kind is not render or audio." "showmesh-install --node-role render" ;; esac
+  run_coordinator_role
+  if ! node_is_enrolled || [ "$OPT_REENROLL" -eq 1 ]; then
+    [ "${ADMIN_READY:-0}" -eq 1 ] || fail "The node half needs an administrator to create its enrollment code." "sudo showmesh-install --role coordinator-node (from a terminal)"
+    mint_local_code
+    OPT_COORDINATOR="$PUBLIC_URL"
+  fi
+  run_node_role "$kind"
+  env_set "$INSTALLER_STATE" 0600 "ROLE=coordinator-node" "NODE_ROLE=$kind"
+}
+
+main() {
+  require_root "$@"
+  require_platform
+  if [ -n "$OPT_NDI" ] && [ -z "$OPT_ROLE" ]; then
+    run_ndi_only
+    return
+  fi
+  choose_role
+  if [ "$OPT_PARTY" -eq 1 ]; then
+    party_colors
+    party_opening "$(role_label "$ROLE")"
+  fi
+  printf '\nInstalling ShowMesh %s as a %s on this machine.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  case "$ROLE" in
+    coordinator) run_coordinator_role ;;
+    render|audio) run_node_role "$ROLE" ;;
+    coordinator-node) run_coordinator_node ;;
+  esac
+  printf '\nShowMesh %s is installed as a %s.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  case "$ROLE" in
+    coordinator|coordinator-node) coord_success_lines ;;
+  esac
+  case "$ROLE" in
+    render|audio|coordinator-node) info "Node $NODE_ID reports to the coordinator at $COORDINATOR_URL." ;;
+  esac
+  [ "$OPT_PARTY" -eq 1 ] && party_success
+  return 0
+}
+
+main "$@"
