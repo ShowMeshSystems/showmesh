@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,10 +176,33 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	// and concurrent per-node dispatch the Playlist path's own
 	// dispatchCueActivations wraps, per that ADR's own "not two
 	// implementations" rule.
+	// The Cue's show actions start before the node dispatch and run beside
+	// it; the response waits for both.
+	actions := []v1.CueActionOutcome{}
+	actionsDone := make(chan struct{})
+	if actionAct, ok := cueActionsActivation(activations); ok {
+		actionIDs, err := h.cueActionIDs(ctx, actionAct)
+		if err != nil {
+			h.logWarn("cue fire: could not read the cue's show actions; firing its other outputs without them", "cueId", cueID, "error", err)
+		}
+		if d := time.Duration(len(actionIDs)) * actionInvokeHTTPWriteDeadline; d > cueFireHTTPWriteDeadline() {
+			_ = http.NewResponseController(w).SetWriteDeadline(now.Add(d + cueFireHTTPWriteDeadlineMargin))
+		}
+		go func() {
+			defer close(actionsDone)
+			if fired, _ := h.fireCueActions(context.WithoutCancel(ctx), actionAct, actionIDs, issuer); len(fired) > 0 {
+				actions = fired
+			}
+		}()
+	} else {
+		close(actionsDone)
+	}
+
 	h.scheduleCueActivations(ctx, now, activations, issuer, nil)
 	outcomes := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		return h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
 	})
+	<-actionsDone
 	nodes := make([]v1.CueActivationNodeOutcome, len(outcomes))
 	for i, outcome := range outcomes {
 		nodes[i] = cueActivateWireOutcome(outcome)
@@ -207,7 +231,7 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(v1.CueActivateResponse{
-		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes,
+		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes, Actions: actions,
 		Aligned: aligned, UnalignedReason: unalignedReason, ScheduledAtNs: scheduledAtNs,
 	})
 }

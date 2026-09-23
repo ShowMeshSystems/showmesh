@@ -57,7 +57,7 @@ var showCueTopLevelKeys = map[string]bool{
 // object is refused for the same reason a typo at the top level is: an
 // ignored key reads as an applied one.
 var (
-	showCueOutputsKeys      = map[string]bool{"render": true, "audio": true, "ltc": true, "announcement": true}
+	showCueOutputsKeys      = map[string]bool{"render": true, "audio": true, "ltc": true, "announcement": true, "actions": true}
 	showCueRenderKeys       = map[string]bool{"sequence": true}
 	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true, "targets": true, "excludeNodes": true}
 	showCueLTCKeys          = map[string]bool{"startOffsetMillis": true, "target": true}
@@ -83,6 +83,9 @@ type ShowCueOutputs struct {
 	Audio        *ShowCueAudioOutput        `json:"audio,omitempty"`
 	LTC          *ShowCueLTCOutput          `json:"ltc,omitempty"`
 	Announcement *ShowCueAnnouncementOutput `json:"announcement,omitempty"`
+	// Actions is an ordered list of same-show show.action ids the
+	// coordinator fires once per activation. Nil when absent or empty.
+	Actions []string `json:"actions,omitempty"`
 }
 
 // ShowCueRenderOutput is show.cue.outputs.render. Sequence is the LOGICAL
@@ -417,10 +420,18 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 		outputs.Announcement = &announcement
 	}
 
-	if outputs.Render == nil && outputs.Audio == nil && outputs.LTC == nil && outputs.Announcement == nil {
+	if raw, present := fields["actions"]; present {
+		actions, verr := decodeShowCueActions(raw)
+		if verr != nil {
+			return ShowCueOutputs{}, verr
+		}
+		outputs.Actions = actions
+	}
+
+	if outputs.Render == nil && outputs.Audio == nil && outputs.LTC == nil && outputs.Announcement == nil && len(outputs.Actions) == 0 {
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs",
-			Detail: "outputs must declare at least one of render, audio, ltc, or announcement",
+			Detail: "outputs must declare at least one of render, audio, ltc, announcement, or actions",
 		}
 	}
 
@@ -461,6 +472,59 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	}
 
 	return outputs, nil
+}
+
+// decodeShowCueActions decodes outputs.actions: a JSON array of distinct,
+// non-empty show.action ids. An empty array decodes as nil, the same as absent.
+func decodeShowCueActions(raw json.RawMessage) ([]string, *ValidationError) {
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: "outputs.actions", Detail: "outputs.actions must not be null; omit it, or use an empty array"}
+	}
+	var actions []string
+	if err := json.Unmarshal(raw, &actions); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "outputs.actions", Detail: "outputs.actions must be a JSON array of show.action ids"}
+	}
+	seen := make(map[string]bool, len(actions))
+	for i, id := range actions {
+		itemField := fmt.Sprintf("outputs.actions[%d]", i)
+		if id == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: itemField, Detail: itemField + " must not be empty"}
+		}
+		if seen[id] {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: itemField,
+				Detail: fmt.Sprintf("show action %q is already listed earlier in outputs.actions", id),
+			}
+		}
+		seen[id] = true
+	}
+	if len(actions) == 0 {
+		return nil, nil
+	}
+	return actions, nil
+}
+
+// ValidateShowCueActions checks that every outputs.actions id names a
+// show.action with an active revision in p's own show. actionShow returns
+// that action's show, or false when it has no active revision.
+func ValidateShowCueActions(p ShowCuePayload, actionShow func(id string) (string, bool)) *ValidationError {
+	for i, id := range p.Outputs.Actions {
+		itemField := fmt.Sprintf("outputs.actions[%d]", i)
+		show, ok := actionShow(id)
+		if !ok {
+			return &ValidationError{
+				Code: ValidationCodeFieldUnknownReference, Field: itemField,
+				Detail: fmt.Sprintf("show action %q does not exist. Create it first, or remove it from this cue.", id),
+			}
+		}
+		if show != p.Show {
+			return &ValidationError{
+				Code: ValidationCodeCrossShowReference, Field: itemField,
+				Detail: fmt.Sprintf("show action %q belongs to show %q, not %q. Pick an action from this cue's show.", id, show, p.Show),
+			}
+		}
+	}
+	return nil
 }
 
 func decodeShowCueRenderOutput(raw json.RawMessage) (ShowCueRenderOutput, *ValidationError) {

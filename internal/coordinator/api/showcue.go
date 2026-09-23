@@ -172,6 +172,10 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	if verr := config.ValidateShowCueActions(payload, h.showActionShow(r.Context())); verr != nil {
+		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
 
 	if problem, err := h.refuseShowChange(r.Context(), config.ShowCueConfigKind, id, payload.Show); err != nil {
 		h.writeInternalError(w, now, "check stored show.cue show before write", err)
@@ -222,7 +226,7 @@ func (h *handlers) handleDeleteShowCue(w http.ResponseWriter, r *http.Request) {
 }
 
 func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
-	out := v1.ConfigShowCueOutputs{}
+	out := v1.ConfigShowCueOutputs{Actions: o.Actions}
 	if o.Render != nil {
 		out.Render = &v1.ConfigShowCueRenderOutput{Sequence: o.Render.Sequence}
 	}
@@ -251,5 +255,21 @@ func mapShowCueConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
+	}
+}
+
+// showActionShow returns the show a show.action's active revision belongs
+// to, the actionShow callback [config.ValidateShowCueActions] takes.
+func (h *handlers) showActionShow(ctx context.Context) func(id string) (string, bool) {
+	return func(id string) (string, bool) {
+		rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, id)
+		if err != nil || problem != nil {
+			return "", false
+		}
+		payload, err := decodeShowActionPayloadForRead(rev.PayloadJSON)
+		if err != nil {
+			return "", false
+		}
+		return payload.Show, true
 	}
 }

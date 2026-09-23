@@ -143,8 +143,45 @@ func cmdCueList(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		}
 		return exitOK
 	}
-	printShowConfigObjectsTable(stdout, resp)
+	actions := make(map[string][]string, len(resp.Objects))
+	for _, o := range resp.Objects {
+		var cue showCueConfigResponse
+		if err := c.getJSON(ctx, "/api/v1/config/show.cue/"+url.PathEscape(o.ID), nil, &cue); err != nil {
+			return reportError(stderr, "cue list", err)
+		}
+		actions[o.ID] = cueActionIDs(cue.Payload.Outputs)
+	}
+	printCueListTable(stdout, resp, actions)
 	return exitOK
+}
+
+// printCueListTable is printShowConfigObjectsTable plus each cue's show
+// actions, in firing order.
+func printCueListTable(w io.Writer, resp showConfigObjectsListResponse, actions map[string][]string) {
+	if len(resp.Objects) == 0 {
+		_, _ = fmt.Fprintf(w, "(no %s objects)\n", resp.Kind)
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tLABEL\tSHOW\tREVISION\tUPDATED\tACTIONS")
+	for _, o := range resp.Objects {
+		list := "-"
+		if a := actions[o.ID]; len(a) > 0 {
+			list = strings.Join(a, ", ")
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", o.ID, o.Label, o.Show, o.CurrentRevision, o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"), list)
+	}
+	_ = tw.Flush()
+}
+
+// cueActionIDs reads outputs.actions for display. Malformed outputs read
+// as no actions; the raw outputs line still shows them.
+func cueActionIDs(outputs json.RawMessage) []string {
+	var o struct {
+		Actions []string `json:"actions"`
+	}
+	_ = json.Unmarshal(outputs, &o)
+	return o.Actions
 }
 
 func cmdCueGet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -387,9 +424,19 @@ type cueActivateResponse struct {
 	ServerTime      time.Time                  `json:"serverTime"`
 	CueID           string                     `json:"cueId"`
 	Nodes           []cueActivationNodeOutcome `json:"nodes"`
+	Actions         []cueActionOutcome         `json:"actions"`
 	Aligned         bool                       `json:"aligned"`
 	UnalignedReason string                     `json:"unalignedReason,omitempty"`
 	ScheduledAtNs   *int64                     `json:"scheduledAtNs,omitempty"`
+}
+
+// cueActionOutcome mirrors v1.CueActionOutcome field for field.
+type cueActionOutcome struct {
+	ActionID      string `json:"actionId"`
+	Label         string `json:"label,omitempty"`
+	Outcome       string `json:"outcome"`
+	OutcomeState  string `json:"outcomeState,omitempty"`
+	OutcomeReason string `json:"outcomeReason,omitempty"`
 }
 
 // cueActivationNodeOutcome mirrors v1.CueActivationNodeOutcome field for
@@ -502,6 +549,9 @@ func reportCueActivateResponse(stdout io.Writer, resp cueActivateResponse) int {
 			_, _ = fmt.Fprintf(stdout, "  %s\n", line)
 		}
 	}
+	for _, a := range resp.Actions {
+		_, _ = fmt.Fprintf(stdout, "%s: %s action %s: %s\n", a.Outcome, resp.CueID, a.ActionID, a.OutcomeReason)
+	}
 	return exitCodeForCueActivateResponse(resp)
 }
 
@@ -554,6 +604,9 @@ func printCueDetail(w io.Writer, resp showCueConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Name:         %s\n", p.Name)
 	_, _ = fmt.Fprintf(w, "Outputs:      %s\n", string(p.Outputs))
 	printCueOutputTargets(w, p.Outputs)
+	if actions := cueActionIDs(p.Outputs); len(actions) > 0 {
+		_, _ = fmt.Fprintf(w, "Actions:      %s\n", strings.Join(actions, ", "))
+	}
 	_, _ = fmt.Fprintf(w, "Revision:     %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:      %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

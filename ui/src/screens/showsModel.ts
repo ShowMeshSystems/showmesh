@@ -173,6 +173,8 @@ export type CueRow = {
   announcementPolicy: string | null
   /** This cue's audio asset (audio or announcement output) is not among the show's current assets. */
   assetMissing: boolean
+  /** Show action ids this cue fires on activation, in firing order. */
+  actions: string[]
 }
 
 /** True when a cue's audio output names a sequence not among this show's current assets. Announcement cues always carry an audio output (ADR-043), so this covers both. */
@@ -215,6 +217,7 @@ export function cueRows(
       usedByPlaylists: names,
       announcementPolicy: cue.payload.outputs.announcement !== undefined ? describeAnnouncementPolicy(cue.payload.outputs.announcement) : null,
       assetMissing: cueAssetMissing(cue.payload.outputs, assets),
+      actions: cue.payload.outputs.actions ?? [],
     }
   })
 }
@@ -228,6 +231,8 @@ export type CueActivationDraft = {
   audio: { asset: string; startOffsetMillis: number; targets: string[] } | null
   ltc: { startOffsetMillis: number; target: string } | null
   announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; targets: string[] } | null
+  /** Labels of the show actions the cue fires, in firing order. */
+  actions?: readonly string[]
   /** The installation's LTC frame rate, for formatting audio/ltc start offsets as timecode. Null when it has not been read. */
   ltcFps: number | null
 }
@@ -245,11 +250,13 @@ export function joinFacts(parts: readonly string[]): string {
  * literally rather than being silently skipped.
  */
 export function cueActivationSummary(draft: CueActivationDraft): string {
-  if (draft.render === null && draft.audio === null && draft.ltc === null && draft.announcement === null) {
+  const actions = draft.actions ?? []
+  if (draft.render === null && draft.audio === null && draft.ltc === null && draft.announcement === null && actions.length === 0) {
     return 'Pick at least one output to see what this cue will do.'
   }
 
   const parts: string[] = []
+  if (actions.length > 0) parts.push(`fire ${actions.join(', then ')}`)
 
   if (draft.render !== null) {
     parts.push(draft.render.sequence.trim() === '' ? 'render an unnamed sequence' : `render sequence ${draft.render.sequence.trim()}`)

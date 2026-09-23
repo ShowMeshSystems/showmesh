@@ -6020,6 +6020,8 @@ export interface components {
             cueId: string;
             /** @description One outcome per node participating in cueId, never a single collapsed verdict: a Cue's outputs may resolve on several nodes, and one node's refusal is never evidence about another's. Empty when no node currently resolves any output for this Cue. */
             nodes: components["schemas"]["CueActivationNodeOutcome"][];
+            /** @description One outcome per show action in the Cue's outputs.actions, in the Cue's order. Empty when the Cue declares no actions. An action failure never changes the node outcomes above. */
+            actions: components["schemas"]["CueActionOutcome"][];
             /** @description ADR-049 decision 3's own verdict: true when this Cue reached at most one audio-bearing node (nothing to align - a Cue reaching one node behaves exactly as before this field existed), or when it reached more than one and the coordinator chose one shared start instant for all of them AND every node's own confirmed result reports it actually started at that instant. False when more than one audio-bearing node was reached and no usable media-clock reading could be obtained (every one of those nodes still started, on arrival), or when the coordinator did choose a shared instant but some node's own confirmed result reports it did not honor that instant (that node's own clock was not usable when the command reached it) - either way, no node is ever reported as a synchronized success it did not reach. */
             aligned: boolean;
             /** @description The concrete reason, present only when aligned is false. */
@@ -6029,6 +6031,15 @@ export interface components {
              * @description The shared start instant every audio-bearing node was started at, present only when aligned is true AND scheduling was actually attempted (more than one audio-bearing node); a single-audio-node or render-only Cue never sets it. Around 1.79e18 nanoseconds, past IEEE-754 double's exact integer range (9.007e15): a client parsing this body with a stock JSON parser ROUNDS it. Parse it as an exact integer.
              */
             scheduledAtNs?: number;
+        };
+        /** @description One show action a Cue activation fired, in the outcome vocabulary POST /actions/{id}/invocations reports. The action is recorded as its own command and audited as action.invoke:<integration>, with the Cue id and activation id in the audit params. */
+        CueActionOutcome: {
+            actionId: string;
+            label?: string;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
+            outcomeState?: string;
+            outcomeReason?: string;
         };
         /** @description One node's own cue.activate dispatch outcome, in the shared "confirmed" | "unconfirmed" | "refused" | "failed" vocabulary (ADR-020) every other command route on this API already reports outcomes in. */
         CueActivationNodeOutcome: {
@@ -6528,6 +6539,8 @@ export interface components {
             audio?: components["schemas"]["ConfigShowCueAudioOutput"];
             ltc?: components["schemas"]["ConfigShowCueLTCOutput"];
             announcement?: components["schemas"]["ConfigShowCueAnnouncementOutput"];
+            /** @description Ordered show.action ids the coordinator fires once per activation of this Cue, before or alongside the node dispatch. Each id must name a show.action with an active revision in this Cue's show; an unknown id is refused as an unknown reference and another show's action as a cross-show reference. Duplicates are refused. An empty array is the same as absent and is omitted on read. A Cue whose only output is actions is valid. Actions claim no node resource. */
+            actions?: string[];
         };
         /** @description The "show.cue" configuration kind's decoded payload (Track H seam H1, ADR-043), returned by GET and accepted by PUT /config/show.cue/{id}. show must name an existing show object. */
         ConfigShowCue: {

@@ -199,6 +199,9 @@ type cueActivationDispatchOutcome struct {
 // envelope is per-node, so a refusal for one node is not evidence about
 // any other.
 func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
+	// The Cue's show actions start before any node dispatch, so a Resolume
+	// column that follows timecode is live before LTC starts.
+	h.startCueActivationActions(ctx, activations, issuer)
 	return dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		// Never arm [cueactivation.AudioSessionID] (the live show session)
 		// here: it used the same act.EvidenceAt-derived revision cue.activate

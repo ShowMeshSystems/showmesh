@@ -43,6 +43,7 @@ import {
   type AudioNodeSummary,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
+  type CueActionOutcome,
   type CueActivationNodeOutcome,
   type EmergencyStopInstanceOutcome,
   type EmergencyStopResult,
@@ -1067,7 +1068,7 @@ type AnnouncementCue = {
 /** One cue row's own Fire attempt: in flight, or its own reported per-node outcomes, or a refusal before any node was ever reached. */
 type AnnouncementFireState =
   | { kind: 'firing' }
-  | { kind: 'reported'; nodes: CueActivationNodeOutcome[]; aligned: boolean; unalignedReason: string; scheduledAtNs: number | null }
+  | { kind: 'reported'; nodes: CueActivationNodeOutcome[]; actions: CueActionOutcome[]; aligned: boolean; unalignedReason: string; scheduledAtNs: number | null }
   | { kind: 'refused'; message: string }
 
 function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | undefined }) {
@@ -1101,6 +1102,12 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
           <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
           {n.outcomeReason !== undefined && n.outcomeReason !== '' ? `: ${n.outcomeReason}` : ''}
           {describeStartTrigger(n) !== null ? ` ${describeStartTrigger(n)}` : ''}
+        </p>
+      ))}
+      {state.actions.map((a) => (
+        <p key={a.actionId} className="sm-small">
+          <StatusPair tone={instanceOutcomeTone(a.outcome)} label={`${a.label ?? a.actionId}: ${a.outcome}`} />
+          {a.outcomeReason !== undefined && a.outcomeReason !== '' ? `: ${a.outcomeReason}` : ''}
         </p>
       ))}
     </div>
@@ -1137,6 +1144,8 @@ function Announcements({ show }: { show: string | null }) {
           [cueId]: {
             kind: 'reported',
             nodes: resp.nodes,
+            // A coordinator older than cue actions omits the field.
+            actions: resp.actions ?? [],
             aligned: resp.aligned,
             unalignedReason: resp.unalignedReason ?? '',
             scheduledAtNs: resp.scheduledAtNs ?? null,
