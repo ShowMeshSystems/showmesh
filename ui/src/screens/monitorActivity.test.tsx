@@ -166,7 +166,7 @@ describe('Monitor · Activity', () => {
           params: {
             cueId: 'song-one',
             actions: [
-              { actionId: 'column-1', label: 'Song one column', outcome: 'confirmed' },
+              { actionId: 'column-1', label: 'Song one column', outcome: 'confirmed', outcomeState: 'current' },
               { actionId: 'blackout-now', outcome: 'failed', outcomeReason: 'Resolume did not answer' },
             ],
           },
@@ -174,7 +174,7 @@ describe('Monitor · Activity', () => {
       ],
     })
     renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
-    expect(await screen.findByText(/Show actions: Song one column confirmed, blackout-now failed\./)).toBeInTheDocument()
+    expect(await screen.findByText(/Show actions: Song one column confirmed, current; blackout-now failed: Resolume did not answer\./)).toBeInTheDocument()
   })
 
   it('reads a failed action as bad, worded "Failed"', async () => {

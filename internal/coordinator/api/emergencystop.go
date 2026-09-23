@@ -501,6 +501,7 @@ func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now ti
 // dispatch itself has already completed by the time this order is
 // applied, so it affects nothing but readability.
 func (h *handlers) emergencyStopDispatchAllTargets(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) (outcomes []v1.EmergencyStopInstanceOutcome, noInstancesConfigured bool) {
+	h.emergencyStops.Add(1)
 	var fppOutcomes, nodeOutcomes, resolumeOutcomes, renderOutcomes []v1.EmergencyStopInstanceOutcome
 	var wg sync.WaitGroup
 	wg.Add(4)

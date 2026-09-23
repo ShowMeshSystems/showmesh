@@ -6020,7 +6020,7 @@ export interface components {
             cueId: string;
             /** @description One outcome per node participating in cueId, never a single collapsed verdict: a Cue's outputs may resolve on several nodes, and one node's refusal is never evidence about another's. Empty when no node currently resolves any output for this Cue. */
             nodes: components["schemas"]["CueActivationNodeOutcome"][];
-            /** @description One outcome per show action in the Cue's outputs.actions, in the Cue's order. Empty when the Cue declares no actions. An action failure never changes the node outcomes above. */
+            /** @description One outcome per show action in the Cue's outputs.actions, in the Cue's order, as known when this response is sent. An action still waiting for its confirmation reads as unconfirmed. Empty when the Cue declares no actions. An action failure never changes the node outcomes above. */
             actions: components["schemas"]["CueActionOutcome"][];
             /** @description ADR-049 decision 3's own verdict: true when this Cue reached at most one audio-bearing node (nothing to align - a Cue reaching one node behaves exactly as before this field existed), or when it reached more than one and the coordinator chose one shared start instant for all of them AND every node's own confirmed result reports it actually started at that instant. False when more than one audio-bearing node was reached and no usable media-clock reading could be obtained (every one of those nodes still started, on arrival), or when the coordinator did choose a shared instant but some node's own confirmed result reports it did not honor that instant (that node's own clock was not usable when the command reached it) - either way, no node is ever reported as a synchronized success it did not reach. */
             aligned: boolean;
@@ -6032,7 +6032,7 @@ export interface components {
              */
             scheduledAtNs?: number;
         };
-        /** @description One show action a Cue activation fired, in the outcome vocabulary POST /actions/{id}/invocations reports. The action is recorded as its own command and audited as action.invoke:<integration>, with the Cue id and activation id in the audit params. */
+        /** @description One show action a Cue activation fired, in the outcome vocabulary POST /actions/{id}/invocations reports. The action is recorded as its own command and audited as action.invoke:<integration>, with the Cue id and activationKey, a hash identifying the activation, in the audit params. Once every action resolves, a cue.activate outcome audit entry targeting cue:<cueId> carries the final outcomes in its actions param. */
         CueActionOutcome: {
             actionId: string;
             label?: string;

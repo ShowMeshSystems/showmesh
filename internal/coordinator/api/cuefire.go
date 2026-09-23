@@ -177,11 +177,11 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	// dispatchCueActivations wraps, per that ADR's own "not two
 	// implementations" rule.
 	// The cue's show actions are sent before the node dispatch starts, up to
-	// cueActionsSendBudget; the response waits for their outcomes too.
+	// cueActionsSendBudget; the response carries their outcomes as known then.
 	actionsCtx := context.WithoutCancel(ctx)
-	actionsRun := h.startCueActions(actionsCtx, activations, nonce, issuer)
+	actionsRun := h.startCueActions(actionsCtx, nil, activations, nonce, issuer)
 	if actionsRun != nil {
-		_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueFireHTTPWriteDeadline() + actionInvokeHTTPWriteDeadline))
+		_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueFireHTTPWriteDeadline() + cueActionsSendBudget))
 	}
 	actionsRun.waitSent()
 	ctx = withCueActionsRun(ctx, actionsRun)
@@ -190,8 +190,10 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	outcomes := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		return h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
 	})
-	h.finishCueActions(actionsCtx, actionsRun, activations)
 	actions := actionsRun.snapshot()
+	if actionsRun != nil {
+		go h.finishCueActions(actionsCtx, actionsRun, activations, nonce, issuer)
+	}
 	nodes := make([]v1.CueActivationNodeOutcome, len(outcomes))
 	for i, outcome := range outcomes {
 		nodes[i] = cueActivateWireOutcome(outcome)

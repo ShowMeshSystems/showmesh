@@ -17294,8 +17294,10 @@ components:
           type: array
           description: >-
             One outcome per show action in the Cue's outputs.actions, in the
-            Cue's order. Empty when the Cue declares no actions. An action
-            failure never changes the node outcomes above.
+            Cue's order, as known when this response is sent. An action still
+            waiting for its confirmation reads as unconfirmed. Empty when the
+            Cue declares no actions. An action failure never changes the node
+            outcomes above.
           items:
             $ref: "#/components/schemas/CueActionOutcome"
         aligned:
@@ -17336,7 +17338,10 @@ components:
         One show action a Cue activation fired, in the outcome vocabulary
         POST /actions/{id}/invocations reports. The action is recorded as
         its own command and audited as action.invoke:<integration>, with
-        the Cue id and activation id in the audit params.
+        the Cue id and activationKey, a hash identifying the activation, in
+        the audit params. Once every action resolves, a cue.activate outcome
+        audit entry targeting cue:<cueId> carries the final outcomes in its
+        actions param.
       required: [actionId, outcome]
       properties:
         actionId:

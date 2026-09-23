@@ -44,12 +44,28 @@ type cueActionFireResultPayload struct {
 
 // cueActionsRun is one activation's show actions in flight.
 type cueActionsRun struct {
-	sent chan struct{}
-	done chan struct{}
+	sent       chan struct{}
+	done       chan struct{}
+	budgetEnds time.Time
 
 	mu       sync.Mutex
 	outcomes []v1.CueActionOutcome
 	fresh    []bool
+	settled  []bool
+	late     []bool
+	gaveUp   bool
+}
+
+func newCueActionsRun(actionIDs []string, budgetEnds time.Time) *cueActionsRun {
+	n := len(actionIDs)
+	run := &cueActionsRun{
+		sent: make(chan struct{}), done: make(chan struct{}), budgetEnds: budgetEnds,
+		outcomes: make([]v1.CueActionOutcome, n), fresh: make([]bool, n), settled: make([]bool, n), late: make([]bool, n),
+	}
+	for i, id := range actionIDs {
+		run.outcomes[i] = v1.CueActionOutcome{ActionID: id, Outcome: outcomeWordUnconfirmed, OutcomeReason: "This action has not been sent yet."}
+	}
+	return run
 }
 
 func (r *cueActionsRun) set(i int, o v1.CueActionOutcome, fresh bool) {
@@ -57,6 +73,24 @@ func (r *cueActionsRun) set(i int, o v1.CueActionOutcome, fresh bool) {
 	defer r.mu.Unlock()
 	r.outcomes[i] = o
 	r.fresh[i] = fresh
+	r.settled[i] = true
+}
+
+// markSent records that action i reached the wire. It is late when that
+// happened after the budget ended or after the node dispatch stopped waiting.
+func (r *cueActionsRun) markSent(i int, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.late[i] = at.After(r.budgetEnds) || r.gaveUp
+	if !r.settled[i] {
+		r.outcomes[i].OutcomeReason = "This action was sent and is waiting for its confirmation."
+	}
+}
+
+func (r *cueActionsRun) wasLate(i int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.late[i]
 }
 
 // snapshot copies the outcomes known now. An action still waiting for its
@@ -86,11 +120,14 @@ func (r *cueActionsRun) waitSent() {
 	if r == nil {
 		return
 	}
-	t := time.NewTimer(cueActionsSendBudget)
+	t := time.NewTimer(time.Until(r.budgetEnds))
 	defer t.Stop()
 	select {
 	case <-r.sent:
 	case <-t.C:
+		r.mu.Lock()
+		r.gaveUp = true
+		r.mu.Unlock()
 	}
 }
 
@@ -161,11 +198,10 @@ func (h *handlers) cueActionIDs(ctx context.Context, act cueactivation.Activatio
 	return payload.Outputs.Actions, nil
 }
 
-// startCueActions fires the show actions of the cue behind activations, in
-// order: each starts once the one before it is sent, never waiting for its
-// confirmation. It returns nil when the cue has no actions. The goroutine
-// is owned by cueActivationFailToBlackWG so the loop's shutdown waits for it.
-func (h *handlers) startCueActions(ctx context.Context, activations map[string]cueactivation.Activation, occurrence int64, issuer cueActivationIssuer) *cueActionsRun {
+// startCueActions fires the cue's show actions in order, each once the one
+// before it is sent. It returns nil when the cue has no actions; wg, when
+// set, owns the goroutine so the loop's shutdown waits for it.
+func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, activations map[string]cueactivation.Activation, occurrence int64, issuer cueActivationIssuer) *cueActionsRun {
 	act, ok := cueActionsActivation(activations)
 	if !ok {
 		return nil
@@ -178,35 +214,41 @@ func (h *handlers) startCueActions(ctx context.Context, activations map[string]c
 	if len(actionIDs) == 0 {
 		return nil
 	}
-	run := &cueActionsRun{
-		sent: make(chan struct{}), done: make(chan struct{}),
-		outcomes: make([]v1.CueActionOutcome, len(actionIDs)), fresh: make([]bool, len(actionIDs)),
-	}
-	for i, id := range actionIDs {
-		run.outcomes[i] = v1.CueActionOutcome{ActionID: id, Outcome: outcomeWordUnconfirmed, OutcomeReason: "This action has not been sent yet."}
-	}
+	stopsAtStart := h.emergencyStops.Load()
+	run := newCueActionsRun(actionIDs, time.Now().Add(cueActionsSendBudget))
 	activationKey := cueActionsActivationKey(act, occurrence)
-	budgetEnds := time.Now().Add(cueActionsSendBudget)
 
-	h.cueActivationFailToBlackWG.Add(1)
+	if wg != nil {
+		wg.Add(1)
+	}
 	go func() {
-		defer h.cueActivationFailToBlackWG.Done()
-		var wg sync.WaitGroup
+		if wg != nil {
+			defer wg.Done()
+		}
+		var fired sync.WaitGroup
 		for i, actionID := range actionIDs {
-			late := time.Now().After(budgetEnds)
+			if h.cueActionsStopped(ctx, stopsAtStart) {
+				for j := i; j < len(actionIDs); j++ {
+					key := cueActionIdempotencyKey(activationKey, j, actionIDs[j])
+					o, fresh := h.recordUnsentCueAction(ctx, act, key, actionIDs[j], cueActionUnresolvedCommandAction, "", issuer, outcomeWordRefused, cueActionStoppedReason)
+					run.set(j, o, fresh)
+				}
+				break
+			}
 			sent := make(chan struct{})
 			var once sync.Once
-			markSent := func() { once.Do(func() { close(sent) }) }
-			wg.Add(1)
+			release := func() { once.Do(func() { close(sent) }) }
+			onSent := func() { run.markSent(i, time.Now()); release() }
+			fired.Add(1)
 			go func() {
-				defer wg.Done()
-				defer markSent()
+				defer fired.Done()
+				defer release()
 				defer func() {
 					if r := recover(); r != nil {
 						run.set(i, v1.CueActionOutcome{ActionID: actionID, Outcome: outcomeWordFailed, OutcomeReason: "this action stopped because of an internal coordinator error"}, true)
 					}
 				}()
-				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, markSent), act, activationKey, i, actionID, issuer, late)
+				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, onSent), act, activationKey, i, actionID, issuer, func() bool { return run.wasLate(i) })
 				run.set(i, o, fresh)
 				if fresh && o.Outcome != outcomeWordConfirmed {
 					h.logWarn("cue actions: a show action did not confirm; the cue's other outputs were not affected",
@@ -216,32 +258,48 @@ func (h *handlers) startCueActions(ctx context.Context, activations map[string]c
 			<-sent
 		}
 		close(run.sent)
-		wg.Wait()
+		fired.Wait()
 		close(run.done)
 	}()
 	return run
+}
+
+const cueActionStoppedReason = "The show was stopped before this action was sent."
+
+// cueActionsStopped reports whether an emergency stop fired since the run
+// began or a weather delay is active. A failed read counts as stopped.
+func (h *handlers) cueActionsStopped(ctx context.Context, stopsAtStart int64) bool {
+	if h.emergencyStops.Load() != stopsAtStart {
+		return true
+	}
+	delayed, err := h.weatherDelayActive(ctx)
+	if err != nil {
+		h.logWarn("cue actions: failed to read weather delay state; holding the remaining actions as a precaution", "error", err)
+		return true
+	}
+	return delayed
 }
 
 // dispatchCueActivationsWithActions is the playlist loop's dispatch: the
 // cue's show actions are sent first, up to cueActionsSendBudget, then the
 // node dispatch runs, and the action outcomes land on the activation later.
 func (h *handlers) dispatchCueActivationsWithActions(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, occurrence int64, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
-	run := h.startCueActions(ctx, activations, occurrence, issuer)
+	run := h.startCueActions(ctx, &h.cueActivationFailToBlackWG, activations, occurrence, issuer)
 	run.waitSent()
 	outcomes := h.dispatchCueActivations(withCueActionsRun(ctx, run), now, activations, issuer, pin)
 	if run != nil {
 		h.cueActivationFailToBlackWG.Add(1)
 		go func() {
 			defer h.cueActivationFailToBlackWG.Done()
-			h.finishCueActions(ctx, run, activations)
+			h.finishCueActions(ctx, run, activations, occurrence, issuer)
 		}()
 	}
 	return outcomes
 }
 
-// finishCueActions waits for every action's outcome and then writes the
-// outcomes onto each node's cue.activate command row.
-func (h *handlers) finishCueActions(ctx context.Context, run *cueActionsRun, activations map[string]cueactivation.Activation) {
+// finishCueActions waits for every action's outcome, writes the outcomes
+// onto each node's cue.activate command row, and audits them once.
+func (h *handlers) finishCueActions(ctx context.Context, run *cueActionsRun, activations map[string]cueactivation.Activation, occurrence int64, issuer cueActivationIssuer) {
 	if run == nil {
 		return
 	}
@@ -266,11 +324,41 @@ func (h *handlers) finishCueActions(ctx context.Context, run *cueActionsRun, act
 			h.logWarn("cue actions: failed to record action outcomes on the activation", "nodeId", nodeID, "error", err)
 		}
 	}
+	act, ok := cueActionsActivation(activations)
+	if !ok {
+		return
+	}
+	params := cueActivationAuditParams(act)
+	params["activationKey"] = cueActionsActivationKey(act, occurrence)
+	params["actions"] = actions
+	h.writeCueActionAudit(ctx, identity.AuditEntry{
+		Timestamp: h.now(), PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
+		Form: issuer.Form, CredentialID: issuer.CredentialID,
+		Action: "cue.activate", Target: "cue:" + act.CueID, Params: params,
+		Kind: identity.AuditOutcome, Outcome: cueActionsWorstOutcome(actions),
+		OutcomeReason: fmt.Sprintf("The show actions of cue %q finished.", act.CueID),
+	})
+}
+
+// cueActionsWorstOutcome is the outcome of the least successful action.
+func cueActionsWorstOutcome(actions []v1.CueActionOutcome) string {
+	rank := map[string]int{outcomeWordConfirmed: 0, outcomeWordUnconfirmable: 1, outcomeWordUnconfirmed: 2, outcomeWordRefused: 3, outcomeWordFailed: 4}
+	worst := outcomeWordConfirmed
+	for _, a := range actions {
+		o := a.Outcome
+		if _, known := rank[o]; !known {
+			o = outcomeWordUnconfirmed
+		}
+		if rank[o] > rank[worst] {
+			worst = o
+		}
+	}
+	return worst
 }
 
 // fireOneCueAction fires one action at most once per activation. fresh is
 // false when the outcome was replayed from an earlier fire.
-func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activation, activationKey string, index int, actionID string, issuer cueActivationIssuer, late bool) (v1.CueActionOutcome, bool) {
+func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activation, activationKey string, index int, actionID string, issuer cueActivationIssuer, late func() bool) (v1.CueActionOutcome, bool) {
 	key := cueActionIdempotencyKey(activationKey, index, actionID)
 	if existing, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, key); err == nil {
 		return cueActionOutcomeFromRecord(actionID, existing), false
@@ -331,7 +419,7 @@ func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activ
 	if outcomeState == "" && outcome == outcomeWordConfirmed {
 		outcomeState = "current"
 	}
-	if late {
+	if late() {
 		outcomeReason = cueActionLateReason + outcomeReason
 	}
 
