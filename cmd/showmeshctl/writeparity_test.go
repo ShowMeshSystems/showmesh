@@ -23,6 +23,10 @@ import (
 // Path keys match api/openapi.yaml verbatim (no /api/v1 prefix, {param}
 // placeholders as written there).
 var exemptWritePaths = map[string]string{
+	"/node-enrollments/redeem": "a node exchanges its one-time code for its own credentials, which the " +
+		"installer writes into the node's agent.env (ADR-055 decisions 5 and 6). It is the node's call, not " +
+		"an operator capability; the operator's half is \"node enroll\", \"node enrollments\" and " +
+		"\"node enrollments cancel\".",
 	"/bootstrap": "mints a browser session cookie (ADR-024's session credential form); this CLI is " +
 		"bearer-only (cmd_session.go's own doc comment) and never holds or presents a cookie. The " +
 		"equivalent break-glass path for a coordinator with no reachable admin is the coordinator " +

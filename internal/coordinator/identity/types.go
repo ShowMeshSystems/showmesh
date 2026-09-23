@@ -37,6 +37,11 @@ const (
 	// that narrow in the right place — scheduler is show:macro:run,
 	// operator is far wider.
 	RoleRecovery Role = "recovery"
+
+	// RoleNode is the machine role an enrolled node's API token carries
+	// (ADR-055 decision 5): exactly the scopes the node agent's own HTTP
+	// calls to the coordinator need.
+	RoleNode Role = "node"
 )
 
 // Scope is one `<resource>:<action>` authorization unit (ADR-024 decision
@@ -233,6 +238,10 @@ const (
 	// ScopeShowWeatherDelayResume gates resuming. It is separate from
 	// [ScopeShowWeatherDelayInvoke] because a resume relights the display.
 	ScopeShowWeatherDelayResume Scope = "show:weatherdelay:resume"
+
+	// ScopeNodeEnroll gates minting, listing and cancelling node
+	// enrollment codes (ADR-055 decision 4). Admin only.
+	ScopeNodeEnroll Scope = "node:enroll"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -260,7 +269,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // ScopeNightOverride sits here, not in operatorActionScopes, per its own
 // doc comment: bypassing a blocking interlock is deliberately not implied
 // by holding [ScopeNightCommand].
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
@@ -289,6 +298,10 @@ func (r Role) Scopes() []Scope {
 		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}
 	case RoleRecovery:
 		return []Scope{ScopeResolumeAction}
+	case RoleNode:
+		// asset:write registers an FPP Connect upload (POST /api/v1/assets);
+		// node:read fetches asset content when reads are closed.
+		return []Scope{ScopeNodeRead, ScopeAssetWrite}
 	default:
 		return nil
 	}
@@ -318,7 +331,7 @@ var ErrUnknownRole = errors.New("identity: unknown role")
 // role string a scope check would then treat as "no scopes at all".
 func ParseRole(s string) (Role, error) {
 	switch Role(s) {
-	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler, RoleRecovery:
+	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler, RoleRecovery, RoleNode:
 		return Role(s), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownRole, s)

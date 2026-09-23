@@ -184,6 +184,8 @@ var migrations = []migration{
 	// v44 (ADR-054): adds the level 1 stop hold to night_sessions. Existing
 	// rows read back with no hold.
 	{version: 44, fn: migrateV44AddNightSessionStopHoldColumns},
+	// v45 (ADR-055): adds node_enrollment_codes.
+	{version: 45, sql: schemaV45},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

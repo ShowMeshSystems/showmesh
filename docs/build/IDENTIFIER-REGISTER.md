@@ -1436,8 +1436,8 @@ The store schema version, bumped by migrations in
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
-| v45 | reserved | ADR-055: the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
-| v45+ | unallocated | free, except the reservations above |
+| v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
+| v46+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

@@ -33,7 +33,7 @@ The `generate-credentials.sh` step is not optional: the bundled Mosquitto now re
 ./mosquitto/generate-credentials.sh
 ```
 
-It creates `mosquitto/passwd` (gitignored — see this repository's `.gitignore` — bcrypt-hashed via Mosquitto's own `mosquitto_passwd`, using the exact `eclipse-mosquitto` image version this bundle runs) with three fixed roles this bundle itself needs: `coordinator` and `healthcheck`, whose freshly generated passwords it writes directly into `deploy/.env` for you, and `fpp` (the publisher role above), whose password it prints once to the terminal for you to copy into FPP's own configuration. It is idempotent — safe to run again, it never rotates an existing password — and it never authors a credential into anything checked into version control: a password file committed to the repository would be identical in every ShowMesh installation, which is precisely the failure [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) named when it rejected a mandatory shared secret with no distribution mechanism, and which [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10 repeats for the broker specifically.
+It creates `mosquitto/passwd` (gitignored in this repository's `.gitignore`, and hashed with PBKDF2-SHA512 by Mosquitto 2.0's own `mosquitto_passwd`, using the exact `eclipse-mosquitto` image version this bundle runs) with three fixed roles this bundle itself needs: `coordinator` and `healthcheck`, whose freshly generated passwords it writes directly into `deploy/.env` for you, and `fpp` (the publisher role above), whose password it prints once to the terminal for you to copy into FPP's own configuration. It is idempotent: it is safe to run again and never rotates an existing password. It never authors a credential into anything checked into version control: a password file committed to the repository would be identical in every ShowMesh installation, which is precisely the failure [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) named when it rejected a mandatory shared secret with no distribution mechanism, and which [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10 repeats for the broker specifically.
 
 On every run it also rebuilds the gitignored `mosquitto/acl.generated.conf` from the committed fixed-role base (`mosquitto/acl.conf`) and the existing password-file usernames. That migration is intentional: older bundles used a Mosquitto `pattern` grant for agents, but Mosquitto applies a pattern to every authenticated user, including `coordinator`, `fpp`, and `healthcheck`. The generated file has a separate explicit block for every agent and no pattern grants, so those fixed users receive only their documented role permissions. If an existing password file contains a non-fixed username that is not a valid ShowMesh node ID, the script stops before replacing the generated ACL and names the entry to repair; it will not guess whether that account was intended as an agent.
 
@@ -52,9 +52,45 @@ On every run it also rebuilds the gitignored `mosquitto/acl.generated.conf` from
 **What "revocable" does and does not mean here — two limits, stated so an upgrade does not surprise you at showtime:**
 
 - Mosquitto re-reads `passwd` and `acl.generated.conf` on `SIGHUP` but does **not** re-authenticate a client that is already connected. The provisioning script reloads a current Compose broker after it atomically rebuilds the generated file; rotating a compromised or retired agent's credential still takes effect only when that agent's connection actually drops and it reconnects, or when the broker itself restarts (which flips every node's control-plane state to offline at once — a bigger hammer, use deliberately).
-- Every credential this bundle provisions is a **hand-provisioned, permanent-in-practice** credential, not a rotating one. A node agent's credential lives in that node's own configuration on a controller that may be mounted in a yard; rotating it means editing that node's config and restarting its agent, which for a physically deployed node means a visit. This will not change until node-enrollment automation exists (not part of this release — see ADR-024's supersession section).
+- Every credential this bundle provisions is a **hand-provisioned, permanent-in-practice** credential, not a rotating one. A node agent's credential lives in that node's own configuration on a controller that may be mounted in a yard; rotating it means editing that node's config and restarting its agent, which for a physically deployed node means a visit. Node enrollment (below) is the way to rotate a node's credentials without editing files by hand: a re-enrollment code replaces both.
 
 **Residual exposure, recorded rather than glossed over:** the ACL bounds what a compromised *agent* credential can do (a stolen node, per ADR-024 decision 10's own reasoning: "a node is a Pi in a weatherproof box in a front yard, physically reachable by anyone walking past"). It does not defend against a compromised *coordinator* broker credential: anyone holding it can publish a forged command to any node's `cmd` topic, and an agent has no way to tell. Message-level command authentication would close that and is deliberately not built here (see ADR-024's own consequences and alternatives sections). If FPP's own broker credential — whether on this bundle's broker or, as in the reference installation, a separate home-automation broker — is ever a shared, general-purpose account with publish rights rather than a dedicated read-only or FPP-scoped one, that account is a larger command-authority exposure than anything this ACL restricts; see ADR-024 decision 10's own closing paragraphs.
+
+## Node enrollment (ADR-055)
+
+A node can get its broker login and API token from the coordinator instead of from `add-agent-credential.sh`. An administrator mints a one-time code:
+
+```sh
+showmeshctl node enroll <node-id>            # add --reenroll to replace an enrolled node's credentials
+showmeshctl node enrollments                 # list codes; "node enrollments cancel <id>" cancels one
+```
+
+The node's installer sends the code to `POST /api/v1/node-enrollments/redeem` and writes what comes back into `/etc/showmesh/agent.env`. On the built-in broker the coordinator writes the node's entry into `mosquitto/passwd` and rebuilds `mosquitto/acl.generated.conf` by the same rules as `generate-credentials.sh`. Both scripts keep working alongside enrollment. Once the directory has the owner and mode layout below, run `generate-credentials.sh` and `add-agent-credential.sh` with `sudo`, because they write into a directory the coordinator's user owns. The first run of `generate-credentials.sh` creates `passwd` with mode `0600`, which Mosquitto cannot read, so apply the layout after that run. A later run of either script leaves an existing `passwd` at its owner and mode.
+
+A redeem is refused for a minute after 5 wrong or used codes from one address. 30 failed redeems within an hour, from any address, pause every enrollment until that hour has passed.
+
+`docker-compose.yml` mounts `./mosquitto` into the coordinator read-write at `/showmesh/broker-config` and sets `SHOWMESH_BROKER_CONFIG_DIR` to that path. The `mosquitto` service runs `mosquitto/run-with-reload.sh`, which reloads the broker within two seconds of either file changing, so a new node connects without a broker restart.
+
+**Owner and mode.** The coordinator image runs as uid 65532 and Mosquitto 2.0.22 runs as uid and gid 1883. Mosquitto cannot read a `root:root 0600` password file. Set the directory and the two generated files up like this, once:
+
+| Path | Owner:group | Mode |
+| --- | --- | --- |
+| `mosquitto/` | `65532:1883` | `2755` (setgid, so new files get group 1883) |
+| `mosquitto/passwd` | `65532:1883` | `0640` |
+| `mosquitto/acl.generated.conf` | `65532:1883` | `0644` |
+
+```sh
+sudo chown 65532:1883 mosquitto mosquitto/passwd mosquitto/acl.generated.conf
+sudo chmod 2755 mosquitto
+sudo chmod 0640 mosquitto/passwd
+sudo chmod 0644 mosquitto/acl.generated.conf
+```
+
+The coordinator writes each file to a temporary file in the same directory, sets mode `0640` or `0644` explicitly, and renames it into place, so the group comes from the setgid directory. Mosquitto 2.0.22 logs "owner is not mosquitto" and "world readable" warnings for these files and loads them anyway. If the directory is not set up, or `generate-credentials.sh` has not run, `showmeshctl node enroll` is refused with a message naming what to fix.
+
+**External broker.** Set `SHOWMESH_BROKER_MODE=external` and the coordinator writes no broker files. Every enrolled node receives `SHOWMESH_NODE_MQTT_USERNAME` and `SHOWMESH_NODE_MQTT_PASSWORD`, or empty strings when they are unset. On such a broker any client that can reach it can command every node; the per-node access list above does not apply.
+
+**Addresses a node is told.** The broker address is `SHOWMESH_NODE_BROKER_URL` when set, otherwise `tcp://<the host the node reached the coordinator on>:1883`. The coordinator address is `SHOWMESH_PUBLIC_URL` when set, otherwise the address the node used.
 
 ## The control API
 

@@ -323,6 +323,19 @@ type Config struct {
 	// without a real wait, not a recommended production value. Valid range
 	// [0s, 60s]; anything else fails [Config.Validate].
 	ResolumeRecoverySettle time.Duration
+
+	// Node enrollment (ADR-055 decisions 5, 7 and 8). BrokerMode is
+	// "builtin" (the default) or "external". BrokerConfigDir is where the
+	// built-in broker's passwd and acl.generated.conf live. NodeBrokerURL
+	// and PublicURL override the addresses a redeeming node is told.
+	// NodeMQTTUsername/Password are the shared login an external broker
+	// hands every node.
+	BrokerMode       string
+	BrokerConfigDir  string
+	NodeBrokerURL    string
+	PublicURL        string
+	NodeMQTTUsername string
+	NodeMQTTPassword string
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -423,6 +436,14 @@ const (
 	envAPILoginPerSourceDelay = "SHOWMESH_API_LOGIN_PER_SOURCE_DELAY"
 	envAPILoginMaxDelay       = "SHOWMESH_API_LOGIN_MAX_DELAY"
 	envAPITrustClientAddr     = "SHOWMESH_API_TRUST_CLIENT_ADDR"
+
+	// Node enrollment settings; see the Config fields of the same names.
+	envBrokerMode       = "SHOWMESH_BROKER_MODE"
+	envBrokerConfigDir  = "SHOWMESH_BROKER_CONFIG_DIR"
+	envNodeBrokerURL    = "SHOWMESH_NODE_BROKER_URL"
+	envPublicURL        = "SHOWMESH_PUBLIC_URL"
+	envNodeMQTTUsername = "SHOWMESH_NODE_MQTT_USERNAME"
+	envNodeMQTTPassword = "SHOWMESH_NODE_MQTT_PASSWORD"
 
 	// envFPPMQTTBrokerURL, envFPPMQTTUsername, envFPPMQTTPassword,
 	// envFPPMQTTTopicPrefix, and envFPPMQTTHosts back the Step 5 Seam B
@@ -670,6 +691,13 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		AssetInventoryInterval:  assetInventoryInterval,
 		AssetSettingsEnvVarsSet: assetSettingsEnvVarsSet,
 		ResolumeRecoverySettle:  resolumeRecoverySettle,
+
+		BrokerMode:       getEnvDefault(lookup, envBrokerMode, "builtin"),
+		BrokerConfigDir:  getEnvDefault(lookup, envBrokerConfigDir, ""),
+		NodeBrokerURL:    getEnvDefault(lookup, envNodeBrokerURL, ""),
+		PublicURL:        getEnvDefault(lookup, envPublicURL, ""),
+		NodeMQTTUsername: getEnvDefault(lookup, envNodeMQTTUsername, ""),
+		NodeMQTTPassword: getEnvDefault(lookup, envNodeMQTTPassword, ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -946,6 +974,27 @@ func (c Config) Validate() error {
 		return err
 	}
 
+	return validateEnrollmentConfig(c)
+}
+
+// validateEnrollmentConfig checks the node enrollment settings.
+func validateEnrollmentConfig(c Config) error {
+	if c.BrokerMode != "builtin" && c.BrokerMode != "external" {
+		return fmt.Errorf("%s must be builtin or external, got %q", envBrokerMode, c.BrokerMode)
+	}
+	if c.NodeBrokerURL != "" {
+		u, err := url.Parse(c.NodeBrokerURL)
+		if err != nil || !validBrokerSchemes[u.Scheme] || u.Host == "" || u.User != nil {
+			return fmt.Errorf("%s %q must be a broker URL with one of the schemes %s and a host, and no login in it",
+				envNodeBrokerURL, c.NodeBrokerURL, strings.Join(validBrokerSchemesList, ", "))
+		}
+	}
+	if c.PublicURL != "" {
+		u, err := url.Parse(c.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			return fmt.Errorf("%s %q must be an http or https URL with a host, like http://coordinator.local:8080", envPublicURL, c.PublicURL)
+		}
+	}
 	return nil
 }
 
@@ -1413,6 +1462,12 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("asset_sync_interval", c.AssetSyncInterval),
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 		slog.Duration("resolume_recovery_settle", c.ResolumeRecoverySettle),
+		slog.String("broker_mode", c.BrokerMode),
+		slog.String("broker_config_dir", c.BrokerConfigDir),
+		slog.String("node_broker_url", c.NodeBrokerURL),
+		slog.String("public_url", c.PublicURL),
+		slog.String("node_mqtt_username", c.NodeMQTTUsername),
+		slog.Bool("node_mqtt_password_set", c.NodeMQTTPassword != ""),
 	)
 }
 

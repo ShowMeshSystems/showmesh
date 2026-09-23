@@ -2717,6 +2717,179 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /node-enrollments:
+    post:
+      operationId: createNodeEnrollment
+      summary: Mint a one-time enrollment code for a node (ADR-055 decision 4)
+      description: >-
+        Requires `node:enroll`. Validates `nodeId` with the node ID rule
+        and refuses `coordinator`, `fpp`, `healthcheck` and `observer`.
+        Refused with `409` when the node is already enrolled (a code for
+        it was redeemed before, or on the built-in broker its login is
+        already in the password file) unless `reenroll` is true. Minting a
+        code cancels the node's earlier unused code. On the built-in
+        broker, refused with `503` when the coordinator cannot write the
+        broker's login files. The response is the only place the code
+        ever appears. A cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNodeEnrollmentRequest"
+      responses:
+        "201":
+          description: Created. Carries the code, once.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateNodeEnrollmentResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+    get:
+      operationId: listNodeEnrollments
+      summary: List every enrollment code, never the code itself (ADR-055)
+      description: >-
+        Requires `node:enroll`, whether or not reads are otherwise open.
+        Newest first.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeEnrollmentsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+  /node-enrollments/{id}:
+    delete:
+      operationId: cancelNodeEnrollment
+      summary: Cancel a pending enrollment code (ADR-055)
+      description: >-
+        Requires `node:enroll`. Refused with `409` when the code is not
+        pending (already redeemed, expired or cancelled). A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK. The cancelled code.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeEnrollmentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+  /node-enrollments/redeem:
+    post:
+      operationId: redeemNodeEnrollment
+      summary: Exchange an enrollment code for the node's credentials (ADR-055 decision 5)
+      description: >-
+        Takes no principal and no same-origin check: the code is the
+        credential for this one call. It is the only write this API
+        accepts without a principal. The code is accepted in any case,
+        with or without its hyphen. Returns, once, everything the node's
+        `/etc/showmesh/agent.env` needs. On the built-in broker the
+        coordinator writes the node's login into the broker's password
+        file and generated access list; on an external broker it returns
+        the shared login it was configured with, or empty strings. A
+        re-enrollment code replaces the node's broker password and revokes
+        every token of its previous enrollment. Every redemption is
+        audited as `node.enrollment.redeem`, attributed to the principal
+        who minted the code. Failed redemptions (unknown, expired, used or
+        cancelled codes) are limited to 5 a minute from one client address
+        and 30 an hour overall, then refused with `429`; a successful
+        redemption is not counted. When any step fails the coordinator
+        undoes what it did and the code stays pending.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemNodeEnrollmentRequest"
+      responses:
+        "200":
+          description: OK. The node's credentials, once.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedeemNodeEnrollmentResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          description: >-
+            The code expired, was already used, or was cancelled. `detail`
+            says which, and how to get a new one.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
   /audit:
     get:
       operationId: listAudit
@@ -10009,6 +10182,19 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    NodeEnrollmentUnavailable:
+      description: >-
+        The coordinator cannot hand out a node's credentials right now:
+        node enrollment is not set up, or on the built-in broker the
+        coordinator cannot read or write the broker's login files.
+        `detail` says what to fix. A code involved stays valid.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     TooManyRequests:
       description: >-
         `POST /session`'s login concurrency bound was exceeded (ADR-024
@@ -13184,7 +13370,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
         disabled:
           type: boolean
         hasPassword:
@@ -13235,7 +13421,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
         password:
           type: string
     SetPrincipalRoleRequest:
@@ -13248,7 +13434,7 @@ components:
       properties:
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
     SetPrincipalPasswordRequest:
       type: object
       description: >-
@@ -16163,6 +16349,143 @@ components:
           type: [string, "null"]
         source:
           type: string
+    CreateNodeEnrollmentRequest:
+      type: object
+      description: The body of POST /node-enrollments.
+      required: [nodeId]
+      properties:
+        nodeId:
+          type: string
+        reenroll:
+          type: boolean
+          default: false
+        expiresInSeconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 900
+    CreateNodeEnrollmentResponse:
+      type: object
+      description: >-
+        The 201 body of POST /node-enrollments. `code` appears here and
+        nowhere else, as XXXX-XXXX in Crockford base32. `coordinatorUrl`
+        is `SHOWMESH_PUBLIC_URL` when the coordinator has one, and empty
+        otherwise; a client then gives the node the address it used
+        itself.
+      required: [serverTime, id, nodeId, code, reenroll, expiresAt, coordinatorUrl]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        id:
+          type: string
+        nodeId:
+          type: string
+        code:
+          type: string
+          pattern: "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+        reenroll:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
+        coordinatorUrl:
+          type: string
+    NodeEnrollment:
+      type: object
+      description: One enrollment code as listed. Never carries the code.
+      required: [id, nodeId, reenroll, createdBy, createdAt, expiresAt, state, redeemedAt]
+      properties:
+        id:
+          type: string
+        nodeId:
+          type: string
+        reenroll:
+          type: boolean
+        createdBy:
+          type: string
+          description: The name of the principal who minted the code.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [pending, redeemed, expired, cancelled]
+        redeemedAt:
+          type: [string, "null"]
+          format: date-time
+    NodeEnrollmentsResponse:
+      type: object
+      description: The body of GET /node-enrollments.
+      required: [serverTime, enrollments]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        enrollments:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeEnrollment"
+    NodeEnrollmentResponse:
+      type: object
+      description: The body of DELETE /node-enrollments/{id}.
+      required: [serverTime, enrollment]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        enrollment:
+          $ref: "#/components/schemas/NodeEnrollment"
+    RedeemNodeEnrollmentRequest:
+      type: object
+      description: >-
+        The body of POST /node-enrollments/redeem. `hostname` and `arch`
+        are recorded with the redemption and change nothing else.
+      required: [code]
+      properties:
+        code:
+          type: string
+        hostname:
+          type: string
+        arch:
+          type: string
+    RedeemNodeEnrollmentResponse:
+      type: object
+      description: >-
+        The 200 body of POST /node-enrollments/redeem, returned once.
+        `brokerUrl` is the broker as the node reaches it:
+        `SHOWMESH_NODE_BROKER_URL` when set, otherwise
+        `tcp://<the host this request arrived on>:1883`. `coordinatorUrl`
+        is `SHOWMESH_PUBLIC_URL` when set, otherwise the scheme and host
+        this request arrived on. `mqttUsername` and `mqttPassword` are
+        empty strings on an external broker that allows anonymous
+        clients. `apiToken` belongs to a new machine principal named
+        `<nodeId> agent` holding the `node` role. `coordinatorPublicKey`
+        is the standard base64 of the coordinator's raw 32-byte Ed25519
+        public key, the content of the file
+        `SHOWMESH_WEATHERDELAY_COORDINATOR_PUBLIC_KEY_PATH` names.
+      required: [serverTime, nodeId, brokerUrl, mqttUsername, mqttPassword, apiToken, coordinatorUrl, coordinatorPublicKey]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodeId:
+          type: string
+        brokerUrl:
+          type: string
+        mqttUsername:
+          type: string
+        mqttPassword:
+          type: string
+        apiToken:
+          type: string
+        coordinatorUrl:
+          type: string
+        coordinatorPublicKey:
+          type: string
     Problem:
       type: object
       description: >-
@@ -16356,6 +16679,8 @@ components:
             - https://showmesh.dev/problems/observation-entry-key-mismatch
             - https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed
             - https://showmesh.dev/problems/asset-resync-publish-failed
+            - https://showmesh.dev/problems/enrollment-code-gone
+            - https://showmesh.dev/problems/node-enrollment-unavailable
         title:
           type: string
         status:

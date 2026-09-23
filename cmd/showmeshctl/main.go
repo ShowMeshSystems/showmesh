@@ -148,6 +148,12 @@ Usage:
 Commands:
   nodes                    list the node inventory
   node <id>                show one node in detail
+  node enroll [--reenroll] [--expires 15m] <id>
+                           mint a one-time enrollment code for a node and print the
+                           command to run on it (write, requires node:enroll)
+  node enrollments         list enrollment codes, never the code itself (requires node:enroll)
+  node enrollments cancel <id>
+                           cancel a pending enrollment code (write, requires node:enroll)
   fpp [id]                 list configured FPP instances (or show one, if id given)
   fpp stop-playlist <id>              dispatch FPP's Stop Now and confirm by evidence (write)
   fpp start-playlist <id> <name>      dispatch FPP's Start Playlist and confirm by evidence (write)
