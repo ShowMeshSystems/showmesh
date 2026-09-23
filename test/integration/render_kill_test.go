@@ -232,12 +232,9 @@ func TestKillMinusNinePipelineIsDetectedReportedRestartedAndEventedEndToEnd(t *t
 		t.Fatalf("restart count after kill = %v, want >= 1", restartCountAfter)
 	}
 
-	// --- (3) restarted: a fresh process comes up and the surface returns
-	// to running, with its real transition dated strictly after the kill.
-	// surface.pipeline.changed_at's VALUE proves this, not
-	// surface.pipeline.state's own ObservedAt, which now tracks receipt
-	// time on a live report and would trivially post-date the kill even
-	// without a real restart. ---
+	// --- (3) restarted: the surface returns to running, with changed_at
+	// proving the real transition post-dates the kill. state's own
+	// ObservedAt now tracks receipt time and cannot prove that. ---
 	var runningAfter v1.ObservationEntry
 	waitFor(t, 20*time.Second, 50*time.Millisecond, func() bool {
 		e, ok := findRenderSignal(t, coord, nodeID, surfaceID, string(noderender.SignalSurfacePipelineState))

@@ -1090,8 +1090,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 
 	// Value-bearing evidence is fenced on the node's real transition time,
 	// never CollectedAt. surface.pipeline.changed_at's VALUE is preferred;
-	// o.ObservedAt is the fallback ONLY when changed_at is entirely absent
-	// (a row from before this signal existed).
+	// o.ObservedAt is the fallback ONLY when changed_at is entirely absent.
 	transitionAt, changedOutcome, changedDetail := classifyChangedAt(changedAtRow, foundChangedAt)
 	switch changedOutcome {
 	case changedAtNotCollected:
@@ -1149,9 +1148,7 @@ const (
 
 // classifyChangedAt turns one surface.pipeline.changed_at reading (or its
 // absence, when found is false) into a transition time and which outcome
-// produced it. Only [changedAtAbsent] is safe to fall back from; the other
-// non-found outcomes are evidence that confirmation must refuse to trust,
-// not a reason to fall back to a different signal.
+// produced it. Only [changedAtAbsent] is safe to fall back from.
 func classifyChangedAt(o observation.Observation, found bool) (time.Time, changedAtOutcome, string) {
 	if !found {
 		return time.Time{}, changedAtAbsent, ""
@@ -1171,9 +1168,8 @@ func classifyChangedAt(o observation.Observation, found bool) (time.Time, change
 }
 
 // renderPipelineChangedAt reads surface.pipeline.changed_at for
-// (surfaceID, source) and reports its transition time, or false for any
-// outcome other than [changedAtFound]. A store error is treated the same
-// as absent here, unlike [evaluateRenderSurfaceState]'s stricter read.
+// (surfaceID, source), reporting its transition time or false for any
+// outcome other than [changedAtFound], a store error included.
 func (h *handlers) renderPipelineChangedAt(ctx context.Context, kind observation.ResourceKind, surfaceID, source string) (time.Time, bool) {
 	sig := observation.SignalID(renderSignalPipelineChangedAt)
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})

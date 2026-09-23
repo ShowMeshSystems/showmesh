@@ -158,10 +158,9 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// probe confirmation depends on this).
 	observedAt := sf.ObservedAt
 
-	// pipelineFreshAt stamps the four pipeline-lifecycle signals below:
-	// rep.receivedAt on a live report, so they stay current while the node
-	// keeps reporting a real transition time; sf.ObservedAt otherwise (a
-	// retained replay, or a node that has never reported one at all).
+	// pipelineFreshAt stamps the pipeline-lifecycle signals below:
+	// rep.receivedAt on a live report with a real transition time,
+	// sf.ObservedAt otherwise (retained, or never reported).
 	pipelineFreshAt := sf.ObservedAt
 	if !rep.retained && !sf.ObservedAt.IsZero() {
 		pipelineFreshAt = rep.receivedAt

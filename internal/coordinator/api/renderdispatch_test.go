@@ -935,9 +935,8 @@ func TestRenderApplyIgnoresEvidenceSnapshottedBeforeDispatchEvenIfReceivedAfter(
 }
 
 // TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm proves a report
-// that merely repeats the ALREADY-RUNNING state, with no real transition,
-// must not confirm a fresh dispatch: only surface.pipeline.changed_at
-// proves a real transition happened, and here it predates dispatch.
+// repeating the ALREADY-RUNNING state, with no real transition, must not
+// confirm a fresh dispatch when changed_at predates it.
 func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 	renderCommandConfirmDeadline = 100 * time.Millisecond
 	renderCommandPollInterval = 10 * time.Millisecond
@@ -959,10 +958,8 @@ func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 	lastRealTransition := testNow.Add(-time.Hour)
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		// surface.pipeline.state's own ObservedAt is AFTER dispatch (a live
-		// report arrived), but changed_at proves the pipeline transitioned
-		// to "running" an hour before dispatch: an unchanged state, not a
-		// fresh apply taking effect.
+		// state's ObservedAt is after dispatch (a live report arrived), but
+		// changed_at proves the transition happened an hour earlier.
 		setup.obs.setObs([]observation.Observation{
 			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
 			surfacePipelineChangedAtObs("media-01", "wall-1", lastRealTransition, testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
@@ -986,11 +983,9 @@ func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 	}
 }
 
-// TestRenderApplyConfirmsOnRealTransitionAfterDispatch proves the other half
-// of the same rule: when surface.pipeline.changed_at itself post-dates
-// dispatch (a real transition actually happened), the command confirms,
-// even though surface.pipeline.state's own ObservedAt is receipt time, not
-// the transition time.
+// TestRenderApplyConfirmsOnRealTransitionAfterDispatch proves the command
+// confirms once changed_at itself post-dates dispatch, even though
+// state's own ObservedAt is receipt time, not the transition time.
 func TestRenderApplyConfirmsOnRealTransitionAfterDispatch(t *testing.T) {
 	renderCommandConfirmDeadline = 2 * time.Second
 	renderCommandPollInterval = 10 * time.Millisecond
@@ -1034,11 +1029,69 @@ func TestRenderApplyConfirmsOnRealTransitionAfterDispatch(t *testing.T) {
 	}
 }
 
+// TestClassifyChangedAt proves each classifyChangedAt outcome, table-driven:
+// a real value is found; no row falls back (absent); an explicit absence
+// refuses (not-collected); and a value that cannot be read as evidence,
+// whether not a string or not RFC3339Nano, refuses as unparsable.
+func TestClassifyChangedAt(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: "wall-1"}
+	sig := observation.SignalID(renderSignalPipelineChangedAt)
+	transitionAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name    string
+		o       observation.Observation
+		found   bool
+		want    changedAtOutcome
+		wantVal time.Time
+	}{
+		{
+			name:    "found",
+			o:       mustObs(observation.Measured(res, sig, transitionAt.Format(time.RFC3339Nano), transitionAt)),
+			found:   true,
+			want:    changedAtFound,
+			wantVal: transitionAt,
+		},
+		{
+			name:  "absent",
+			found: false,
+			want:  changedAtAbsent,
+		},
+		{
+			name:  "not collected",
+			o:     mustObs(observation.NotCollected(res, sig, "no transition reported yet")),
+			found: true,
+			want:  changedAtNotCollected,
+		},
+		{
+			name:  "unparsable: not a string",
+			o:     mustObs(observation.Measured(res, sig, int64(12345), transitionAt)),
+			found: true,
+			want:  changedAtUnparsable,
+		},
+		{
+			name:  "unparsable: not RFC3339Nano",
+			o:     mustObs(observation.Measured(res, sig, "not-a-timestamp", transitionAt)),
+			found: true,
+			want:  changedAtUnparsable,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, outcome, _ := classifyChangedAt(c.o, c.found)
+			if outcome != c.want {
+				t.Errorf("outcome = %v, want %v", outcome, c.want)
+			}
+			if outcome == changedAtFound && !got.Equal(c.wantVal) {
+				t.Errorf("transition time = %s, want %s", got, c.wantVal)
+			}
+		})
+	}
+}
+
 // TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm proves
-// classifyChangedAt's not-collected outcome is never treated as a fallback
-// signal: an unchanged "running" report with an explicit not-collected
-// changed_at must not confirm, even though its own ObservedAt post-dates
-// dispatch.
+// a not-collected changed_at never falls back to state's own ObservedAt,
+// even though that ObservedAt post-dates dispatch.
 func TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm(t *testing.T) {
 	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -2116,12 +2169,8 @@ func TestRenderTransportProbeReportsUnconfirmedWithoutFreshEvidence(t *testing.T
 }
 
 // TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch
-// proves the collector-level fix (SignalSurfaceTransportAvailable/Reason
-// stay pinned to sf.ObservedAt, never rep.receivedAt) reaches this
-// confirmation path: an ordinary report repeating the SAME pre-dispatch
-// transport reading, merely RECEIVED after dispatch, must not confirm the
-// probe. Only a reading whose own ObservedAt post-dates dispatch proves a
-// real re-probe happened.
+// proves a pre-dispatch transport reading, merely RECEIVED after dispatch,
+// must not confirm the probe.
 func TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch(t *testing.T) {
 	renderCommandConfirmDeadline = 100 * time.Millisecond
 	renderCommandPollInterval = 10 * time.Millisecond
@@ -2163,12 +2212,8 @@ func TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch(t *tes
 }
 
 // TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports
-// proves renderEstablishIdempotencyKey's witness stays IDENTICAL across
-// two separate live reports of the SAME failed pipeline state: the witness
-// must name the failure EVENT (surface.pipeline.changed_at's value), never
-// merely the latest report's own receipt time, or a re-establish attempt's
-// idempotency key would change on every ordinary report and stop
-// deduplicating.
+// proves the witness stays IDENTICAL across two live reports of the SAME
+// failed state, naming the changed_at event, not a report timestamp.
 func TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports(t *testing.T) {
 	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})

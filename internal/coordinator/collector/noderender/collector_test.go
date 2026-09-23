@@ -109,11 +109,8 @@ func TestPollLivePipelineStateUsesReceivedAt(t *testing.T) {
 }
 
 // TestPollPipelineChangedAtCarriesNodeTransitionTime proves
-// surface.pipeline.changed_at exists precisely so render apply confirmation
-// can still fence on a real transition once surface.pipeline.state's own
-// ObservedAt tracks receipt time on a live report: its VALUE is always
-// sf.ObservedAt itself (the node's real transition time), regardless of
-// live/retained, formatted RFC3339Nano UTC.
+// surface.pipeline.changed_at's VALUE is always sf.ObservedAt itself,
+// formatted RFC3339Nano UTC, regardless of live/retained.
 func TestPollPipelineChangedAtCarriesNodeTransitionTime(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -200,10 +197,8 @@ func TestPollRetainedNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	}
 }
 
-// TestPollLiveNodeReportsNoObservedAtIsUnknownAge proves receipt-time
-// stamping applies ONLY when the node gave a real transition time: a LIVE
-// report with a zero sf.ObservedAt still reports unknown age, never
-// rep.receivedAt.
+// TestPollLiveNodeReportsNoObservedAtIsUnknownAge proves a LIVE report
+// with a zero sf.ObservedAt still reports unknown age, never receivedAt.
 func TestPollLiveNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -280,12 +275,9 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 }
 
-// TestPollLiveTransportSignalsStayOnNodeObservedAt proves the six-signal
-// receipt-time fix does not leak into surface.transport.available/reason:
-// a LIVE report carrying an unchanged pre-dispatch transport reading must
-// still stamp ObservedAt from sf.ObservedAt, never rep.receivedAt, so a
-// render.transport.probe confirmation never fires on an ordinary report
-// that carries no new probe evidence.
+// TestPollLiveTransportSignalsStayOnNodeObservedAt proves a LIVE report
+// still stamps surface.transport.available/reason from sf.ObservedAt,
+// never rep.receivedAt.
 func TestPollLiveTransportSignalsStayOnNodeObservedAt(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
@@ -377,11 +369,9 @@ func TestPollLiveStaleIsMeasuredFromReceivedAt(t *testing.T) {
 	}
 }
 
-// TestPollRetainedStaleIsNeverHealthy proves ADR-011's core rule survives
-// this package specifically for a RETAINED replay: a report whose
-// node-reported ObservedAt has aged past DefaultValidFor must report
-// StateStale, never current. Staleness for a retained delivery is measured
-// from sf.ObservedAt (today's behavior, unchanged), never from receivedAt.
+// TestPollRetainedStaleIsNeverHealthy proves a RETAINED report whose
+// node-reported ObservedAt has aged past DefaultValidFor reports stale,
+// measured from sf.ObservedAt, never from receivedAt.
 func TestPollRetainedStaleIsNeverHealthy(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
@@ -676,8 +666,7 @@ func TestPollLiveMultiSyncUsesReceivedAt(t *testing.T) {
 }
 
 // TestPollRetainedMultiSyncStillUsesNodeObservedAt proves a RETAINED replay
-// keeps today's behavior for node.multisync.listening/reason: ObservedAt is
-// MultiSyncObservedAt, the node's own bind-outcome evidence time, never
+// stamps node.multisync.listening/reason from MultiSyncObservedAt, never
 // receivedAt.
 func TestPollRetainedMultiSyncStillUsesNodeObservedAt(t *testing.T) {
 	st := NewStore()

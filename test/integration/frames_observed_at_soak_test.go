@@ -11,17 +11,13 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/fseq/fseqtest"
 )
 
-// TestFramesObservedAtStaysCurrentPastTheStaleWindow is the load-bearing
-// gate for this issue: render evidence going permanently stale on a
-// healthy, continuously running pipeline. It runs a REAL showmesh-agent
-// subprocess against a REAL broker and coordinator, and polls for longer
-// than DefaultValidFor so the bug (or its absence) has time to show up.
+// TestFramesObservedAtStaysCurrentPastTheStaleWindow proves render evidence
+// never goes stale on a healthy, continuously running pipeline: it runs a
+// REAL agent, broker, and coordinator, polling past DefaultValidFor.
 //
-// surface.pipeline.state must now stay CURRENT the whole soak (it is
-// stamped from receipt time on a live report). The setState-only
-// invariant confirmation depends on moved to surface.pipeline.changed_at:
-// its VALUE must stay pinned at the apply's real transition time
-// throughout, never surface.pipeline.state's own ObservedAt.
+// surface.pipeline.state must stay CURRENT the whole soak. The invariant
+// confirmation depends on lives on surface.pipeline.changed_at instead:
+// its VALUE must stay pinned at the real transition time throughout.
 func TestFramesObservedAtStaysCurrentPastTheStaleWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("soak test: run explicitly, not under -short")
