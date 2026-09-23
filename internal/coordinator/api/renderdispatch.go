@@ -992,6 +992,13 @@ func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, 
 
 const renderSignalPipelineState = "surface.pipeline.state"
 
+// renderSignalPipelineChangedAt mirrors internal/coordinator/collector/
+// noderender.SignalSurfacePipelineChangedAt: its value is the node's own
+// last real pipeline-state transition time (RFC3339Nano UTC), used below to
+// fence confirmation on a transition even though renderSignalPipelineState's
+// own ObservedAt now tracks receipt time on a live report to stay current.
+const renderSignalPipelineChangedAt = "surface.pipeline.changed_at"
+
 // renderNodeSourceFor mirrors internal/coordinator/collector/noderender.
 // SourceFor's exact wire format (that package's SourceName constant plus a
 // ':' plus the node id) without importing that collector package — this
@@ -1074,22 +1081,29 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 		return false, string(o.Absence), fmt.Sprintf("surface.pipeline.state is absent (%s), wanted %q (via %s)", o.Reason, wantState, src), false
 	}
 
-	// Value-bearing evidence is fenced on ObservedAt — the node's own
-	// clock reading of when the condition was true (Finding 4) — never on
-	// CollectedAt, the coordinator's receipt time. A report snapshotted
-	// before dispatch and merely RECEIVED after it must not confirm; that
-	// is the 179-microsecond defect this project has already paid for
-	// once. ObservedAt==nil (genuinely unknown age) can never satisfy this
-	// fence either, since there is then no evidence the reading post-dates
-	// dispatch at all.
-	if o.ObservedAt == nil {
-		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID), false
+	// Value-bearing evidence is fenced on the node's real transition time —
+	// never on CollectedAt, the coordinator's receipt time. A report
+	// snapshotted before dispatch and merely RECEIVED after it must not
+	// confirm; that is the 179-microsecond defect this project has already
+	// paid for once. surface.pipeline.changed_at's own VALUE is preferred
+	// (the node's last real transition), since o.ObservedAt now tracks
+	// receipt time on a live report to stay current and would otherwise let
+	// an unchanged state confirm merely because a new report arrived.
+	// Falling back to o.ObservedAt when changed_at is absent (an older
+	// coordinator row or an older agent that predates the field) keeps
+	// everything that confirms today still confirming.
+	transitionAt, haveTransition := h.renderPipelineChangedAt(ctx, kind, surfaceID, wantSource)
+	if !haveTransition {
+		if o.ObservedAt == nil {
+			return false, string(observation.StateUnknownAge), fmt.Sprintf(
+				"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID), false
+		}
+		transitionAt = *o.ObservedAt
 	}
-	if o.ObservedAt.Before(notBefore) {
+	if transitionAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
-			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src), false
+			"no surface.pipeline.state transition has arrived since this command was dispatched at %s; the most recent transition was at %s, via %s, and predates dispatch",
+			notBefore.Format(time.RFC3339), transitionAt.Format(time.RFC3339), src), false
 	}
 
 	state := o.StateAt(h.now())
@@ -1112,6 +1126,35 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	// confirmation itself or a state that genuinely isn't "failed".
 	pipelineFailed = v == mqttproto.RenderPipelineStateFailed
 	return false, string(state), fmt.Sprintf("surface.pipeline.state = %v, wanted %q (via %s)", o.Value, wantState, src), pipelineFailed
+}
+
+// renderPipelineChangedAt reads surface.pipeline.changed_at for
+// (surfaceID, source) and parses its value into the node's real transition
+// time. Absent, not-collected, or an unparsable value all report false so
+// evaluateRenderSurfaceState falls back to surface.pipeline.state's own
+// ObservedAt (an older coordinator row, or an older agent predating this
+// signal, must keep confirming the way it does today).
+func (h *handlers) renderPipelineChangedAt(ctx context.Context, kind observation.ResourceKind, surfaceID, source string) (time.Time, bool) {
+	sig := observation.SignalID(renderSignalPipelineChangedAt)
+	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, cand := range obs {
+		if cand.Resource.Kind != kind || cand.Resource.ID != surfaceID || cand.Signal != sig || cand.Source != source {
+			continue
+		}
+		v, ok := cand.Value.(string)
+		if !ok {
+			return time.Time{}, false
+		}
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 // renderSignalTransportAvailable is the signal

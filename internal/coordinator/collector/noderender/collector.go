@@ -155,14 +155,19 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 
 	// sf.ObservedAt is THIS surface's own evidence timestamp — the node's
 	// clock at the moment the supervisor actually sampled this report
-	// (runner.setState/setFrameCounts/setDrawState — internal/agent/
-	// pipeline/supervisor.go), distinct from rep.receivedAt (this
-	// coordinator's own receipt/bookkeeping time, which stays CollectedAt
-	// via buildValue). Using it as ObservedAt is what makes "a fresh
-	// ObservedAt means the state actually moved" true all the way to the
-	// observation layer, not just inside the agent's own Supervisor —
-	// review fix, finding 2/finding 7.
+	// (runner.setState — internal/agent/pipeline/supervisor.go) — and is
+	// never itself changed here; render apply confirmation still depends on
+	// it moving only on a real pipeline-state transition.
+	//
+	// A live report is judged fresh by rep.receivedAt instead, since
+	// sf.ObservedAt does not move while the node keeps reporting an
+	// unchanged state; a retained replay proves nothing about now, so it
+	// keeps sf.ObservedAt and can only become current again once a live
+	// report arrives (owner ruling).
 	observedAt := sf.ObservedAt
+	if !rep.retained {
+		observedAt = rep.receivedAt
+	}
 
 	// framesObservedAt is the frame writer's OWN evidence timestamp
 	// (pipeline.FrameWriter.sampleRate's window-close stamp, carried over
@@ -191,6 +196,17 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, framesObservedAt, rep),
+	}
+
+	// SignalSurfacePipelineChangedAt's VALUE is sf.ObservedAt itself (the
+	// transition time), never observedAt above: render apply confirmation
+	// fences on this to still require a real transition, now that
+	// surface.pipeline.state's own freshness stamp tracks receipt instead.
+	if sf.ObservedAt.IsZero() {
+		obs = append(obs, notCollected(res, SignalSurfacePipelineChangedAt, SourceFor(nodeID),
+			"this surface has not yet reported a pipeline-state transition", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfacePipelineChangedAt, sf.ObservedAt.UTC().Format(time.RFC3339Nano), observedAt, rep))
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -414,7 +430,13 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 		}
 	}
 
+	// A live report is judged fresh by rep.receivedAt, since
+	// MultiSyncObservedAt only moves on a real bind outcome change; a
+	// retained replay keeps MultiSyncObservedAt (owner ruling).
 	observedAt := rep.payload.MultiSyncObservedAt
+	if !rep.retained {
+		observedAt = rep.receivedAt
+	}
 	return []observation.Observation{
 		buildValue(nodeID, res, SignalNodeMultiSyncListening, rep.payload.MultiSyncListening, observedAt, rep),
 		buildValue(nodeID, res, SignalNodeMultiSyncReason, rep.payload.MultiSyncReason, observedAt, rep),
