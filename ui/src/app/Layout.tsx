@@ -6,6 +6,7 @@ import {
   ChromeProgress,
   ClockSkewStrip,
   ConnectionPill,
+  FPPPluginReportsRefusedBanner,
   Notice,
   Popover,
   Rail,
@@ -904,6 +905,11 @@ export function Layout() {
           explanation={model.auditStore.reason ?? 'Commands continue, but this coordinator cannot durably write their audit entries.'}
         />
       )}
+      <FPPPluginReportsRefusedBanner
+        instances={model.fpp
+          .filter((instance) => instance.playlistObservationRefused !== null)
+          .map((instance) => ({ instanceId: instance.instanceId }))}
+      />
       <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <StopHoldShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>

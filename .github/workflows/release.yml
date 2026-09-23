@@ -174,8 +174,75 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.ui }}
 
-  node-agent-amd64:
+  # ndi-plugin-amd64 and ndi-plugin-arm64 build the NDI GStreamer plugin in
+  # their own jobs rather than inside the node-agent jobs: the arm64
+  # node-agent job has already run over its time budget once under QEMU
+  # (see its own comment), and a Rust build added inline there risks the
+  # same failure again. Each leg uploads libgstndi.so as a job artifact;
+  # the matching node-agent job downloads it and packages it in.
+  ndi-plugin-amd64:
     needs: [resolve]
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      # Keyed on the build script's own contents, which is where the
+      # pinned gst-plugins-rs revision and Rust toolchain version live: a
+      # revision or toolchain bump changes the key and starts a fresh
+      # cache, exactly the cases where a stale cache would be wrong.
+      - name: Cache the gst-plugins-rs cargo registry and target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/ndi-plugin-work/gst-plugins-rs/target
+          key: ndi-plugin-amd64-${{ hashFiles('deploy/node/ndi-plugin/build-ndi-plugin.sh') }}
+
+      - name: Build the NDI GStreamer plugin (amd64)
+        run: deploy/node/ndi-plugin/build-ndi-plugin.sh dist/ndi-plugin/amd64 /tmp/ndi-plugin-work
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ndi-plugin-amd64
+          path: dist/ndi-plugin/amd64/libgstndi.so
+          retention-days: 7
+
+  ndi-plugin-arm64:
+    needs: [resolve]
+    # A native arm64 runner, not an emulated one, for the same reason
+    # node-agent-arm64 uses one: a Rust build under QEMU is exactly the
+    # kind of cost that job's own comment records going over budget.
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: debian:trixie
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache the gst-plugins-rs cargo registry and target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/ndi-plugin-work/gst-plugins-rs/target
+          key: ndi-plugin-arm64-${{ hashFiles('deploy/node/ndi-plugin/build-ndi-plugin.sh') }}
+
+      - name: Build the NDI GStreamer plugin (arm64)
+        run: deploy/node/ndi-plugin/build-ndi-plugin.sh dist/ndi-plugin/arm64 /tmp/ndi-plugin-work
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ndi-plugin-arm64
+          path: dist/ndi-plugin/arm64/libgstndi.so
+          retention-days: 7
+
+  node-agent-amd64:
+    needs: [resolve, ndi-plugin-amd64]
     runs-on: ubuntu-latest
     # Debian 13 for the same reason CI's `test`/`lint`/`vuln` jobs use it:
     # ubuntu-latest ships GStreamer 1.24 and the agent's cgo backend needs
@@ -189,7 +256,7 @@ jobs:
           set -eux
           apt-get update -o Acquire::Retries=2
           apt-get install -y --no-install-recommends \
-            ca-certificates curl git build-essential pkg-config \
+            ca-certificates curl git build-essential pkg-config file \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
@@ -202,8 +269,28 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: ndi-plugin-amd64
+          path: ndi-plugin-amd64
+
       - name: Build and package the node agent (amd64)
-        run: make package-node-agent NODE_AGENT_VERSION=${{ needs.resolve.outputs.version }}
+        run: make package-node-agent NODE_AGENT_VERSION=${{ needs.resolve.outputs.version }} NDI_PLUGIN_SO=ndi-plugin-amd64/libgstndi.so
+
+      # Same discipline as node-agent-arm64's own check below: read the
+      # architecture off the packaged file, never off the job name.
+      - name: The packaged NDI plugin exists and really is amd64
+        run: |
+          set -euxo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          tarball="dist/node-agent/showmesh-node-agent_${version}_linux_amd64.tar.gz"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP" showmesh-node-agent/gstreamer/libgstndi.so
+          described="$(file -b "$RUNNER_TEMP/showmesh-node-agent/gstreamer/libgstndi.so")"
+          echo "$described"
+          case "$described" in
+            *"ELF 64-bit LSB"*"x86-64"*) ;;
+            *) echo "::error::packaged NDI plugin is not amd64: $described" >&2; exit 1 ;;
+          esac
 
       # Only the tarball: package-node-agent also writes a
       # showmesh-node-agent_<VERSION>_SHA256SUMS in this same directory,
@@ -219,7 +306,7 @@ jobs:
           retention-days: 7
 
   node-agent-arm64:
-    needs: [resolve]
+    needs: [resolve, ndi-plugin-arm64]
     # A native arm64 runner, not an emulated one. Under QEMU this job took
     # 24.3 minutes on 2026-09-03 and exceeded 25 minutes on 2026-09-08, so a
     # tag would have pushed both images and then lost the release to a
@@ -244,6 +331,11 @@ jobs:
       # there with `make package-node-agent` so the packaging step (naming,
       # SHA256SUMS, self-verify) stays the exact same code path as the FPP
       # plugin's and the amd64 leg's.
+      - uses: actions/download-artifact@v8
+        with:
+          name: ndi-plugin-arm64
+          path: ndi-plugin-arm64
+
       - name: Build and package the node agent (arm64)
         run: |
           set -eux
@@ -267,7 +359,7 @@ jobs:
               tar -C /usr/local -xzf /tmp/go.tgz
               export PATH="/usr/local/go/bin:$PATH"
               go version
-              make package-node-agent NODE_AGENT_VERSION="$NODE_AGENT_VERSION"
+              make package-node-agent NODE_AGENT_VERSION="$NODE_AGENT_VERSION" NDI_PLUGIN_SO=ndi-plugin-arm64/libgstndi.so
             '
 
       # Read the architecture off the artifact itself, never off the runner
@@ -288,12 +380,50 @@ jobs:
             *) echo "::error::packaged agent is not arm64: $described" >&2; exit 1 ;;
           esac
 
+      - name: The packaged NDI plugin exists and really is arm64
+        run: |
+          set -euxo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          tarball="dist/node-agent/showmesh-node-agent_${version}_linux_arm64.tar.gz"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP" showmesh-node-agent/gstreamer/libgstndi.so
+          described="$(file -b "$RUNNER_TEMP/showmesh-node-agent/gstreamer/libgstndi.so")"
+          echo "$described"
+          case "$described" in
+            *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+            *) echo "::error::packaged NDI plugin is not arm64: $described" >&2; exit 1 ;;
+          esac
+
       # See node-agent-amd64's own comment: only the tarball, the release
       # job computes one combined SHA256SUMS once both are staged.
       - uses: actions/upload-artifact@v7
         with:
           name: node-agent-arm64
           path: dist/node-agent/*.tar.gz
+          retention-days: 7
+
+  # installer builds the one-command installer bundle and its bootstrap. Only
+  # those two files are uploaded; the release job lists them in SHA256SUMS.
+  installer:
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build and self-verify the installer bundle
+        run: make package-installer INSTALLER_VERSION=${{ needs.resolve.outputs.version }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: |
+            dist/installer/showmesh-installer_${{ needs.resolve.outputs.version }}.tar.gz
+            dist/installer/get-showmesh.sh
           retention-days: 7
 
   # There is still no node-agent-armv7 job, but no longer because the build
@@ -316,7 +446,7 @@ jobs:
     # this job would still run and publish a release from an incomplete
     # set of images or packages after any of the jobs above failed.
     if: success() && needs.resolve.outputs.mode == 'release'
-    needs: [resolve, images, node-agent-amd64, node-agent-arm64]
+    needs: [resolve, images, node-agent-amd64, node-agent-arm64, installer]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -332,24 +462,36 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: installer
+          path: dist-artifacts
+
+      - uses: actions/download-artifact@v8
+        with:
           name: changelog-section
           path: .
 
-      - name: Write and verify one SHA256SUMS covering both platforms
+      - name: Write and verify one SHA256SUMS covering every downloadable file
         # Each leg already self-verified its own single-platform tarball;
         # this is the point both are staged together (per the release
         # contract the amd64 and arm64 legs otherwise share), so this is
         # where the real, all-platform manifest is written, using the same
         # sha256sum invocation package-node-agent itself uses. There is no
-        # armv7 tarball to stage: see the note above this job.
+        # armv7 tarball to stage: see the note above this job. The file is
+        # named SHA256SUMS because get-showmesh.sh and showmesh-install fetch
+        # it by that name to check the installer bundle and the node tarball.
         run: |
           set -euo pipefail
           version="${{ needs.resolve.outputs.version }}"
           cd dist-artifacts
-          ls showmesh-node-agent_${version}_linux_amd64.tar.gz
-          ls showmesh-node-agent_${version}_linux_arm64.tar.gz
-          sha256sum showmesh-node-agent_${version}_*.tar.gz > "showmesh-node-agent_${version}_SHA256SUMS"
-          sha256sum -c "showmesh-node-agent_${version}_SHA256SUMS"
+          files=(
+            "showmesh-node-agent_${version}_linux_amd64.tar.gz"
+            "showmesh-node-agent_${version}_linux_arm64.tar.gz"
+            "showmesh-installer_${version}.tar.gz"
+            get-showmesh.sh
+          )
+          ls "${files[@]}"
+          sha256sum "${files[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
 
       - name: Create the GitHub pre-release
         uses: softprops/action-gh-release@v3

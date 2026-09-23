@@ -74,6 +74,7 @@ function fpp(
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: uuidChanged ? ({ previousUuid: 'old', changedAt: '2026-08-28T20:54:00Z' }) : null,
     duplicateInstanceUuidEndpointIds: [],
+    playlistObservationRefused: null,
   } as unknown as FPPInstance
 }
 

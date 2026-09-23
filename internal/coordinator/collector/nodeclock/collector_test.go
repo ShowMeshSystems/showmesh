@@ -66,8 +66,11 @@ func TestCollectorPollRendersLockedPayload(t *testing.T) {
 	}
 
 	reason := findObs(t, obs, SignalReason)
-	if reason.Absence == "" {
-		t.Errorf("reason: expected not_collected while locked, got a value")
+	if reason.Absence != "" {
+		t.Errorf("reason: expected a current empty value while locked, got not_collected: %v", reason.Absence)
+	}
+	if reason.Value != "" {
+		t.Errorf("reason value = %v, want empty string while locked", reason.Value)
 	}
 
 	role := findObs(t, obs, SignalRole)

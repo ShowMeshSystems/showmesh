@@ -18,9 +18,13 @@ import (
 func TestCmdCueListPassesShowFilter(t *testing.T) {
 	var gotPath, gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
+		if r.URL.Path != "/api/v1/config/show.cue" {
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,"payload":{"show":"halloween-2026","name":"Thriller","outputs":{}}}`)
+			return
+		}
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.cue","objects":[
 			{"id":"thriller","label":"Thriller","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}
 		]}`)

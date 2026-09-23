@@ -3559,6 +3559,17 @@ export interface components {
             instanceUuidChange: components["schemas"]["FPPInstanceUUIDChange"] | null;
             /** @description Every OTHER currently configured FPP instance reporting the SAME instanceUuid as this one, a stated finding, never a silently overwritten row. Empty, never null, when there is no duplicate. */
             duplicateInstanceUuidEndpointIds: string[];
+            /** @description Non-null exactly when this instance's playlist-entry reports are currently being refused (a sequence regression, most often a plugin reinstall or a wiped state directory). Cleared by this instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}. */
+            playlistObservationRefused: components["schemas"]["FPPPlaylistObservationRefused"] | null;
+        };
+        /** @description The operator-facing reason this instance's playlist-entry reports are currently being refused, and when it was recorded. */
+        FPPPlaylistObservationRefused: {
+            reason: string;
+            /**
+             * Format: date-time
+             * @description The most recent refusal's time. A retried refusal while the condition is already recorded overwrites this to the newer time, so this is never the first refusal's time once more than one has occurred.
+             */
+            refusedAt: string;
         };
         /** @description The uuid an FPP instance reported immediately before its current one, and when that change was first observed. */
         FPPInstanceUUIDChange: {
@@ -6020,6 +6031,8 @@ export interface components {
             cueId: string;
             /** @description One outcome per node participating in cueId, never a single collapsed verdict: a Cue's outputs may resolve on several nodes, and one node's refusal is never evidence about another's. Empty when no node currently resolves any output for this Cue. */
             nodes: components["schemas"]["CueActivationNodeOutcome"][];
+            /** @description One outcome per show action in the Cue's outputs.actions, in the Cue's order, as known when this response is sent. An action still waiting for its confirmation reads as unconfirmed. Empty when the Cue declares no actions. An action failure never changes the node outcomes above. */
+            actions: components["schemas"]["CueActionOutcome"][];
             /** @description ADR-049 decision 3's own verdict: true when this Cue reached at most one audio-bearing node (nothing to align - a Cue reaching one node behaves exactly as before this field existed), or when it reached more than one and the coordinator chose one shared start instant for all of them AND every node's own confirmed result reports it actually started at that instant. False when more than one audio-bearing node was reached and no usable media-clock reading could be obtained (every one of those nodes still started, on arrival), or when the coordinator did choose a shared instant but some node's own confirmed result reports it did not honor that instant (that node's own clock was not usable when the command reached it) - either way, no node is ever reported as a synchronized success it did not reach. */
             aligned: boolean;
             /** @description The concrete reason, present only when aligned is false. */
@@ -6029,6 +6042,15 @@ export interface components {
              * @description The shared start instant every audio-bearing node was started at, present only when aligned is true AND scheduling was actually attempted (more than one audio-bearing node); a single-audio-node or render-only Cue never sets it. Around 1.79e18 nanoseconds, past IEEE-754 double's exact integer range (9.007e15): a client parsing this body with a stock JSON parser ROUNDS it. Parse it as an exact integer.
              */
             scheduledAtNs?: number;
+        };
+        /** @description One show action a Cue activation fired, in the outcome vocabulary POST /actions/{id}/invocations reports. The action is recorded as its own command and audited as action.invoke:<integration>, with the Cue id and activationKey, a hash identifying the activation, in the audit params. Once every action resolves, a cue.activate outcome audit entry targeting cue:<cueId> carries the final outcomes in its actions param. */
+        CueActionOutcome: {
+            actionId: string;
+            label?: string;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
+            outcomeState?: string;
+            outcomeReason?: string;
         };
         /** @description One node's own cue.activate dispatch outcome, in the shared "confirmed" | "unconfirmed" | "refused" | "failed" vocabulary (ADR-020) every other command route on this API already reports outcomes in. */
         CueActivationNodeOutcome: {
@@ -6528,6 +6550,8 @@ export interface components {
             audio?: components["schemas"]["ConfigShowCueAudioOutput"];
             ltc?: components["schemas"]["ConfigShowCueLTCOutput"];
             announcement?: components["schemas"]["ConfigShowCueAnnouncementOutput"];
+            /** @description Ordered show.action ids the coordinator fires once per activation of this Cue. Each is sent once the one before it is sent, and the node dispatch waits up to 2 seconds for all of them to be sent; an action sent after that is reported late. Each id must name a show.action with an active revision in this Cue's show; an unknown id is refused as an unknown reference and another show's action as a cross-show reference. Duplicates are refused. An empty array is the same as absent and is omitted on read. A Cue whose only output is actions is refused: an activation needs a render, audio, LTC or announcement output. Actions claim no node resource. */
+            actions?: string[];
         };
         /** @description The "show.cue" configuration kind's decoded payload (Track H seam H1, ADR-043), returned by GET and accepted by PUT /config/show.cue/{id}. show must name an existing show object. */
         ConfigShowCue: {
@@ -6928,6 +6952,7 @@ export interface components {
          *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
          *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reason`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
+         *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), naming the reason in `reason`. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
          */
         NightReadinessCheck: {
             name: string;

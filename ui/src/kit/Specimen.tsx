@@ -11,6 +11,7 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  FPPPluginReportsRefusedBanner,
   StopHoldBanner,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
@@ -473,6 +474,7 @@ export function Specimen() {
               dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
               error="This question already expired. Nothing was changed."
             />
+            <FPPPluginReportsRefusedBanner instances={[{ instanceId: 'bench-fpp' }]} />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>

@@ -631,6 +631,27 @@ describe('Live Control', () => {
     expect(screen.getByText(/audio-01: confirmed/)).toBeInTheDocument()
   })
 
+  it('reports each show action the Fire fired, with its own outcome and reason', async () => {
+    stubs.activateCue = vi.fn((cueId: string) =>
+      Promise.resolve({
+        serverTime: '2026-08-10T21:14:22Z',
+        cueId,
+        nodes: [{ nodeId: 'audio-01', dispatched: true, confirmed: true, outcome: 'confirmed' }],
+        actions: [
+          { actionId: 'song-one-column', label: 'Song one column', outcome: 'refused', outcomeReason: 'No composition is loaded.' },
+          { actionId: 'blackout-now', label: 'Blackout', outcome: 'confirmed' },
+        ],
+        aligned: true,
+      }),
+    )
+    await renderAnnouncements()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Fire' })[0]!)
+    expect(await screen.findByText('Song one column: refused')).toBeInTheDocument()
+    expect(screen.getByText(/No composition is loaded\./)).toBeInTheDocument()
+    expect(screen.getByText('Blackout: confirmed')).toBeInTheDocument()
+    expect(screen.getByText(/audio-01: confirmed/)).toBeInTheDocument()
+  })
+
   it('shows a multi-node Fire as aligned to the shared instant it reports', async () => {
     stubs.activateCue = vi.fn(() =>
       Promise.resolve({

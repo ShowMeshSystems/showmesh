@@ -2,6 +2,7 @@ export { AttentionRow, StatTile, Tiles } from './Attention'
 export { Button, ButtonRow, ButtonRule, ReorderButtons } from './Button'
 export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition } from './Blocks'
 export { ClockSkewStrip } from './ClockSkewStrip'
+export { FPPPluginReportsRefusedBanner, type FPPPluginReportsRefusedInstance } from './FPPPluginReportsRefusedBanner'
 export {
   WeatherDelayBanner,
   WeatherDelayHeldBanner,

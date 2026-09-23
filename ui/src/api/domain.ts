@@ -339,6 +339,7 @@ export type ActionInvocationResult = components['schemas']['ActionInvocationResu
 // automatic FPP-observation-driven activation loop.
 export type CueActivateResponse = components['schemas']['CueActivateResponse']
 export type CueActivationNodeOutcome = components['schemas']['CueActivationNodeOutcome']
+export type CueActionOutcome = components['schemas']['CueActionOutcome']
 // The full stored composition id map (decks, layer groups, layers,
 // columns, clips, persistent clips) — distinct from
 // ResolumeCompositionSummary above, which is the display-only subset.

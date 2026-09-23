@@ -499,6 +499,25 @@ NODE_AGENT_LDFLAGS := -X $(MODULE)/internal/version.Version=$(NODE_AGENT_VERSION
                        -X $(MODULE)/internal/version.Commit=$(COMMIT) \
                        -X $(MODULE)/internal/version.BuildDate=$(NODE_AGENT_COMMIT_DATE)
 
+# NDI_PLUGIN_SO, when given, is the path to a prebuilt libgstndi.so
+# (deploy/node/ndi-plugin/build-ndi-plugin.sh) that package-node-agent
+# copies into the tarball. Left empty, the tarball ships without it and a
+# node builds it locally with that same script.
+NDI_PLUGIN_SO ?=
+NDI_PLUGIN_DIST := ./dist/ndi-plugin
+NDI_PLUGIN_GOARCH := $(shell go env GOARCH 2>/dev/null)
+
+# build-ndi-plugin runs deploy/node/ndi-plugin/build-ndi-plugin.sh for the
+# host's own architecture, so its output feeds NDI_PLUGIN_SO above without
+# hand-naming the architecture.
+.PHONY: build-ndi-plugin
+build-ndi-plugin:
+	@if [ -z "$(NDI_PLUGIN_GOARCH)" ]; then \
+		echo "build-ndi-plugin: could not determine the target architecture ('go env GOARCH' produced nothing). Install Go and put it on PATH; refusing to build for an unnamed architecture." >&2; \
+		exit 1; \
+	fi
+	deploy/node/ndi-plugin/build-ndi-plugin.sh $(NDI_PLUGIN_DIST)/$(NDI_PLUGIN_GOARCH)
+
 # package-node-agent builds the native agent with -trimpath (byte-stable
 # paths, same reasoning as the FPP plugin's build) and the deterministic
 # commit-timestamp ldflags above, stages it alongside deploy/node's
@@ -522,6 +541,12 @@ package-node-agent:
 	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/showmesh-agent-native
 	cp deploy/node/showmesh-agent.service deploy/node/agent.env.example deploy/node/preflight.sh deploy/node/install.sh deploy/node/README.md $(NODE_AGENT_DIST)/showmesh-node-agent/
 	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/preflight.sh $(NODE_AGENT_DIST)/showmesh-node-agent/install.sh
+	if [ -n "$(NDI_PLUGIN_SO)" ]; then \
+		mkdir -p $(NODE_AGENT_DIST)/showmesh-node-agent/gstreamer; \
+		cp "$(NDI_PLUGIN_SO)" $(NODE_AGENT_DIST)/showmesh-node-agent/gstreamer/libgstndi.so; \
+	else \
+		echo "package-node-agent: the tarball has no NDI GStreamer plugin. Build one with 'make build-ndi-plugin' and pass NDI_PLUGIN_SO, or let the node build it locally with deploy/node/ndi-plugin/build-ndi-plugin.sh."; \
+	fi
 	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
 		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(NODE_AGENT_DIST) -cf - showmesh-node-agent | gzip -n -9 > $(NODE_AGENT_DIST)/$(NODE_AGENT_TARBALL); \
 	else \
@@ -536,6 +561,56 @@ package-node-agent:
 .PHONY: clean-node-agent-dist
 clean-node-agent-dist:
 	rm -rf $(NODE_AGENT_DIST)
+
+# --- One-command installer (ADR-055) ---
+#
+# package-installer builds the release's installer bundle and its bootstrap:
+#   bundle:    showmesh-installer_<VERSION>.tar.gz (showmesh-install, its lib/,
+#              the coordinator Compose bundle, the node PTP and NDI plugin
+#              scripts, and showmeshctl for linux amd64 and arm64)
+#   bootstrap: get-showmesh.sh with <VERSION> written in
+#   sums:      showmesh-installer_<VERSION>_SHA256SUMS covering both
+# The release publishes one SHA256SUMS that also lists the node agent
+# tarballs; the bootstrap and the installer read that file.
+INSTALLER_DIST    := ./dist/installer
+INSTALLER_VERSION ?= $(VERSION)
+INSTALLER_STAGE   := $(INSTALLER_DIST)/showmesh-installer_$(INSTALLER_VERSION)
+INSTALLER_TARBALL := showmesh-installer_$(INSTALLER_VERSION).tar.gz
+INSTALLER_LDFLAGS := -X $(MODULE)/internal/version.Version=$(INSTALLER_VERSION) \
+                     -X $(MODULE)/internal/version.Commit=$(COMMIT) \
+                     -X $(MODULE)/internal/version.BuildDate=$(NODE_AGENT_COMMIT_DATE)
+
+.PHONY: package-installer
+package-installer:
+	rm -rf $(INSTALLER_STAGE)
+	mkdir -p $(INSTALLER_STAGE)/lib $(INSTALLER_STAGE)/bin $(INSTALLER_STAGE)/coordinator/mosquitto $(INSTALLER_STAGE)/node
+	install -m 0755 deploy/install/showmesh-install deploy/install/showmeshctl-wrapper.sh $(INSTALLER_STAGE)/
+	install -m 0644 deploy/install/showmesh.service deploy/install/README.md $(INSTALLER_STAGE)/
+	install -m 0644 deploy/install/lib/*.sh $(INSTALLER_STAGE)/lib/
+	install -m 0644 deploy/docker-compose.yml deploy/docker-compose.published.yml $(INSTALLER_STAGE)/coordinator/
+	install -m 0644 deploy/mosquitto/mosquitto.conf deploy/mosquitto/acl.conf $(INSTALLER_STAGE)/coordinator/mosquitto/
+	install -m 0755 deploy/mosquitto/generate-credentials.sh deploy/mosquitto/add-agent-credential.sh $(INSTALLER_STAGE)/coordinator/mosquitto/
+	install -m 0755 deploy/node/install-ptp-audio.sh deploy/node/verify-ptp-audio.sh $(INSTALLER_STAGE)/node/
+	cp -R deploy/node/ptp-audio $(INSTALLER_STAGE)/node/
+	cp -R deploy/node/ndi-plugin $(INSTALLER_STAGE)/node/
+	for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(INSTALLER_LDFLAGS)" \
+			-o $(INSTALLER_STAGE)/bin/showmeshctl_linux_$$arch ./cmd/showmeshctl || exit 1; \
+	done
+	printf 'SHOWMESH_VERSION=%s\nSHOWMESH_COMMIT=%s\nSHOWMESH_BUILD_DATE=%s\n' \
+		'$(INSTALLER_VERSION)' '$(COMMIT)' '$(NODE_AGENT_COMMIT_DATE)' > $(INSTALLER_STAGE)/BUILD-INFO
+	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
+		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(INSTALLER_DIST) -cf - showmesh-installer_$(INSTALLER_VERSION) | gzip -n -9 > $(INSTALLER_DIST)/$(INSTALLER_TARBALL); \
+	else \
+		echo "WARNING: GNU tar not found on PATH; the installer bundle is correct but will not reproduce byte-for-byte." >&2; \
+		tar -C $(INSTALLER_DIST) -czf $(INSTALLER_DIST)/$(INSTALLER_TARBALL) showmesh-installer_$(INSTALLER_VERSION); \
+	fi
+	rm -rf $(INSTALLER_STAGE)
+	sed 's/@SHOWMESH_VERSION@/$(INSTALLER_VERSION)/' deploy/install/get-showmesh.sh > $(INSTALLER_DIST)/get-showmesh.sh
+	chmod 0755 $(INSTALLER_DIST)/get-showmesh.sh
+	cd $(INSTALLER_DIST) && sha256sum $(INSTALLER_TARBALL) get-showmesh.sh > showmesh-installer_$(INSTALLER_VERSION)_SHA256SUMS
+	cd $(INSTALLER_DIST) && sha256sum -c showmesh-installer_$(INSTALLER_VERSION)_SHA256SUMS
+	@echo "package-installer: built and self-verified $(INSTALLER_DIST)/$(INSTALLER_TARBALL) and get-showmesh.sh"
 
 # bench-audio builds and runs bench/audio-node's Track C seam C0a-1
 # measurement bench (RES-007): a real Debian 13 GStreamer image, all
