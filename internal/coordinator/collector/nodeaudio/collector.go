@@ -199,22 +199,16 @@ func ltcFrameRateAbsentReason(generatorState string) string {
 var _ collector.Collector = (*Collector)(nil)
 
 // SessionObservationDeleter is nodeaudio's own view onto *store.Store's
-// deletion surface for audio_session rows Poll already knows are gone, plus
-// the retired-signal purge [Collector.Poll] runs once on its first call.
-// *store.Store satisfies this directly, the same live-wiring precedent
-// [LocalClockSource] already uses.
+// deletion surface: dropped audio_session rows and the retired-signal
+// purge. *store.Store satisfies this directly.
 type SessionObservationDeleter interface {
 	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
 	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
 	DeleteObservationsBySignal(ctx context.Context, signal observation.SignalID) (int64, error)
 }
 
-// RetiredSignalIDs is every signal this package used to emit and no longer
-// does. [Collector.Poll] purges any stored row for these once, on its first
-// call, so a row a previous build wrote before the retirement shipped does
-// not linger in the database (and on a node's page) forever. Add a name
-// here when a signal is dropped; never remove one, since a row from an
-// even older build could still be sitting there.
+// RetiredSignalIDs are signals this package no longer emits; Poll purges
+// their stored rows once. Never remove an entry.
 var RetiredSignalIDs = []observation.SignalID{
 	"audio_session.reference_position_ms",
 	"audio_session.drift_ms",
@@ -296,9 +290,8 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	return obs, true
 }
 
-// purgeRetiredSignals deletes any stored row for each of [RetiredSignalIDs],
-// once per process lifetime (see [Collector.Poll]'s sync.Once), and logs how
-// many rows it removed for each signal at info level. A no-op if no
+// purgeRetiredSignals deletes stored rows for [RetiredSignalIDs] and logs
+// the count per signal at info level. A no-op if no
 // [SessionObservationDeleter] is wired in.
 func (c *Collector) purgeRetiredSignals(ctx context.Context) {
 	if c.deleter == nil {

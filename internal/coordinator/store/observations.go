@@ -347,14 +347,9 @@ func (s *Store) DeleteOrphanedObservations(ctx context.Context, kind observation
 	return n, nil
 }
 
-// DeleteObservationsBySignal removes every stored observation for signal,
-// across every resource kind, resource id and source, and reports how many
-// rows it removed. For a signal a build has retired entirely (no collector
-// path writes it any more), this is what clears rows a previous build
-// already stored before the retirement shipped — [Store.ReplaceObservations]
-// and [Store.DeleteOrphanedObservations] only prune within a (resource,
-// source) a caller still reports for, so a signal no path reports for
-// ANY resource any more needs this instead.
+// DeleteObservationsBySignal removes every stored row for signal across all
+// resources and sources and returns the count. Use it for a signal no
+// collector writes any more.
 func (s *Store) DeleteObservationsBySignal(ctx context.Context, signal observation.SignalID) (int64, error) {
 	guardNotInTx(ctx, "Store.DeleteObservationsBySignal")
 	res, err := s.db.ExecContext(ctx, `DELETE FROM observations WHERE signal = ?`, string(signal))

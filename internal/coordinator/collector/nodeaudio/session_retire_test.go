@@ -131,10 +131,7 @@ func TestOrphanSweepRemovesPreExistingStrandedRows(t *testing.T) {
 	}
 }
 
-// TestPollPurgesRetiredSignalsOnce proves the first Poll call clears any
-// stored row for [RetiredSignalIDs], across resources, and never repeats the
-// purge on a later Poll (a second row written for a retired signal after
-// startup is not this feature's job to clean up again).
+// TestPollPurgesRetiredSignalsOnce proves the purge runs on first Poll and never again.
 func TestPollPurgesRetiredSignalsOnce(t *testing.T) {
 	st := openRealStore(t)
 	ctx := context.Background()
