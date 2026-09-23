@@ -169,28 +169,40 @@ func writeFileAtomic(dir, name string, data []byte, mode fs.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
-	if _, err := tmp.Write(data); err != nil {
+	fail := func(what string, err error) error {
 		_ = tmp.Close()
 		cleanup()
-		return unavailable("The coordinator could not write %s: %v", filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not %s %s: %v. Check the directory's owner, mode and free space, then try again.", what, filepath.Join(dir, name), err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fail("write", err)
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return unavailable("The coordinator could not set the mode of %s: %v", filepath.Join(dir, name), err)
+		return fail("set the mode of", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return unavailable("The coordinator could not write %s: %v", filepath.Join(dir, name), err)
+		return fail("write", err)
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		return unavailable("The coordinator could not write %s: %v", filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not write %s: %v. Check the directory's owner, mode and free space, then try again.", filepath.Join(dir, name), err)
 	}
 	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
 		cleanup()
-		return unavailable("The coordinator could not replace %s: %v", filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not replace %s: %v. Check the directory's owner and mode, then try again.", filepath.Join(dir, name), err)
+	}
+	if err := syncDir(dir); err != nil {
+		return unavailable("The coordinator replaced %s but could not flush %s: %v. Check the disk, then try again.", filepath.Join(dir, name), dir, err)
 	}
 	return nil
+}
+
+// syncDir flushes dir so a rename into it survives a power loss.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

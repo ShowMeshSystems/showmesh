@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -286,7 +287,7 @@ func TestMintForEnrolledNodeWithoutReenrollIs409(t *testing.T) {
 
 func TestMintRefusesReservedAndMalformedNodeIDs(t *testing.T) {
 	h := newEnrollHarness(t, enrollment.Config{}, newBrokerConfigDir(t, ""))
-	for _, id := range []string{"coordinator", "fpp", "healthcheck", "observer", "Bad_ID", ""} {
+	for _, id := range []string{"coordinator", "fpp", "healthcheck", "observer", "enroll", "enrollments", "Bad_ID", ""} {
 		h.mint(t, `{"nodeId":"`+id+`"}`, http.StatusBadRequest)
 	}
 	h.mint(t, `{"nodeId":"render-01","expiresInSeconds":59}`, http.StatusBadRequest)
@@ -393,6 +394,9 @@ func TestRedeemLeavesCodePendingWhenBrokerFilesCannotBeWritten(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(problemDetail(t, raw), "still valid") {
 		t.Fatalf("redeem with a read-only broker dir: %d %s; want 503 saying the code is still valid", resp.StatusCode, raw)
 	}
+	if detail := problemDetail(t, raw); strings.Contains(detail, dir) || strings.Contains(detail, "permission denied") {
+		t.Fatalf("detail %q shows the caller a path or an OS error", detail)
+	}
 	if states := h.listStates(t); states[minted.ID] != enrollment.StatePending {
 		t.Fatalf("state = %q, want pending", states[minted.ID])
 	}
@@ -479,5 +483,76 @@ func TestRedeemAcceptsNoSameOriginHeaderAndNoCredential(t *testing.T) {
 	resp, raw := doRawRequest(t, h.api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("curl-style redeem: %d %s", resp.StatusCode, raw)
+	}
+}
+
+// slowGuessService refuses every code after a pause, counting the calls
+// that reach it.
+type slowGuessService struct {
+	NodeEnrollmentService
+	calls atomic.Int32
+}
+
+func (s *slowGuessService) Redeem(context.Context, enrollment.RedeemRequest, time.Time) (enrollment.Redeemed, error) {
+	s.calls.Add(1)
+	time.Sleep(50 * time.Millisecond)
+	return enrollment.Redeemed{}, enrollment.ErrCodeNotFound
+}
+
+func TestConcurrentWrongCodesFromOneAddressReachRedeemAtMostFiveTimes(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, func() time.Time { return testNow })
+	deps := assetsTestDeps(t, svc, st)
+	fake := &slowGuessService{}
+	deps.NodeEnrollment = fake
+	api := New(deps, Options{Clock: func() time.Time { return testNow }, Logger: testLogger()})
+
+	const burst = 50
+	statuses := make(chan int, burst)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range burst {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/node-enrollments/redeem", strings.NewReader(`{"code":"ABCD-2345"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "192.0.2.10:40000"
+			rec := httptest.NewRecorder()
+			api.Handler.ServeHTTP(rec, req)
+			statuses <- rec.Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+	counts := map[int]int{}
+	for code := range statuses {
+		counts[code]++
+	}
+	if n := fake.calls.Load(); n > 5 || n == 0 {
+		t.Fatalf("%d of %d concurrent wrong codes reached Redeem, want 1 to 5; statuses %v", n, burst, counts)
+	}
+	if counts[http.StatusNotFound]+counts[http.StatusTooManyRequests] != burst {
+		t.Fatalf("statuses %v, want only 404 and 429", counts)
+	}
+}
+
+func TestRedeemLimiterGivesBackTheSlotOfANonGuess(t *testing.T) {
+	l := newRedeemLimiter()
+	for range 20 {
+		_, release := l.reserve("a", testNow)
+		if release == nil {
+			t.Fatal("a released slot still counted against the source")
+		}
+		release()
+	}
+	for range 5 {
+		if _, release := l.reserve("a", testNow); release == nil {
+			t.Fatal("refused before five held slots")
+		}
+	}
+	if wait, release := l.reserve("a", testNow); release != nil || wait <= 0 {
+		t.Fatalf("sixth held slot: wait %v, release %v; want a refusal with a wait", wait, release != nil)
 	}
 }

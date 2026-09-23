@@ -43,11 +43,12 @@ func enrollmentProblem(status int, typ, title, detail string) v1.Problem {
 
 // redeemLimiter bounds failed redeems: at most perSourceMax per
 // perSourceWindow from one client address, and globalMax per globalWindow
-// overall. A successful redeem is never counted.
+// overall. A redeem holds a slot while it runs, so concurrent guesses
+// cannot pass the check together; a successful redeem gives its slot back.
 type redeemLimiter struct {
 	mu        sync.Mutex
-	perSource map[string][]time.Time
-	global    []time.Time
+	perSource map[string][]*redeemSlot
+	global    []*redeemSlot
 
 	perSourceMax    int
 	perSourceWindow time.Duration
@@ -55,50 +56,76 @@ type redeemLimiter struct {
 	globalWindow    time.Duration
 }
 
+type redeemSlot struct{ at time.Time }
+
 func newRedeemLimiter() *redeemLimiter {
 	return &redeemLimiter{
-		perSource: map[string][]time.Time{}, perSourceMax: 5, perSourceWindow: time.Minute,
+		perSource: map[string][]*redeemSlot{}, perSourceMax: 5, perSourceWindow: time.Minute,
 		globalMax: 30, globalWindow: time.Hour,
 	}
 }
 
-func pruneBefore(ts []time.Time, cutoff time.Time) []time.Time {
+func pruneBefore(slots []*redeemSlot, cutoff time.Time) []*redeemSlot {
 	i := 0
-	for i < len(ts) && !ts[i].After(cutoff) {
+	for i < len(slots) && !slots[i].at.After(cutoff) {
 		i++
 	}
-	return ts[i:]
+	return slots[i:]
 }
 
-// retryAfter reports how long source must wait before its next redeem,
-// or zero when it may try now.
-func (l *redeemLimiter) retryAfter(source string, now time.Time) time.Duration {
+func withoutSlot(slots []*redeemSlot, slot *redeemSlot) []*redeemSlot {
+	for i, s := range slots {
+		if s == slot {
+			return append(slots[:i:i], slots[i+1:]...)
+		}
+	}
+	return slots
+}
+
+// reserve takes a failure slot for source. It returns how long source must
+// wait when no slot is free, or a release func that gives the slot back.
+func (l *redeemLimiter) reserve(source string, now time.Time) (time.Duration, func()) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.global = pruneBefore(l.global, now.Add(-l.globalWindow))
 	src := pruneBefore(l.perSource[source], now.Add(-l.perSourceWindow))
-	if len(src) == 0 {
-		delete(l.perSource, source)
-	} else {
-		l.perSource[source] = src
-	}
 	var wait time.Duration
 	if len(src) >= l.perSourceMax {
-		wait = src[len(src)-l.perSourceMax].Add(l.perSourceWindow).Sub(now)
+		wait = src[len(src)-l.perSourceMax].at.Add(l.perSourceWindow).Sub(now)
 	}
 	if len(l.global) >= l.globalMax {
-		if w := l.global[len(l.global)-l.globalMax].Add(l.globalWindow).Sub(now); w > wait {
+		if w := l.global[len(l.global)-l.globalMax].at.Add(l.globalWindow).Sub(now); w > wait {
 			wait = w
 		}
 	}
-	return wait
+	if len(src) >= l.perSourceMax || len(l.global) >= l.globalMax {
+		if len(src) == 0 {
+			delete(l.perSource, source)
+		} else {
+			l.perSource[source] = src
+		}
+		return max(wait, time.Second), nil
+	}
+	slot := &redeemSlot{at: now}
+	l.perSource[source] = append(src, slot)
+	l.global = append(l.global, slot)
+	return 0, func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.global = withoutSlot(l.global, slot)
+		if rest := withoutSlot(l.perSource[source], slot); len(rest) == 0 {
+			delete(l.perSource, source)
+		} else {
+			l.perSource[source] = rest
+		}
+	}
 }
 
-func (l *redeemLimiter) recordFailure(source string, now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.perSource[source] = append(l.perSource[source], now)
-	l.global = append(l.global, now)
+// isGuessOutcome reports whether a redeem failed because the code was
+// wrong or no longer usable, the outcomes the failure limit counts.
+func isGuessOutcome(err error) bool {
+	return errors.Is(err, enrollment.ErrCodeNotFound) || errors.Is(err, enrollment.ErrCodeExpired) ||
+		errors.Is(err, enrollment.ErrCodeUsed) || errors.Is(err, enrollment.ErrCodeCancelled)
 }
 
 func mapNodeEnrollment(c enrollment.Code) v1.NodeEnrollment {
@@ -125,16 +152,21 @@ func (h *handlers) nodeEnrollmentUnavailable(w http.ResponseWriter, now time.Tim
 	return true
 }
 
-// writeEnrollmentError maps an enrollment error to its response.
+// writeEnrollmentError maps an enrollment error to its response. The
+// response carries only operator copy; any underlying cause is logged.
 func (h *handlers) writeEnrollmentError(w http.ResponseWriter, now time.Time, action string, err error) {
+	detail, cause := enrollment.Explain(err)
+	if cause != nil && h.logger != nil {
+		h.logger.Error("api: node enrollment failed", "action", action, "error", cause)
+	}
 	var status int
 	typ, title := ProblemTypeConflict, "Conflict"
 	switch {
 	case errors.Is(err, enrollment.ErrInvalidNodeID), errors.Is(err, enrollment.ErrMalformedCode):
-		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		writeProblem(w, h.logger, now, invalidParameterProblem(detail))
 		return
 	case errors.Is(err, enrollment.ErrCodeNotFound):
-		writeProblem(w, h.logger, now, resourceNotFoundProblem(err.Error()))
+		writeProblem(w, h.logger, now, resourceNotFoundProblem(detail))
 		return
 	case errors.Is(err, enrollment.ErrAlreadyEnrolled), errors.Is(err, enrollment.ErrCodeNotPending),
 		errors.Is(err, enrollment.ErrPrincipalConflict):
@@ -147,7 +179,7 @@ func (h *handlers) writeEnrollmentError(w http.ResponseWriter, now time.Time, ac
 		h.writeInternalError(w, now, action, err)
 		return
 	}
-	writeProblem(w, h.logger, now, enrollmentProblem(status, typ, title, err.Error()))
+	writeProblem(w, h.logger, now, enrollmentProblem(status, typ, title, detail))
 }
 
 func (h *handlers) handleCreateNodeEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +260,8 @@ func (h *handlers) handleRedeemNodeEnrollment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	source := loginSource(r)
-	if wait := h.redeemLimiter.retryAfter(source, now); wait > 0 {
+	wait, release := h.redeemLimiter.reserve(source, now)
+	if release == nil {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
 			"Too many enrollment codes were refused recently. Wait "+strconv.Itoa(retryAfterSeconds(wait))+" seconds, then try again."))
@@ -237,6 +270,7 @@ func (h *handlers) handleRedeemNodeEnrollment(w http.ResponseWriter, r *http.Req
 	var req v1.RedeemNodeEnrollmentRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNodeEnrollmentBodyBytes))
 	if err := dec.Decode(&req); err != nil {
+		release()
 		writeProblem(w, h.logger, now, invalidParameterProblem(
 			"The request body must be JSON like {\"code\":\"ABCD-2345\"}. Fix the body and try again."))
 		return
@@ -245,11 +279,10 @@ func (h *handlers) handleRedeemNodeEnrollment(w http.ResponseWriter, r *http.Req
 		Code: req.Code, Hostname: req.Hostname, Arch: req.Arch, ClientAddr: h.clientAddr(r),
 		RequestHost: r.Host, RequestScheme: requestScheme(r),
 	}, now)
+	if !isGuessOutcome(err) {
+		release()
+	}
 	if err != nil {
-		if errors.Is(err, enrollment.ErrCodeNotFound) || errors.Is(err, enrollment.ErrCodeExpired) ||
-			errors.Is(err, enrollment.ErrCodeUsed) || errors.Is(err, enrollment.ErrCodeCancelled) {
-			h.redeemLimiter.recordFailure(source, now)
-		}
 		h.writeEnrollmentError(w, now, "redeem node enrollment code", err)
 		return
 	}

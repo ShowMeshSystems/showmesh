@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -117,6 +118,7 @@ func cmdNodeEnroll(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	if coordinatorURL == "" {
 		coordinatorURL = strings.TrimRight(c.baseURL.String(), "/")
 	}
+	coordinatorURL, loopback := replaceLoopbackHost(coordinatorURL)
 	var desc serviceDescriptor
 	version := ""
 	if err := c.getJSON(ctx, "/api/v1/", nil, &desc); err == nil {
@@ -132,8 +134,33 @@ func cmdNodeEnroll(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	_, _ = fmt.Fprintf(stdout, "Expires:     %s (in %s)\n", resp.ExpiresAt.Format(time.RFC3339), resp.ExpiresAt.Sub(resp.ServerTime).Round(time.Second))
 	_, _ = fmt.Fprintf(stdout, "Re-enroll:   %s\n", reenrollText)
 	_, _ = fmt.Fprintf(stdout, "\nRun this on the node:\n  %s\n", nodeInstallCommand(version, coordinatorURL, resp.Code))
+	if loopback {
+		_, _ = fmt.Fprintf(stdout, "\n%s is a placeholder because the coordinator's address here is only reachable from this machine. Set SHOWMESH_PUBLIC_URL on the coordinator, or run this command with --server set to the coordinator's network address.\n", coordinatorPlaceholderHost)
+	}
 	_, _ = fmt.Fprintln(stdout, "\nThe code works once and is shown only now.")
 	return exitOK
+}
+
+const coordinatorPlaceholderHost = "COORDINATOR-ADDRESS"
+
+// replaceLoopbackHost swaps a loopback host in rawURL for a placeholder,
+// since a node cannot reach the coordinator at that address.
+func replaceLoopbackHost(rawURL string) (string, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return rawURL, false
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return rawURL, false
+	}
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(coordinatorPlaceholderHost, port)
+	} else {
+		u.Host = coordinatorPlaceholderHost
+	}
+	return u.String(), true
 }
 
 // releaseVersionPattern matches a release version as the release workflow

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestGenerateCodeFormatAndNormalize(t *testing.T) {
@@ -245,5 +246,19 @@ func TestCheckExplainsWhatToFix(t *testing.T) {
 		if !errors.Is(err, ErrBrokerFilesUnavailable) || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: Check() = %v, want a refusal mentioning %q", name, err, tc.want)
 		}
+	}
+}
+
+func TestTrimFieldDropsNonPrintableAndCutsOnARuneBoundary(t *testing.T) {
+	if got := trimField(" pi\x00-\x1b[31mnode​\n "); got != "pi-[31mnode" {
+		t.Fatalf("trimField kept a control or format character: %q", got)
+	}
+	if got := trimField("ok\xffname"); got != "okname" {
+		t.Fatalf("trimField kept invalid UTF-8: %q", got)
+	}
+	long := strings.Repeat("a", 127) + "é" + "tail"
+	got := trimField(long)
+	if !utf8.ValidString(got) || len(got) > 128 || got != strings.Repeat("a", 127) {
+		t.Fatalf("trimField(%d bytes) = %q (%d bytes), want 127 a's cut before the two-byte rune", len(long), got, len(got))
 	}
 }

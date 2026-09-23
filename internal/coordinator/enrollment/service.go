@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -58,10 +60,12 @@ var (
 	ErrRedeemFailed      = errors.New("enrollment: redeem failed")
 )
 
-// operatorError pairs a sentinel with the message an operator reads.
+// operatorError pairs a sentinel with the message an operator reads. cause
+// is for the coordinator's log only and never reaches the caller.
 type operatorError struct {
-	kind error
-	msg  string
+	kind  error
+	msg   string
+	cause error
 }
 
 func (e *operatorError) Error() string        { return e.msg }
@@ -69,6 +73,16 @@ func (e *operatorError) Is(target error) bool { return target == e.kind }
 
 func opErr(kind error, format string, args ...any) error {
 	return &operatorError{kind: kind, msg: fmt.Sprintf(format, args...)}
+}
+
+// Explain returns the message a caller may show for err and the cause the
+// coordinator should log, which is nil when there is nothing more to say.
+func Explain(err error) (message string, cause error) {
+	var oe *operatorError
+	if errors.As(err, &oe) {
+		return oe.msg, oe.cause
+	}
+	return err.Error(), nil
 }
 
 // Config is the coordinator's enrollment settings, all read at start.
@@ -142,6 +156,9 @@ func codeFromRecord(rec store.NodeEnrollmentCodeRecord, now time.Time) Code {
 // ValidateNodeID refuses a malformed node ID or one reserved for a fixed
 // broker role.
 func ValidateNodeID(nodeID string) error {
+	if mqttproto.IsCommandNameNodeID(nodeID) {
+		return opErr(ErrInvalidNodeID, "%q is reserved because showmeshctl node uses it as a command name. Choose a different node ID.", nodeID)
+	}
 	if err := mqttproto.ValidateNodeID(nodeID); err != nil {
 		return opErr(ErrInvalidNodeID, "%q is not a valid node ID. Use 1 to 64 lowercase letters, digits and inner hyphens.", nodeID)
 	}
@@ -326,19 +343,23 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 		return Redeemed{}, opErr(ErrCodeExpired, "This enrollment code expired at %s. Mint a new one with showmeshctl node enroll %s.", rec.ExpiresAt.UTC().Format(time.RFC3339), rec.NodeID)
 	}
 	nodeID := rec.NodeID
-	if !rec.Reenroll {
-		isEnrolled, err := s.enrolled(ctx, nodeID)
-		if err != nil {
-			return Redeemed{}, redeemFailed("check whether the node is already enrolled", err)
-		}
-		if isEnrolled {
-			return Redeemed{}, opErr(ErrAlreadyEnrolled, "Node %q was enrolled after this code was minted. Mint a re-enrollment code to replace its credentials.", nodeID)
-		}
-	}
-
 	previous, hasPrevious, err := s.st.LatestRedeemedNodeEnrollment(ctx, nodeID)
 	if err != nil {
 		return Redeemed{}, redeemFailed("read the node's earlier enrollment", err)
+	}
+	if !rec.Reenroll {
+		if hasPrevious {
+			return Redeemed{}, opErr(ErrAlreadyEnrolled, "Node %q was enrolled after this code was minted. Mint a re-enrollment code to replace its credentials.", nodeID)
+		}
+		if s.cfg.BrokerMode == BrokerModeBuiltin {
+			hasLogin, err := s.broker.HasUser(nodeID)
+			if err != nil {
+				return Redeemed{}, redeemFailed("check whether the node already has a broker login", err)
+			}
+			if hasLogin {
+				return Redeemed{}, opErr(ErrAlreadyEnrolled, "Node %q already has a broker login. Mint a re-enrollment code to replace its credentials.", nodeID)
+			}
+		}
 	}
 	reuseID := ""
 	existing, err := s.st.GetPrincipalByName(ctx, PrincipalName(nodeID))
@@ -356,7 +377,8 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 	if s.cfg.BrokerMode == BrokerModeBuiltin {
 		password, undo, err := s.broker.Provision(nodeID)
 		if err != nil {
-			return Redeemed{}, opErr(ErrRedeemFailed, "The coordinator could not create the node's broker login: %s The code is still valid.", err.Error())
+			return Redeemed{}, &operatorError{kind: ErrRedeemFailed, cause: err,
+				msg: "The coordinator could not create the node's broker login, and the code is still valid. Check the coordinator's log, then try the code again."}
 		}
 		result.MQTTUsername, result.MQTTPassword, undoBroker = nodeID, password, undo
 	} else {
@@ -365,7 +387,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 
 	tok, err := identity.GenerateToken()
 	if err != nil {
-		return Redeemed{}, errors.Join(redeemFailed("generate the node's API token", err), undoBroker())
+		return Redeemed{}, undoFailedOr(redeemFailed("generate the node's API token", err), err, undoBroker())
 	}
 	err = s.ids.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		principalID := reuseID
@@ -414,30 +436,51 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 		}, nil
 	})
 	if err != nil {
-		undoErr := undoBroker()
-		if errors.Is(err, ErrCodeUsed) {
-			return Redeemed{}, errors.Join(err, undoErr)
+		reported := err
+		if !errors.Is(err, ErrCodeUsed) {
+			reported = redeemFailed("record the enrollment", err)
 		}
-		if undoErr != nil {
-			return Redeemed{}, opErr(ErrRedeemFailed, "The coordinator could not record the enrollment (%v) and could not restore the broker login files (%v). Check the broker config directory, then mint a new code.", err, undoErr)
-		}
-		return Redeemed{}, redeemFailed("record the enrollment", err)
+		return Redeemed{}, undoFailedOr(reported, err, undoBroker())
 	}
 	result.APIToken = tok.Value
 	return result, nil
 }
 
 func redeemFailed(step string, err error) error {
-	return opErr(ErrRedeemFailed, "The coordinator could not %s: %v. Nothing was changed and the code is still valid, so try again.", step, err)
+	return &operatorError{kind: ErrRedeemFailed, cause: err,
+		msg: fmt.Sprintf("The coordinator could not %s, and nothing was changed. Try the same code again.", step)}
 }
 
-// trimField bounds an optional, caller-supplied descriptive field.
-func trimField(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) > 128 {
-		s = s[:128]
+// undoFailedOr returns reported, or a failure that says the broker login
+// files could not be put back when undoErr is set.
+func undoFailedOr(reported, err, undoErr error) error {
+	if undoErr == nil {
+		return reported
 	}
-	return s
+	return &operatorError{kind: ErrRedeemFailed, cause: errors.Join(err, undoErr),
+		msg: "The coordinator could not finish the enrollment or put the broker login files back. Check the broker config directory and the coordinator's log, then mint a new code."}
+}
+
+const maxFieldBytes = 128
+
+// trimField bounds an optional, caller-supplied descriptive field: it keeps
+// printable characters only and cuts on a UTF-8 boundary.
+func trimField(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))
+	s = strings.TrimSpace(s)
+	if len(s) <= maxFieldBytes {
+		return s
+	}
+	cut := maxFieldBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut])
 }
 
 func (s *Service) brokerURL(req RedeemRequest) string {

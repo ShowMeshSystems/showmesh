@@ -61,9 +61,32 @@ func TestNodeEnrollPrintsCodeAndCommand(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{"Code:        ABCD-2345", "Node:        render-01", "(in 15m0s)",
-		"sudo showmesh-install --coordinator " + srv.URL + " --code ABCD-2345", "shown only now"} {
+		"sudo showmesh-install --coordinator http://COORDINATOR-ADDRESS:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + " --code ABCD-2345",
+		"COORDINATOR-ADDRESS is a placeholder", "Set SHOWMESH_PUBLIC_URL on the coordinator, or run this command with --server",
+		"shown only now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "127.0.0.1") {
+		t.Errorf("output prints a loopback address a node cannot reach:\n%s", out)
+	}
+}
+
+func TestReplaceLoopbackHost(t *testing.T) {
+	cases := map[string]string{
+		"http://localhost:8080":    "http://COORDINATOR-ADDRESS:8080",
+		"http://127.0.0.1:8080":    "http://COORDINATOR-ADDRESS:8080",
+		"http://127.1.2.3":         "http://COORDINATOR-ADDRESS",
+		"https://[::1]:8443":       "https://COORDINATOR-ADDRESS:8443",
+		"http://LocalHost:80/":     "http://COORDINATOR-ADDRESS:80/",
+		"http://showmesh.lan:8080": "http://showmesh.lan:8080",
+		"http://192.168.1.10:8080": "http://192.168.1.10:8080",
+	}
+	for in, want := range cases {
+		got, replaced := replaceLoopbackHost(in)
+		if got != want || replaced != (in != want) {
+			t.Errorf("replaceLoopbackHost(%q) = %q, %v; want %q", in, got, replaced, want)
 		}
 	}
 }
