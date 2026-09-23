@@ -226,11 +226,12 @@ func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, acti
 			defer wg.Done()
 		}
 		var fired sync.WaitGroup
+		stopped := func() string { return h.cueActionsStopped(ctx, stopsAtStart) }
 		for i, actionID := range actionIDs {
-			if h.cueActionsStopped(ctx, stopsAtStart) {
+			if reason := stopped(); reason != "" {
 				for j := i; j < len(actionIDs); j++ {
 					key := cueActionIdempotencyKey(activationKey, j, actionIDs[j])
-					o, fresh := h.recordUnsentCueAction(ctx, act, key, actionIDs[j], cueActionUnresolvedCommandAction, "", issuer, outcomeWordRefused, cueActionStoppedReason)
+					o, fresh := h.recordUnsentCueAction(ctx, act, key, actionIDs[j], cueActionUnresolvedCommandAction, "", issuer, outcomeWordRefused, reason)
 					run.set(j, o, fresh)
 				}
 				break
@@ -249,7 +250,7 @@ func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, acti
 						run.set(i, v1.CueActionOutcome{ActionID: actionID, Outcome: outcomeWordFailed, OutcomeReason: "this action stopped because of an internal coordinator error"}, true)
 					}
 				}()
-				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, onSent), act, activationKey, i, actionID, issuer, func() bool { return startedLate || run.wasLate(i) })
+				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, onSent), act, activationKey, i, actionID, issuer, func() bool { return startedLate || run.wasLate(i) }, stopped)
 				run.set(i, o, fresh)
 				if fresh && o.Outcome != outcomeWordConfirmed {
 					h.logWarn("cue actions: a show action did not confirm; the cue's other outputs were not affected",
@@ -265,20 +266,27 @@ func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, acti
 	return run
 }
 
-const cueActionStoppedReason = "The show was stopped before this action was sent."
+const (
+	cueActionStoppedReason      = "The show was stopped before this action was sent."
+	cueActionWeatherDelayReason = "A weather delay started before this action was sent."
+)
 
-// cueActionsStopped reports whether an emergency stop fired since the run
-// began or a weather delay is active. A failed read counts as stopped.
-func (h *handlers) cueActionsStopped(ctx context.Context, stopsAtStart int64) bool {
+// cueActionsStopped returns the refusal reason when an emergency stop fired
+// since the run began or a weather delay is active, and "" otherwise. A
+// failed read counts as stopped.
+func (h *handlers) cueActionsStopped(ctx context.Context, stopsAtStart int64) string {
 	if h.emergencyStops.Load() != stopsAtStart {
-		return true
+		return cueActionStoppedReason
 	}
 	delayed, err := h.weatherDelayActive(ctx)
 	if err != nil {
 		h.logWarn("cue actions: failed to read weather delay state; holding the remaining actions as a precaution", "error", err)
-		return true
+		return cueActionStoppedReason
 	}
-	return delayed
+	if delayed {
+		return cueActionWeatherDelayReason
+	}
+	return ""
 }
 
 // dispatchCueActivationsWithActions is the playlist loop's dispatch: the
@@ -358,8 +366,9 @@ func cueActionsWorstOutcome(actions []v1.CueActionOutcome) string {
 }
 
 // fireOneCueAction fires one action at most once per activation. fresh is
-// false when the outcome was replayed from an earlier fire.
-func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activation, activationKey string, index int, actionID string, issuer cueActivationIssuer, late func() bool) (v1.CueActionOutcome, bool) {
+// false when the outcome was replayed from an earlier fire. stopped is
+// checked again right before the send, so a stop that lands meanwhile holds it.
+func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activation, activationKey string, index int, actionID string, issuer cueActivationIssuer, late func() bool, stopped func() string) (v1.CueActionOutcome, bool) {
 	key := cueActionIdempotencyKey(activationKey, index, actionID)
 	if existing, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, key); err == nil {
 		return cueActionOutcomeFromRecord(actionID, existing), false
@@ -410,6 +419,10 @@ func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activ
 		Kind: identity.AuditDispatch, CommandID: cmdID, Params: auditParams,
 	})
 
+	if reason := stopped(); reason != "" {
+		return h.refuseRecordedCueAction(ctx, act, cmdID, key, actionID, auditAction, payload.Label, issuer, auditParams, reason), true
+	}
+
 	ac := authContext{result: identity.Authenticated{
 		Principal: identity.Principal{ID: issuer.PrincipalID, Name: issuer.PrincipalName},
 		Form:      issuer.Form, CredentialID: issuer.CredentialID,
@@ -439,6 +452,28 @@ func (h *handlers) fireOneCueAction(ctx context.Context, act cueactivation.Activ
 		h.logWarn("cue actions: failed to record action outcome", "commandId", cmdID, "error", err)
 	}
 	return v1.CueActionOutcome{ActionID: actionID, Label: payload.Label, Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason}, true
+}
+
+// refuseRecordedCueAction resolves an already-recorded action as refused
+// without sending it, and audits that outcome.
+func (h *handlers) refuseRecordedCueAction(ctx context.Context, act cueactivation.Activation, cmdID, key, actionID, auditAction, label string, issuer cueActivationIssuer, auditParams map[string]any, reason string) v1.CueActionOutcome {
+	now := h.now()
+	h.writeCueActionAudit(ctx, identity.AuditEntry{
+		Timestamp: now, PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
+		Form: issuer.Form, CredentialID: issuer.CredentialID,
+		Action: auditAction, Target: actionID, IdempotencyKey: key,
+		Kind: identity.AuditOutcome, CommandID: cmdID, Params: auditParams,
+		Outcome: outcomeWordRefused, OutcomeState: outcomeWordRefused, OutcomeReason: reason,
+	})
+	outcomeState := outcomeWordRefused
+	final, _ := json.Marshal(cueActionFireResultPayload{CueID: act.CueID, Label: label, Outcome: outcomeWordRefused})
+	if err := h.updateCommandOutcomeBounded(ctx, cmdID, store.CommandOutcomeUpdate{
+		ResolvedAt: &now, State: strPtr("resolved"),
+		ResultJSON: strPtr(string(final)), OutcomeState: &outcomeState, OutcomeReason: &reason,
+	}); err != nil {
+		h.logWarn("cue actions: failed to record a held action", "commandId", cmdID, "error", err)
+	}
+	return v1.CueActionOutcome{ActionID: actionID, Label: label, Outcome: outcomeWordRefused, OutcomeState: outcomeState, OutcomeReason: reason}
 }
 
 // recordUnsentCueAction records an action refused before it was sent, under

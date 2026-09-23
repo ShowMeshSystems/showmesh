@@ -15,6 +15,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
+	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
 
 const cueActionLaunchColumnBody = `{"show":"halloween-2026","label":"Song one column","safetyClass":"none",
@@ -274,7 +275,7 @@ func TestFireOneCueActionRecordsAnUnsentRefusalOnce(t *testing.T) {
 	h := newCueActionHandlers(setup, now, dispatcher)
 	key := cueActionsActivationKey(act, 1)
 
-	o, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, func() bool { return false })
+	o, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, func() bool { return false }, func() string { return "" })
 	if o.Outcome != outcomeWordRefused || !fresh {
 		t.Fatalf("outcome = %+v fresh=%v, want a fresh refusal", o, fresh)
 	}
@@ -282,7 +283,7 @@ func TestFireOneCueActionRecordsAnUnsentRefusalOnce(t *testing.T) {
 	if err != nil || rec.OutcomeReason != o.OutcomeReason {
 		t.Fatalf("refusal row = %+v, err = %v; want the refusal recorded under the action's key", rec, err)
 	}
-	again, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, func() bool { return false })
+	again, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, func() bool { return false }, func() string { return "" })
 	if fresh || again.Outcome != outcomeWordRefused {
 		t.Fatalf("second attempt = %+v fresh=%v, want the recorded refusal replayed", again, fresh)
 	}
@@ -528,5 +529,77 @@ func TestHandleActivateCueReturnsBeforeActionsConfirm(t *testing.T) {
 	final := waitForCueActionsAudit(t, setup.svc, act.CueID)
 	if got := auditActionOutcomes(t, final); len(got) != 1 || got[0].Outcome != outcomeWordConfirmed {
 		t.Fatalf("final audit actions = %+v, want the confirmed outcome", got)
+	}
+}
+
+// stopOnDispatchAudit fires an emergency stop while an action's dispatch
+// audit is written, after the loop's stop check and before the send.
+type stopOnDispatchAudit struct {
+	identity.Service
+	h *handlers
+}
+
+func (s *stopOnDispatchAudit) WriteAudit(ctx context.Context, e identity.AuditEntry) error {
+	if e.Kind == identity.AuditDispatch && strings.HasPrefix(e.Action, "action.invoke:") {
+		s.h.emergencyStops.Add(1)
+	}
+	return s.Service.WriteAudit(ctx, e)
+}
+
+func TestDispatchCueActivationsStopBeforeTheSendHoldsTheAction(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActionFixture(t, setup, now, "song-one-column")
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{"launchColumn": {Outcome: ResolumeOutcomeConfirmed}}}
+	h := newCueActionHandlers(setup, now, dispatcher)
+	h.deps.Identity = &stopOnDispatchAudit{Service: setup.svc, h: h}
+
+	h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	h.cueActivationFailToBlackWG.Wait()
+
+	if dispatcher.callCount() != 0 {
+		t.Fatalf("resolume calls = %v, want none after a stop that landed before the send", resolumeCallActions(dispatcher))
+	}
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(cueActionsActivationKey(act, 1), 0, "song-one-column"))
+	if err != nil {
+		t.Fatalf("held action's row: %v", err)
+	}
+	if rec.Action != "action.invoke:resolume" || rec.State != "resolved" {
+		t.Fatalf("held action's row = %+v, want the recorded resolume command resolved", rec)
+	}
+	if o := cueActionOutcomeFromRecord("song-one-column", rec); o.Outcome != outcomeWordRefused || o.OutcomeReason != cueActionStoppedReason {
+		t.Fatalf("held action = %+v, want refused because the show was stopped", o)
+	}
+}
+
+func TestDispatchCueActivationsWeatherDelayHoldsQueuedActions(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActionFixture(t, setup, now, "song-one-column", "blackout-now")
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	g := newGatedLaunchColumn(false, false)
+	h := newGatedCueActionHandlers(setup, now, g)
+	h.deps.WeatherDelay = setup.st
+	act.ScheduledAtNs = new(int64)
+	defer func(old time.Duration) { cueActionsSendBudget = old }(cueActionsSendBudget)
+	cueActionsSendBudget = 50 * time.Millisecond
+
+	h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	if err := setup.st.SetWeatherDelayState(context.Background(), store.WeatherDelayStateRecord{Active: true, Kind: weatherdelay.KindDelay, StartedAt: now, StartedBy: "op-1", Revision: 1}); err != nil {
+		t.Fatalf("set weather delay state: %v", err)
+	}
+	close(g.release)
+	h.cueActivationFailToBlackWG.Wait()
+
+	if got := resolumeCallActions(&g.fakeResolumeActionDispatcher); len(got) != 1 || got[0] != "launchColumn" {
+		t.Fatalf("resolume calls = %v, want only the action already in flight before the delay", got)
+	}
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(cueActionsActivationKey(act, 1), 1, "blackout-now"))
+	if err != nil {
+		t.Fatalf("held action's row: %v", err)
+	}
+	if o := cueActionOutcomeFromRecord("blackout-now", rec); o.Outcome != outcomeWordRefused || o.OutcomeReason != cueActionWeatherDelayReason {
+		t.Fatalf("held action = %+v, want refused because a weather delay started", o)
 	}
 }
