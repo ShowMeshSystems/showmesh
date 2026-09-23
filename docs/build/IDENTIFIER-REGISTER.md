@@ -1230,6 +1230,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `definition-superseded` | reserved | Lane 16, SM-290 |
 | `evidence-unavailable` | reserved | Lane 16, SM-290 |
 | `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
+| `fpp-plugin-reports-refused` | reserved | the coordinator is refusing the FPP plugin's playlist entry reports (sequence regression after a plugin reinstall or wiped state directory). Also the night readiness check name, reported as failing on any show that binds the instance, cleared by the next accepted report or the clear-observation route |
 | `assets-missing` | shipped | Lane 20.1, SM-329 |
 | `node-catalog-stale` | reserved | Lane 16, SM-285 |
 | `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
@@ -1566,6 +1567,7 @@ strings are registered here.
 | Warning message | Status | Owner |
 |---|---|---|
 | the coordinator's operator mismatch instruction (`fppreconcile.OperatorMismatchInstruction`, one constant shared by the raise and the clear) | reserved | pre-release notice: the bound playlist's on-disk content changed after it started; raised under id `0`, plugin name constant, C++ constant `ShowMesh_PlaylistMismatch` names the id in the plugin source |
+| `ShowMesh_ReportsRefused`: the coordinator's refusal reason followed by the sentence "Clear the playlist observation on the coordinator's Monitor screen, or run showmeshctl fpp reset-observation-sequence" | reserved | pre-release notice: the coordinator refused the plugin's last playlist entry report; raised under id `0`, cleared by the next accepted report |
 
 ## Change stream event kinds
 
