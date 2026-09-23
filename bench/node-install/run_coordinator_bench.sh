@@ -48,7 +48,7 @@ run_install() {
   in_box "cat /repo/dist/inst-bench/$v/get-showmesh.sh | SHOWMESH_RELEASE_BASE=file:///repo/dist/inst-bench/$v bash -s -- $* 2>&1 | tee /tmp/install-$v.log; exit \${PIPESTATUS[1]}"
 }
 
-run_install 0.0.0-bench1 --role coordinator --yes --admin-name bench-admin --admin-password-file /root/admin-password
+run_install 0.0.0-bench1 --role coordinator --yes --admin-name bench-admin --admin-password-file /root/admin-password --address 192.0.2.44
 check "coordinator install succeeds" "[ $? -eq 0 ]"
 check "the API answers" "in_box 'grep -q \"ok: the coordinator answers on port 8080\" /tmp/install-0.0.0-bench1.log'"
 check "the broker accepts the coordinator's login" "in_box 'grep -q \"ok: the broker accepts the coordinator.s login\" /tmp/install-0.0.0-bench1.log'"
@@ -57,6 +57,13 @@ check ".env carries the release and broker settings" "in_box 'cd /opt/showmesh/c
 check "the broker files belong to the coordinator's uid" "in_box '[ \$(stat -c %u:%g:%a /opt/showmesh/coordinator/mosquitto/passwd) = 65532:1883:640 ] && [ \$(stat -c %a /opt/showmesh/coordinator/mosquitto) = 2755 ]'"
 check "showmeshctl signs in as the administrator" "in_box 'showmeshctl principal list | grep -q bench-admin'"
 check "the coordinator is announced as _showmesh._tcp" "in_box 'grep -q _showmesh._tcp /etc/avahi/services/showmesh.service && grep -q \"<port>8080</port>\" /etc/avahi/services/showmesh.service'"
+check "the given address is what nodes are told" "in_box 'grep -qx SHOWMESH_PUBLIC_URL=http://192.0.2.44:8080 /opt/showmesh/coordinator/.env && grep -qx SHOWMESH_NODE_BROKER_URL=tcp://192.0.2.44:1883 /opt/showmesh/coordinator/.env'"
+# shellcheck disable=SC2016
+no_readable_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showmeshctl.env; do sed -n "s/^SHOWMESH_\(MQTT_PASSWORD\|CTL_TOKEN\)=//p" "$f"; done | grep . > /tmp/secrets
+  hits="$(find /etc/showmesh /opt/showmesh/coordinator -type f -perm -o=r -exec grep -lF -f /tmp/secrets {} + 2>/dev/null)"
+  [ -s /tmp/secrets ] && [ -z "$hits" ] || { echo "world-readable: $hits"; false; }'
+check "no world-readable file under /etc/showmesh or /opt/showmesh/coordinator holds a secret" "in_box '$no_readable_secret'"
+check "the installer left nothing in /tmp named for ShowMesh" "in_box '! ls /tmp/showmesh-* >/dev/null 2>&1'"
 pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')"
 
 run_install 0.0.0-bench2 --yes
@@ -64,6 +71,8 @@ check "upgrade succeeds with no options" "[ $? -eq 0 ]"
 check "upgrade runs the bench2 images" "in_box 'cd /opt/showmesh/coordinator && docker compose -f docker-compose.yml -f docker-compose.published.yml ps --format \"{{.Image}}\" | grep -c 0.0.0-bench2 | grep -qx 2'"
 check "upgrade keeps the administrator token" "in_box 'grep -q \"showmeshctl already signs in as an administrator\" /tmp/install-0.0.0-bench2.log'"
 check "upgrade keeps the broker login" "[ \"\$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')\" = \"$pw_before\" ]"
+check "the address given on the first install survives a rerun without it" "in_box 'grep -qx SHOWMESH_PUBLIC_URL=http://192.0.2.44:8080 /opt/showmesh/coordinator/.env'"
+check "no world-readable secret after the upgrade either" "in_box '$no_readable_secret'"
 check "upgrade saw the broker accept the login again" "in_box 'grep -q \"ok: the broker accepts the coordinator.s login\" /tmp/install-0.0.0-bench2.log'"
 
 echo

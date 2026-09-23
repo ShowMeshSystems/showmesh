@@ -592,7 +592,7 @@ package-installer:
 	install -m 0755 deploy/mosquitto/generate-credentials.sh deploy/mosquitto/add-agent-credential.sh $(INSTALLER_STAGE)/coordinator/mosquitto/
 	install -m 0755 deploy/node/install-ptp-audio.sh deploy/node/verify-ptp-audio.sh $(INSTALLER_STAGE)/node/
 	cp -R deploy/node/ptp-audio $(INSTALLER_STAGE)/node/
-	if [ -d deploy/node/ndi-plugin ]; then cp -R deploy/node/ndi-plugin $(INSTALLER_STAGE)/node/; fi
+	cp -R deploy/node/ndi-plugin $(INSTALLER_STAGE)/node/
 	for arch in amd64 arm64; do \
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(INSTALLER_LDFLAGS)" \
 			-o $(INSTALLER_STAGE)/bin/showmeshctl_linux_$$arch ./cmd/showmeshctl || exit 1; \

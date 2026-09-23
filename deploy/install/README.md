@@ -12,12 +12,13 @@ This file is for contributors. Operator documentation lives in
 | File | Contents |
 | --- | --- |
 | `get-showmesh.sh` | The bootstrap, with the version written in. |
-| `showmesh-installer_<version>.tar.gz` | `showmesh-install`, `lib/`, the avahi service template, the coordinator Compose bundle under `coordinator/`, `install-ptp-audio.sh`, `ptp-audio/` and `ndi-plugin/` under `node/`, `showmeshctl` for linux amd64 and arm64 under `bin/`, and `BUILD-INFO`. |
-| `showmesh-installer_<version>_SHA256SUMS` | Checksums of the two files above. |
+| `showmesh-installer_<version>.tar.gz` | `showmesh-install`, `lib/`, the avahi service template, the coordinator Compose bundle under `coordinator/`, `install-ptp-audio.sh`, `verify-ptp-audio.sh`, `ptp-audio/` and `ndi-plugin/` under `node/`, `showmeshctl` for linux amd64 and arm64 under `bin/`, and `BUILD-INFO`. |
+| `showmesh-installer_<version>_SHA256SUMS` | Checksums of the two files above, for the local self-check only. |
 
-The release must publish one file named `SHA256SUMS` that lists the installer
-bundle and both node agent tarballs. The bootstrap checks the bundle against it
-and the installer checks the node agent tarball against it.
+The release workflow publishes the bundle and the bootstrap with one file named
+`SHA256SUMS` that lists both of them and both node agent tarballs. The bootstrap
+checks the bundle against it and the installer checks the node agent tarball
+against it.
 
 ## How a run flows
 
