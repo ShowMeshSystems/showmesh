@@ -663,11 +663,6 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh position is available from the engine; it is mid-discontinuity or has nothing loaded", rep.receivedAt))
 	}
 
-	obs = append(obs,
-		notCollected(res, SignalSessionReferencePositionMs, source, "this build has no reference show-position source", rep.receivedAt),
-		notCollected(res, SignalSessionDriftMs, source, "drift is only measured at track changes, and that measurement is not implemented yet", rep.receivedAt),
-	)
-
 	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, sessionAt, rep))
 	obs = append(obs, buildSessionValue(res, source, SignalSessionStateReason, sessionStateReason(sess.State), sessionAt, rep))
 	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), sessionAt, rep))

@@ -171,17 +171,15 @@ const (
 	SignalOutputsPipeWireEnumeratedReason observation.SignalID = "node.audio.outputs.pipewire_enumerated_reason"
 )
 
-// The four node.audio.sync.* signals are ADR-052 decision 6's sync
+// The three node.audio.sync.* signals are ADR-052 decision 6's sync
 // status: whether this node's local clock is locked to the global clock,
-// what it follows, the offset, and the rate adjustment. Built from the
-// node's own PTP report and the clock its pipeline was built on, so a
-// locked provider on a system-clock pipeline is not a locked output.
-// See [syncObservations].
+// what it follows, and the offset. Built from the node's own PTP report
+// and the clock its pipeline was built on, so a locked provider on a
+// system-clock pipeline is not a locked output. See [syncObservations].
 const (
 	SignalSyncState    observation.SignalID = "node.audio.sync.state"
 	SignalSyncFollows  observation.SignalID = "node.audio.sync.follows"
 	SignalSyncOffsetNs observation.SignalID = "node.audio.sync.offset_ns"
-	SignalSyncRatePPM  observation.SignalID = "node.audio.sync.rate_ppm"
 )
 
 // AllSignalIDs is every signal this package ever emits, in the order
@@ -203,7 +201,6 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSyncState,
 	SignalSyncFollows,
 	SignalSyncOffsetNs,
-	SignalSyncRatePPM,
 	SignalClockAlignment,
 	SignalClockAlignmentState,
 	SignalLTCFrameRate,
@@ -245,15 +242,6 @@ const (
 	SignalSessionItemID           observation.SignalID = "audio_session.playlist.item_id"
 	SignalSessionItemIndex        observation.SignalID = "audio_session.playlist.item_index"
 	SignalSessionPositionMs       observation.SignalID = "audio_session.position_ms"
-
-	// SignalSessionReferencePositionMs and SignalSessionDriftMs are
-	// AUDIO-ENGINE section 15's reference-position and drift telemetry.
-	// No source for either is wired into this seam (ADR-017: drift is
-	// measured discretely at track boundaries, not continuously, and
-	// that measurement does not exist yet), so both always report
-	// [observation.StateNotCollected] with a reason.
-	SignalSessionReferencePositionMs observation.SignalID = "audio_session.reference_position_ms"
-	SignalSessionDriftMs             observation.SignalID = "audio_session.drift_ms"
 
 	SignalSessionState observation.SignalID = "audio_session.state"
 
@@ -354,8 +342,6 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionItemID,
 	SignalSessionItemIndex,
 	SignalSessionPositionMs,
-	SignalSessionReferencePositionMs,
-	SignalSessionDriftMs,
 	SignalSessionState,
 	SignalSessionStateReason,
 	SignalSessionDesiredRevision,

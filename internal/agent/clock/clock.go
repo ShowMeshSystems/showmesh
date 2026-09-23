@@ -181,8 +181,8 @@ type RawStatus struct {
 	OffsetKnown bool
 
 	// FrequencyPPM is how far this provider's steered clock is being
-	// adjusted, in parts per million -- never node.audio.sync.rate_ppm's
-	// audio-interface rate. FrequencyPPMReason explains an unknown value.
+	// adjusted, in parts per million. FrequencyPPMReason explains an
+	// unknown value.
 	FrequencyPPM       float64
 	FrequencyPPMKnown  bool
 	FrequencyPPMReason string
