@@ -11,6 +11,8 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  FPPPluginReportsRefusedBanner,
+  StopHoldBanner,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
@@ -439,6 +441,10 @@ export function Specimen() {
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
               cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
             />
+            <StopHoldBanner
+              message="The show is stopped. Press Resume on Live Control to start the show playlist from its first song."
+              detail="Stopped at 20:41 by operator"
+            />
             <WeatherDelayHeldBanner
               messages={['FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.']}
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
@@ -468,6 +474,7 @@ export function Specimen() {
               dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
               error="This question already expired. Nothing was changed."
             />
+            <FPPPluginReportsRefusedBanner instances={[{ instanceId: 'bench-fpp' }]} />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>

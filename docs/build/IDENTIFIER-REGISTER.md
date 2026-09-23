@@ -755,6 +755,7 @@ listed because the last row was minted after the others had shipped:
 | Signal | Status | Owner |
 |---|---|---|
 | `surface.pipeline.state` | shipped | Track B seam B2 |
+| `surface.pipeline.changed_at` | shipped | Track B render confirmation (the node's last real pipeline-state transition time, RFC3339Nano UTC; render apply confirmation fences on it) |
 | `surface.pipeline.reason` | shipped | Track B seam B2 |
 | `surface.pipeline.restart_count` | shipped | Track B seam B2 |
 | `surface.pipeline.consecutive_failures` | shipped | Track B seam B2 |
@@ -798,7 +799,7 @@ divergence was reconciled below.
 | `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
 | `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
 | `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
-| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which is `node.audio.sync.rate_ppm` |
+| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which no build measures yet |
 | `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
 | `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
 | `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
@@ -835,8 +836,8 @@ All are on the `audio_session` resource kind, resource id the session id:
 | `audio_session.playlist.item_id` | shipped | C6/C7 |
 | `audio_session.playlist.item_index` | shipped | C6/C7 |
 | `audio_session.position_ms` | shipped | C6/C7 |
-| `audio_session.reference_position_ms` | shipped | C6/C7 |
-| `audio_session.drift_ms` | shipped | C6/C7 |
+| `audio_session.reference_position_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
+| `audio_session.drift_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 | `audio_session.desired_revision` | shipped | C6/C7 |
 | `audio_session.gain.effective` | shipped | C6/C7 |
 | `audio_session.gain.ceiling` | shipped | C6/C7 |
@@ -901,7 +902,7 @@ right and never inferred from the pipeline still being up.
 | `node.audio.sync.state` | shipped | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
 | `node.audio.sync.follows` | shipped | ADR-052 decision 6: what the local clock follows, the PTP grandmaster identity and domain; blank when free-running |
 | `node.audio.sync.offset_ns` | shipped | ADR-052 decision 6: offset from the global clock; omitted when not measured |
-| `node.audio.sync.rate_ppm` | shipped | ADR-052 decision 6: measured rate adjustment in parts per million; omitted until a build measures it, never invented |
+| `node.audio.sync.rate_ppm` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 
 **Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
 software could measure program-to-LTC alignment, so it was never derived
@@ -1018,8 +1019,8 @@ naming which `Settings` struct field was refused.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.settings.state` | shipped | SM-161 (`accepted` or `substituted`; `""` from an older agent reads as `accepted`) |
-| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; not_collected, not empty, whenever state is not `substituted`) |
-| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; not_collected whenever state is not `substituted`) |
+| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; empty and current when state is `accepted`) |
+| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; empty and current when state is `accepted`) |
 
 **One more node-level signal, SM-494.** `audio.node.silence`'s own
 result reports a per-session outcome and count directly in its
@@ -1434,9 +1435,9 @@ The store schema version, bumped by migrations in
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
-| v44 | reserved | ADR-054 level 1 stop hold: `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
-| v45 | reserved | ADR-055: the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
-| v44+ | unallocated | free, except the reservations above |
+| v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
+| v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
+| v46+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

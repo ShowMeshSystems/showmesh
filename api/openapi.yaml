@@ -6144,9 +6144,15 @@ paths:
         see `result.noInstancesConfigured` for the FPP-specific
         zero-instance signal), and a failure to read this level's own
         follow-up configuration degrades to no follow-ups (see
-        `result.followUpConfigError`) rather than aborting the stop. No
-        night-session interaction of any kind - see
-        `/emergency-stop/stop-power-down` for level 2.
+        `result.followUpConfigError`) rather than aborting the stop. If a
+        night session is active (any state but `inactive` or `stopped`),
+        the stop first sets that session's `stopHold` (ADR-054): the night
+        loop and the cue activation loop then start nothing until the
+        `resume-show` night command, which starts the show playlist from
+        its first entry. `result.nightSession` reports that step, with
+        `present` `false` when no session was active; a failure is
+        reported in `result.nightSession.error` and never aborts the
+        stop. See `/emergency-stop/stop-power-down` for level 2.
       requestBody:
         required: true
         content:
@@ -8509,7 +8515,19 @@ paths:
         (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`,
         `request-final-show`, `fade-out-night`, `power-down-presentation`)
         plus `end-session`, a PROVISIONAL operator-recovery action not yet
-        part of ADR-038's own closed vocabulary (owner decision pending).
+        part of ADR-038's own closed vocabulary (owner decision pending),
+        and `resume-show` (ADR-054). `resume-show` clears the `stopHold` a
+        level 1 emergency stop set and moves the session to
+        `transition-to-show` with its launch due immediately, so the night
+        loop starts the show playlist from its first entry through the
+        same launch path `start-night` uses. It never returns to resting
+        first. It is refused with `409` when no hold stands
+        (`night-state-rejected`), while a weather delay is active, while
+        the session is degraded, and in `preparing`, `fading-out` and
+        `end-of-night-resting`, where no show can start. It is also refused
+        with `409` in `preshow`, where `start-night` has not run; in
+        `preshow`, `start-night` clears the hold when it runs. It is audited
+        as `show.night.resume_show` and takes no `interlockOverrides`.
         Answers `202`, never `200`: accepted and applied, or recognized as
         an idempotent duplicate - this layer holds no downstream
         confirmation loop.
@@ -8599,6 +8617,7 @@ paths:
               - fade-out-night
               - power-down-presentation
               - end-session
+              - resume-show
       requestBody:
         required: false
         content:
@@ -10873,7 +10892,7 @@ components:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
          instanceUuidChange, duplicateInstanceUuidEndpointIds,
-         showParticipation]
+         showParticipation, playlistObservationRefused]
       properties:
         instanceId:
           type: string
@@ -10930,6 +10949,33 @@ components:
             duplicate.
           items:
             type: string
+        playlistObservationRefused:
+          oneOf:
+            - $ref: "#/components/schemas/FPPPlaylistObservationRefused"
+            - type: "null"
+          description: >-
+            Non-null exactly when this instance's playlist-entry reports
+            are currently being refused (a sequence regression, most often
+            a plugin reinstall or a wiped state directory). Cleared by
+            this instance's next accepted report or by
+            DELETE .../playlist-entry-observations/{instanceUuid}.
+    FPPPlaylistObservationRefused:
+      type: object
+      description: >-
+        The operator-facing reason this instance's playlist-entry reports
+        are currently being refused, and when it was recorded.
+      required: [reason, refusedAt]
+      properties:
+        reason:
+          type: string
+        refusedAt:
+          type: string
+          format: date-time
+          description: >-
+            The most recent refusal's time. A retried refusal while the
+            condition is already recorded overwrites this to the newer
+            time, so this is never the first refusal's time once more
+            than one has occurred.
     FPPInstanceUUIDChange:
       type: object
       description: >-
@@ -15646,8 +15692,10 @@ components:
     EmergencyStopNightSessionOutcome:
       type: object
       description: >-
-        What, if anything, happened to the active night session as level
-        stop-power-down's or hard-stop's own night-session component.
+        What, if anything, happened to the active night session as the
+        stop level's own night-session component: the stop hold for level
+        stop (ADR-054), the forced shutdown for stop-power-down, the ended
+        session for hard-stop.
         present is false when no night session was active - a real, valid
         outcome, not an error. error is non-empty exactly when this
         component could not be attempted or did not complete; the stop
@@ -17598,7 +17646,7 @@ components:
         The body of POST /cues/{id}/activate (status 202 - accepted, and
         each node's own outcome below is this coordinator's own evidence,
         never a claim of success).
-      required: [serverTime, cueId, nodes, aligned]
+      required: [serverTime, cueId, nodes, actions, aligned]
       properties:
         serverTime:
           type: string
@@ -17615,6 +17663,16 @@ components:
             for this Cue.
           items:
             $ref: "#/components/schemas/CueActivationNodeOutcome"
+        actions:
+          type: array
+          description: >-
+            One outcome per show action in the Cue's outputs.actions, in the
+            Cue's order, as known when this response is sent. An action still
+            waiting for its confirmation reads as unconfirmed. Empty when the
+            Cue declares no actions. An action failure never changes the node
+            outcomes above.
+          items:
+            $ref: "#/components/schemas/CueActionOutcome"
         aligned:
           type: boolean
           description: >-
@@ -17647,6 +17705,29 @@ components:
             1.79e18 nanoseconds, past IEEE-754 double's exact integer
             range (9.007e15): a client parsing this body with a stock
             JSON parser ROUNDS it. Parse it as an exact integer.
+    CueActionOutcome:
+      type: object
+      description: >-
+        One show action a Cue activation fired, in the outcome vocabulary
+        POST /actions/{id}/invocations reports. The action is recorded as
+        its own command and audited as action.invoke:<integration>, with
+        the Cue id and activationKey, a hash identifying the activation, in
+        the audit params. Once every action resolves, a cue.activate outcome
+        audit entry targeting cue:<cueId> carries the final outcomes in its
+        actions param.
+      required: [actionId, outcome]
+      properties:
+        actionId:
+          type: string
+        label:
+          type: string
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed"]
+        outcomeState:
+          type: string
+        outcomeReason:
+          type: string
     CueActivationNodeOutcome:
       type: object
       description: >-
@@ -18966,6 +19047,24 @@ components:
           $ref: "#/components/schemas/ConfigShowCueLTCOutput"
         announcement:
           $ref: "#/components/schemas/ConfigShowCueAnnouncementOutput"
+        actions:
+          type: array
+          description: >-
+            Ordered show.action ids the coordinator fires once per
+            activation of this Cue. Each is sent once the one before it is
+            sent, and the node dispatch waits up to 2 seconds for all of
+            them to be sent; an action sent after that is reported late.
+            Each id must name a show.action with an active revision in this
+            Cue's show; an unknown id is refused as an unknown reference and
+            another show's action as a cross-show reference. Duplicates are
+            refused. An empty array is the same as absent and is omitted on
+            read. A Cue whose only output is actions is refused: an
+            activation needs a render, audio, LTC or announcement output.
+            Actions claim no node resource.
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
     ConfigShowCue:
       type: object
       description: >-
@@ -20161,6 +20260,14 @@ components:
         threshold, and `not_verifiable` whenever this coordinator holds no
         current measurement for that node. A drifting show still runs;
         this is a warning, never a reason `outcome` blocks `start-night`.
+
+        It also checks `fpp-plugin-reports-refused`: one fleet-wide check,
+        not one per instance, that fails when any FPP instance this
+        session binds is currently refusing the plugin's playlist-entry
+        reports (a sequence regression, most often a plugin reinstall or a
+        wiped state directory), naming the reason in `reason`. Cleared by
+        the referenced instance's next accepted report or by
+        DELETE .../playlist-entry-observations/{instanceUuid}.
       required: [name, state, reason]
       properties:
         name:
@@ -20493,6 +20600,8 @@ components:
             "not recorded" entry.
           items:
             $ref: "#/components/schemas/NightCycleOutcome"
+        stopHold:
+          $ref: "#/components/schemas/NightStopHold"
         degraded:
           type: boolean
         degradedReason:
@@ -20509,6 +20618,24 @@ components:
         updatedAt:
           type: string
           format: date-time
+    NightStopHold:
+      type: object
+      description: >-
+        Present while a level 1 emergency stop holds the night session
+        (ADR-054): the night loop starts no playlist, background audio,
+        cue or announcement until `resume-show`. Absent when no hold
+        stands. A hard stop, power-down or end-session ends the session
+        and the hold with it; a weather delay resume clears it too.
+      required: [reason, at]
+      properties:
+        reason:
+          type: string
+        at:
+          type: string
+          format: date-time
+        principal:
+          type: string
+          description: The name of the principal who pressed Stop.
     NightCycleOutcome:
       type: object
       description: >-

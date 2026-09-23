@@ -11,35 +11,13 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/fseq/fseqtest"
 )
 
-// TestFramesObservedAtStaysCurrentPastTheStaleWindow is the load-bearing
-// gate for this issue: render evidence going permanently stale 45 seconds
-// after any apply, on a healthy, continuously running pipeline. It runs a
-// REAL showmesh-agent subprocess (with a REAL FSEQ asset, so B3's
-// FrameWriter is actually running, not merely B2a's bare test-pattern
-// pipeline) against a REAL Mosquitto broker and a REAL
-// showmesh-coordinator, with the production SHOWMESH_RENDER_REPORT_INTERVAL
-// default (15s), and polls GET /api/v1/nodes/{id} every 5s for longer than
-// DefaultValidFor (45s) so the bug (or its absence) actually has time to
-// show up, not merely a single snapshot.
+// TestFramesObservedAtStaysCurrentPastTheStaleWindow proves render evidence
+// never goes stale on a healthy, continuously running pipeline: it runs a
+// REAL agent, broker, and coordinator, polling past DefaultValidFor.
 //
-// Run once against the pre-fix tree (production code reverted to main,
-// this test file kept) it reproduces the bug: every render signal,
-// including surface.frames.written, pins its observedAt at apply time and
-// flips to stale at T0+45s despite framesWritten climbing the whole time.
-// Run again against the fixed tree, it proves the four frame signals'
-// observedAt keeps advancing (in steps of at most 5s, the frame writer's
-// own sampling window) and never goes stale, while surface.pipeline.state's
-// own observedAt stays pinned at T0 throughout, exactly as it must (that
-// pinning is the invariant the coordinator's own render-command
-// confirmation depends on, and this issue's fix must not touch it).
-//
-// surface.pipeline.state itself IS expected to flip current -> stale
-// during this soak, on both trees: it never transitions again after the
-// initial apply (setState only stamps ObservedAt on a real transition), so
-// its own evidence genuinely does age past DefaultValidFor. That is
-// correct, unrelated behavior this issue does not change; this test
-// asserts only that its ObservedAt VALUE stays pinned, never that its
-// State stays current.
+// surface.pipeline.state must stay CURRENT the whole soak. The invariant
+// confirmation depends on lives on surface.pipeline.changed_at instead:
+// its VALUE must stay pinned at the real transition time throughout.
 func TestFramesObservedAtStaysCurrentPastTheStaleWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("soak test: run explicitly, not under -short")
@@ -96,6 +74,7 @@ func TestFramesObservedAtStaysCurrentPastTheStaleWindow(t *testing.T) {
 
 	signalsOfInterest := []string{
 		string(noderender.SignalSurfacePipelineState),
+		string(noderender.SignalSurfacePipelineChangedAt),
 		string(noderender.SignalSurfaceFramesWritten),
 		string(noderender.SignalSurfaceFramesRate),
 		string(noderender.SignalSurfaceFramesLate),
@@ -147,29 +126,37 @@ func TestFramesObservedAtStaysCurrentPastTheStaleWindow(t *testing.T) {
 		t.Fatalf("no samples recorded at all; agent logs:\n%s", agent.logs.String())
 	}
 
-	// Assert surface.pipeline.state's own observedAt stays pinned at
-	// whatever its first recorded value was for the entire soak. This is
-	// the guard this issue's fix must NOT break. If this assertion fails,
-	// the fix defeated the setState-only-stamps-ObservedAt invariant
-	// instead of fixing the frame-counter staleness bug.
-	var pipelineStateObservedAt string
+	// surface.pipeline.changed_at's VALUE (the real transition time) must
+	// stay pinned at whatever it first reported, for the whole soak. If
+	// this fails, confirmation's transition invariant broke.
+	var changedAtValue string
 	for _, s := range samples {
-		if s.signal != string(noderender.SignalSurfacePipelineState) {
+		if s.signal != string(noderender.SignalSurfacePipelineChangedAt) {
 			continue
 		}
-		if pipelineStateObservedAt == "" {
-			pipelineStateObservedAt = s.observed
+		v, _ := s.value.(string)
+		if changedAtValue == "" {
+			changedAtValue = v
 			continue
 		}
-		if s.observed != pipelineStateObservedAt {
-			t.Errorf("surface.pipeline.state observedAt moved from %s to %s at t+%.1fs: this must stay pinned at T0 (setState-only invariant broken)",
-				pipelineStateObservedAt, s.observed, s.at.Sub(t0).Seconds())
+		if v != changedAtValue {
+			t.Errorf("surface.pipeline.changed_at moved from %s to %s at t+%.1fs: this must stay pinned at the real transition time",
+				changedAtValue, v, s.at.Sub(t0).Seconds())
 		}
 	}
-	if pipelineStateObservedAt == "" {
-		t.Errorf("never observed a surface.pipeline.state sample")
+	if changedAtValue == "" {
+		t.Errorf("never observed a surface.pipeline.changed_at sample")
 	} else {
-		t.Logf("surface.pipeline.state observedAt pinned at %s across the whole soak: PASS", pipelineStateObservedAt)
+		t.Logf("surface.pipeline.changed_at pinned at %s across the whole soak: PASS", changedAtValue)
+	}
+
+	// surface.pipeline.state itself must stay CURRENT the whole soak: this
+	// is the point of the fix, now that it is stamped from receipt time on
+	// a live report instead of a timestamp that only moves on transition.
+	for _, s := range samples {
+		if s.signal == string(noderender.SignalSurfacePipelineState) && s.state != "current" {
+			t.Errorf("surface.pipeline.state at t+%.1fs: state = %q, want current", s.at.Sub(t0).Seconds(), s.state)
+		}
 	}
 
 	// The fact this issue is actually about: none of the four frame

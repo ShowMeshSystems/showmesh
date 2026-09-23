@@ -48,6 +48,7 @@ import {
   FieldGrid,
   Input,
   LifecycleCommands,
+  Notice,
   Panes,
   RevisionHistory,
   RuledStrip,
@@ -60,6 +61,7 @@ import {
   Workbench,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { RESUME_CONFIRM_TITLE, useResumeShow } from '../app/stopHold'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
@@ -143,6 +145,7 @@ export function ShowNight() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'night:command')
   const overrideGate = evaluateScope(model.session, model.sessionFetchFailed, 'night:override')
+  const resumeShow = useResumeShow(model, session)
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
   const [withheld, setWithheld] = useState<Withheld | null>(null)
   const [overrideRule, setOverrideRule] = useState('')
@@ -451,6 +454,20 @@ export function ShowNight() {
           </span>
         }
       >
+        <ButtonRow>
+          <Button variant="primary" size="gloved" disabled={resumeShow.disabled} title={resumeShow.title} onClick={resumeShow.onClick}>
+            {resumeShow.busy ? 'Resuming…' : 'Resume'}
+          </Button>
+        </ButtonRow>
+        {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
+        <ConfirmDialog
+          open={resumeShow.confirmOpen}
+          title={RESUME_CONFIRM_TITLE}
+          detail={null}
+          confirmLabel="Resume"
+          onConfirm={resumeShow.onConfirm}
+          onCancel={resumeShow.onCancel}
+        />
         <LifecycleCommands
           dense
           groups={[

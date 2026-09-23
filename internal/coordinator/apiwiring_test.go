@@ -910,6 +910,62 @@ func TestFPPInstanceListerSurfacesChangedUUIDConflict(t *testing.T) {
 	}
 }
 
+// TestFPPInstanceListerSurfacesPlaylistObservationRefused proves the
+// sequence-regression marker (schemaV29's evidence_broken_at_millis) on
+// an endpoint's current instance uuid renders as
+// FPPInstanceView.PlaylistObservationRefused, and that an accepted
+// observation with no marker set renders none.
+func TestFPPInstanceListerSurfacesPlaylistObservationRefused(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-a", time.Now()); err != nil {
+		t.Fatalf("record uuid: %v", err)
+	}
+	rec := store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "uuid-a", SchemaVersion: 1, Sequence: 42,
+		BodyHash: "hash", ObservationJSON: `{}`, PlaylistName: "Christmas 2026",
+		PlaylistHash: strings.Repeat("a", 64), Section: "mainPlaylist", Position: 1,
+		EntryKey: strings.Repeat("b", 64), SequenceFilename: "show.fseq", MediaFilename: "show.mp4",
+		Action: "playing", ObservedAt: time.Now(), ReceivedAt: time.Now(),
+	}
+	if err := st.PutFPPPlaylistEntryObservation(ctx, rec); err != nil {
+		t.Fatalf("PutFPPPlaylistEntryObservation: %v", err)
+	}
+
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{{ID: "front-yard", URL: "http://10.0.1.20"}}}
+	views, err := lister.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if views[0].PlaylistObservationRefused != nil {
+		t.Fatalf("PlaylistObservationRefused = %+v after an accepted observation with no marker, want nil", views[0].PlaylistObservationRefused)
+	}
+
+	brokenAt := time.Now()
+	if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "uuid-a", brokenAt); err != nil {
+		t.Fatalf("MarkFPPPlaylistEntryObservationEvidenceBroken: %v", err)
+	}
+
+	views, err = lister.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	refused := views[0].PlaylistObservationRefused
+	if refused == nil {
+		t.Fatal("PlaylistObservationRefused = nil after marking evidence broken, want a populated refusal")
+	}
+	if refused.Reason == "" {
+		t.Error("PlaylistObservationRefused.Reason is empty, want an operator-facing sentence")
+	}
+	if wantCmd := "showmeshctl fpp reset-observation-sequence --confirm uuid-a"; !strings.Contains(refused.Reason, wantCmd) {
+		t.Errorf("PlaylistObservationRefused.Reason = %q, want it to contain the runnable command %q", refused.Reason, wantCmd)
+	}
+	if !refused.RefusedAt.Equal(brokenAt.Truncate(time.Millisecond)) {
+		t.Errorf("PlaylistObservationRefused.RefusedAt = %v, want %v", refused.RefusedAt, brokenAt.Truncate(time.Millisecond))
+	}
+}
+
 // TestFPPInstanceListerSurfacesDuplicateUUID is the duplicate-uuid rule end to end: two
 // currently configured endpoints reporting the SAME uuid must both
 // render the finding, and neither endpoint's own row is affected by the

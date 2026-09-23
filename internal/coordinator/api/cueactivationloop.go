@@ -233,6 +233,13 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 			} else if active {
 				return
 			}
+			// ADR-054: a level 1 stop hold refuses output the same way.
+			if held, err := l.h.nightStopHoldActive(ctx); err != nil {
+				l.logger.Warn("cue activation loop: failed to read the night session's stop hold; holding this tick as a precaution", "error", err)
+				return
+			} else if held {
+				return
+			}
 			pin, err := l.resolvePin(ctx)
 			if err != nil {
 				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)
@@ -358,7 +365,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
 		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
-			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer, pin)
+			outcomes = h.dispatchCueActivationsWithActions(ctx, now, dec.Activations, obs.EntryOccurrenceSequence, issuer, pin)
 			// dispatchCueActivations's own scheduleCueActivations call has
 			// already mutated dec.Activations in place (ADR-049 decision
 			// 3): read the verdict back off it once per activation batch,

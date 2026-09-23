@@ -153,16 +153,18 @@ func surfaceObservations(nodeID string, rep report) []observation.Observation {
 func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: sf.SurfaceID}
 
-	// sf.ObservedAt is THIS surface's own evidence timestamp — the node's
-	// clock at the moment the supervisor actually sampled this report
-	// (runner.setState/setFrameCounts/setDrawState — internal/agent/
-	// pipeline/supervisor.go), distinct from rep.receivedAt (this
-	// coordinator's own receipt/bookkeeping time, which stays CollectedAt
-	// via buildValue). Using it as ObservedAt is what makes "a fresh
-	// ObservedAt means the state actually moved" true all the way to the
-	// observation layer, not just inside the agent's own Supervisor —
-	// review fix, finding 2/finding 7.
+	// observedAt is sf.ObservedAt, unchanged: only for signals whose
+	// freshness must track a real pipeline-state transition (transport
+	// probe confirmation depends on this).
 	observedAt := sf.ObservedAt
+
+	// pipelineFreshAt stamps the pipeline-lifecycle signals below:
+	// rep.receivedAt on a live report with a real transition time,
+	// sf.ObservedAt otherwise (retained, or never reported).
+	pipelineFreshAt := sf.ObservedAt
+	if !rep.retained && !sf.ObservedAt.IsZero() {
+		pipelineFreshAt = rep.receivedAt
+	}
 
 	// framesObservedAt is the frame writer's OWN evidence timestamp
 	// (pipeline.FrameWriter.sampleRate's window-close stamp, carried over
@@ -184,13 +186,23 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	framesObservedAt := sf.FramesObservedAt
 
 	obs := []observation.Observation{
-		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, pipelineFreshAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, framesObservedAt, rep),
+	}
+
+	// SignalSurfacePipelineChangedAt's VALUE is always sf.ObservedAt (the
+	// transition time): render apply confirmation fences on this value to
+	// still require a real transition.
+	if sf.ObservedAt.IsZero() {
+		obs = append(obs, notCollected(res, SignalSurfacePipelineChangedAt, SourceFor(nodeID),
+			"this surface has not yet reported a pipeline-state transition", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfacePipelineChangedAt, sf.ObservedAt.UTC().Format(time.RFC3339Nano), pipelineFreshAt, rep))
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -414,7 +426,13 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 		}
 	}
 
+	// A live report is judged fresh by rep.receivedAt, since
+	// MultiSyncObservedAt only moves on a real bind outcome change; a
+	// retained replay keeps MultiSyncObservedAt.
 	observedAt := rep.payload.MultiSyncObservedAt
+	if !rep.retained {
+		observedAt = rep.receivedAt
+	}
 	return []observation.Observation{
 		buildValue(nodeID, res, SignalNodeMultiSyncListening, rep.payload.MultiSyncListening, observedAt, rep),
 		buildValue(nodeID, res, SignalNodeMultiSyncReason, rep.payload.MultiSyncReason, observedAt, rep),
@@ -436,14 +454,9 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 //   - observedAt.IsZero(): the node reported no evidence timestamp at all —
 //     [observation.MeasuredUnknownAge], ObservedAt left nil rather than
 //     defaulted to rep.receivedAt.
-//   - otherwise: [observation.Measured] with observedAt, REGARDLESS of
-//     rep.retained. A retained MQTT delivery is only a reason to treat age
-//     as unknown when the payload itself carries no evidence timestamp
-//     (that is fppmqtt's and inventory's hello/health/LWT case, which never
-//     puts a sample time on the wire); here the payload always does, so the
-//     retained flag adds no information the node's own timestamp lacks, and
-//     ordinary staleness (WithValidFor) still applies once ObservedAt ages
-//     past DefaultValidFor.
+//   - otherwise: [observation.Measured] with observedAt, whichever caller
+//     already chose it to be. Ordinary staleness (WithValidFor) still
+//     applies once ObservedAt ages past DefaultValidFor.
 //
 // CollectedAt is always rep.receivedAt: when this package's cache actually
 // recorded the evidence (Store.Put), never the node's own clock and never

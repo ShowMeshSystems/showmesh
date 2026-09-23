@@ -4,6 +4,7 @@ import {
   AttentionRow,
   Button,
   ConnectionPill,
+  Notice,
   Panes,
   RuledStrip,
   Section,
@@ -114,7 +115,7 @@ export function Monitor() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const [kind, setKind] = useState<FleetKind>('all')
   const [searchParams, setSearchParams] = useSearchParams()
-  const [resourceParam, setResourceParam] = useState<string | null>(() => searchParams.get('resource'))
+  const resourceParam = searchParams.get('resource')
   const { nodeId: routeNodeId } = useParams<{ nodeId?: string }>()
 
   const counts = fleetCounts(model)
@@ -133,7 +134,6 @@ export function Monitor() {
       return
     }
     const next = key === selected ? null : key
-    setResourceParam(next)
     setSearchParams(next === null ? {} : { resource: next })
   }
   const closeInspector = () => {
@@ -141,7 +141,6 @@ export function Monitor() {
       navigate('/monitor/fleet')
       return
     }
-    setResourceParam(null)
     setSearchParams({})
   }
   const inspectorLabelledBy = routeNodeId !== undefined
@@ -455,6 +454,19 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
         </section>
       ))}
       <FallbackProgramGroup instance={instance} />
+      {instance.playlistObservationRefused !== null && (
+        <Notice
+          tone="bad"
+          live="status"
+          headline="Playlist reports are being refused"
+          explanation={
+            <>
+              {instance.playlistObservationRefused.reason}{' '}
+              <span className="sm-small sm-faint">{`Last refused ${formatClock(instance.playlistObservationRefused.refusedAt) ?? 'at an unrecorded time'}.`}</span>
+            </>
+          }
+        />
+      )}
       <div className="sm-inspector__actions">
         <Link to="/control">Open Live Control</Link>
         <Link to="/monitor/signals">All signals</Link>

@@ -1,0 +1,11 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Announces the ShowMesh coordinator API so node installers can find it. -->
+<service-group>
+  <name replace-wildcards="yes">ShowMesh coordinator on %h</name>
+  <service>
+    <type>_showmesh._tcp</type>
+    <port>@API_PORT@</port>
+    <txt-record>path=/api/v1</txt-record>
+  </service>
+</service-group>

@@ -150,6 +150,7 @@ export type {
   // Firing one Cue directly from Live Control.
   CueActivateResponse,
   CueActivationNodeOutcome,
+  CueActionOutcome,
   ResolumeCompositionDeckSummary,
   ResolumeCompositionLayerGroup,
   ResolumeCompositionLayer,

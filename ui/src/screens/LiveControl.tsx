@@ -43,6 +43,7 @@ import {
   type AudioNodeSummary,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
+  type CueActionOutcome,
   type CueActivationNodeOutcome,
   type EmergencyStopInstanceOutcome,
   type EmergencyStopResult,
@@ -78,6 +79,7 @@ import {
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { RESUME_CONFIRM_TITLE, useCurrentNightSession, useResumeShow } from '../app/stopHold'
 import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis } from '../domain/time'
@@ -475,6 +477,7 @@ export function LiveControl() {
   const emergencyGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:emergencystop:invoke')
   const weatherDelayGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:invoke')
   const weatherDelay = useWeatherDelay()
+  const resumeShow = useResumeShow(model, useCurrentNightSession(model))
 
   const [selected, setSelected] = useState<string | null>(null)
   const instance = model.fpp.find((entry) => entry.instanceId === selected) ?? model.fpp[0]
@@ -705,6 +708,9 @@ export function LiveControl() {
             >
               Stop
             </Button>
+            <Button variant="primary" size="gloved" disabled={resumeShow.disabled} title={resumeShow.title} onClick={resumeShow.onClick}>
+              {resumeShow.busy ? 'Resuming…' : 'Resume'}
+            </Button>
             <Button
               variant="danger"
               size="gloved"
@@ -783,6 +789,15 @@ export function LiveControl() {
               {weatherDelay.busy === 'cancelNight' ? 'Cancelling night…' : 'Cancel night'}
             </Button>
           </ButtonRow>
+          {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
+          <ConfirmDialog
+            open={resumeShow.confirmOpen}
+            title={RESUME_CONFIRM_TITLE}
+            detail={null}
+            confirmLabel="Resume"
+            onConfirm={resumeShow.onConfirm}
+            onCancel={resumeShow.onCancel}
+          />
           {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
           {hardStopArm !== null && armRemainingMs !== null && (
             <Notice
@@ -1067,7 +1082,7 @@ type AnnouncementCue = {
 /** One cue row's own Fire attempt: in flight, or its own reported per-node outcomes, or a refusal before any node was ever reached. */
 type AnnouncementFireState =
   | { kind: 'firing' }
-  | { kind: 'reported'; nodes: CueActivationNodeOutcome[]; aligned: boolean; unalignedReason: string; scheduledAtNs: number | null }
+  | { kind: 'reported'; nodes: CueActivationNodeOutcome[]; actions: CueActionOutcome[]; aligned: boolean; unalignedReason: string; scheduledAtNs: number | null }
   | { kind: 'refused'; message: string }
 
 function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | undefined }) {
@@ -1101,6 +1116,12 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
           <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
           {n.outcomeReason !== undefined && n.outcomeReason !== '' ? `: ${n.outcomeReason}` : ''}
           {describeStartTrigger(n) !== null ? ` ${describeStartTrigger(n)}` : ''}
+        </p>
+      ))}
+      {state.actions.map((a) => (
+        <p key={a.actionId} className="sm-small">
+          <StatusPair tone={instanceOutcomeTone(a.outcome)} label={`${a.label ?? a.actionId}: ${a.outcome}`} />
+          {a.outcomeReason !== undefined && a.outcomeReason !== '' ? `: ${a.outcomeReason}` : ''}
         </p>
       ))}
     </div>
@@ -1137,6 +1158,8 @@ function Announcements({ show }: { show: string | null }) {
           [cueId]: {
             kind: 'reported',
             nodes: resp.nodes,
+            // A coordinator older than cue actions omits the field.
+            actions: resp.actions ?? [],
             aligned: resp.aligned,
             unalignedReason: resp.unalignedReason ?? '',
             scheduledAtNs: resp.scheduledAtNs ?? null,

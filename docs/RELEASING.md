@@ -59,8 +59,9 @@ pre-release" below), then publishes, with no manual step:
   deployed coordinator's `GET /version` reports the real cut instead of
   `version=dev commit=none`.
 - The node agent, packaged for amd64 and arm64, as GitHub release assets
-  (`showmesh-node-agent_<VERSION>_linux_<amd64|arm64>.tar.gz`, plus a
-  `showmesh-node-agent_<VERSION>_SHA256SUMS` covering both). There is no
+  (`showmesh-node-agent_<VERSION>_linux_<amd64|arm64>.tar.gz`), the
+  one-command installer (`showmesh-installer_<VERSION>.tar.gz` and
+  `get-showmesh.sh`), and one `SHA256SUMS` covering all four. There is no
   armv7 asset yet: the cgo build fails on that target with a 32-bit C
   portability defect, a 64-bit-only constant in
   `internal/agent/audio/ltcgen/ltcgen_cgo.go` overflowing `size_t`. That is a

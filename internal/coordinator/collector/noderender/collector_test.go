@@ -75,22 +75,13 @@ func findObs(t *testing.T, obs []observation.Observation, sig observation.Signal
 	return observation.Observation{}
 }
 
-// TestPollUsesNodeReportedObservedAt proves Finding 3's fix: ObservedAt is
-// the node's own evidence timestamp (sampleObservedAt), never the
-// coordinator's receipt time, while CollectedAt stays the receipt time —
-// [pkg/observation]'s ObservedAt/CollectedAt split, actually honored here.
-// Renamed from TestPollLiveDeliveryUsesReceiptTime, which asserted the OLD,
-// now-wrong behaviour: buildValue used to collapse ObservedAt and
-// CollectedAt onto the coordinator's own receipt time, which is exactly the
-// evidence-vs-collection conflation ADR-011/ADR-003 forbid. Revert buildValue
-// to stamp rep.receivedAt as ObservedAt and this fails: state.ObservedAt
-// comes back equal to receivedAt (2026-08-17 12:00:00), not sampleObservedAt
-// (1970-01-01 00:33:20 UTC).
-func TestPollUsesNodeReportedObservedAt(t *testing.T) {
+// TestPollLivePipelineStateUsesReceivedAt proves a LIVE report's
+// surface.pipeline.state is judged fresh by rep.receivedAt, not by
+// sf.ObservedAt. CollectedAt stays the receipt time either way.
+func TestPollLivePipelineStateUsesReceivedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
-	nodeObservedAt := payload.Surfaces[0].ObservedAt
 	st.Put("render-01", payload, false, receivedAt)
 
 	c := New(st)
@@ -101,10 +92,10 @@ func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 
 	state := findObs(t, obs, SignalSurfacePipelineState)
 	if state.ObservedAt == nil {
-		t.Fatalf("live delivery: ObservedAt is nil, want %s", nodeObservedAt)
+		t.Fatalf("live delivery: ObservedAt is nil, want %s", receivedAt)
 	}
-	if !state.ObservedAt.Equal(nodeObservedAt) {
-		t.Errorf("live delivery: ObservedAt = %s, want the node-reported %s (not receivedAt %s)", state.ObservedAt, nodeObservedAt, receivedAt)
+	if !state.ObservedAt.Equal(receivedAt) {
+		t.Errorf("live delivery: ObservedAt = %s, want rep.receivedAt %s", state.ObservedAt, receivedAt)
 	}
 	if !state.CollectedAt.Equal(receivedAt) {
 		t.Errorf("live delivery: CollectedAt = %s, want the coordinator's own receipt time %s", state.CollectedAt, receivedAt)
@@ -114,6 +105,53 @@ func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 	}
 	if state.Resource.Kind != observation.ResourceSurface || state.Resource.ID != "garage" {
 		t.Errorf("resource = %+v, want kind=surface id=garage", state.Resource)
+	}
+}
+
+// TestPollPipelineChangedAtCarriesNodeTransitionTime proves
+// surface.pipeline.changed_at's VALUE is always sf.ObservedAt itself,
+// formatted RFC3339Nano UTC, regardless of live/retained.
+func TestPollPipelineChangedAtCarriesNodeTransitionTime(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	nodeObservedAt := payload.Surfaces[0].ObservedAt
+	st.Put("render-01", payload, false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	changedAt := findObs(t, obs, SignalSurfacePipelineChangedAt)
+	if changedAt.Absence != "" {
+		t.Fatalf("changed_at: Absence = %q, want empty", changedAt.Absence)
+	}
+	v, ok := changedAt.Value.(string)
+	if !ok {
+		t.Fatalf("changed_at: Value = %v (%T), want a string", changedAt.Value, changedAt.Value)
+	}
+	if v != nodeObservedAt.UTC().Format(time.RFC3339Nano) {
+		t.Errorf("changed_at: Value = %q, want %q", v, nodeObservedAt.UTC().Format(time.RFC3339Nano))
+	}
+	// changed_at's own freshness follows the same live/retained rule as the
+	// other five signals, so a live report still reads it as current.
+	if changedAt.ObservedAt == nil || !changedAt.ObservedAt.Equal(receivedAt) {
+		t.Errorf("changed_at: ObservedAt = %v, want rep.receivedAt %s", changedAt.ObservedAt, receivedAt)
+	}
+}
+
+// TestPollPipelineChangedAtNotCollectedWhenNodeHasNoTransition proves
+// surface.pipeline.changed_at states absence rather than fabricating a
+// changed_at from a zero sf.ObservedAt.
+func TestPollPipelineChangedAtNotCollectedWhenNodeHasNoTransition(t *testing.T) {
+	st := NewStore()
+	st.Put("render-01", samplePayloadNoObservedAt(mqttproto.RenderPipelineStateRunning), false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	changedAt := findObs(t, obs, SignalSurfacePipelineChangedAt)
+	if changedAt.Absence != observation.StateNotCollected {
+		t.Errorf("changed_at with no node transition: Absence = %q, want %q", changedAt.Absence, observation.StateNotCollected)
 	}
 }
 
@@ -139,12 +177,29 @@ func TestPollRetainedWithNodeObservedAtStillUsesIt(t *testing.T) {
 	}
 }
 
-// TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
-// half of Finding 3: when the node itself reports no evidence timestamp
-// (the zero value), ObservedAt stays nil rather than being defaulted to
-// anything, including the receipt time — ADR-011's rule this project has
-// caught missing three times before.
-func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
+// TestPollRetainedNodeReportsNoObservedAtIsUnknownAge proves that when the
+// node itself reports no evidence timestamp, ObservedAt stays nil for a
+// RETAINED delivery, never defaulted to anything.
+func TestPollRetainedNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", samplePayloadNoObservedAt(mqttproto.RenderPipelineStateRunning), true, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalSurfacePipelineState)
+	if state.ObservedAt != nil {
+		t.Errorf("no node-reported observedAt, retained: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
+	}
+	if state.StateAt(receivedAt) != observation.StateUnknownAge {
+		t.Errorf("no node-reported observedAt, retained: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
+	}
+}
+
+// TestPollLiveNodeReportsNoObservedAtIsUnknownAge proves a LIVE report
+// with a zero sf.ObservedAt still reports unknown age, never receivedAt.
+func TestPollLiveNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	st.Put("render-01", samplePayloadNoObservedAt(mqttproto.RenderPipelineStateRunning), false, receivedAt)
@@ -154,10 +209,10 @@ func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 
 	state := findObs(t, obs, SignalSurfacePipelineState)
 	if state.ObservedAt != nil {
-		t.Errorf("no node-reported observedAt: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
+		t.Errorf("live delivery with no node-reported observedAt: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
 	}
 	if state.StateAt(receivedAt) != observation.StateUnknownAge {
-		t.Errorf("no node-reported observedAt: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
+		t.Errorf("live delivery with no node-reported observedAt: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
 	}
 }
 
@@ -220,6 +275,28 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 }
 
+// TestPollLiveTransportSignalsStayOnNodeObservedAt proves a LIVE report
+// still stamps surface.transport.available/reason from sf.ObservedAt,
+// never rep.receivedAt.
+func TestPollLiveTransportSignalsStayOnNodeObservedAt(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].TransportAvailable = boolPtr(false)
+	payload.Surfaces[0].TransportReason = "NDI runtime not found"
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", payload, false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSurfaceTransportAvailable, SignalSurfaceTransportReason} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(sampleObservedAt) {
+			t.Errorf("%s: ObservedAt = %v, want the node's own %s (not rep.receivedAt %s)", sig, o.ObservedAt, sampleObservedAt, receivedAt)
+		}
+	}
+}
+
 // TestPollFramesRateUnmeasuredIsNotCollected proves ADR-040's obligation:
 // before the agent's frame writer has completed a sampling window,
 // FramesRate is nil on the wire, and this must render as not_collected —
@@ -268,18 +345,38 @@ func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
 	}
 }
 
-// TestPollStaleIsNeverHealthy proves ADR-011's core rule survives this
-// package specifically: a report whose node-reported ObservedAt has aged
-// past DefaultValidFor must report StateStale, never current. Staleness is
-// measured from ObservedAt (the node-reported evidence timestamp, per
-// TestPollUsesNodeReportedObservedAt), not from receivedAt — this test's
-// windows are computed against samplePayload's own sf.ObservedAt for
-// exactly that reason.
-func TestPollStaleIsNeverHealthy(t *testing.T) {
+// TestPollLiveStaleIsMeasuredFromReceivedAt proves a LIVE
+// surface.pipeline.state report ages from rep.receivedAt, the last time
+// the node actually reported, not from sf.ObservedAt.
+func TestPollLiveStaleIsMeasuredFromReceivedAt(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", payload, false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+	state := findObs(t, obs, SignalSurfacePipelineState)
+
+	fresh := receivedAt.Add(DefaultValidFor - time.Second)
+	if state.StateAt(fresh) != observation.StateCurrent {
+		t.Errorf("just before ValidFor elapses since the last report: StateAt = %s, want current", state.StateAt(fresh))
+	}
+
+	stale := receivedAt.Add(DefaultValidFor + time.Second)
+	if state.StateAt(stale) != observation.StateStale {
+		t.Errorf("after ValidFor elapses with no further report: StateAt = %s, want stale", state.StateAt(stale))
+	}
+}
+
+// TestPollRetainedStaleIsNeverHealthy proves a RETAINED report whose
+// node-reported ObservedAt has aged past DefaultValidFor reports stale,
+// measured from sf.ObservedAt, never from receivedAt.
+func TestPollRetainedStaleIsNeverHealthy(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
 	nodeObservedAt := payload.Surfaces[0].ObservedAt
-	st.Put("render-01", payload, false, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
+	st.Put("render-01", payload, true, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
@@ -501,6 +598,86 @@ func TestReasonAndCountsAreExposed(t *testing.T) {
 		if got.Value != want {
 			t.Errorf("%s = %v, want %v", sig, got.Value, want)
 		}
+	}
+}
+
+// TestPollLiveReasonAndCountsUseReceivedAt proves a LIVE report's
+// ObservedAt for surface.pipeline.reason/restart_count/consecutive_failures
+// is rep.receivedAt, matching surface.pipeline.state.
+func TestPollLiveReasonAndCountsUseReceivedAt(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	st.Put("render-01", payload, false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceReason,
+		SignalSurfaceRestartCount,
+		SignalSurfaceConsecutiveFailures,
+	} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(receivedAt) {
+			t.Errorf("%s: ObservedAt = %v, want rep.receivedAt %s", sig, o.ObservedAt, receivedAt)
+		}
+		stale := receivedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(stale) != observation.StateStale {
+			t.Errorf("%s: after ValidFor elapses with no further report, StateAt = %s, want stale", sig, o.StateAt(stale))
+		}
+	}
+}
+
+// sampleMultiSyncPayload builds a RenderPayload reporting a bound MultiSync
+// listener, evidenced at sampleMultiSyncObservedAt, deliberately distinct
+// from sampleObservedAt so a test mixing the two up fails loudly.
+var sampleMultiSyncObservedAt = time.Unix(2600, 0).UTC()
+
+func sampleMultiSyncPayload() mqttproto.RenderPayload {
+	p := samplePayload(mqttproto.RenderPipelineStateRunning)
+	p.MultiSyncListening = true
+	p.MultiSyncReason = ""
+	p.MultiSyncObservedAt = sampleMultiSyncObservedAt
+	return p
+}
+
+// TestPollLiveMultiSyncUsesReceivedAt proves a LIVE report's ObservedAt for
+// node.multisync.listening/reason is rep.receivedAt, not
+// MultiSyncObservedAt (which only moves on a real bind outcome change).
+func TestPollLiveMultiSyncUsesReceivedAt(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", sampleMultiSyncPayload(), false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalNodeMultiSyncListening, SignalNodeMultiSyncReason} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(receivedAt) {
+			t.Errorf("%s: ObservedAt = %v, want rep.receivedAt %s", sig, o.ObservedAt, receivedAt)
+		}
+		stale := receivedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(stale) != observation.StateStale {
+			t.Errorf("%s: after ValidFor elapses with no further report, StateAt = %s, want stale", sig, o.StateAt(stale))
+		}
+	}
+}
+
+// TestPollRetainedMultiSyncStillUsesNodeObservedAt proves a RETAINED replay
+// stamps node.multisync.listening/reason from MultiSyncObservedAt, never
+// receivedAt.
+func TestPollRetainedMultiSyncStillUsesNodeObservedAt(t *testing.T) {
+	st := NewStore()
+	st.Put("render-01", sampleMultiSyncPayload(), true, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	listening := findObs(t, obs, SignalNodeMultiSyncListening)
+	if listening.ObservedAt == nil || !listening.ObservedAt.Equal(sampleMultiSyncObservedAt) {
+		t.Errorf("retained: node.multisync.listening ObservedAt = %v, want %s", listening.ObservedAt, sampleMultiSyncObservedAt)
 	}
 }
 
@@ -1184,16 +1361,17 @@ func TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.
 	payload.Surfaces[0].CueID = "cue-42"
 	payload.Surfaces[0].CatalogRevision = "rev-7"
 	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
-	st.Put("render-01", payload, false, time.Now())
+	// retained=true: pipeline-state on a live delivery ages from
+	// rep.receivedAt, not sf.ObservedAt, so isolating "pipeline evidence
+	// stale, content evidence fresh" needs a retained delivery here.
+	st.Put("render-01", payload, true, time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	// checkAt is chosen so it is PAST sampleObservedAt+DefaultValidFor (the
-	// pipeline-lifecycle evidence has gone stale) but still BEFORE
-	// sampleContentObservedAt+DefaultValidFor (the content evidence is
-	// still fresh) — exactly the "old ObservedAt, fresh content read"
-	// scenario this issue describes.
+	// checkAt is PAST sampleObservedAt+DefaultValidFor (pipeline evidence
+	// stale) but still BEFORE sampleContentObservedAt+DefaultValidFor
+	// (content evidence fresh).
 	checkAt := sampleObservedAt.Add(DefaultValidFor + time.Minute)
 	if !checkAt.Before(sampleContentObservedAt.Add(DefaultValidFor)) {
 		t.Fatalf("test fixture bug: checkAt %s is not before sampleContentObservedAt+DefaultValidFor %s",

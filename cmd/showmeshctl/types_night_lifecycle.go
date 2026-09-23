@@ -131,9 +131,10 @@ type nightSessionStateWire struct {
 
 	FinishedCycles []nightCycleOutcomeWire `json:"finishedCycles"`
 
-	Degraded            bool   `json:"degraded"`
-	DegradedReason      string `json:"degradedReason,omitempty"`
-	AttributionDegraded bool   `json:"attributionDegraded"`
+	StopHold            *nightStopHoldWire `json:"stopHold,omitempty"`
+	Degraded            bool               `json:"degraded"`
+	DegradedReason      string             `json:"degradedReason,omitempty"`
+	AttributionDegraded bool               `json:"attributionDegraded"`
 
 	Authorization nightAuthorizationWire `json:"authorization"`
 
@@ -164,4 +165,11 @@ type nightCommandResponseWire struct {
 	ServerTime time.Time              `json:"serverTime"`
 	Command    nightCommandResultWire `json:"command"`
 	Session    nightSessionStateWire  `json:"session"`
+}
+
+// nightStopHoldWire mirrors v1.NightStopHold.
+type nightStopHoldWire struct {
+	Reason    string `json:"reason"`
+	At        string `json:"at"`
+	Principal string `json:"principal,omitempty"`
 }

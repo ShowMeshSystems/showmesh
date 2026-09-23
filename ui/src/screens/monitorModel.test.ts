@@ -48,4 +48,12 @@ describe('nodeSignalGroups · Audio', () => {
     expect(row).toBeDefined()
     expect(row?.value).toBe('beyond_threshold')
   })
+
+  it('renders a real, current empty-string value as "None", never a blank cell', () => {
+    const audio = [{ ...alignmentStateEvidence(''), signal: 'node.audio.settings.reason' }] as Node['audio']
+    const groups = nodeSignalGroups(nodeWithAudio(audio))
+    const row = groups.find((g) => g.name === 'Audio')?.rows.find((r) => r.label === 'node.audio.settings.reason')
+    expect(row).toBeDefined()
+    expect(row?.value).toBe('None')
+  })
 })

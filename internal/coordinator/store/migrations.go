@@ -181,8 +181,10 @@ var migrations = []migration{
 	// an operator-recognizable name beside started_by.
 	{version: 42, fn: migrateV42AddWeatherDelayStateStartedByNameColumn},
 	{version: 43, sql: schemaV43},
-	// v45 (ADR-055): adds node_enrollment_codes. v44 is reserved for a
-	// different change.
+	// v44 (ADR-054): adds the level 1 stop hold to night_sessions. Existing
+	// rows read back with no hold.
+	{version: 44, fn: migrateV44AddNightSessionStopHoldColumns},
+	// v45 (ADR-055): adds node_enrollment_codes.
 	{version: 45, sql: schemaV45},
 }
 
