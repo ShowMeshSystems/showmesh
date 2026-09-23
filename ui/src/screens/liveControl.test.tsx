@@ -330,7 +330,7 @@ describe('Live Control', () => {
   it('sends resume-show from Live Control while Stop holds the night', async () => {
     const sent: string[] = []
     stubs.dispatchNightCommand = (...args: never[]) => {
-      sent.push(args[0] as string)
+      sent.push((args as unknown[])[0] as string)
       return Promise.resolve({})
     }
     renderScreen({

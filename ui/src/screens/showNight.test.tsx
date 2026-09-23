@@ -1832,7 +1832,7 @@ describe('ShowNight stop hold', () => {
   it('sends resume-show while held and shows the hold on the status line', async () => {
     const sent: string[] = []
     stubs.dispatchNightCommand = (...args: never[]) => {
-      sent.push(args[0] as string)
+      sent.push((args as unknown[])[0] as string)
       return Promise.resolve(commandResponse('resume-show'))
     }
     renderScreen({ nightSession: session({ stopHold: hold }), session: nightCommandSession })
