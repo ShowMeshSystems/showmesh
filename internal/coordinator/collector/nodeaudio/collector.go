@@ -199,12 +199,26 @@ func ltcFrameRateAbsentReason(generatorState string) string {
 var _ collector.Collector = (*Collector)(nil)
 
 // SessionObservationDeleter is nodeaudio's own view onto *store.Store's
-// deletion surface for audio_session rows Poll already knows are gone.
+// deletion surface for audio_session rows Poll already knows are gone, plus
+// the retired-signal purge [Collector.Poll] runs once on its first call.
 // *store.Store satisfies this directly, the same live-wiring precedent
 // [LocalClockSource] already uses.
 type SessionObservationDeleter interface {
 	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
 	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
+	DeleteObservationsBySignal(ctx context.Context, signal observation.SignalID) (int64, error)
+}
+
+// RetiredSignalIDs is every signal this package used to emit and no longer
+// does. [Collector.Poll] purges any stored row for these once, on its first
+// call, so a row a previous build wrote before the retirement shipped does
+// not linger in the database (and on a node's page) forever. Add a name
+// here when a signal is dropped; never remove one, since a row from an
+// even older build could still be sitting there.
+var RetiredSignalIDs = []observation.SignalID{
+	"audio_session.reference_position_ms",
+	"audio_session.drift_ms",
+	"node.audio.sync.rate_ppm",
 }
 
 // Collector renders [Store]'s current push cache into observations on a
@@ -216,6 +230,8 @@ type Collector struct {
 
 	mu    sync.Mutex
 	known map[string]map[string]struct{} // nodeID -> session ids named by its last delivery
+
+	retirePurge sync.Once
 }
 
 // Option configures a [Collector] at construction. See [WithSessionDeleter].
@@ -253,6 +269,8 @@ func (c *Collector) ID() string { return SourceName }
 // it always returns complete=true, matching noderender.Collector.Poll and
 // fppmqtt.Collector.Poll.
 func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) {
+	c.retirePurge.Do(func() { c.purgeRetiredSignals(ctx) })
+
 	snap := c.store.snapshot()
 	var obs []observation.Observation
 
@@ -276,6 +294,24 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	c.sweepOrphanedSessions(ctx, liveIDs)
 
 	return obs, true
+}
+
+// purgeRetiredSignals deletes any stored row for each of [RetiredSignalIDs],
+// once per process lifetime (see [Collector.Poll]'s sync.Once), and logs how
+// many rows it removed for each signal at info level. A no-op if no
+// [SessionObservationDeleter] is wired in.
+func (c *Collector) purgeRetiredSignals(ctx context.Context) {
+	if c.deleter == nil {
+		return
+	}
+	for _, sig := range RetiredSignalIDs {
+		n, err := c.deleter.DeleteObservationsBySignal(ctx, sig)
+		if err != nil {
+			slog.Default().Error("nodeaudio: failed to purge a retired signal's stored rows", "signal", sig, "error", err)
+			continue
+		}
+		slog.Default().Info("nodeaudio: purged a retired signal's stored rows", "signal", sig, "rows_removed", n)
+	}
 }
 
 // retireDroppedSessions deletes every audio_session row nodeID reported on
