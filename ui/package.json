@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
@@ -28,7 +28,7 @@
     "@testing-library/user-event": "^14.5.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.3.0",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
