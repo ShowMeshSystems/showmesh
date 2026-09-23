@@ -1430,7 +1430,8 @@ The store schema version, bumped by migrations in
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
-| v44+ | unallocated | free |
+| v44 | reserved | ADR-054 level 1 stop hold: `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
+| v45+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
