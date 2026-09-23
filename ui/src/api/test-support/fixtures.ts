@@ -110,6 +110,7 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    playlistObservationRefused: null,
     showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1680,6 +1681,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		}
 		checks = append(checks, h.nightCheckFPPReachable(ctx, now, id))
 	}
+	checks = append(checks, h.nightCheckFPPPluginReportsRefused(ctx, instanceIDs))
 
 	cueOffsets := append(nightParseCueOffsets(payload.EnterShow.Cues), nightParseCueOffsets(payload.EnterResting.Cues)...)
 	checks = append(checks, nightCheckRestingAssetDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset, cueOffsets))
@@ -1832,6 +1834,28 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 		reason = "fpp.reachable evidence state: " + string(obs[0].StateAt(now))
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
+}
+
+// nightCheckFPPPluginReportsRefused is fpp-plugin-reports-refused: one
+// fleet-wide check, failing when any bound instance carries a refused
+// playlist-entry observation, naming every refused instance in reason.
+func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instanceIDs map[string]bool) nightReadinessCheck {
+	const name = "fpp-plugin-reports-refused"
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "The coordinator could not read FPP instance state. Run readiness again."}
+	}
+	var reasons []string
+	for _, v := range views {
+		if !instanceIDs[v.InstanceID] || v.PlaylistObservationRefused == nil {
+			continue
+		}
+		reasons = append(reasons, v.PlaylistObservationRefused.Reason)
+	}
+	if len(reasons) == 0 {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: strings.Join(reasons, " ")}
 }
 
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]

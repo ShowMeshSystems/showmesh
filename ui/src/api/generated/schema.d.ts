@@ -3559,6 +3559,17 @@ export interface components {
             instanceUuidChange: components["schemas"]["FPPInstanceUUIDChange"] | null;
             /** @description Every OTHER currently configured FPP instance reporting the SAME instanceUuid as this one, a stated finding, never a silently overwritten row. Empty, never null, when there is no duplicate. */
             duplicateInstanceUuidEndpointIds: string[];
+            /** @description Non-null exactly when this instance's playlist-entry reports are currently being refused (a sequence regression, most often a plugin reinstall or a wiped state directory). Cleared by this instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}. */
+            playlistObservationRefused: components["schemas"]["FPPPlaylistObservationRefused"] | null;
+        };
+        /** @description The operator-facing reason this instance's playlist-entry reports are currently being refused, and when it was recorded. */
+        FPPPlaylistObservationRefused: {
+            reason: string;
+            /**
+             * Format: date-time
+             * @description The most recent refusal's time. A retried refusal while the condition is already recorded overwrites this to the newer time, so this is never the first refusal's time once more than one has occurred.
+             */
+            refusedAt: string;
         };
         /** @description The uuid an FPP instance reported immediately before its current one, and when that change was first observed. */
         FPPInstanceUUIDChange: {
@@ -6941,6 +6952,7 @@ export interface components {
          *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
          *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reason`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
+         *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), naming the reason in `reason`. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
          */
         NightReadinessCheck: {
             name: string;
