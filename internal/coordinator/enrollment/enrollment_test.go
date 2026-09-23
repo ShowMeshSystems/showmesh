@@ -250,7 +250,7 @@ func TestCheckExplainsWhatToFix(t *testing.T) {
 }
 
 func TestTrimFieldDropsNonPrintableAndCutsOnARuneBoundary(t *testing.T) {
-	if got := trimField(" pi\x00-\x1b[31mnode​\n "); got != "pi-[31mnode" {
+	if got := trimField(" pi\x00-\x1b[31mnode\u200b\n "); got != "pi-[31mnode" {
 		t.Fatalf("trimField kept a control or format character: %q", got)
 	}
 	if got := trimField("ok\xffname"); got != "okname" {
