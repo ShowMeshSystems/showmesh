@@ -312,6 +312,7 @@ bundles of these (ADR-024).
 | `show:weatherdelay:invoke` | shipped | ADR-053 weather delay: start a weather delay, start a cancel night, change a delay into a cancel night |
 | `show:weatherdelay:resume` | shipped | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
+| `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -638,12 +639,16 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
 | `show.weatherdelay.cancel_night` | shipped | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
+| `show.night.resume_show` | reserved | ADR-054: the resume-show night command cleared a level 1 stop hold and started the show playlist from its first entry |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
 | `show.weatherdelay.trigger` | shipped | ADR-053 weather delay: an automatic trigger was received from a source |
 | `show.weatherdelay.decision` | shipped | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
+| `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
+| `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
+| `node.enrollment.redeem` | reserved | ADR-055: a node redeemed an enrollment code and received its credentials, attributed to the principal who minted the code |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -1377,6 +1382,7 @@ value, and it does not belong here.
 | `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 | `localClockOverride` | shipped | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
+| `stopHold` | reserved | ADR-054: the night session record's hold set by a level 1 emergency stop (reason and time), absent when no hold stands. In scope because the API, `showmeshctl` and the UI must agree on it |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
@@ -1428,7 +1434,9 @@ The store schema version, bumped by migrations in
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
-| v44+ | unallocated | free |
+| v44 | reserved | ADR-054 level 1 stop hold: `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
+| v45 | reserved | ADR-055: the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
+| v44+ | unallocated | free, except the reservations above |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1646,6 +1654,13 @@ path on the node agent's inbound listener and one on the FPP plugin,
 [ADR-053](../decisions/ADR-053-weather-delay.md) decision 9 adds as the single
 exception to the paragraph above about that listener. That path accepts a
 signed start and nothing else, and stays out of `api/openapi.yaml`.
+
+**ADR-055 owns every path under `/api/v1/node-enrollments`**, including the
+unauthenticated `POST /api/v1/node-enrollments/redeem`, and the `showmeshctl
+node enroll` and `showmeshctl node enrollments` subcommands, on the
+`/api/v1/fallback-programs` precedent. It also mints the `node` role
+(`internal/coordinator/identity/types.go`), the machine role an enrolled
+node's API token carries.
 
 **Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
 `/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on
