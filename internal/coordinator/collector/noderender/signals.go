@@ -20,7 +20,11 @@ const SourceName = "node-render"
 // stated reason (which doubles as the last-exit reason: it is required
 // whenever pipelineState is not "running" — see RenderSurfaceReport.Reason).
 const (
-	SignalSurfacePipelineState       observation.SignalID = "surface.pipeline.state"
+	SignalSurfacePipelineState observation.SignalID = "surface.pipeline.state"
+	// SignalSurfacePipelineChangedAt carries the node's last real
+	// pipeline-state transition time (RFC3339Nano UTC), independent of
+	// SignalSurfacePipelineState's own freshness stamp.
+	SignalSurfacePipelineChangedAt   observation.SignalID = "surface.pipeline.changed_at"
 	SignalSurfaceReason              observation.SignalID = "surface.pipeline.reason"
 	SignalSurfaceRestartCount        observation.SignalID = "surface.pipeline.restart_count"
 	SignalSurfaceConsecutiveFailures observation.SignalID = "surface.pipeline.consecutive_failures"
@@ -133,6 +137,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceFramesWritten,
 	SignalSurfaceFramesLate,
 	SignalSurfaceFramesDropped,
+	SignalSurfacePipelineChangedAt,
 	SignalSurfaceFramesRate,
 	SignalSurfaceTransportAvailable,
 	SignalSurfaceTransportReason,
