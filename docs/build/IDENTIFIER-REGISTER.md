@@ -638,6 +638,7 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
 | `show.weatherdelay.cancel_night` | shipped | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
+| `show.night.resume_show` | reserved | ADR-054: the resume-show night command cleared a level 1 stop hold and started the show playlist from its first entry |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
 | `show.weatherdelay.trigger` | shipped | ADR-053 weather delay: an automatic trigger was received from a source |
@@ -1377,6 +1378,7 @@ value, and it does not belong here.
 | `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 | `localClockOverride` | shipped | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
+| `stopHold` | reserved | ADR-054: the night session record's hold set by a level 1 emergency stop (reason and time), absent when no hold stands. In scope because the API, `showmeshctl` and the UI must agree on it |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
