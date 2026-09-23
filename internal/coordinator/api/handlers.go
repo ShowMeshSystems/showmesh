@@ -64,6 +64,10 @@ type handlers struct {
 	trustClientAddr bool
 	loginLimiter    *loginLimiter
 
+	// redeemLimiter bounds failed POST /api/v1/node-enrollments/redeem
+	// calls (nodeenrollments.go).
+	redeemLimiter *redeemLimiter
+
 	// fppCommandConfirmDeadline and fppCommandPollInterval back Step 7
 	// seam C's fppcommand_handler.go — see
 	// [Options.FPPCommandConfirmDeadline]/[Options.FPPCommandPollInterval]'s

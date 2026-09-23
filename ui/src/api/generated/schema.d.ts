@@ -867,6 +867,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/node-enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every enrollment code, never the code itself (ADR-055)
+         * @description Requires `node:enroll`, whether or not reads are otherwise open. Newest first.
+         */
+        get: operations["listNodeEnrollments"];
+        put?: never;
+        /**
+         * Mint a one-time enrollment code for a node (ADR-055 decision 4)
+         * @description Requires `node:enroll`. Validates `nodeId` with the node ID rule and refuses `coordinator`, `fpp`, `healthcheck` and `observer`. Refused with `409` when the node is already enrolled (a code for it was redeemed before, or on the built-in broker its login is already in the password file) unless `reenroll` is true. Minting a code cancels the node's earlier unused code. On the built-in broker, refused with `503` when the coordinator cannot write the broker's login files. The response is the only place the code ever appears. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+         */
+        post: operations["createNodeEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/node-enrollments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel a pending enrollment code (ADR-055)
+         * @description Requires `node:enroll`. Refused with `409` when the code is not pending (already redeemed, expired or cancelled). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin`.
+         */
+        delete: operations["cancelNodeEnrollment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/node-enrollments/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange an enrollment code for the node's credentials (ADR-055 decision 5)
+         * @description Takes no principal and no same-origin check: the code is the credential for this one call. It is the only write this API accepts without a principal. The code is accepted in any case, with or without its hyphen. Returns, once, everything the node's `/etc/showmesh/agent.env` needs. On the built-in broker the coordinator writes the node's login into the broker's password file and generated access list; on an external broker it returns the shared login it was configured with, or empty strings. A re-enrollment code replaces the node's broker password and revokes every token of its previous enrollment. Every redemption is audited as `node.enrollment.redeem`, attributed to the principal who minted the code. Failed redemptions (unknown, expired, used or cancelled codes) are limited to 5 a minute from one client address and 30 an hour overall, then refused with `429`; a successful redemption is not counted. When any step fails the coordinator undoes what it did and the code stays pending.
+         */
+        post: operations["redeemNodeEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/audit": {
         parameters: {
             query?: never;
@@ -4468,7 +4532,7 @@ export interface components {
             /** @enum {string} */
             kind: "human" | "machine";
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
             disabled: boolean;
             hasPassword: boolean;
             reserved: boolean;
@@ -4493,13 +4557,13 @@ export interface components {
             /** @enum {string} */
             kind: "human" | "machine";
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
             password?: string;
         };
         /** @description The body of PUT /principals/{id}/role. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (Track G seam G-5 requirement 3). */
         SetPrincipalRoleRequest: {
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
         };
         /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty - a reset that silently clears a password would leave a human principal with no way to sign in at all. */
         SetPrincipalPasswordRequest: {
@@ -5642,6 +5706,72 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
+        /** @description The body of POST /node-enrollments. */
+        CreateNodeEnrollmentRequest: {
+            nodeId: string;
+            /** @default false */
+            reenroll?: boolean;
+            /** @default 900 */
+            expiresInSeconds?: number;
+        };
+        /** @description The 201 body of POST /node-enrollments. `code` appears here and nowhere else, as XXXX-XXXX in Crockford base32. `coordinatorUrl` is `SHOWMESH_PUBLIC_URL` when the coordinator has one, and empty otherwise; a client then gives the node the address it used itself. */
+        CreateNodeEnrollmentResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            id: string;
+            nodeId: string;
+            code: string;
+            reenroll: boolean;
+            /** Format: date-time */
+            expiresAt: string;
+            coordinatorUrl: string;
+        };
+        /** @description One enrollment code as listed. Never carries the code. */
+        NodeEnrollment: {
+            id: string;
+            nodeId: string;
+            reenroll: boolean;
+            /** @description The name of the principal who minted the code. */
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** @enum {string} */
+            state: "pending" | "redeemed" | "expired" | "cancelled";
+            /** Format: date-time */
+            redeemedAt: string | null;
+        };
+        /** @description The body of GET /node-enrollments. */
+        NodeEnrollmentsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            enrollments: components["schemas"]["NodeEnrollment"][];
+        };
+        /** @description The body of DELETE /node-enrollments/{id}. */
+        NodeEnrollmentResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            enrollment: components["schemas"]["NodeEnrollment"];
+        };
+        /** @description The body of POST /node-enrollments/redeem. `hostname` and `arch` are recorded with the redemption and change nothing else. */
+        RedeemNodeEnrollmentRequest: {
+            code: string;
+            hostname?: string;
+            arch?: string;
+        };
+        /** @description The 200 body of POST /node-enrollments/redeem, returned once. `brokerUrl` is the broker as the node reaches it: `SHOWMESH_NODE_BROKER_URL` when set, otherwise `tcp://<the host this request arrived on>:1883`. `coordinatorUrl` is `SHOWMESH_PUBLIC_URL` when set, otherwise the scheme and host this request arrived on. `mqttUsername` and `mqttPassword` are empty strings on an external broker that allows anonymous clients. `apiToken` belongs to a new machine principal named `<nodeId> agent` holding the `node` role. `coordinatorPublicKey` is the standard base64 of the coordinator's raw 32-byte Ed25519 public key, the content of the file `SHOWMESH_WEATHERDELAY_COORDINATOR_PUBLIC_KEY_PATH` names. */
+        RedeemNodeEnrollmentResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            nodeId: string;
+            brokerUrl: string;
+            mqttUsername: string;
+            mqttPassword: string;
+            apiToken: string;
+            coordinatorUrl: string;
+            coordinatorPublicKey: string;
+        };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on - the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
@@ -5654,7 +5784,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed" | "https://showmesh.dev/problems/enrollment-code-gone" | "https://showmesh.dev/problems/node-enrollment-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -7686,6 +7816,16 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description The coordinator cannot hand out a node's credentials right now: node enrollment is not set up, or on the built-in broker the coordinator cannot read or write the broker's login files. `detail` says what to fix. A code involved stays valid. */
+        NodeEnrollmentUnavailable: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `POST /session`'s login concurrency bound was exceeded (ADR-024 decision 8). Carries a `Retry-After` response header. */
         TooManyRequests: {
             headers: {
@@ -9372,6 +9512,136 @@ export interface operations {
             405: components["responses"]["MethodNotAllowed"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    listNodeEnrollments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeEnrollmentsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NodeEnrollmentUnavailable"];
+        };
+    };
+    createNodeEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateNodeEnrollmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Created. Carries the code, once. */
+            201: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateNodeEnrollmentResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NodeEnrollmentUnavailable"];
+        };
+    };
+    cancelNodeEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. The cancelled code. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeEnrollmentResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NodeEnrollmentUnavailable"];
+        };
+    };
+    redeemNodeEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemNodeEnrollmentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The node's credentials, once. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemNodeEnrollmentResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            /** @description The code expired, was already used, or was cancelled. `detail` says which, and how to get a new one. */
+            410: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NodeEnrollmentUnavailable"];
         };
     };
     listAudit: {

@@ -181,6 +181,9 @@ var migrations = []migration{
 	// an operator-recognizable name beside started_by.
 	{version: 42, fn: migrateV42AddWeatherDelayStateStartedByNameColumn},
 	{version: 43, sql: schemaV43},
+	// v45 (ADR-055): adds node_enrollment_codes. v44 is reserved for a
+	// different change.
+	{version: 45, sql: schemaV45},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

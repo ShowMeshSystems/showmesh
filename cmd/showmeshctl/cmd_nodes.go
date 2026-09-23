@@ -54,6 +54,14 @@ func cmdNodes(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 }
 
 func cmdNode(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "enroll":
+			return cmdNodeEnroll(args[1:], stdout, stderr, clock)
+		case "enrollments":
+			return cmdNodeEnrollments(args[1:], stdout, stderr, clock)
+		}
+	}
 	fs, g := newFlagSet("showmeshctl node", stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl node [flags] <node-id>")

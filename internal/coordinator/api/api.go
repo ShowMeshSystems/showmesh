@@ -661,6 +661,10 @@ type Dependencies struct {
 	// failing" posture, and covered by
 	// TestEveryRefusingDependencyIsWired (apidependencywiring_test.go).
 	FPPReconciliation FPPReconciliationStore
+
+	// NodeEnrollment is ADR-055's enrollment code service. Nil answers
+	// every /api/v1/node-enrollments route with 503.
+	NodeEnrollment NodeEnrollmentService
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -1875,6 +1879,7 @@ func New(deps Dependencies, opts Options) *API {
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
 		emergencyStopArms:         newEmergencyStopArmStore(),
+		redeemLimiter:             newRedeemLimiter(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
 	// A write whose result is visible in a streamed resource has to say so
@@ -2022,6 +2027,13 @@ func New(deps Dependencies, opts Options) *API {
 	// directly, no [handlers.writeGuard], since there is no pre-existing
 	// credential to check a scope or CSRF header against. See bootstrap.go.
 	mux.HandleFunc("POST /api/v1/bootstrap", h.loginCSRFGuard(h.handleClaimBootstrap))
+
+	// ADR-055 node enrollment. The redeem route is the one write that takes
+	// no principal and no same-origin check: the code is the credential.
+	mux.HandleFunc("POST /api/v1/node-enrollments", h.writeGuard(&scopeNodeEnroll, h.handleCreateNodeEnrollment))
+	mux.HandleFunc("GET /api/v1/node-enrollments", h.requireScope(identity.ScopeNodeEnroll, h.handleListNodeEnrollments))
+	mux.HandleFunc("DELETE /api/v1/node-enrollments/{id}", h.writeGuard(&scopeNodeEnroll, h.handleCancelNodeEnrollment))
+	mux.HandleFunc("POST /api/v1/node-enrollments/redeem", h.handleRedeemNodeEnrollment)
 
 	// GET /api/v1/audit is always gated by audit:read (requireScope, not
 	// readGuard): it is not one of the four pre-existing v1 read

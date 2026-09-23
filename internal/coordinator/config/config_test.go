@@ -70,6 +70,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// SHOWMESH_RESOLUME_RECOVERY_SETTLE also defaults regardless of
 		// whether the collector is active — see its own doc comment.
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		BrokerMode:             "builtin",
 	}
 
 	// reflect.DeepEqual, not ==: FPPEndpoints is a slice, which made Config
@@ -114,6 +115,7 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		FPPMQTTTopicPrefix:     "falcon/player",
 		ResolumeID:             "resolume",
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		BrokerMode:             "builtin",
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
