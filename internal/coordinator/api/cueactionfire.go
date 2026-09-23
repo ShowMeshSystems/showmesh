@@ -235,6 +235,7 @@ func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, acti
 				}
 				break
 			}
+			startedLate := time.Now().After(run.budgetEnds)
 			sent := make(chan struct{})
 			var once sync.Once
 			release := func() { once.Do(func() { close(sent) }) }
@@ -248,7 +249,7 @@ func (h *handlers) startCueActions(ctx context.Context, wg *sync.WaitGroup, acti
 						run.set(i, v1.CueActionOutcome{ActionID: actionID, Outcome: outcomeWordFailed, OutcomeReason: "this action stopped because of an internal coordinator error"}, true)
 					}
 				}()
-				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, onSent), act, activationKey, i, actionID, issuer, func() bool { return run.wasLate(i) })
+				o, fresh := h.fireOneCueAction(sendsignal.WithHook(ctx, onSent), act, activationKey, i, actionID, issuer, func() bool { return startedLate || run.wasLate(i) })
 				run.set(i, o, fresh)
 				if fresh && o.Outcome != outcomeWordConfirmed {
 					h.logWarn("cue actions: a show action did not confirm; the cue's other outputs were not affected",
