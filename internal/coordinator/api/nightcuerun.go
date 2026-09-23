@@ -81,7 +81,7 @@ func (h *handlers) nightCommitFirstCue(ctx context.Context, now time.Time, rec s
 		if gerr != nil {
 			return gerr
 		}
-		if !ok || cur.ID != rec.ID || cur.State != rec.State || cur.Cycle != rec.Cycle || cur.ShowCommitted {
+		if !ok || cur.ID != rec.ID || cur.State != rec.State || cur.Cycle != rec.Cycle || cur.ShowCommitted || nightStopHoldStands(cur) {
 			return nil
 		}
 		cur.ShowCommitted = true
@@ -206,6 +206,9 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 			dispatchRevision = r
 		}
+		if !h.nightCueMayDispatch(ctx, rec, phase) {
+			return row, errNightCueSessionMoved
+		}
 		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
 	case nightCueStateDispatched:
@@ -231,6 +234,9 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		dispatchRevision := row.ActionRevision
 		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 			dispatchRevision = r
+		}
+		if !h.nightCueMayDispatch(ctx, rec, phase) {
+			return row, errNightCueSessionMoved
 		}
 		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
@@ -292,7 +298,20 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 		dispatchRevision = r
 	}
+	if !h.nightCueMayDispatch(ctx, rec, phase) {
+		return store.NightCueOutboxRecord{}, errNightCueSessionMoved
+	}
 	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
+}
+
+// nightCueMayDispatch re-reads the session before an enter-show or
+// enter-resting cue goes out, so a Stop that landed after the tick's read
+// starts nothing. Shutdown phases only remove output and always proceed.
+func (h *handlers) nightCueMayDispatch(ctx context.Context, rec store.NightSessionRecord, phase string) bool {
+	if phase != nightPhaseEnterShow && phase != nightPhaseEnterResting {
+		return true
+	}
+	return h.nightSessionUnchanged(ctx, rec)
 }
 
 // nightBarrierResolutionDeadline bounds how long a barrier cue may hold

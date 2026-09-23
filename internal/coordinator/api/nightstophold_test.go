@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -446,5 +447,67 @@ func TestAFailingHoldWriteStillStopsEveryTarget(t *testing.T) {
 	}
 	if got := mustGetCurrentSession(t, r.st); got.StopHold != nil {
 		t.Fatalf("hold = %+v, want none after the failed write", got.StopHold)
+	}
+}
+
+func TestAHoldSetUnderATickStopsItsEnterCues(t *testing.T) {
+	cases := []struct {
+		name, state, phase string
+		first              bool
+	}{
+		{"enter-show first cue", nightStateTransitionToShow, nightPhaseEnterShow, true},
+		{"enter-show later cue", nightStateTransitionToShow, nightPhaseEnterShow, false},
+		{"enter-resting cue", nightStateTransitionToResting, nightPhaseEnterResting, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, held := range []bool{false, true} {
+				h, st := nightCueTestHandlers(t)
+				dispatcher := h.deps.ResolumeActions.(*fakeResolumeActionDispatcher)
+				dispatcher.results = map[string]ResolumeActionResult{
+					config.ShowActionResolumeBlackout: {Outcome: ResolumeOutcomeConfirmed, Dispatched: true, Reason: "dark"},
+				}
+				putNightAction(t, st, "act-blackout", blackoutResolumeAction())
+				stale := store.NightSessionRecord{ID: "sess-1", ConfigObjectID: "halloween-main", ConfigRevision: 1, State: tc.state, StateEnteredAt: testNow, Cycle: 1}
+				if err := st.CreateNightSession(context.Background(), stale, testNow); err != nil {
+					t.Fatalf("create night session: %v", err)
+				}
+				if held {
+					next := stale
+					next.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: testNow}
+					if err := st.UpdateNightSession(context.Background(), next, testNow); err != nil {
+						t.Fatalf("set hold: %v", err)
+					}
+				}
+				cue := config.NightSessionCue{Name: "blackout", Role: config.NightSessionCueRoleLighting, Action: "act-blackout", OnFailure: config.NightSessionCueOnFailureContinue}
+
+				_, err := h.nightRunCue(context.Background(), testNow, stale, tc.phase, cue, testIssuer, tc.first)
+				n := dispatcher.callCount()
+				if !held && (err != nil || n != 1) {
+					t.Fatalf("control: unheld cue err %v, dispatched %d times, want once", err, n)
+				}
+				if held && (!errors.Is(err, errNightCueSessionMoved) || n != 0) {
+					t.Fatalf("held: err %v, dispatched %d times, want the moved error and no dispatch", err, n)
+				}
+			}
+		})
+	}
+}
+
+func TestAFadeOutCueStillDispatchesWhileHeld(t *testing.T) {
+	h, st := nightCueTestHandlers(t)
+	dispatcher := h.deps.ResolumeActions.(*fakeResolumeActionDispatcher)
+	dispatcher.results = map[string]ResolumeActionResult{
+		config.ShowActionResolumeBlackout: {Outcome: ResolumeOutcomeConfirmed, Dispatched: true, Reason: "dark"},
+	}
+	putNightAction(t, st, "act-blackout", blackoutResolumeAction())
+	rec := store.NightSessionRecord{ID: "sess-1", ConfigObjectID: "halloween-main", ConfigRevision: 1, State: nightStateFadingOut, StateEnteredAt: testNow, Cycle: 1,
+		StopHold: &store.NightSessionStopHold{Reason: nightStopHoldReason, At: testNow}}
+	if err := st.CreateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("create night session: %v", err)
+	}
+	cue := config.NightSessionCue{Name: "blackout", Role: config.NightSessionCueRoleLighting, Action: "act-blackout", OnFailure: config.NightSessionCueOnFailureContinue}
+	if _, err := h.nightRunCue(context.Background(), testNow, rec, nightPhaseFadeOut, cue, testIssuer, false); err != nil || dispatcher.callCount() != 1 {
+		t.Fatalf("fade-out cue while held: err %v, dispatched %d times, want once: a shutdown only removes output", err, dispatcher.callCount())
 	}
 }

@@ -117,10 +117,9 @@ func (h *handlers) nightTickDuringStopHold(ctx context.Context, now time.Time, r
 	h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 }
 
-// nightResumeShowTx clears the hold and puts the session at the start of
-// its show transition with the launch due now, so the next loop tick
-// starts the show playlist from its first entry through the start-night
-// launch path.
+// nightResumeShowTx clears the hold and moves the session to its show
+// transition with the launch due now, so the next tick starts the show
+// playlist from its first entry through the start-night launch path.
 func (h *handlers) nightResumeShowTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil || !nightStopHoldStands(*current) {
 		p := nightStateRejectedProblem(nightResumeShowNoHoldDetail)
