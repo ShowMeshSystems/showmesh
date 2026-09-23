@@ -401,6 +401,31 @@ jobs:
           path: dist/node-agent/*.tar.gz
           retention-days: 7
 
+  # installer builds the one-command installer bundle and its bootstrap. Only
+  # those two files are uploaded; the release job lists them in SHA256SUMS.
+  installer:
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build and self-verify the installer bundle
+        run: make package-installer INSTALLER_VERSION=${{ needs.resolve.outputs.version }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: |
+            dist/installer/showmesh-installer_${{ needs.resolve.outputs.version }}.tar.gz
+            dist/installer/get-showmesh.sh
+          retention-days: 7
+
   # There is still no node-agent-armv7 job, but no longer because the build
   # cannot succeed. The 32-bit size_t constant that blocked it is fixed, and
   # the agent now builds and links under a real linux/arm/v7 debian:trixie
@@ -421,7 +446,7 @@ jobs:
     # this job would still run and publish a release from an incomplete
     # set of images or packages after any of the jobs above failed.
     if: success() && needs.resolve.outputs.mode == 'release'
-    needs: [resolve, images, node-agent-amd64, node-agent-arm64]
+    needs: [resolve, images, node-agent-amd64, node-agent-arm64, installer]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -437,24 +462,36 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: installer
+          path: dist-artifacts
+
+      - uses: actions/download-artifact@v8
+        with:
           name: changelog-section
           path: .
 
-      - name: Write and verify one SHA256SUMS covering both platforms
+      - name: Write and verify one SHA256SUMS covering every downloadable file
         # Each leg already self-verified its own single-platform tarball;
         # this is the point both are staged together (per the release
         # contract the amd64 and arm64 legs otherwise share), so this is
         # where the real, all-platform manifest is written, using the same
         # sha256sum invocation package-node-agent itself uses. There is no
-        # armv7 tarball to stage: see the note above this job.
+        # armv7 tarball to stage: see the note above this job. The file is
+        # named SHA256SUMS because get-showmesh.sh and showmesh-install fetch
+        # it by that name to check the installer bundle and the node tarball.
         run: |
           set -euo pipefail
           version="${{ needs.resolve.outputs.version }}"
           cd dist-artifacts
-          ls showmesh-node-agent_${version}_linux_amd64.tar.gz
-          ls showmesh-node-agent_${version}_linux_arm64.tar.gz
-          sha256sum showmesh-node-agent_${version}_*.tar.gz > "showmesh-node-agent_${version}_SHA256SUMS"
-          sha256sum -c "showmesh-node-agent_${version}_SHA256SUMS"
+          files=(
+            "showmesh-node-agent_${version}_linux_amd64.tar.gz"
+            "showmesh-node-agent_${version}_linux_arm64.tar.gz"
+            "showmesh-installer_${version}.tar.gz"
+            get-showmesh.sh
+          )
+          ls "${files[@]}"
+          sha256sum "${files[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
 
       - name: Create the GitHub pre-release
         uses: softprops/action-gh-release@v3

@@ -73,3 +73,44 @@ bench/node-install/
                            present (must pass) and once with it genuinely
                            absent (must fail, naming it).
 ```
+
+## One-command installer proof
+
+These scripts prove `deploy/install/showmesh-install` (ADR-055). They start
+nothing on the host's network: every container publishes no ports, and the
+coordinator proof runs its own dockerd with no host Docker socket.
+
+```sh
+bench/node-install/run_installer_bench.sh     # render node and audio node
+bench/node-install/run_coordinator_bench.sh   # coordinator, after the line above
+```
+
+`run_installer_bench.sh` builds two fake releases, `0.0.0-bench1` and
+`0.0.0-bench2`, into `dist/inst-bench/` with `build_installer_release.sh`
+(node agent tarball, installer bundle, `get-showmesh.sh`, one `SHA256SUMS`;
+bench1's node tarball carries a stand-in `libgstndi.so`, bench2's has none).
+Then, in a fresh container per role, `run_installer_proof.sh` starts
+`fake_enrollment_server.py` and pipes each release's `get-showmesh.sh` into
+`bash -s --` with no terminal, as `curl | sudo bash` does, and asserts:
+
+- a wrong code (404) and an expired code (410) stop the install, print the
+  server's reason verbatim and name `showmeshctl node enroll`, and write no
+  enrollment;
+- the first install writes every enrollment value into `agent.env` (mode
+  0600, the template's other lines kept), writes the coordinator key file,
+  installs the bench1 agent and, on a render node, the packaged plugin;
+- a second run with no role, coordinator or code upgrades to bench2, skips
+  enrollment, leaves `agent.env` byte for byte, keeps node state, and keeps
+  the plugin bench2 does not carry.
+
+**Cannot prove**: the agent starting under systemd (no systemd here, as above),
+a real coordinator answering redeem (the server is a stand-in for the
+enrollment API), the NDI runtime step (no NDI SDK file), or the PTP step.
+
+`run_coordinator_bench.sh` builds the coordinator and UI images locally,
+tags them as the bench releases, loads them into a privileged `debian:13`
+container running its own dockerd, and runs the coordinator role there for
+real, then upgrades it to bench2. It asserts the API answers, the built-in
+broker accepts the coordinator's login, `showmeshctl` on that host signs in
+as the new administrator, and the upgrade keeps the token and broker login.
+It removes its container and volume on exit.
