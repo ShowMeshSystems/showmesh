@@ -289,6 +289,31 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 }
 
+// TestPollLiveTransportSignalsStayOnNodeObservedAt proves the six-signal
+// receipt-time fix does not leak into surface.transport.available/reason:
+// a LIVE report carrying an unchanged pre-dispatch transport reading must
+// still stamp ObservedAt from sf.ObservedAt, never rep.receivedAt, so a
+// render.transport.probe confirmation never fires on an ordinary report
+// that carries no new probe evidence.
+func TestPollLiveTransportSignalsStayOnNodeObservedAt(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].TransportAvailable = boolPtr(false)
+	payload.Surfaces[0].TransportReason = "NDI runtime not found"
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", payload, false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSurfaceTransportAvailable, SignalSurfaceTransportReason} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(sampleObservedAt) {
+			t.Errorf("%s: ObservedAt = %v, want the node's own %s (not rep.receivedAt %s)", sig, o.ObservedAt, sampleObservedAt, receivedAt)
+		}
+	}
+}
+
 // TestPollFramesRateUnmeasuredIsNotCollected proves ADR-040's obligation:
 // before the agent's frame writer has completed a sampling window,
 // FramesRate is nil on the wire, and this must render as not_collected —

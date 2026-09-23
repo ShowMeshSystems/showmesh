@@ -2069,6 +2069,95 @@ func TestRenderTransportProbeReportsUnconfirmedWithoutFreshEvidence(t *testing.T
 	}
 }
 
+// TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch
+// proves the collector-level fix (SignalSurfaceTransportAvailable/Reason
+// stay pinned to sf.ObservedAt, never rep.receivedAt) reaches this
+// confirmation path: an ordinary report repeating the SAME pre-dispatch
+// transport reading, merely RECEIVED after dispatch, must not confirm the
+// probe. Only a reading whose own ObservedAt post-dates dispatch proves a
+// real re-probe happened.
+func TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		// The same pre-dispatch reading, as an ordinary report would
+		// re-deliver it: ObservedAt (the last real probe) is BEFORE
+		// dispatch; CollectedAt (this report's own receipt) is AFTER it.
+		setup.obs.setObs([]observation.Observation{
+			surfaceTransportAvailableObs("media-01", "wall-1", true, testNow.Add(-time.Millisecond), testNow.Add(time.Millisecond)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe",
+		`{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed: the reading's ObservedAt predates dispatch, only its receipt is after it; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports
+// proves renderEstablishIdempotencyKey's witness stays IDENTICAL across
+// two separate live reports of the SAME failed pipeline state: the witness
+// must name the failure EVENT (surface.pipeline.changed_at's value), never
+// merely the latest report's own receipt time, or a re-establish attempt's
+// idempotency key would change on every ordinary report and stop
+// deduplicating.
+func TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	failedAt := testNow.Add(-time.Hour)
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", mqttproto.RenderPipelineStateFailed, testNow, testNow),
+		surfacePipelineChangedAtObs("media-01", "wall-1", failedAt, testNow, testNow),
+	})
+	_, witnessFirst, err := api.h.renderSurfaceAssignmentEvidence(context.Background(), "media-01", "wall-1")
+	if err != nil {
+		t.Fatalf("renderSurfaceAssignmentEvidence (first report): %v", err)
+	}
+
+	// A SECOND live report, an ordinary tick later: same failed value, same
+	// real changed_at, but a LATER pipeline.state ObservedAt/CollectedAt,
+	// exactly what a live, continuously-reporting node now produces.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", mqttproto.RenderPipelineStateFailed, testNow.Add(time.Minute), testNow.Add(time.Minute)),
+		surfacePipelineChangedAtObs("media-01", "wall-1", failedAt, testNow.Add(time.Minute), testNow.Add(time.Minute)),
+	})
+	_, witnessSecond, err := api.h.renderSurfaceAssignmentEvidence(context.Background(), "media-01", "wall-1")
+	if err != nil {
+		t.Fatalf("renderSurfaceAssignmentEvidence (second report): %v", err)
+	}
+
+	if witnessFirst != witnessSecond {
+		t.Errorf("witness changed across two reports of the SAME failure: %q vs %q, want identical", witnessFirst, witnessSecond)
+	}
+	wantSuffix := "failed@" + failedAt.UTC().Format(time.RFC3339Nano)
+	if witnessFirst != wantSuffix {
+		t.Errorf("witness = %q, want %q (the changed_at value, not a report timestamp)", witnessFirst, wantSuffix)
+	}
+}
+
 // TestRenderTransportProbeNotReachableByGET proves ADR-024's rule directly:
 // no state change is reachable by GET. net/http.ServeMux's own
 // method-mismatch handling (the route is registered "POST ...") is what

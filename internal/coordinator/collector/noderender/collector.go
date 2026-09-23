@@ -153,20 +153,17 @@ func surfaceObservations(nodeID string, rep report) []observation.Observation {
 func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: sf.SurfaceID}
 
-	// sf.ObservedAt is THIS surface's own evidence timestamp — the node's
-	// clock at the moment the supervisor actually sampled this report
-	// (runner.setState — internal/agent/pipeline/supervisor.go) — and is
-	// never itself changed here; render apply confirmation still depends on
-	// it moving only on a real pipeline-state transition.
-	//
-	// A live report is judged fresh by rep.receivedAt instead, since
-	// sf.ObservedAt does not move while the node keeps reporting an
-	// unchanged state; a retained replay proves nothing about now, so it
-	// keeps sf.ObservedAt and can only become current again once a live
-	// report arrives (owner ruling).
+	// observedAt is sf.ObservedAt, unchanged: only for signals whose
+	// freshness must track a real pipeline-state transition (transport
+	// probe confirmation depends on this).
 	observedAt := sf.ObservedAt
+
+	// pipelineFreshAt stamps the four pipeline-lifecycle signals below:
+	// rep.receivedAt on a live report, so they stay current while the node
+	// keeps reporting; sf.ObservedAt on a retained replay.
+	pipelineFreshAt := sf.ObservedAt
 	if !rep.retained {
-		observedAt = rep.receivedAt
+		pipelineFreshAt = rep.receivedAt
 	}
 
 	// framesObservedAt is the frame writer's OWN evidence timestamp
@@ -189,24 +186,23 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	framesObservedAt := sf.FramesObservedAt
 
 	obs := []observation.Observation{
-		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, pipelineFreshAt, rep),
+		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, pipelineFreshAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, framesObservedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, framesObservedAt, rep),
 	}
 
-	// SignalSurfacePipelineChangedAt's VALUE is sf.ObservedAt itself (the
-	// transition time), never observedAt above: render apply confirmation
-	// fences on this to still require a real transition, now that
-	// surface.pipeline.state's own freshness stamp tracks receipt instead.
+	// SignalSurfacePipelineChangedAt's VALUE is always sf.ObservedAt (the
+	// transition time): render apply confirmation fences on this value to
+	// still require a real transition.
 	if sf.ObservedAt.IsZero() {
 		obs = append(obs, notCollected(res, SignalSurfacePipelineChangedAt, SourceFor(nodeID),
 			"this surface has not yet reported a pipeline-state transition", rep.receivedAt))
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfacePipelineChangedAt, sf.ObservedAt.UTC().Format(time.RFC3339Nano), observedAt, rep))
+		obs = append(obs, buildValue(nodeID, res, SignalSurfacePipelineChangedAt, sf.ObservedAt.UTC().Format(time.RFC3339Nano), pipelineFreshAt, rep))
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -432,7 +428,7 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 
 	// A live report is judged fresh by rep.receivedAt, since
 	// MultiSyncObservedAt only moves on a real bind outcome change; a
-	// retained replay keeps MultiSyncObservedAt (owner ruling).
+	// retained replay keeps MultiSyncObservedAt.
 	observedAt := rep.payload.MultiSyncObservedAt
 	if !rep.retained {
 		observedAt = rep.receivedAt

@@ -21,11 +21,9 @@ const SourceName = "node-render"
 // whenever pipelineState is not "running" — see RenderSurfaceReport.Reason).
 const (
 	SignalSurfacePipelineState observation.SignalID = "surface.pipeline.state"
-	// SignalSurfacePipelineChangedAt carries sf.ObservedAt itself (the node's
-	// last real pipeline-state transition time, RFC3339Nano UTC), so render
-	// apply confirmation can fence on the transition even though
-	// SignalSurfacePipelineState's own ObservedAt now tracks receipt time on
-	// a live report to stay current (owner ruling).
+	// SignalSurfacePipelineChangedAt carries the node's last real
+	// pipeline-state transition time (RFC3339Nano UTC), independent of
+	// SignalSurfacePipelineState's own freshness stamp.
 	SignalSurfacePipelineChangedAt   observation.SignalID = "surface.pipeline.changed_at"
 	SignalSurfaceReason              observation.SignalID = "surface.pipeline.reason"
 	SignalSurfaceRestartCount        observation.SignalID = "surface.pipeline.restart_count"
