@@ -312,6 +312,7 @@ bundles of these (ADR-024).
 | `show:weatherdelay:invoke` | shipped | ADR-053 weather delay: start a weather delay, start a cancel night, change a delay into a cancel night |
 | `show:weatherdelay:resume` | shipped | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
+| `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -645,6 +646,9 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.decision` | shipped | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
+| `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
+| `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
+| `node.enrollment.redeem` | reserved | ADR-055: a node redeemed an enrollment code and received its credentials, attributed to the principal who minted the code |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -1430,7 +1434,9 @@ The store schema version, bumped by migrations in
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
-| v44+ | unallocated | free |
+| v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
+| v45 | reserved | ADR-055: the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
+| v45+ | unallocated | free, except the reservations above |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1648,6 +1654,13 @@ path on the node agent's inbound listener and one on the FPP plugin,
 [ADR-053](../decisions/ADR-053-weather-delay.md) decision 9 adds as the single
 exception to the paragraph above about that listener. That path accepts a
 signed start and nothing else, and stays out of `api/openapi.yaml`.
+
+**ADR-055 owns every path under `/api/v1/node-enrollments`**, including the
+unauthenticated `POST /api/v1/node-enrollments/redeem`, and the `showmeshctl
+node enroll` and `showmeshctl node enrollments` subcommands, on the
+`/api/v1/fallback-programs` precedent. It also mints the `node` role
+(`internal/coordinator/identity/types.go`), the machine role an enrolled
+node's API token carries.
 
 **Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
 `/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on

@@ -290,6 +290,8 @@ Commands:
                                        without clearing its degraded record (write, requires
                                        night:command; the only lifecycle command accepted while
                                        degraded besides the three above)
+  night resume-show                   after Stop holds the night, start the show playlist from its
+                                       first song (write, requires night:command)
   emergency-stop stop                 stop playout immediately on every configured FPP instance
                                        (write, requires show:emergencystop:invoke)
   emergency-stop stop-power-down      stop playout immediately, then force the active night
