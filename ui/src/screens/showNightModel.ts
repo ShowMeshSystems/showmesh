@@ -256,7 +256,20 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
         `${readiness.sameEpoch ? ', this epoch' : ', from an earlier epoch'}` +
         `${readiness.fresh ? '' : ', no longer fresh'}.`
 
+  const hold = session.stopHold
   return [
+    ...(hold === undefined
+      ? []
+      : [
+          {
+            key: 'stopHold',
+            label: 'Stopped',
+            tone: 'bad' as const,
+            fact: `${hold.reason} Nothing starts until Resume, which starts the show playlist from its first song.${
+              hold.principal === undefined || hold.principal === '' ? '' : ` Stopped by ${hold.principal}.`
+            }`,
+          },
+        ]),
     {
       key: 'transition',
       label: phaseLabel('Transition', session.transition.state),

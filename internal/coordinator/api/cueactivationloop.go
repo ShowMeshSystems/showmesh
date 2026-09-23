@@ -233,6 +233,13 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 			} else if active {
 				return
 			}
+			// ADR-054: a level 1 stop hold refuses output the same way.
+			if held, err := l.h.nightStopHoldActive(ctx); err != nil {
+				l.logger.Warn("cue activation loop: failed to read the night session's stop hold; holding this tick as a precaution", "error", err)
+				return
+			} else if held {
+				return
+			}
 			pin, err := l.resolvePin(ctx)
 			if err != nil {
 				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)

@@ -131,6 +131,10 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightTickDuringWeatherDelay(ctx, now, rec)
 		return
 	}
+	if nightStopHoldStands(rec) {
+		h.nightTickDuringStopHold(ctx, now, rec)
+		return
+	}
 	switch rec.State {
 	case nightStatePreshow:
 		h.nightAdvancePreshow(ctx, now, rec)

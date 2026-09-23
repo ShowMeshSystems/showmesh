@@ -430,6 +430,7 @@ export type NightCommandName =
   | 'fade-out-night'
   | 'power-down-presentation'
   | 'end-session'
+  | 'resume-show'
 
 // Runner-neutral current playback projection. Unlike macroRuns, these are
 // the coordinator's authoritative FPP and showmesh-audio runs, including the

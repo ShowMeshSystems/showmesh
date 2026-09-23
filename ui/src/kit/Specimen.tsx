@@ -11,6 +11,7 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  StopHoldBanner,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
@@ -438,6 +439,10 @@ export function Specimen() {
               ]}
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
               cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+            />
+            <StopHoldBanner
+              message="The show is stopped. Press Resume on Live Control to start the show playlist from its first song."
+              detail="Stopped at 20:41 by operator"
             />
             <WeatherDelayHeldBanner
               messages={['FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.']}

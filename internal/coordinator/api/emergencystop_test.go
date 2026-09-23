@@ -208,8 +208,9 @@ func TestEmergencyStopDispatchesFPPStopAndFollowUp(t *testing.T) {
 	if f.resolume.callCount() != 1 {
 		t.Fatalf("resolume dispatch calls = %d, want 1 (the configured follow-up)", f.resolume.callCount())
 	}
-	if _, present := result["nightSession"]; present {
-		t.Error("level 1 (stop) response carries a nightSession field; level 1 must never touch night-session state")
+	ns, ok := result["nightSession"].(map[string]any)
+	if !ok || ns["present"] != false {
+		t.Errorf("level 1 (stop) with no night session: nightSession = %v, want present=false", result["nightSession"])
 	}
 }
 

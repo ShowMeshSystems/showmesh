@@ -78,6 +78,7 @@ import {
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { useCurrentNightSession, useResumeShow } from '../app/stopHold'
 import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis } from '../domain/time'
@@ -475,6 +476,7 @@ export function LiveControl() {
   const emergencyGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:emergencystop:invoke')
   const weatherDelayGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:weatherdelay:invoke')
   const weatherDelay = useWeatherDelay()
+  const resumeShow = useResumeShow(model, useCurrentNightSession(model))
 
   const [selected, setSelected] = useState<string | null>(null)
   const instance = model.fpp.find((entry) => entry.instanceId === selected) ?? model.fpp[0]
@@ -705,6 +707,9 @@ export function LiveControl() {
             >
               Stop
             </Button>
+            <Button variant="primary" size="gloved" disabled={resumeShow.disabled} title={resumeShow.title} onClick={resumeShow.onClick}>
+              {resumeShow.busy ? 'Resuming…' : 'Resume'}
+            </Button>
             <Button
               variant="danger"
               size="gloved"
@@ -783,6 +788,7 @@ export function LiveControl() {
               {weatherDelay.busy === 'cancelNight' ? 'Cancelling night…' : 'Cancel night'}
             </Button>
           </ButtonRow>
+          {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
           {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
           {hardStopArm !== null && armRemainingMs !== null && (
             <Notice

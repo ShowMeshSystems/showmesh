@@ -34,7 +34,9 @@ import (
 // operation exactly the way a failed FPP stop already did, instead of
 // sitting unnoticed in the best-effort FollowUps array.
 //
-//   - stop            (level 1): the immediate stop and its follow-ups.
+//   - stop            (level 1): the immediate stop, PLUS holding the
+//     active night session so its loop starts nothing until resume-show
+//     (ADR-054, nightEmergencyStopHold), plus its own follow-ups.
 //   - stop-power-down (level 2): the immediate stop, PLUS forcing the
 //     active night session's own existing graceful-shutdown sequence to
 //     start now instead of deferring (see nightEmergencyPowerDown's own
@@ -574,7 +576,8 @@ func emergencyStopFollowUpCommandID(idempotencyKey, actionID string) string {
 	return "emergencystop:" + idempotencyKey + ":action:" + actionID
 }
 
-// --- the night-session side effects levels 2 and 3 force ---
+// --- the night-session side effects levels 2 and 3 force (level 1's hold
+// is nightEmergencyStopHold, nightstophold.go) ---
 
 // nightEmergencyPowerDown is level stop-power-down's own "standard
 // graceful shutdown" component: RESTING-MODE.md's own words ("Only an
@@ -782,11 +785,12 @@ func (h *handlers) emergencyStopIssuer(now time.Time, ac authContext, clientAddr
 }
 
 // handleEmergencyStop serves POST .../emergency-stop/stop (level 1):
-// immediate stop, plus its own configured follow-ups. No night-session
-// interaction of any kind. NOTHING BELOW THE IDEMPOTENCY-KEY CHECK MAY
-// ABORT: the FPP instance list, and this level's own follow-up
-// configuration, each degrade and are reported alongside the stop rather
-// than turning a stop that could otherwise proceed into a 500.
+// immediate stop, holding the active night session (ADR-054,
+// nightEmergencyStopHold), plus its own configured follow-ups. NOTHING
+// BELOW THE IDEMPOTENCY-KEY CHECK MAY ABORT: the FPP instance list, the
+// night-session hold, and this level's own follow-up configuration, each
+// degrade and are reported alongside the stop rather than turning a stop
+// that could otherwise proceed into a 500.
 func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(h.emergencyStopHTTPWriteDeadline()))
@@ -798,17 +802,24 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	}
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
+	issuer := h.emergencyStopIssuer(now, ac, clientAddr)
 
+	// The hold is set first so the night loop cannot see the stopped
+	// player as a finished show and restart the resting playlist.
+	nightOutcome := h.nightEmergencyStopHold(ctx, now, issuer)
 	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.Stop.Actions, ac, clientAddr)
 
-	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
-		h.emergencyStopIssuer(now, ac, clientAddr), auditActionEmergencyStop, idempotencyKey, emergencyStopLevelStop, stopOutcomes, followUps, nil, configErr))
+	entry := emergencyStopAuditEntry(issuer, auditActionEmergencyStop, idempotencyKey, emergencyStopLevelStop, stopOutcomes, followUps, &nightOutcome, configErr)
+	if nightOutcome.Present && nightOutcome.Error == "" {
+		entry.Params["stopHold"] = map[string]any{"sessionId": nightOutcome.SessionID, "outcome": nightOutcome.Outcome}
+	}
+	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, entry)
 
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelStop, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes,
-		NoInstancesConfigured: noInstancesConfigured, FollowUps: followUps, FollowUpConfigError: configErr,
+		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
 	}})
 }
 

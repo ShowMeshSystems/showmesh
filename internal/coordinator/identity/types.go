@@ -557,3 +557,7 @@ const (
 	// answered by an operator, or defaulted at its deadline.
 	AuditActionShowWeatherDelayDecision = "show.weatherdelay.decision"
 )
+
+// AuditActionShowNightResumeShow records the resume-show night command
+// clearing a level 1 stop hold (ADR-054).
+const AuditActionShowNightResumeShow = "show.night.resume_show"

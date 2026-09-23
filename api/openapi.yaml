@@ -5971,9 +5971,15 @@ paths:
         see `result.noInstancesConfigured` for the FPP-specific
         zero-instance signal), and a failure to read this level's own
         follow-up configuration degrades to no follow-ups (see
-        `result.followUpConfigError`) rather than aborting the stop. No
-        night-session interaction of any kind - see
-        `/emergency-stop/stop-power-down` for level 2.
+        `result.followUpConfigError`) rather than aborting the stop. If a
+        night session is active (any state but `inactive` or `stopped`),
+        the stop first sets that session's `stopHold` (ADR-054): the night
+        loop and the cue activation loop then start nothing until the
+        `resume-show` night command, which starts the show playlist from
+        its first entry. `result.nightSession` reports that step, with
+        `present` `false` when no session was active; a failure is
+        reported in `result.nightSession.error` and never aborts the
+        stop. See `/emergency-stop/stop-power-down` for level 2.
       requestBody:
         required: true
         content:
@@ -8336,7 +8342,17 @@ paths:
         (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`,
         `request-final-show`, `fade-out-night`, `power-down-presentation`)
         plus `end-session`, a PROVISIONAL operator-recovery action not yet
-        part of ADR-038's own closed vocabulary (owner decision pending).
+        part of ADR-038's own closed vocabulary (owner decision pending),
+        and `resume-show` (ADR-054). `resume-show` clears the `stopHold` a
+        level 1 emergency stop set and moves the session to
+        `transition-to-show` with its launch due immediately, so the night
+        loop starts the show playlist from its first entry through the
+        same launch path `start-night` uses. It never returns to resting
+        first. It is refused with `409` when no hold stands
+        (`night-state-rejected`), while a weather delay is active, while
+        the session is degraded, and in `preparing`, `fading-out` and
+        `end-of-night-resting`, where no show can start. It is audited as
+        `show.night.resume_show` and takes no `interlockOverrides`.
         Answers `202`, never `200`: accepted and applied, or recognized as
         an idempotent duplicate - this layer holds no downstream
         confirmation loop.
@@ -8426,6 +8442,7 @@ paths:
               - fade-out-night
               - power-down-presentation
               - end-session
+              - resume-show
       requestBody:
         required: false
         content:
@@ -15460,8 +15477,10 @@ components:
     EmergencyStopNightSessionOutcome:
       type: object
       description: >-
-        What, if anything, happened to the active night session as level
-        stop-power-down's or hard-stop's own night-session component.
+        What, if anything, happened to the active night session as the
+        stop level's own night-session component: the stop hold for level
+        stop (ADR-054), the forced shutdown for stop-power-down, the ended
+        session for hard-stop.
         present is false when no night session was active - a real, valid
         outcome, not an error. error is non-empty exactly when this
         component could not be attempted or did not complete; the stop
@@ -20168,6 +20187,8 @@ components:
             "not recorded" entry.
           items:
             $ref: "#/components/schemas/NightCycleOutcome"
+        stopHold:
+          $ref: "#/components/schemas/NightStopHold"
         degraded:
           type: boolean
         degradedReason:
@@ -20184,6 +20205,24 @@ components:
         updatedAt:
           type: string
           format: date-time
+    NightStopHold:
+      type: object
+      description: >-
+        Present while a level 1 emergency stop holds the night session
+        (ADR-054): the night loop starts no playlist, background audio,
+        cue or announcement until `resume-show`. Absent when no hold
+        stands. A hard stop, power-down or end-session ends the session
+        and the hold with it; a weather delay resume clears it too.
+      required: [reason, at]
+      properties:
+        reason:
+          type: string
+        at:
+          type: string
+          format: date-time
+        principal:
+          type: string
+          description: The name of the principal who pressed Stop.
     NightCycleOutcome:
       type: object
       description: >-

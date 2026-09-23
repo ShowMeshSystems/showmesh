@@ -56,6 +56,7 @@ const (
 	nightCommandFadeOutNight          = "fade-out-night"
 	nightCommandPowerDownPresentation = "power-down-presentation"
 	nightCommandEndSession            = "end-session"
+	nightCommandResumeShow            = "resume-show"
 )
 
 var validNightCommands = map[string]bool{
@@ -67,6 +68,7 @@ var validNightCommands = map[string]bool{
 	nightCommandFadeOutNight:          true,
 	nightCommandPowerDownPresentation: true,
 	nightCommandEndSession:            true,
+	nightCommandResumeShow:            true,
 }
 
 // nightExemptFromDegradedGate: these three, plus end-session (handled on
@@ -261,6 +263,7 @@ func nightCommandHTTPWriteDeadline() time.Duration {
 var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandRequestFinalShow: true,
 	nightCommandEndSession:       true,
+	nightCommandResumeShow:       true,
 }
 
 func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead bool, problem *v1.Problem) {
@@ -304,7 +307,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
-		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session", cmd)))
+		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session, resume-show", cmd)))
 		return
 	}
 	idempotencyKey, interlockOverrides, skipEnterShowLead, problem := decodeNightCommandBody(r, cmd)
@@ -318,7 +321,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	// command (fade-out, power-down, end-session) stays available, per
 	// decision 13. A cancelled night gets its own sentence: it stays
 	// refused until an operator clears it, not merely resumes it.
-	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight {
+	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight || cmd == nightCommandResumeShow {
 		wdRec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 		if err != nil {
 			h.writeInternalError(w, now, "check weather delay state", err)
@@ -381,6 +384,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// [handlers.nightStartNightCommand]'s own doc comment for when and
 		// why.
 		out, problem, opErr = h.nightStartNightCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
+	case cmd == nightCommandResumeShow:
+		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+			return h.nightResumeShowTx(ctx, tx, now, current)
+		})
 	case cmd == nightCommandPowerDownPresentation:
 		// Its own phase="power-down-presentation" interlock evidence is
 		// dispatched live, outside any transaction; see
@@ -618,7 +625,7 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			}
 		}
 		issuer.Timestamp = now
-		issuer.Action = "night." + cmd
+		issuer.Action = nightCommandAuditAction(cmd)
 		issuer.Target = out.result.ID
 		issuer.Kind = identity.AuditOutcome
 		issuer.OutcomeState = string(observation.StateCurrent)
@@ -1267,6 +1274,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 	default: // preparing, preshow, uncommitted transition-to-show, transition-to-resting, resting-intershow, end-of-night-resting
 		rec.ArmedShowID = ""
 		rec.ShowCommitted = false
+		rec.StopHold = nil
 		rec.State = nightStateFadingOut
 		rec.StateEnteredAt = now
 		rec.ContentAnchorJSON = ""
@@ -1501,6 +1509,7 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 	next.StateEnteredAt = now
 	next.ArmedShowID = ""
 	next.ShowCommitted = false
+	next.StopHold = nil
 	if !next.AdmissionClosed {
 		next.AdmissionClosed = true
 		t := now
@@ -1943,6 +1952,9 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.Cues = mapNightCues(ctx, deps, rec)
 	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
 	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
+	if nightStopHoldStands(rec) {
+		out.StopHold = &v1.NightStopHold{Reason: rec.StopHold.Reason, At: formatTime(rec.StopHold.At), Principal: rec.StopHold.Principal}
+	}
 	return out
 }
 

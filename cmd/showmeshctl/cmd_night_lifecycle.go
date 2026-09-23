@@ -207,6 +207,11 @@ func cmdNightEndSession(args []string, stdout, stderr io.Writer, clock func() ti
 		"PROVISIONAL operator recovery action (POST /api/v1/night/commands/\nend-session): abandons the current session, reaches \"stopped\", and\nlaunches nothing. Does not clear the degraded record; recover with\n\"night prepare-site\" afterward.\n\nFour commands are accepted against a DEGRADED session:\n\n  request-final-show        close admission after one more show\n  fade-out-night            fade the presentation out and stop FPP\n  power-down-presentation   the above, plus any configured power phase\n  end-session               abandon the session outright\n\nThe first three are directional safety and shutdown actions and are never\nrefused for want of this coordinator's own evidence. end-session is the\nonly one that abandons the session rather than ending the night through\nit. Every other lifecycle command refuses while degraded.\n\nend-session declares no interlock phase and consults no gate at all: it\nis unconditionally the way to reach \"stopped\" even when a configured\n\"block\" interlock on fade-out-night or power-down-presentation has no\noverride path (overridePolicy: none) and an unavailable source. It never\nissues an FPP stop or resolves the power phase, so use fade-out-night or\npower-down-presentation first whenever either one is reachable.")
 }
 
+func cmdNightResumeShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night resume-show", "resume-show",
+		"After Stop (emergency stop level 1) holds the night, start the show\nplaylist from its first song (POST /api/v1/night/commands/resume-show).\nThe night never returns to resting first. Refused when the show is not\nstopped, while a weather delay is active, and when the night has not\nstarted, is shutting down, or has already played its last show.\n\n\"night status\" prints the hold while it stands.")
+}
+
 // runSimpleNightLifecycleCommand is the flag-parsing wrapper every
 // no-argument "night <verb>" write subcommand above shares.
 func runSimpleNightLifecycleCommand(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string) int {
