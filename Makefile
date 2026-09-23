@@ -499,6 +499,25 @@ NODE_AGENT_LDFLAGS := -X $(MODULE)/internal/version.Version=$(NODE_AGENT_VERSION
                        -X $(MODULE)/internal/version.Commit=$(COMMIT) \
                        -X $(MODULE)/internal/version.BuildDate=$(NODE_AGENT_COMMIT_DATE)
 
+# NDI_PLUGIN_SO, when given, is the path to a prebuilt libgstndi.so
+# (deploy/node/ndi-plugin/build-ndi-plugin.sh) that package-node-agent
+# copies into the tarball. Left empty, the tarball ships without it and a
+# node builds it locally with that same script.
+NDI_PLUGIN_SO ?=
+NDI_PLUGIN_DIST := ./dist/ndi-plugin
+NDI_PLUGIN_GOARCH := $(shell go env GOARCH 2>/dev/null)
+
+# build-ndi-plugin runs deploy/node/ndi-plugin/build-ndi-plugin.sh for the
+# host's own architecture, so its output feeds NDI_PLUGIN_SO above without
+# hand-naming the architecture.
+.PHONY: build-ndi-plugin
+build-ndi-plugin:
+	@if [ -z "$(NDI_PLUGIN_GOARCH)" ]; then \
+		echo "build-ndi-plugin: could not determine the target architecture ('go env GOARCH' produced nothing). Install Go and put it on PATH; refusing to build for an unnamed architecture." >&2; \
+		exit 1; \
+	fi
+	deploy/node/ndi-plugin/build-ndi-plugin.sh $(NDI_PLUGIN_DIST)/$(NDI_PLUGIN_GOARCH)
+
 # package-node-agent builds the native agent with -trimpath (byte-stable
 # paths, same reasoning as the FPP plugin's build) and the deterministic
 # commit-timestamp ldflags above, stages it alongside deploy/node's
@@ -522,6 +541,12 @@ package-node-agent:
 	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/showmesh-agent-native
 	cp deploy/node/showmesh-agent.service deploy/node/agent.env.example deploy/node/preflight.sh deploy/node/install.sh deploy/node/README.md $(NODE_AGENT_DIST)/showmesh-node-agent/
 	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/preflight.sh $(NODE_AGENT_DIST)/showmesh-node-agent/install.sh
+	if [ -n "$(NDI_PLUGIN_SO)" ]; then \
+		mkdir -p $(NODE_AGENT_DIST)/showmesh-node-agent/gstreamer; \
+		cp "$(NDI_PLUGIN_SO)" $(NODE_AGENT_DIST)/showmesh-node-agent/gstreamer/libgstndi.so; \
+	else \
+		echo "package-node-agent: the tarball has no NDI GStreamer plugin. Build one with 'make build-ndi-plugin' and pass NDI_PLUGIN_SO, or let the node build it locally with deploy/node/ndi-plugin/build-ndi-plugin.sh."; \
+	fi
 	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
 		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(NODE_AGENT_DIST) -cf - showmesh-node-agent | gzip -n -9 > $(NODE_AGENT_DIST)/$(NODE_AGENT_TARBALL); \
 	else \
