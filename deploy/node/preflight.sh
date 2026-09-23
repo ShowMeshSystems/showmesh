@@ -175,7 +175,7 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
   if gst-inspect-1.0 ndisink >/dev/null 2>&1; then
     info "ndisink resolves: this host can drive NDI output. (Not verified against real hardware or a real NDI receiver by this script.)"
   else
-    info "ndisink does NOT resolve. This is expected on a fresh install and on any audio-only node. A render node that needs NDI output must build the gst-plugins-rs NDI element separately (see deploy/node/README.md) and set GST_PLUGIN_PATH in /etc/showmesh/agent.env, then re-run this preflight."
+    info "ndisink does not resolve. That is expected on an audio node. On a render node, install the NDI plugin with: sudo showmesh-install --role render"
   fi
 else
   fail "gst-inspect-1.0 (needed to check GStreamer elements)" "apt-get install -y gstreamer1.0-tools"
