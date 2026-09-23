@@ -797,7 +797,6 @@ describe('Node detail · Sync status', () => {
         evidence('node.audio.sync.state', { value: 'locked' }),
         evidence('node.audio.sync.follows', { value: 'PTP 000fd4fffe06553a:0' }),
         evidence('node.audio.sync.offset_ns', { value: 200 }),
-        evidence('node.audio.sync.rate_ppm', { state: 'not_collected', reason: 'this node does not measure the rate adjustment applied to its output interface' }),
       ],
       clock: [evidence('node.clock.ptp.frequency_ppm', { value: 15.29 })],
       ...overrides,

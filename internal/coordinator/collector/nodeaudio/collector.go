@@ -199,12 +199,20 @@ func ltcFrameRateAbsentReason(generatorState string) string {
 var _ collector.Collector = (*Collector)(nil)
 
 // SessionObservationDeleter is nodeaudio's own view onto *store.Store's
-// deletion surface for audio_session rows Poll already knows are gone.
-// *store.Store satisfies this directly, the same live-wiring precedent
-// [LocalClockSource] already uses.
+// deletion surface: dropped audio_session rows and the retired-signal
+// purge. *store.Store satisfies this directly.
 type SessionObservationDeleter interface {
 	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
 	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
+	DeleteObservationsBySignal(ctx context.Context, signal observation.SignalID) (int64, error)
+}
+
+// RetiredSignalIDs are signals this package no longer emits; Poll purges
+// their stored rows once. Never remove an entry.
+var RetiredSignalIDs = []observation.SignalID{
+	"audio_session.reference_position_ms",
+	"audio_session.drift_ms",
+	"node.audio.sync.rate_ppm",
 }
 
 // Collector renders [Store]'s current push cache into observations on a
@@ -216,6 +224,8 @@ type Collector struct {
 
 	mu    sync.Mutex
 	known map[string]map[string]struct{} // nodeID -> session ids named by its last delivery
+
+	retirePurge sync.Once
 }
 
 // Option configures a [Collector] at construction. See [WithSessionDeleter].
@@ -253,6 +263,8 @@ func (c *Collector) ID() string { return SourceName }
 // it always returns complete=true, matching noderender.Collector.Poll and
 // fppmqtt.Collector.Poll.
 func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) {
+	c.retirePurge.Do(func() { c.purgeRetiredSignals(ctx) })
+
 	snap := c.store.snapshot()
 	var obs []observation.Observation
 
@@ -276,6 +288,23 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	c.sweepOrphanedSessions(ctx, liveIDs)
 
 	return obs, true
+}
+
+// purgeRetiredSignals deletes stored rows for [RetiredSignalIDs] and logs
+// the count per signal at info level. A no-op if no
+// [SessionObservationDeleter] is wired in.
+func (c *Collector) purgeRetiredSignals(ctx context.Context) {
+	if c.deleter == nil {
+		return
+	}
+	for _, sig := range RetiredSignalIDs {
+		n, err := c.deleter.DeleteObservationsBySignal(ctx, sig)
+		if err != nil {
+			slog.Default().Error("nodeaudio: failed to purge a retired signal's stored rows", "signal", sig, "error", err)
+			continue
+		}
+		slog.Default().Info("nodeaudio: purged a retired signal's stored rows", "signal", sig, "rows_removed", n)
+	}
 }
 
 // retireDroppedSessions deletes every audio_session row nodeID reported on
@@ -640,11 +669,6 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh position is available from the engine; it is mid-discontinuity or has nothing loaded", rep.receivedAt))
 	}
-
-	obs = append(obs,
-		notCollected(res, SignalSessionReferencePositionMs, source, "this build has no reference show-position source", rep.receivedAt),
-		notCollected(res, SignalSessionDriftMs, source, "drift is only measured at track changes, and that measurement is not implemented yet", rep.receivedAt),
-	)
 
 	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, sessionAt, rep))
 	obs = append(obs, buildSessionValue(res, source, SignalSessionStateReason, sessionStateReason(sess.State), sessionAt, rep))

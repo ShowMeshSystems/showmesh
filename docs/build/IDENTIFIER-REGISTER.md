@@ -798,7 +798,7 @@ divergence was reconciled below.
 | `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
 | `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
 | `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
-| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which is `node.audio.sync.rate_ppm` |
+| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which no build measures yet |
 | `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
 | `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
 | `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
@@ -835,8 +835,8 @@ All are on the `audio_session` resource kind, resource id the session id:
 | `audio_session.playlist.item_id` | shipped | C6/C7 |
 | `audio_session.playlist.item_index` | shipped | C6/C7 |
 | `audio_session.position_ms` | shipped | C6/C7 |
-| `audio_session.reference_position_ms` | shipped | C6/C7 |
-| `audio_session.drift_ms` | shipped | C6/C7 |
+| `audio_session.reference_position_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
+| `audio_session.drift_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 | `audio_session.desired_revision` | shipped | C6/C7 |
 | `audio_session.gain.effective` | shipped | C6/C7 |
 | `audio_session.gain.ceiling` | shipped | C6/C7 |
@@ -901,7 +901,7 @@ right and never inferred from the pipeline still being up.
 | `node.audio.sync.state` | shipped | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
 | `node.audio.sync.follows` | shipped | ADR-052 decision 6: what the local clock follows, the PTP grandmaster identity and domain; blank when free-running |
 | `node.audio.sync.offset_ns` | shipped | ADR-052 decision 6: offset from the global clock; omitted when not measured |
-| `node.audio.sync.rate_ppm` | shipped | ADR-052 decision 6: measured rate adjustment in parts per million; omitted until a build measures it, never invented |
+| `node.audio.sync.rate_ppm` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 
 **Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
 software could measure program-to-LTC alignment, so it was never derived

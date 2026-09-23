@@ -1160,8 +1160,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 45 {
-		t.Errorf("AllSignalIDs has %d entries, want 45", len(AllSignalIDs))
+	if len(AllSignalIDs) != 44 {
+		t.Errorf("AllSignalIDs has %d entries, want 44", len(AllSignalIDs))
 	}
 }
 
@@ -1171,7 +1171,7 @@ func TestSessionSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(SessionSignalIDs) != 31 {
-		t.Errorf("SessionSignalIDs has %d entries, want 31", len(SessionSignalIDs))
+	if len(SessionSignalIDs) != 29 {
+		t.Errorf("SessionSignalIDs has %d entries, want 29", len(SessionSignalIDs))
 	}
 }
