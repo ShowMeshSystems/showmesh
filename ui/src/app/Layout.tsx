@@ -48,6 +48,7 @@ import { fppElapsedFraction } from '../screens/liveControlModel'
 import { nowPlaying as fppNowPlaying } from '../screens/showNightModel'
 import { useModelContext } from './ModelContext'
 import { useWeatherDelay, WeatherDelayProvider } from './WeatherDelayContext'
+import { StopHoldShellBanner } from './StopHoldShellBanner'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
 const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
@@ -910,6 +911,7 @@ export function Layout() {
           .map((instance) => ({ instanceId: instance.instanceId }))}
       />
       <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      <StopHoldShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>
         <Rail>
           <RailGroup>Operate</RailGroup>

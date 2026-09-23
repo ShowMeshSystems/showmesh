@@ -44,6 +44,13 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		}
 	}
 
+	if h := s.StopHold; h != nil {
+		by := ""
+		if h.Principal != "" {
+			by = " by " + h.Principal
+		}
+		_, _ = fmt.Fprintf(w, "\nSTOPPED:     %s Held since %s%s. Run \"showmeshctl night resume-show\" to start the show playlist from its first song.\n", h.Reason, h.At, by)
+	}
 	if s.Degraded {
 		_, _ = fmt.Fprintf(w, "\nDEGRADED:    %s\n", s.DegradedReason)
 	}

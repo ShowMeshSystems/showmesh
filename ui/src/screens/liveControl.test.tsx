@@ -36,6 +36,7 @@ const stubs = vi.hoisted(() => ({
   unmuteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   emergencyStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  dispatchNightCommand: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   emergencyStopPowerDown: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   armEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   fireEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -75,6 +76,8 @@ vi.mock('../api', async () => {
     unmuteAudioSessionOutput: (...args: never[]) => stubs.unmuteAudioSessionOutput(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     emergencyStop: (...args: never[]) => stubs.emergencyStop(...args),
+    dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
+    getCurrentNightSession: () => new Promise(() => {}),
     emergencyStopPowerDown: (...args: never[]) => stubs.emergencyStopPowerDown(...args),
     armEmergencyStopHardStop: (...args: never[]) => stubs.armEmergencyStopHardStop(...args),
     fireEmergencyStopHardStop: (...args: never[]) => stubs.fireEmergencyStopHardStop(...args),
@@ -304,6 +307,44 @@ describe('Live Control', () => {
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
+
+  const nightCommandSession = {
+    serverTime: '2026-09-23T20:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['night:command', 'show:emergencystop:invoke'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+
+  it('puts Resume beside the stop buttons, disabled with a hint when the show is not stopped', () => {
+    renderScreen({ session: nightCommandSession, nightSession: { state: 'live' } as never })
+    const region = screen.getByRole('region', { name: 'Emergency stop' })
+    const resume = within(region).getByRole('button', { name: 'Resume' })
+    expect(resume).toBeDisabled()
+    expect(resume).toHaveAttribute('title', 'The show is not stopped, so there is nothing to resume.')
+  })
+
+  it('sends resume-show from Live Control while Stop holds the night', async () => {
+    const sent: string[] = []
+    stubs.dispatchNightCommand = (...args: never[]) => {
+      sent.push((args as unknown[])[0] as string)
+      return Promise.resolve({})
+    }
+    renderScreen({
+      session: nightCommandSession,
+      nightSession: { state: 'live', stopHold: { reason: 'The show was stopped with Stop.', at: '2026-09-23T20:05:00Z' } } as never,
+    })
+    const resume = within(screen.getByRole('region', { name: 'Emergency stop' })).getByRole('button', { name: 'Resume' })
+    expect(resume).toBeEnabled()
+    fireEvent.click(resume)
+    const confirm = screen.getByRole('dialog', { name: 'Start the show playlist from its first song now?' })
+    expect(sent).toEqual([])
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Resume' }))
+    await waitFor(() => expect(sent).toEqual(['resume-show']))
+  })
 
   it('gates every emergency-stop control on show:emergencystop:invoke, disabled with the real reason, never hidden', () => {
     renderScreen({

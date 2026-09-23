@@ -1807,3 +1807,43 @@ describe('Show Night', () => {
     })
   })
 })
+
+describe('ShowNight stop hold', () => {
+  afterEach(cleanup)
+  const nightCommandSession = {
+    serverTime: '2026-09-23T20:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['night:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+  const hold = { reason: 'The show was stopped with Stop.', at: '2026-09-23T20:05:00Z', principal: 'bench' }
+
+  it('disables Resume with a hint when no hold stands', () => {
+    renderScreen({ nightSession: session(), session: nightCommandSession })
+    const resume = screen.getByRole('button', { name: 'Resume' })
+    expect(resume).toBeDisabled()
+    expect(resume).toHaveAttribute('title', 'The show is not stopped, so there is nothing to resume.')
+  })
+
+  it('sends resume-show while held and shows the hold on the status line', async () => {
+    const sent: string[] = []
+    stubs.dispatchNightCommand = (...args: never[]) => {
+      sent.push((args as unknown[])[0] as string)
+      return Promise.resolve(commandResponse('resume-show'))
+    }
+    renderScreen({ nightSession: session({ stopHold: hold }), session: nightCommandSession })
+    expect(screen.getByText('Stopped')).toBeInTheDocument()
+    expect(screen.getByText(/Nothing starts until Resume/)).toBeInTheDocument()
+    const resume = screen.getByRole('button', { name: 'Resume' })
+    expect(resume).toBeEnabled()
+    fireEvent.click(resume)
+    const confirm = screen.getByRole('dialog', { name: 'Start the show playlist from its first song now?' })
+    expect(sent).toEqual([])
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Resume' }))
+    await waitFor(() => expect(sent).toEqual(['resume-show']))
+  })
+})

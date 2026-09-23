@@ -1995,7 +1995,7 @@ export interface paths {
         put?: never;
         /**
          * Emergency stop, level 1: stop playout immediately
-         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches, CONCURRENTLY, to all three target kinds: FPP's "Stop Now" to every configured FPP instance (`targetKind` `"fpp"`), `audio.node.silence` to every declared audio.node (`targetKind` `"node"`), and `resolume.blackout` to every configured Resolume instance (`targetKind` `"resolume"`) - then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen" - but a failed or refused entry in `result.stopOutcomes` itself, of ANY target kind, DOES fail this response. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read one kind's own configured/declared target list is reported as one `failed` entry of that kind in `result.stopOutcomes` (never a silent empty array for that kind; see `result.noInstancesConfigured` for the FPP-specific zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. No night-session interaction of any kind - see `/emergency-stop/stop-power-down` for level 2.
+         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches, CONCURRENTLY, to all three target kinds: FPP's "Stop Now" to every configured FPP instance (`targetKind` `"fpp"`), `audio.node.silence` to every declared audio.node (`targetKind` `"node"`), and `resolume.blackout` to every configured Resolume instance (`targetKind` `"resolume"`) - then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen" - but a failed or refused entry in `result.stopOutcomes` itself, of ANY target kind, DOES fail this response. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read one kind's own configured/declared target list is reported as one `failed` entry of that kind in `result.stopOutcomes` (never a silent empty array for that kind; see `result.noInstancesConfigured` for the FPP-specific zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. If a night session is active (any state but `inactive` or `stopped`), the stop first sets that session's `stopHold` (ADR-054): the night loop and the cue activation loop then start nothing until the `resume-show` night command, which starts the show playlist from its first entry. `result.nightSession` reports that step, with `present` `false` when no session was active; a failure is reported in `result.nightSession.error` and never aborts the stop. See `/emergency-stop/stop-power-down` for level 2.
          */
         post: operations["emergencyStop"];
         delete?: never;
@@ -2861,7 +2861,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch a night-session lifecycle command (Track F seam F2, ADR-038)
-         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending). Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate - this layer holds no downstream confirmation loop.
+         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending), and `resume-show` (ADR-054). `resume-show` clears the `stopHold` a level 1 emergency stop set and moves the session to `transition-to-show` with its launch due immediately, so the night loop starts the show playlist from its first entry through the same launch path `start-night` uses. It never returns to resting first. It is refused with `409` when no hold stands (`night-state-rejected`), while a weather delay is active, while the session is degraded, and in `preparing`, `fading-out` and `end-of-night-resting`, where no show can start. It is also refused with `409` in `preshow`, where `start-night` has not run; in `preshow`, `start-night` clears the hold when it runs. It is audited as `show.night.resume_show` and takes no `interlockOverrides`. Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate - this layer holds no downstream confirmation loop.
          *
          *     `fade-out-night`, `power-down-presentation`, `request-final-show`, and `end-session` are exempt from the degraded-session gate and never refused for want of an audit write (ADR-024 decision 11): all four are direction-safe. The other four fail closed on an unwritable audit store (`503`, see below) and refuse while the session is degraded and non-terminal.
          *
@@ -5452,7 +5452,7 @@ export interface components {
             outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
             outcomeReason: string;
         };
-        /** @description What, if anything, happened to the active night session as level stop-power-down's or hard-stop's own night-session component. present is false when no night session was active - a real, valid outcome, not an error. error is non-empty exactly when this component could not be attempted or did not complete; the stop itself still proceeded regardless (this build's own degrade-safely rule, applied to every component that supports the stop, not only to follow-up actions). When error is set, outcome carries whatever partial information is known and may be absent. */
+        /** @description What, if anything, happened to the active night session as the stop level's own night-session component: the stop hold for level stop (ADR-054), the forced shutdown for stop-power-down, the ended session for hard-stop. present is false when no night session was active - a real, valid outcome, not an error. error is non-empty exactly when this component could not be attempted or did not complete; the stop itself still proceeded regardless (this build's own degrade-safely rule, applied to every component that supports the stop, not only to follow-up actions). When error is set, outcome carries whatever partial information is known and may be absent. */
         EmergencyStopNightSessionOutcome: {
             present: boolean;
             sessionId?: string;
@@ -7089,6 +7089,7 @@ export interface components {
             backgroundAudio: components["schemas"]["NightBackgroundAudio"];
             /** @description Every cycle this session has already completed, oldest first. The current, still-open cycle (`cycle` above) is never included here. A cycle that ran before this field existed has no recorded outcome and is simply absent, never a synthesized "not recorded" entry. */
             finishedCycles?: components["schemas"]["NightCycleOutcome"][];
+            stopHold?: components["schemas"]["NightStopHold"];
             degraded: boolean;
             degradedReason?: string;
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
@@ -7096,6 +7097,14 @@ export interface components {
             authorization: components["schemas"]["NightAuthorization"];
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description Present while a level 1 emergency stop holds the night session (ADR-054): the night loop starts no playlist, background audio, cue or announcement until `resume-show`. Absent when no hold stands. A hard stop, power-down or end-session ends the session and the hold with it; a weather delay resume clears it too. */
+        NightStopHold: {
+            reason: string;
+            /** Format: date-time */
+            at: string;
+            /** @description The name of the principal who pressed Stop. */
+            principal?: string;
         };
         /** @description One already-finished cycle of a night session: when its show started and ended, and how it ended. */
         NightCycleOutcome: {
@@ -13479,7 +13488,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                command: "prepare-site" | "run-readiness" | "start-preshow" | "start-night" | "request-final-show" | "fade-out-night" | "power-down-presentation" | "end-session";
+                command: "prepare-site" | "run-readiness" | "start-preshow" | "start-night" | "request-final-show" | "fade-out-night" | "power-down-presentation" | "end-session" | "resume-show";
             };
             cookie?: never;
         };

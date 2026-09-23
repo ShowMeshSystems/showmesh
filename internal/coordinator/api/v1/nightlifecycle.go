@@ -205,6 +205,10 @@ type NightSessionState struct {
 	// synthesized "not recorded" entry.
 	FinishedCycles []NightCycleOutcome `json:"finishedCycles"`
 
+	// StopHold is present while a level 1 emergency stop holds the night
+	// (ADR-054): the night loop starts nothing until resume-show.
+	StopHold *NightStopHold `json:"stopHold,omitempty"`
+
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`
 
@@ -221,6 +225,13 @@ type NightSessionState struct {
 	Authorization NightAuthorization `json:"authorization"`
 
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// NightStopHold is who stopped the show, when, and why.
+type NightStopHold struct {
+	Reason    string `json:"reason"`
+	At        string `json:"at"`
+	Principal string `json:"principal,omitempty"`
 }
 
 // NightCycleOutcome is one already-finished cycle of a night session: when

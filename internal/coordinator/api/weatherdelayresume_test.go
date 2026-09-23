@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,6 +115,12 @@ func newResumeHarnessWith(t *testing.T, weatherDelay func(*store.Store) WeatherD
 		r.commands = append(r.commands, body.Command)
 		r.args = append(r.args, body.Args)
 		r.mu.Unlock()
+		if strings.HasPrefix(body.Command, "Stop") {
+			r.obs.add(
+				statusObservation("player-01", fppStatusValueIdle, r.now),
+				playlistNameObservation("player-01", "", r.now),
+			)
+		}
 		if body.Command == "Start Playlist" && len(body.Args) > 0 {
 			r.obs.add(
 				statusObservation("player-01", fppStatusValuePlaying, r.now),

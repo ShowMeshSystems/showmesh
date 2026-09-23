@@ -10,6 +10,7 @@ export {
   type WeatherDelayBannerAction,
   type WeatherDelayGroupView,
 } from './WeatherDelayBanner'
+export { StopHoldBanner } from './StopHoldBanner'
 export { Choice, ChoiceGroup, ChoiceRow, Field, FieldGrid, Input, Select, Textarea, type ChoiceGroupOption } from './Field'
 export { Freshness, SelectableRow, Table, TableWrap } from './Table'
 export { LifecycleCommands, type LifecycleCommandGroup, type LifecycleCommandSpec } from './LifecycleCommands'

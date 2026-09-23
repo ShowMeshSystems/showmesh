@@ -181,6 +181,9 @@ var migrations = []migration{
 	// an operator-recognizable name beside started_by.
 	{version: 42, fn: migrateV42AddWeatherDelayStateStartedByNameColumn},
 	{version: 43, sql: schemaV43},
+	// v44 (ADR-054): adds the level 1 stop hold to night_sessions. Existing
+	// rows read back with no hold.
+	{version: 44, fn: migrateV44AddNightSessionStopHoldColumns},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
