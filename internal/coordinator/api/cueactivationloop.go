@@ -358,7 +358,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
 		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
-			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer, pin)
+			outcomes = h.dispatchCueActivationsWithActions(ctx, now, dec.Activations, obs.EntryOccurrenceSequence, issuer, pin)
 			// dispatchCueActivations's own scheduleCueActivations call has
 			// already mutated dec.Activations in place (ADR-049 decision
 			// 3): read the verdict back off it once per activation batch,

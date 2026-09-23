@@ -448,6 +448,9 @@ function TargetNodeField({
 }
 
 
+/** The coordinator's own refusal of a cue whose only output is show actions. */
+const ACTIONS_ONLY_REASON = 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.'
+
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
   { kind: 'audio', title: 'Audience audio', description: 'Play an audio asset on the program bus' },
@@ -553,7 +556,7 @@ function CueEditor({
 
   let blockReason: string | null = null
   const unknownActions = actions.filter((actionId) => !showActions.some((a) => a.id === actionId))
-  if (kinds.size === 0 && actions.length === 0) blockReason = 'Pick at least one output or show action.'
+  if (kinds.size === 0) blockReason = actions.length > 0 ? ACTIONS_ONLY_REASON : 'Pick at least one output.'
   else if (unknownActions.length > 0) blockReason = `${unknownActions.join(', ')} is not a show action in this show. Remove it to save.`
   else if (kinds.has('ltc') && !kinds.has('audio')) blockReason = 'LTC requires Audio to also be selected.'
   else if (kinds.has('announcement') && !kinds.has('audio')) blockReason = 'Announcement requires Audio to also be selected.'

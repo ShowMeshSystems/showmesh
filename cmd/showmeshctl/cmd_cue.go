@@ -147,16 +147,21 @@ func cmdCueList(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	for _, o := range resp.Objects {
 		var cue showCueConfigResponse
 		if err := c.getJSON(ctx, "/api/v1/config/show.cue/"+url.PathEscape(o.ID), nil, &cue); err != nil {
-			return reportError(stderr, "cue list", err)
+			actions[o.ID] = nil
+			continue
 		}
 		actions[o.ID] = cueActionIDs(cue.Payload.Outputs)
+		if actions[o.ID] == nil {
+			actions[o.ID] = []string{}
+		}
 	}
 	printCueListTable(stdout, resp, actions)
 	return exitOK
 }
 
 // printCueListTable is printShowConfigObjectsTable plus each cue's show
-// actions, in firing order.
+// actions, in firing order. A nil entry means that cue could not be read
+// and prints "?".
 func printCueListTable(w io.Writer, resp showConfigObjectsListResponse, actions map[string][]string) {
 	if len(resp.Objects) == 0 {
 		_, _ = fmt.Fprintf(w, "(no %s objects)\n", resp.Kind)
@@ -166,7 +171,10 @@ func printCueListTable(w io.Writer, resp showConfigObjectsListResponse, actions 
 	_, _ = fmt.Fprintln(tw, "ID\tLABEL\tSHOW\tREVISION\tUPDATED\tACTIONS")
 	for _, o := range resp.Objects {
 		list := "-"
-		if a := actions[o.ID]; len(a) > 0 {
+		switch a := actions[o.ID]; {
+		case a == nil:
+			list = "?"
+		case len(a) > 0:
 			list = strings.Join(a, ", ")
 		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", o.ID, o.Label, o.Show, o.CurrentRevision, o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"), list)

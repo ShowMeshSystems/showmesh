@@ -152,6 +152,31 @@ describe('Monitor · Activity', () => {
     expect(status?.className).not.toContain('sm-status--good')
   })
 
+  it('names a cue activation’s show action outcomes on the activation’s own row', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [
+        auditEntry({
+          action: 'cue.activate',
+          target: 'node:render-01',
+          kind: 'outcome',
+          outcome: 'confirmed',
+          params: {
+            cueId: 'song-one',
+            actions: [
+              { actionId: 'column-1', label: 'Song one column', outcome: 'confirmed' },
+              { actionId: 'blackout-now', outcome: 'failed', outcomeReason: 'Resolume did not answer' },
+            ],
+          },
+        } as Partial<AuditEntry>),
+      ],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    expect(await screen.findByText(/Show actions: Song one column confirmed, blackout-now failed\./)).toBeInTheDocument()
+  })
+
   it('reads a failed action as bad, worded "Failed"', async () => {
     listAudit.mockResolvedValue({
       serverTime: '2026-08-28T21:07:00Z',

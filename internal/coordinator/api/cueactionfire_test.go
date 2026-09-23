@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 )
@@ -79,7 +81,7 @@ func TestDispatchCueActivationsFiresActionsInOrder(t *testing.T) {
 	h := newCueActionHandlers(setup, now, dispatcher)
 	act.ScheduledAtNs = new(int64)
 
-	outcomes := h.dispatchCueActivations(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	outcomes := h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
 	h.cueActivationFailToBlackWG.Wait()
 
 	if len(outcomes) != 1 || !outcomes[0].Confirmed {
@@ -88,7 +90,7 @@ func TestDispatchCueActivationsFiresActionsInOrder(t *testing.T) {
 	if got := resolumeCallActions(dispatcher); len(got) != 2 || got[0] != "launchColumn" || got[1] != "blackout" {
 		t.Fatalf("resolume calls = %v, want [launchColumn blackout]", got)
 	}
-	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(act.ActivationID, 0, "song-one-column"))
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(cueActionsActivationKey(act, 1), 0, "song-one-column"))
 	if err != nil {
 		t.Fatalf("first action's command row: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestDispatchCueActivationsFailingActionDoesNotStopNodeDispatch(t *testing.T
 	h := newCueActionHandlers(setup, now, dispatcher)
 	act.ScheduledAtNs = new(int64)
 
-	outcomes := h.dispatchCueActivations(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	outcomes := h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
 	h.cueActivationFailToBlackWG.Wait()
 
 	if len(outcomes) != 1 || !outcomes[0].Dispatched || !outcomes[0].Confirmed {
@@ -118,7 +120,7 @@ func TestDispatchCueActivationsFailingActionDoesNotStopNodeDispatch(t *testing.T
 	if got := resolumeCallActions(dispatcher); len(got) != 2 {
 		t.Fatalf("resolume calls = %v, want both actions attempted", got)
 	}
-	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(act.ActivationID, 0, "song-one-column"))
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(cueActionsActivationKey(act, 1), 0, "song-one-column"))
 	if err != nil {
 		t.Fatalf("failed action's command row: %v", err)
 	}
@@ -145,7 +147,7 @@ func TestDispatchCueActivationsSameActivationFiresActionsOnce(t *testing.T) {
 	activations := map[string]cueactivation.Activation{nodeID: act}
 
 	for i := 0; i < 2; i++ {
-		h.dispatchCueActivations(context.Background(), now, activations, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+		h.dispatchCueActivationsWithActions(context.Background(), now, activations, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
 		h.cueActivationFailToBlackWG.Wait()
 	}
 	if got := resolumeCallActions(dispatcher); len(got) != 2 {
@@ -162,7 +164,7 @@ func TestDispatchCueActivationsWithoutActionsFiresNothing(t *testing.T) {
 	h := newCueActionHandlers(setup, now, dispatcher)
 	act.ScheduledAtNs = new(int64)
 
-	h.dispatchCueActivations(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
 	h.cueActivationFailToBlackWG.Wait()
 	if n := dispatcher.callCount(); n != 0 {
 		t.Fatalf("resolume calls = %d, want 0 for a cue with no actions", n)
@@ -206,8 +208,14 @@ func TestHandleActivateCueReportsActionOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
-	var dispatches, outcomesAudited int
+	var dispatches, outcomesAudited, activationOutcomes int
 	for _, e := range entries {
+		if e.Action == "cue.activate" && e.Kind == identity.AuditOutcome {
+			if actions, _ := e.Params["actions"].([]any); len(actions) != 2 {
+				t.Fatalf("cue.activate outcome params = %+v, want the two action outcomes on the activation", e.Params)
+			}
+			activationOutcomes++
+		}
 		if e.Action != "action.invoke:resolume" {
 			continue
 		}
@@ -221,26 +229,158 @@ func TestHandleActivateCueReportsActionOutcomes(t *testing.T) {
 			outcomesAudited++
 		}
 	}
+	if activationOutcomes != 1 {
+		t.Fatalf("cue.activate outcome entries = %d, want 1", activationOutcomes)
+	}
 	if dispatches != 2 || outcomesAudited != 2 {
 		t.Fatalf("audited %d dispatches and %d outcomes, want 2 and 2", dispatches, outcomesAudited)
 	}
 }
 
-func TestFireOneCueActionRefusesDeletedActionWithoutDispatch(t *testing.T) {
+func TestFireOneCueActionRecordsAnUnsentRefusalOnce(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	_, act := cueActionFixture(t, setup, now)
 	dispatcher := &fakeResolumeActionDispatcher{}
 	h := newCueActionHandlers(setup, now, dispatcher)
+	key := cueActionsActivationKey(act, 1)
 
-	o, fresh := h.fireOneCueAction(context.Background(), act, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"})
+	o, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, false)
 	if o.Outcome != outcomeWordRefused || !fresh {
 		t.Fatalf("outcome = %+v fresh=%v, want a fresh refusal", o, fresh)
 	}
-	if _, again := h.fireOneCueAction(context.Background(), act, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}); again {
-		t.Fatalf("second attempt reported fresh, want it recognized as a repeat")
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(key, 0, "no-such-action"))
+	if err != nil || rec.OutcomeReason != o.OutcomeReason {
+		t.Fatalf("refusal row = %+v, err = %v; want the refusal recorded under the action's key", rec, err)
+	}
+	again, fresh := h.fireOneCueAction(context.Background(), act, key, 0, "no-such-action", cueActivationIssuer{PrincipalID: "system:test"}, false)
+	if fresh || again.Outcome != outcomeWordRefused {
+		t.Fatalf("second attempt = %+v fresh=%v, want the recorded refusal replayed", again, fresh)
 	}
 	if dispatcher.callCount() != 0 {
 		t.Fatalf("resolume calls = %d, want 0", dispatcher.callCount())
+	}
+}
+
+// gatedResolumeDispatcher holds one Resolume action until released,
+// optionally reporting it sent first.
+type gatedResolumeDispatcher struct {
+	fakeResolumeActionDispatcher
+	gated       string
+	signalSent  bool
+	release     chan struct{}
+	secondStart chan struct{}
+}
+
+func (g *gatedResolumeDispatcher) Dispatch(ctx context.Context, action string, params map[string]any, now time.Time) (ResolumeActionResult, error) {
+	if action == g.gated {
+		if g.signalSent {
+			sendsignal.Sent(ctx)
+		}
+		<-g.release
+	} else {
+		close(g.secondStart)
+	}
+	return g.fakeResolumeActionDispatcher.Dispatch(ctx, action, params, now)
+}
+
+func TestDispatchCueActivationsSentFirstActionDoesNotHoldTheNext(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActionFixture(t, setup, now, "song-one-column", "blackout-now")
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	g := &gatedResolumeDispatcher{
+		fakeResolumeActionDispatcher: fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+			"launchColumn": {Outcome: ResolumeOutcomeConfirmed}, "blackout": {Outcome: ResolumeOutcomeConfirmed},
+		}},
+		gated: "launchColumn", signalSent: true, release: make(chan struct{}), secondStart: make(chan struct{}),
+	}
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.ResolumeActions = g
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	act.ScheduledAtNs = new(int64)
+
+	started := time.Now()
+	outcomes := h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	if waited := time.Since(started); waited >= cueActionsSendBudget {
+		t.Fatalf("node dispatch waited %s, want it to start once both actions were sent", waited)
+	}
+	select {
+	case <-g.secondStart:
+	default:
+		t.Fatal("the second action had not started while the first was still waiting for its confirmation")
+	}
+	if len(outcomes) != 1 || !outcomes[0].Confirmed {
+		t.Fatalf("node outcomes = %+v, want the node dispatch confirmed", outcomes)
+	}
+	close(g.release)
+	h.cueActivationFailToBlackWG.Wait()
+}
+
+func TestDispatchCueActivationsSlowUnsentFirstActionIsCappedAndTheRestAreLate(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActionFixture(t, setup, now, "song-one-column", "blackout-now")
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	g := &gatedResolumeDispatcher{
+		fakeResolumeActionDispatcher: fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+			"launchColumn": {Outcome: ResolumeOutcomeConfirmed}, "blackout": {Outcome: ResolumeOutcomeConfirmed},
+		}},
+		gated: "launchColumn", release: make(chan struct{}), secondStart: make(chan struct{}),
+	}
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.ResolumeActions = g
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	act.ScheduledAtNs = new(int64)
+	defer func(old time.Duration) { cueActionsSendBudget = old }(cueActionsSendBudget)
+	cueActionsSendBudget = 50 * time.Millisecond
+
+	started := time.Now()
+	outcomes := h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	if waited := time.Since(started); waited > cueFireHTTPWriteDeadlineMargin {
+		t.Fatalf("node dispatch waited %s behind an action that was never sent", waited)
+	}
+	if len(outcomes) != 1 || !outcomes[0].Dispatched {
+		t.Fatalf("node outcomes = %+v, want the node dispatch to go ahead", outcomes)
+	}
+	close(g.release)
+	h.cueActivationFailToBlackWG.Wait()
+
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), cueActionIdempotencyKey(cueActionsActivationKey(act, 1), 1, "blackout-now"))
+	if err != nil {
+		t.Fatalf("second action's row: %v", err)
+	}
+	if !strings.HasPrefix(rec.OutcomeReason, cueActionLateReason) {
+		t.Fatalf("second action reason = %q, want it reported late", rec.OutcomeReason)
+	}
+	nodeRec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), act.ActivationID)
+	if err != nil {
+		t.Fatalf("node activation row: %v", err)
+	}
+	var res cueActivationResultPayload
+	if err := json.Unmarshal([]byte(nodeRec.ResultJSON), &res); err != nil || len(res.Actions) != 2 || res.Actions[0].Outcome != outcomeWordConfirmed {
+		t.Fatalf("activation record actions = %+v (err %v), want both action outcomes on it", res.Actions, err)
+	}
+}
+
+func TestDispatchCueActivationsNodeJoiningMidEntryDoesNotRefire(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActionFixture(t, setup, now, "song-one-column")
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{"launchColumn": {Outcome: ResolumeOutcomeConfirmed}}}
+	h := newCueActionHandlers(setup, now, dispatcher)
+	act.ScheduledAtNs = new(int64)
+
+	h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	h.cueActivationFailToBlackWG.Wait()
+	joined := act
+	joined.ActivationID = "cueact-test-joined"
+	h.dispatchCueActivationsWithActions(context.Background(), now, map[string]cueactivation.Activation{nodeID: act, "aaa-first-node": joined}, 1, cueActivationIssuer{PrincipalID: "system:test"}, nil)
+	h.cueActivationFailToBlackWG.Wait()
+	if n := dispatcher.callCount(); n != 1 {
+		t.Fatalf("resolume calls = %d, want the action fired once despite a node joining", n)
 	}
 }

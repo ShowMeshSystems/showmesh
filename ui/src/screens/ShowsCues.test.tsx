@@ -350,7 +350,7 @@ describe('Shows · Cues tab', () => {
     // Uncheck the outputs a fresh cue starts with none selected, so Create
     // stays disabled until at least one is picked.
     expect(create).toBeDisabled()
-    expect(create).toHaveAttribute('title', 'Pick at least one output or show action.')
+    expect(create).toHaveAttribute('title', 'Pick at least one output.')
   })
 
   it('LTC without audio is refused; selecting audio too clears the block', async () => {
@@ -1017,7 +1017,7 @@ describe('Shows · Cues tab', () => {
       expect((sent as unknown as ConfigShowCue).outputs.actions).toEqual(['blackout-now', 'clear-layer'])
     })
 
-    it('a cue whose only output is show actions can be created', async () => {
+    it('a cue whose only output is show actions is refused before save, with the coordinator’s wording', async () => {
       stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) =>
@@ -1026,18 +1026,22 @@ describe('Shows · Cues tab', () => {
       renderWorkspace({ session: signedIn(['config:write']) })
       fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
       fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Song One' } })
-      expect(screen.getByRole('button', { name: 'Create cue' })).toBeDisabled()
       fireEvent.change(screen.getByRole('combobox', { name: 'Add a show action' }), { target: { value: 'song-one-column' } })
       fireEvent.click(screen.getByRole('button', { name: 'Add action' }))
-
+      const create = screen.getByRole('button', { name: 'Create cue' })
+      expect(create).toBeDisabled()
+      expect(create).toHaveAttribute('title', 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.')
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Song One' } })
+      fireEvent.click(screen.getByRole('checkbox', { name: /Render/ }))
+      fireEvent.change(screen.getByLabelText('Sequence'), { target: { value: 'song-one' } })
       let sent: ConfigShowCue | null = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
         sent = payload as ConfigShowCue
         return Promise.resolve(cueResponse(sent, 'song-one'))
       }
-      fireEvent.click(screen.getByRole('button', { name: 'Create cue' }))
+      fireEvent.click(create)
       await waitFor(() => expect(sent).not.toBeNull())
-      expect((sent as unknown as ConfigShowCue).outputs).toEqual({ actions: ['song-one-column'] })
+      expect((sent as unknown as ConfigShowCue).outputs).toEqual({ render: { sequence: 'song-one' }, actions: ['song-one-column'] })
     })
 
     it('a stored action that is not in this show is flagged and blocks save until removed', async () => {

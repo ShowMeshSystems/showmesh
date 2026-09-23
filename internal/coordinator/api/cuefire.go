@@ -176,33 +176,22 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	// and concurrent per-node dispatch the Playlist path's own
 	// dispatchCueActivations wraps, per that ADR's own "not two
 	// implementations" rule.
-	// The Cue's show actions start before the node dispatch and run beside
-	// it; the response waits for both.
-	actions := []v1.CueActionOutcome{}
-	actionsDone := make(chan struct{})
-	if actionAct, ok := cueActionsActivation(activations); ok {
-		actionIDs, err := h.cueActionIDs(ctx, actionAct)
-		if err != nil {
-			h.logWarn("cue fire: could not read the cue's show actions; firing its other outputs without them", "cueId", cueID, "error", err)
-		}
-		if d := time.Duration(len(actionIDs)) * actionInvokeHTTPWriteDeadline; d > cueFireHTTPWriteDeadline() {
-			_ = http.NewResponseController(w).SetWriteDeadline(now.Add(d + cueFireHTTPWriteDeadlineMargin))
-		}
-		go func() {
-			defer close(actionsDone)
-			if fired, _ := h.fireCueActions(context.WithoutCancel(ctx), actionAct, actionIDs, issuer); len(fired) > 0 {
-				actions = fired
-			}
-		}()
-	} else {
-		close(actionsDone)
+	// The cue's show actions are sent before the node dispatch starts, up to
+	// cueActionsSendBudget; the response waits for their outcomes too.
+	actionsCtx := context.WithoutCancel(ctx)
+	actionsRun := h.startCueActions(actionsCtx, activations, nonce, issuer)
+	if actionsRun != nil {
+		_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueFireHTTPWriteDeadline() + actionInvokeHTTPWriteDeadline))
 	}
+	actionsRun.waitSent()
+	ctx = withCueActionsRun(ctx, actionsRun)
 
 	h.scheduleCueActivations(ctx, now, activations, issuer, nil)
 	outcomes := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		return h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
 	})
-	<-actionsDone
+	h.finishCueActions(actionsCtx, actionsRun, activations)
+	actions := actionsRun.snapshot()
 	nodes := make([]v1.CueActivationNodeOutcome, len(outcomes))
 	for i, outcome := range outcomes {
 		nodes[i] = cueActivateWireOutcome(outcome)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -199,9 +200,6 @@ type cueActivationDispatchOutcome struct {
 // envelope is per-node, so a refusal for one node is not evidence about
 // any other.
 func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
-	// The Cue's show actions start before any node dispatch, so a Resolume
-	// column that follows timecode is live before LTC starts.
-	h.startCueActivationActions(ctx, activations, issuer)
 	return dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		// Never arm [cueactivation.AudioSessionID] (the live show session)
 		// here: it used the same act.EvidenceAt-derived revision cue.activate
@@ -531,6 +529,9 @@ type cueActivationResultPayload struct {
 	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
 	StartLeadMs             int    `json:"startLeadMs,omitempty"`
 	PreparedLate            bool   `json:"preparedLate,omitempty"`
+
+	// Actions is the cue's show action outcomes, written once they resolve.
+	Actions []v1.CueActionOutcome `json:"actions,omitempty"`
 }
 
 // cueActivationResultCorrelates mirrors cueCatalogDeployResultCorrelates
@@ -667,6 +668,9 @@ func (h *handlers) writeCueActivationOutcomeAudit(ctx context.Context, now time.
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
 		Kind: identity.AuditOutcome, Outcome: outcome, OutcomeReason: reason,
 	}
+	if run := cueActionsRunFrom(ctx); run != nil {
+		entry.Params["actions"] = run.snapshot()
+	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation outcome audit write failed", "nodeId", nodeID, "error", err)
 	}
@@ -699,6 +703,9 @@ func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.
 		Action: "cue.activate", Target: "node:" + nodeID,
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
 		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: outcomeReason,
+	}
+	if run := cueActionsRunFrom(ctx); run != nil {
+		entry.Params["actions"] = run.snapshot()
 	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation refusal audit write failed", "nodeId", nodeID, "error", err)

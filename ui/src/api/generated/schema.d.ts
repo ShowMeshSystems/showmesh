@@ -6539,7 +6539,7 @@ export interface components {
             audio?: components["schemas"]["ConfigShowCueAudioOutput"];
             ltc?: components["schemas"]["ConfigShowCueLTCOutput"];
             announcement?: components["schemas"]["ConfigShowCueAnnouncementOutput"];
-            /** @description Ordered show.action ids the coordinator fires once per activation of this Cue, before or alongside the node dispatch. Each id must name a show.action with an active revision in this Cue's show; an unknown id is refused as an unknown reference and another show's action as a cross-show reference. Duplicates are refused. An empty array is the same as absent and is omitted on read. A Cue whose only output is actions is valid. Actions claim no node resource. */
+            /** @description Ordered show.action ids the coordinator fires once per activation of this Cue. Each is sent once the one before it is sent, and the node dispatch waits up to 2 seconds for all of them to be sent; an action sent after that is reported late. Each id must name a show.action with an active revision in this Cue's show; an unknown id is refused as an unknown reference and another show's action as a cross-show reference. Duplicates are refused. An empty array is the same as absent and is omitted on read. A Cue whose only output is actions is refused: an activation needs a render, audio, LTC or announcement output. Actions claim no node resource. */
             actions?: string[];
         };
         /** @description The "show.cue" configuration kind's decoded payload (Track H seam H1, ADR-043), returned by GET and accepted by PUT /config/show.cue/{id}. show must name an existing show object. */

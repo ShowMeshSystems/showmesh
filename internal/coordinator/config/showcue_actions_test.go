@@ -5,17 +5,24 @@ import (
 	"testing"
 )
 
-func TestDecodeShowCueActionsOnlyIsAccepted(t *testing.T) {
-	p, verr := DecodeShowCuePayload(`{"show":"halloween-2026","name":"Song one","outputs":{"actions":["col-1","col-2"]}}`, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
+func TestDecodeShowCueActionsOnlyIsRefused(t *testing.T) {
+	_, verr := DecodeShowCuePayload(`{"show":"halloween-2026","name":"Song one","outputs":{"actions":["col-1","col-2"]}}`, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
+	if verr == nil || verr.Field != "outputs" || verr.Detail != showCueActionsOnlyDetail {
+		t.Fatalf("verr = %+v, want the actions-only refusal", verr)
+	}
+}
+
+func TestDecodeShowCueActionsKeepOrderAndClaimNothing(t *testing.T) {
+	p, verr := DecodeShowCuePayload(`{"show":"halloween-2026","name":"Song one","outputs":{"render":{"sequence":"s"},"actions":["col-1","col-2"]}}`, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected refusal: %+v", verr)
 	}
 	if !reflect.DeepEqual(p.Outputs.Actions, []string{"col-1", "col-2"}) {
 		t.Fatalf("actions = %v, want the declared order", p.Outputs.Actions)
 	}
-	claims, err := DeriveShowCueClaims(p, ShowCueClaimContext{})
-	if err != nil || len(claims) != 0 {
-		t.Fatalf("claims = %v, err = %v; want none for an actions-only cue", claims, err)
+	claims, err := DeriveShowCueClaims(p, ShowCueClaimContext{RenderSurfaceIDs: []string{"wall"}})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claims = %v, err = %v; want only the render claim", claims, err)
 	}
 }
 
@@ -48,7 +55,7 @@ func TestDecodeShowCueActionsRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, verr := DecodeShowCuePayload(`{"show":"halloween-2026","name":"x","outputs":{"actions":`+c.actions+`}}`, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
+			_, verr := DecodeShowCuePayload(`{"show":"halloween-2026","name":"x","outputs":{"render":{"sequence":"s"},"actions":`+c.actions+`}}`, alwaysTrueShowExists, alwaysTrueAudioNodeExists, nil)
 			if verr == nil || verr.Field != c.field || verr.Code != c.code {
 				t.Fatalf("verr = %+v, want %s on %s", verr, c.code, c.field)
 			}

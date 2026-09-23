@@ -18,12 +18,15 @@ func cueActionsTestServer(t *testing.T) *httptest.Server {
 		case "/api/v1/config/show.cue":
 			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.cue","objects":[
 				{"id":"song-one","label":"Song one","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"},
-				{"id":"thriller","label":"Thriller","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}
+				{"id":"thriller","label":"Thriller","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"},
+				{"id":"broken","label":"Broken","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}
 			]}`)
 		case "/api/v1/config/show.cue/song-one":
 			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.cue","id":"song-one","revision":1,
 				"payload":{"show":"halloween-2026","name":"Song one","outputs":{"render":{"sequence":"song-one"},"actions":["column-1","blackout-now"]}},
 				"updatedAt":"2026-08-16T20:00:00Z","source":"api"}`)
+		case "/api/v1/config/show.cue/broken":
+			http.Error(w, `{"title":"Internal error"}`, http.StatusInternalServerError)
 		case "/api/v1/config/show.cue/thriller":
 			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
 				"payload":{"show":"halloween-2026","name":"Thriller","outputs":{"render":{"sequence":"thriller"}}},
@@ -62,6 +65,9 @@ func TestCmdCueListPrintsActionsColumn(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "thriller") || !strings.HasSuffix(strings.TrimSpace(lines[2]), "-") {
 		t.Fatalf("thriller row = %q, want - for no actions", lines[2])
+	}
+	if !strings.Contains(lines[3], "broken") || !strings.HasSuffix(strings.TrimSpace(lines[3]), "?") {
+		t.Fatalf("broken row = %q, want ? for a cue that could not be read", lines[3])
 	}
 }
 

@@ -27,7 +27,7 @@ func TestPutShowCueActionsReferenceChecks(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			body := `{"show":"halloween-2026","name":"Song one","outputs":{"actions":` + c.actions + `}}`
+			body := `{"show":"halloween-2026","name":"Song one","outputs":{"render":{"sequence":"song-one"},"actions":` + c.actions + `}}`
 			req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/song-one", body, map[string]string{"Authorization": "Bearer " + token})
 			resp, respBody := doRawRequest(t, api.Handler, req)
 			if resp.StatusCode != http.StatusBadRequest {
@@ -39,5 +39,5 @@ func TestPutShowCueActionsReferenceChecks(t *testing.T) {
 		})
 	}
 
-	mustPutCue(t, api, token, "song-one", `{"show":"halloween-2026","name":"Song one","outputs":{"actions":["blackout-now"]}}`)
+	mustPutCue(t, api, token, "song-one", `{"show":"halloween-2026","name":"Song one","outputs":{"render":{"sequence":"song-one"},"actions":["blackout-now"]}}`)
 }

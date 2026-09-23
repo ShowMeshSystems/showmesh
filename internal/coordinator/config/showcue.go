@@ -84,7 +84,8 @@ type ShowCueOutputs struct {
 	LTC          *ShowCueLTCOutput          `json:"ltc,omitempty"`
 	Announcement *ShowCueAnnouncementOutput `json:"announcement,omitempty"`
 	// Actions is an ordered list of same-show show.action ids the
-	// coordinator fires once per activation. Nil when absent or empty.
+	// coordinator fires once per activation. Nil when absent or empty, and
+	// never the only output.
 	Actions []string `json:"actions,omitempty"`
 }
 
@@ -428,10 +429,13 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 		outputs.Actions = actions
 	}
 
-	if outputs.Render == nil && outputs.Audio == nil && outputs.LTC == nil && outputs.Announcement == nil && len(outputs.Actions) == 0 {
+	if outputs.Render == nil && outputs.Audio == nil && outputs.LTC == nil && outputs.Announcement == nil {
+		if len(outputs.Actions) > 0 {
+			return ShowCueOutputs{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "outputs", Detail: showCueActionsOnlyDetail}
+		}
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs",
-			Detail: "outputs must declare at least one of render, audio, ltc, announcement, or actions",
+			Detail: "outputs must declare at least one of render, audio, ltc, or announcement",
 		}
 	}
 
@@ -473,6 +477,10 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 
 	return outputs, nil
 }
+
+// showCueActionsOnlyDetail refuses a cue whose only output is actions: an
+// activation needs a node output to happen at all.
+const showCueActionsOnlyDetail = "A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one."
 
 // decodeShowCueActions decodes outputs.actions: a JSON array of distinct,
 // non-empty show.action ids. An empty array decodes as nil, the same as absent.
