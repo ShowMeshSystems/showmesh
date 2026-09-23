@@ -160,9 +160,10 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 
 	// pipelineFreshAt stamps the four pipeline-lifecycle signals below:
 	// rep.receivedAt on a live report, so they stay current while the node
-	// keeps reporting; sf.ObservedAt on a retained replay.
+	// keeps reporting a real transition time; sf.ObservedAt otherwise (a
+	// retained replay, or a node that has never reported one at all).
 	pipelineFreshAt := sf.ObservedAt
-	if !rep.retained {
+	if !rep.retained && !sf.ObservedAt.IsZero() {
 		pipelineFreshAt = rep.receivedAt
 	}
 
@@ -454,14 +455,9 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 //   - observedAt.IsZero(): the node reported no evidence timestamp at all —
 //     [observation.MeasuredUnknownAge], ObservedAt left nil rather than
 //     defaulted to rep.receivedAt.
-//   - otherwise: [observation.Measured] with observedAt, REGARDLESS of
-//     rep.retained. A retained MQTT delivery is only a reason to treat age
-//     as unknown when the payload itself carries no evidence timestamp
-//     (that is fppmqtt's and inventory's hello/health/LWT case, which never
-//     puts a sample time on the wire); here the payload always does, so the
-//     retained flag adds no information the node's own timestamp lacks, and
-//     ordinary staleness (WithValidFor) still applies once ObservedAt ages
-//     past DefaultValidFor.
+//   - otherwise: [observation.Measured] with observedAt, whichever caller
+//     already chose it to be. Ordinary staleness (WithValidFor) still
+//     applies once ObservedAt ages past DefaultValidFor.
 //
 // CollectedAt is always rep.receivedAt: when this package's cache actually
 // recorded the evidence (Store.Put), never the node's own clock and never

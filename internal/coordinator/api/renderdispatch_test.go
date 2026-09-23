@@ -296,15 +296,24 @@ func surfaceDroppedAbsenceObs(nodeID, surfaceID string, collectedAt time.Time) o
 
 // surfacePipelineChangedAtObs builds the surface.pipeline.changed_at
 // evidence noderender.Collector.Poll emits alongside surface.pipeline.state:
-// its VALUE is the node's real transition time (RFC3339Nano UTC), which
-// evaluateRenderSurfaceState fences confirmation on instead of
-// surface.pipeline.state's own ObservedAt (which now tracks receipt time on
-// a live report to stay current — this issue's fix).
+// its VALUE is the node's real transition time (RFC3339Nano UTC).
 func surfacePipelineChangedAtObs(nodeID, surfaceID string, changedAt, observedAt, collectedAt time.Time) observation.Observation {
 	return mustObs(observation.Measured(
 		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
 		observation.SignalID(renderSignalPipelineChangedAt), changedAt.UTC().Format(time.RFC3339Nano), observedAt,
 		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
+	))
+}
+
+// surfacePipelineChangedAtNotCollectedObs builds the not-collected row a
+// node that predates this signal never reports and a genuinely stalled
+// collector might: an explicit absence, never a fabricated transition time.
+func surfacePipelineChangedAtNotCollectedObs(nodeID, surfaceID string, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.NotCollected(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		observation.SignalID(renderSignalPipelineChangedAt),
+		"this surface has not yet reported a pipeline-state transition",
+		observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
 	))
 }
 
@@ -925,13 +934,10 @@ func TestRenderApplyIgnoresEvidenceSnapshottedBeforeDispatchEvenIfReceivedAfter(
 	}
 }
 
-// TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm proves this
-// issue's own hard rule: since surface.pipeline.state's ObservedAt now
-// tracks receipt time on a live report (to stay current while the node
-// keeps reporting), a report that merely repeats the ALREADY-RUNNING state
-// with no real transition must not confirm a fresh dispatch — only
-// surface.pipeline.changed_at proves a real transition happened, and here
-// it predates dispatch.
+// TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm proves a report
+// that merely repeats the ALREADY-RUNNING state, with no real transition,
+// must not confirm a fresh dispatch: only surface.pipeline.changed_at
+// proves a real transition happened, and here it predates dispatch.
 func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 	renderCommandConfirmDeadline = 100 * time.Millisecond
 	renderCommandPollInterval = 10 * time.Millisecond
@@ -955,8 +961,8 @@ func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		// surface.pipeline.state's own ObservedAt is AFTER dispatch (a live
 		// report arrived), but changed_at proves the pipeline transitioned
-		// to "running" an hour before dispatch — this is a report repeating
-		// an unchanged state, not a fresh apply taking effect.
+		// to "running" an hour before dispatch: an unchanged state, not a
+		// fresh apply taking effect.
 		setup.obs.setObs([]observation.Observation{
 			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
 			surfacePipelineChangedAtObs("media-01", "wall-1", lastRealTransition, testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
@@ -976,7 +982,7 @@ func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if result.Command.Outcome != "unconfirmed" {
-		t.Fatalf("outcome = %q, want unconfirmed — the report repeats an already-running state from before dispatch; body: %s", result.Command.Outcome, body)
+		t.Fatalf("outcome = %q, want unconfirmed: the report repeats an already-running state from before dispatch; body: %s", result.Command.Outcome, body)
 	}
 }
 
@@ -1024,7 +1030,47 @@ func TestRenderApplyConfirmsOnRealTransitionAfterDispatch(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if result.Command.Outcome != "confirmed" {
-		t.Fatalf("outcome = %q, want confirmed — changed_at post-dates dispatch, a real transition happened; body: %s", result.Command.Outcome, body)
+		t.Fatalf("outcome = %q, want confirmed: changed_at post-dates dispatch, a real transition happened; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm proves
+// classifyChangedAt's not-collected outcome is never treated as a fallback
+// signal: an unchanged "running" report with an explicit not-collected
+// changed_at must not confirm, even though its own ObservedAt post-dates
+// dispatch.
+func TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second)),
+		surfacePipelineChangedAtNotCollectedObs("media-01", "wall-1", testNow.Add(time.Second)),
+	})
+
+	confirmed, outcomeState, _, _ := api.h.evaluateRenderSurfaceState(context.Background(), "media-01", "wall-1", "running", testNow)
+	if confirmed {
+		t.Fatalf("confirmed = true, want false: changed_at is not collected, so no transition is proven")
+	}
+	if outcomeState != string(observation.StateUnknownAge) {
+		t.Errorf("outcomeState = %q, want %q", outcomeState, observation.StateUnknownAge)
+	}
+}
+
+// TestEvaluateRenderSurfaceStateObservationsReadErrorDoesNotConfirm proves
+// a store read error refuses confirmation outright, never falling back to
+// any other signal.
+func TestEvaluateRenderSurfaceStateObservationsReadErrorDoesNotConfirm(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	setup.obs.err = errors.New("store unavailable")
+
+	confirmed, outcomeState, _, _ := api.h.evaluateRenderSurfaceState(context.Background(), "media-01", "wall-1", "running", testNow)
+	if confirmed {
+		t.Fatalf("confirmed = true, want false: the observations store read failed")
+	}
+	if outcomeState != string(observation.StateCollectionFailed) {
+		t.Errorf("outcomeState = %q, want %q", outcomeState, observation.StateCollectionFailed)
 	}
 }
 

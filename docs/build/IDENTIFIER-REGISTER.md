@@ -755,6 +755,7 @@ listed because the last row was minted after the others had shipped:
 | Signal | Status | Owner |
 |---|---|---|
 | `surface.pipeline.state` | shipped | Track B seam B2 |
+| `surface.pipeline.changed_at` | shipped | the node's last real pipeline-state transition time, RFC3339Nano UTC; render apply confirmation fences on it |
 | `surface.pipeline.reason` | shipped | Track B seam B2 |
 | `surface.pipeline.restart_count` | shipped | Track B seam B2 |
 | `surface.pipeline.consecutive_failures` | shipped | Track B seam B2 |

@@ -233,10 +233,11 @@ func TestKillMinusNinePipelineIsDetectedReportedRestartedAndEventedEndToEnd(t *t
 	}
 
 	// --- (3) restarted: a fresh process comes up and the surface returns
-	// to running, with evidence dated strictly after the kill — the
-	// project's own standing rule (ADR-003, and Step 7's 179-microsecond
-	// lesson) that confirmation must be evidence which POST-DATES the
-	// event it confirms, not a pre-kill "running" reading replayed. ---
+	// to running, with its real transition dated strictly after the kill.
+	// surface.pipeline.changed_at's VALUE proves this, not
+	// surface.pipeline.state's own ObservedAt, which now tracks receipt
+	// time on a live report and would trivially post-date the kill even
+	// without a real restart. ---
 	var runningAfter v1.ObservationEntry
 	waitFor(t, 20*time.Second, 50*time.Millisecond, func() bool {
 		e, ok := findRenderSignal(t, coord, nodeID, surfaceID, string(noderender.SignalSurfacePipelineState))
@@ -247,19 +248,21 @@ func TestKillMinusNinePipelineIsDetectedReportedRestartedAndEventedEndToEnd(t *t
 		if v != "running" {
 			return false
 		}
-		if e.ObservedAt == nil {
+		changed, ok := findRenderSignal(t, coord, nodeID, surfaceID, string(noderender.SignalSurfacePipelineChangedAt))
+		if !ok {
 			return false
 		}
-		observedAt, err := time.Parse(time.RFC3339, *e.ObservedAt)
+		changedAtValue, _ := changed.Value.(string)
+		changedAt, err := time.Parse(time.RFC3339Nano, changedAtValue)
 		if err != nil {
 			return false
 		}
-		if !observedAt.After(killDispatch) {
+		if !changedAt.After(killDispatch) {
 			return false
 		}
 		runningAfter = e
 		return true
-	}, "surface.pipeline.state to return to \"running\" with evidence dated after the kill")
+	}, "surface.pipeline.state to return to \"running\" with changed_at dated after the kill")
 	if runningAfter.State != "current" && runningAfter.State != "stale" {
 		t.Fatalf("post-restart running evidence state = %q, want current/stale (real evidence, not absence)", runningAfter.State)
 	}

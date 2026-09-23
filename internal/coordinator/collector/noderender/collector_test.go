@@ -75,13 +75,9 @@ func findObs(t *testing.T, obs []observation.Observation, sig observation.Signal
 	return observation.Observation{}
 }
 
-// TestPollLivePipelineStateUsesReceivedAt proves this issue's fix: a LIVE
-// report's surface.pipeline.state is judged fresh by rep.receivedAt, not by
-// sf.ObservedAt (which only moves on a real transition and would otherwise
-// leave every render signal reading stale 45s after any apply on a healthy,
-// continuously-reporting node). CollectedAt stays the receipt time either
-// way. Renamed from TestPollUsesNodeReportedObservedAt, which asserted the
-// OLD, now-wrong behaviour this issue exists to fix.
+// TestPollLivePipelineStateUsesReceivedAt proves a LIVE report's
+// surface.pipeline.state is judged fresh by rep.receivedAt, not by
+// sf.ObservedAt. CollectedAt stays the receipt time either way.
 func TestPollLivePipelineStateUsesReceivedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -184,14 +180,9 @@ func TestPollRetainedWithNodeObservedAtStillUsesIt(t *testing.T) {
 	}
 }
 
-// TestPollRetainedNodeReportsNoObservedAtIsUnknownAge proves the
-// genuinely-unknown half of Finding 3 survives for a RETAINED delivery:
-// when the node itself reports no evidence timestamp (the zero value) and
-// the delivery is a retained replay, ObservedAt stays nil rather than being
-// defaulted to anything — ADR-011's rule this project has caught missing
-// three times before. A live delivery with no node-reported ObservedAt is
-// covered by TestPollLiveNodeReportsNoObservedAtStillUsesReceivedAt: this
-// issue's fix means a live report is fresh by receipt regardless.
+// TestPollRetainedNodeReportsNoObservedAtIsUnknownAge proves that when the
+// node itself reports no evidence timestamp, ObservedAt stays nil for a
+// RETAINED delivery, never defaulted to anything.
 func TestPollRetainedNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -209,11 +200,11 @@ func TestPollRetainedNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	}
 }
 
-// TestPollLiveNodeReportsNoObservedAtStillUsesReceivedAt proves a LIVE
-// report is judged fresh by rep.receivedAt for these six signals even when
-// the node itself has never reported a pipeline transition timestamp: the
-// live/retained rule applies before sf.ObservedAt is ever inspected.
-func TestPollLiveNodeReportsNoObservedAtStillUsesReceivedAt(t *testing.T) {
+// TestPollLiveNodeReportsNoObservedAtIsUnknownAge proves receipt-time
+// stamping applies ONLY when the node gave a real transition time: a LIVE
+// report with a zero sf.ObservedAt still reports unknown age, never
+// rep.receivedAt.
+func TestPollLiveNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	st.Put("render-01", samplePayloadNoObservedAt(mqttproto.RenderPipelineStateRunning), false, receivedAt)
@@ -222,11 +213,11 @@ func TestPollLiveNodeReportsNoObservedAtStillUsesReceivedAt(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	state := findObs(t, obs, SignalSurfacePipelineState)
-	if state.ObservedAt == nil || !state.ObservedAt.Equal(receivedAt) {
-		t.Errorf("live delivery with no node-reported observedAt: ObservedAt = %v, want rep.receivedAt %s", state.ObservedAt, receivedAt)
+	if state.ObservedAt != nil {
+		t.Errorf("live delivery with no node-reported observedAt: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
 	}
-	if state.StateAt(receivedAt) != observation.StateCurrent {
-		t.Errorf("live delivery with no node-reported observedAt: StateAt = %s, want current", state.StateAt(receivedAt))
+	if state.StateAt(receivedAt) != observation.StateUnknownAge {
+		t.Errorf("live delivery with no node-reported observedAt: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
 	}
 }
 
@@ -362,12 +353,9 @@ func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
 	}
 }
 
-// TestPollLiveStaleIsMeasuredFromReceivedAt proves this issue's fix: a LIVE
-// surface.pipeline.state report ages from rep.receivedAt (the last time the
-// node actually reported), not from sf.ObservedAt — a node that keeps
-// reporting an unchanged state must read current for as long as reports
-// keep arriving, and go stale only once they stop (a fresh Store.Put never
-// lands, so the persisted receivedAt itself ages past DefaultValidFor).
+// TestPollLiveStaleIsMeasuredFromReceivedAt proves a LIVE
+// surface.pipeline.state report ages from rep.receivedAt, the last time
+// the node actually reported, not from sf.ObservedAt.
 func TestPollLiveStaleIsMeasuredFromReceivedAt(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
@@ -623,12 +611,9 @@ func TestReasonAndCountsAreExposed(t *testing.T) {
 	}
 }
 
-// TestPollLiveReasonAndCountsUseReceivedAt proves this issue's fix reaches
-// surface.pipeline.reason/restart_count/consecutive_failures too, not just
-// surface.pipeline.state: a LIVE report's ObservedAt for all three is
-// rep.receivedAt, so they read current for as long as the node keeps
-// reporting, even though sf.ObservedAt itself never moves without a real
-// transition.
+// TestPollLiveReasonAndCountsUseReceivedAt proves a LIVE report's
+// ObservedAt for surface.pipeline.reason/restart_count/consecutive_failures
+// is rep.receivedAt, matching surface.pipeline.state.
 func TestPollLiveReasonAndCountsUseReceivedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -655,7 +640,7 @@ func TestPollLiveReasonAndCountsUseReceivedAt(t *testing.T) {
 }
 
 // sampleMultiSyncPayload builds a RenderPayload reporting a bound MultiSync
-// listener, evidenced at sampleMultiSyncObservedAt — deliberately distinct
+// listener, evidenced at sampleMultiSyncObservedAt, deliberately distinct
 // from sampleObservedAt so a test mixing the two up fails loudly.
 var sampleMultiSyncObservedAt = time.Unix(2600, 0).UTC()
 
@@ -667,11 +652,9 @@ func sampleMultiSyncPayload() mqttproto.RenderPayload {
 	return p
 }
 
-// TestPollLiveMultiSyncUsesReceivedAt proves this issue's fix covers
-// node.multisync.listening/reason: a LIVE report's ObservedAt for both is
-// rep.receivedAt, so a node whose listener stays bound reads current for as
-// long as it keeps reporting, rather than going stale 45s after the bind
-// (MultiSyncObservedAt only moves on a real bind outcome change).
+// TestPollLiveMultiSyncUsesReceivedAt proves a LIVE report's ObservedAt for
+// node.multisync.listening/reason is rep.receivedAt, not
+// MultiSyncObservedAt (which only moves on a real bind outcome change).
 func TestPollLiveMultiSyncUsesReceivedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -1389,20 +1372,17 @@ func TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.
 	payload.Surfaces[0].CueID = "cue-42"
 	payload.Surfaces[0].CatalogRevision = "rev-7"
 	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
-	// retained=true: this issue's fix makes a LIVE pipeline-state report age
-	// from rep.receivedAt instead of sf.ObservedAt, so isolating "pipeline
-	// evidence stale, content evidence fresh" needs a retained delivery,
-	// which still ages pipeline-state from sf.ObservedAt (unchanged).
+	// retained=true: pipeline-state on a live delivery ages from
+	// rep.receivedAt, not sf.ObservedAt, so isolating "pipeline evidence
+	// stale, content evidence fresh" needs a retained delivery here.
 	st.Put("render-01", payload, true, time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	// checkAt is chosen so it is PAST sampleObservedAt+DefaultValidFor (the
-	// pipeline-lifecycle evidence has gone stale) but still BEFORE
-	// sampleContentObservedAt+DefaultValidFor (the content evidence is
-	// still fresh) — exactly the "old ObservedAt, fresh content read"
-	// scenario this issue describes.
+	// checkAt is PAST sampleObservedAt+DefaultValidFor (pipeline evidence
+	// stale) but still BEFORE sampleContentObservedAt+DefaultValidFor
+	// (content evidence fresh).
 	checkAt := sampleObservedAt.Add(DefaultValidFor + time.Minute)
 	if !checkAt.Before(sampleContentObservedAt.Add(DefaultValidFor)) {
 		t.Fatalf("test fixture bug: checkAt %s is not before sampleContentObservedAt+DefaultValidFor %s",

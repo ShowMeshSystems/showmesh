@@ -131,13 +131,13 @@ const (
 // [AllNodeSignalIDs].
 var AllSignalIDs = []observation.SignalID{
 	SignalSurfacePipelineState,
-	SignalSurfacePipelineChangedAt,
 	SignalSurfaceReason,
 	SignalSurfaceRestartCount,
 	SignalSurfaceConsecutiveFailures,
 	SignalSurfaceFramesWritten,
 	SignalSurfaceFramesLate,
 	SignalSurfaceFramesDropped,
+	SignalSurfacePipelineChangedAt,
 	SignalSurfaceFramesRate,
 	SignalSurfaceTransportAvailable,
 	SignalSurfaceTransportReason,
