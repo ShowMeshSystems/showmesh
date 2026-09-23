@@ -6,6 +6,12 @@ CTL_ENV="$ETC_DIR/showmeshctl.env"
 CTL_BIN=/usr/local/lib/showmesh/showmeshctl
 MIN_COMPOSE=2.24.0
 
+# MQ_CHECK publishes one test message inside a mosquitto container. The login goes in a
+# private options file, not on mosquitto_pub's command line, so ps never shows it.
+# shellcheck disable=SC2016
+MQ_CHECK='umask 077; d="$(mktemp -d)"; [ -z "$MQ_USER" ] || printf -- "-u %s\n-P %s\n" "$MQ_USER" "$MQ_PASS" > "$d/mosquitto_pub"
+XDG_CONFIG_HOME="$d" mosquitto_pub -h "$MQ_HOST" -p "$MQ_PORT" -i showmesh-installer-check -t showmesh/installer/check -n; rc=$?; rm -rf "$d"; exit "$rc"'
+
 compose() {
   local files=(-f docker-compose.yml -f docker-compose.published.yml)
   (cd "$COORDINATOR_DIR" && docker compose "${files[@]}" "$@")
@@ -25,7 +31,7 @@ coord_install_docker() {
   fi
   docker info >/dev/null 2>&1 || fail "Docker is installed but not running." "systemctl enable --now docker"
   local v
-  v="$(docker compose version --short 2>/dev/null | sed 's/^v//')"
+  v="$(docker compose version --short 2>/dev/null | sed 's/^v//')" || v=""
   [ -n "$v" ] || fail "The docker compose command is missing." "apt-get install -y docker-compose"
   version_at_least "$v" "$MIN_COMPOSE" ||
     fail "Docker Compose $v is older than $MIN_COMPOSE, which the ShowMesh bundle needs." "apt-get install -y -t trixie docker-compose"
@@ -73,16 +79,25 @@ coord_ask_external_broker() {
   EXT_BROKER_URL="${OPT_BROKER_URL:-$(env_get "$COORD_ENV" SHOWMESH_NODE_BROKER_URL)}"
   EXT_BROKER_USER="${OPT_BROKER_USERNAME-$(env_get "$COORD_ENV" SHOWMESH_NODE_MQTT_USERNAME)}"
   EXT_BROKER_PASS="${OPT_BROKER_PASSWORD-$(env_get "$COORD_ENV" SHOWMESH_NODE_MQTT_PASSWORD)}"
+  if [ -n "$OPT_BROKER_PASSWORD_FILE" ]; then
+    [ -r "$OPT_BROKER_PASSWORD_FILE" ] || fail "There is no readable file at $OPT_BROKER_PASSWORD_FILE." "showmesh-install --broker-password-file <file>"
+    EXT_BROKER_PASS="$(head -n 1 "$OPT_BROKER_PASSWORD_FILE")"
+  fi
   if [ -z "$EXT_BROKER_URL" ]; then
     can_prompt || need_answer "the external broker's address" "--broker-url tcp://<address>:1883"
     ask EXT_BROKER_URL "External broker address, for example tcp://192.168.1.5:1883"
     ask EXT_BROKER_USER "Broker username (leave empty for none)"
-    [ -n "$EXT_BROKER_USER" ] && ask_secret EXT_BROKER_PASS "Broker password"
+    [ -n "$EXT_BROKER_USER" ] && [ -z "$EXT_BROKER_PASS" ] && ask_secret EXT_BROKER_PASS "Broker password"
   fi
   case "$EXT_BROKER_URL" in
-    tcp://*|mqtt://*|ssl://*|tls://*|mqtts://*) ;;
+    tcp://*|mqtt://*) ;;
+    ssl://*|tls://*|mqtts://*)
+      fail "The installer cannot check a broker that uses TLS, so it does not set one up." "showmesh-install --broker external --broker-url tcp://<address>:1883, or --broker builtin" ;;
+    *://*) fail "The broker address $EXT_BROKER_URL does not start with tcp:// or mqtt://." "showmesh-install --broker external --broker-url tcp://<address>:1883" ;;
     *) EXT_BROKER_URL="tcp://$EXT_BROKER_URL" ;;
   esac
+  env_value_safe "broker username" "$EXT_BROKER_USER" "--broker-username"
+  env_value_safe "broker password" "$EXT_BROKER_PASS" "--broker-password-file"
   if [ "$(env_get "$COORD_ENV" SHOWMESH_BROKER_MODE)" = "external" ]; then
     return
   fi
@@ -115,8 +130,11 @@ apply_broker_config_ownership() {
 
 coord_write_env() {
   step "Writing the coordinator's settings to $COORD_ENV"
-  local addr http_port mqtt_port
-  addr="${OPT_ADDRESS:-$(lan_address)}"
+  local addr saved_url http_port mqtt_port
+  saved_url="$(env_get "$COORD_ENV" SHOWMESH_PUBLIC_URL)"
+  saved_url="${saved_url#*://}"
+  addr="${OPT_ADDRESS:-${saved_url%:*}}"
+  [ -n "$addr" ] || addr="$(lan_address)"
   http_port="$(env_get "$COORD_ENV" SHOWMESH_HTTP_PORT)"
   mqtt_port="$(env_get "$COORD_ENV" MOSQUITTO_PORT)"
   HTTP_PORT="${http_port:-8080}"
@@ -156,22 +174,24 @@ coord_write_env() {
 
 coord_builtin_credentials() {
   step "Creating the built-in broker's logins"
-  if ! "$COORDINATOR_DIR/mosquitto/generate-credentials.sh" >/tmp/showmesh-broker.log 2>&1; then
-    cat /tmp/showmesh-broker.log >&2
+  local log
+  log="$(run_tmp)"
+  if ! "$COORDINATOR_DIR/mosquitto/generate-credentials.sh" >"$log" 2>&1; then
+    cat "$log" >&2
     fail "The broker logins could not be created; the reason is printed above." "sudo $COORDINATOR_DIR/mosquitto/generate-credentials.sh"
   fi
-  if grep -q '^  password: ' /tmp/showmesh-broker.log; then
+  if grep -q '^  password: ' "$log"; then
     info "FPP's broker login, shown once. Enter it in each FPP player under System Configuration, MQTT:"
-    sed -n 's/^  \(username\|password\): /      \1: /p' /tmp/showmesh-broker.log
+    sed -n 's/^  \(username\|password\): /      \1: /p' "$log"
   fi
-  rm -f /tmp/showmesh-broker.log
   apply_broker_config_ownership
   ok "broker logins are in $COORDINATOR_DIR/mosquitto/passwd"
 }
 
 coord_start() {
   step "Starting the coordinator $SHOWMESH_VERSION"
-  local log=/tmp/showmesh-compose.log
+  local log
+  log="$(run_tmp)"
   if [ "$BROKER_MODE" = "builtin" ]; then
     compose up -d --remove-orphans >"$log" 2>&1 || { tail -n 20 "$log" >&2; fail "The coordinator did not start." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml up -d"; }
   else
@@ -203,7 +223,8 @@ coord_exec() {
 coord_install_ctl() {
   local src="$BUNDLE_DIR/bin/showmeshctl_linux_$ARCH"
   [ -f "$src" ] || fail "This installer has no showmeshctl for $ARCH." "download a complete installer for version $SHOWMESH_VERSION"
-  install -D -m 0755 -o root -g root "$src" "$CTL_BIN"
+  install -d -m 0755 "$(dirname "$CTL_BIN")"
+  install -m 0755 -o root -g root "$src" "$CTL_BIN"
   install -m 0755 -o root -g root "$BUNDLE_DIR/showmeshctl-wrapper.sh" /usr/local/bin/showmeshctl
 }
 
@@ -264,19 +285,25 @@ coord_check_broker() {
     user="$(env_get "$COORD_ENV" SHOWMESH_MQTT_USERNAME)"
     pass="$(env_get "$COORD_ENV" SHOWMESH_MQTT_PASSWORD)"
     local waited=0
-    # shellcheck disable=SC2016
-    while ! MQ_USER="$user" MQ_PASS="$pass" compose exec -T -e MQ_USER -e MQ_PASS mosquitto \
-      sh -c 'mosquitto_pub -h localhost -p 1883 -u "$MQ_USER" -P "$MQ_PASS" -i showmesh-installer-check -t showmesh/installer/check -n' >/dev/null 2>&1; do
+    while ! MQ_HOST=localhost MQ_PORT=1883 MQ_USER="$user" MQ_PASS="$pass" \
+      compose exec -T -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS mosquitto sh -c "$MQ_CHECK" >/dev/null 2>&1; do
       waited=$((waited + 2))
       [ "$waited" -ge 60 ] && fail "The built-in broker refused the coordinator's login." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml logs mosquitto"
       sleep 2
     done
   else
-    local hostport="${EXT_BROKER_URL#*://}"
-    local auth=()
-    [ -n "$EXT_BROKER_USER" ] && auth=(-u "$EXT_BROKER_USER" -P "$EXT_BROKER_PASS")
-    if ! docker run --rm --network host eclipse-mosquitto:2.0.22 mosquitto_pub -h "${hostport%:*}" -p "${hostport##*:}" \
-      "${auth[@]}" -i showmesh-installer-check -t showmesh/installer/check -n >/dev/null 2>&1; then
+    local hostport host port
+    hostport="${EXT_BROKER_URL#*://}"
+    hostport="${hostport%%/*}"
+    host="$hostport"
+    port=1883
+    if [[ "$hostport" == *:* ]]; then
+      host="${hostport%:*}"
+      port="${hostport##*:}"
+    fi
+    if ! MQ_HOST="$host" MQ_PORT="$port" MQ_USER="$EXT_BROKER_USER" MQ_PASS="$EXT_BROKER_PASS" \
+      docker run --rm --network host -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS \
+      eclipse-mosquitto:2.0.22 sh -c "$MQ_CHECK" >/dev/null 2>&1; then
       fail "The external broker at $EXT_BROKER_URL refused the login or did not answer." "showmesh-install --broker external --broker-url <address>"
     fi
   fi
@@ -285,7 +312,7 @@ coord_check_broker() {
 
 coord_advertise() {
   step "Announcing the coordinator on the network"
-  mkdir -p /etc/avahi/services
+  install -d -m 0755 /etc/avahi/services
   sed "s/@API_PORT@/$HTTP_PORT/" "$BUNDLE_DIR/showmesh.service" > /etc/avahi/services/showmesh.service
   chmod 0644 /etc/avahi/services/showmesh.service
   if have_systemd; then

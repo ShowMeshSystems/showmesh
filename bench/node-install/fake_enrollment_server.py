@@ -3,11 +3,11 @@
 
 Usage: fake_enrollment_server.py PORT GOOD_CODE NODE_ID LOG_FILE
 GOOD_CODE redeems once, then answers 410. EXPD-0000 always answers 410 and
-anything else 404, each with an RFC 7807 detail. Every request is logged.
+anything else 404, each with an RFC 7807 detail. OLDC-0000 answers a plain 404,
+as a coordinator with no redeem endpoint does. Every request is logged.
 """
 import base64
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,6 +18,8 @@ NODE_ID = sys.argv[3]
 LOG = sys.argv[4]
 TOKEN = "bench-api-token-" + NODE_ID
 PUBLIC_KEY = base64.b64encode(bytes(range(32))).decode()
+MQTT_PASSWORD = "bench-mqtt-secret-" + NODE_ID
+NOT_FOUND = "https://showmesh.dev/problems/resource-not-found"
 state = {"used": False}
 
 
@@ -38,8 +40,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def problem(self, status, title, detail):
-        self.send(status, {"type": "about:blank", "title": title, "status": status, "detail": detail},
+    def problem(self, status, title, detail, problem_type="about:blank"):
+        self.send(status, {"type": problem_type, "title": title, "status": status, "detail": detail},
                   "application/problem+json")
 
     def do_GET(self):
@@ -66,16 +68,23 @@ class Handler(BaseHTTPRequestHandler):
             assert body["hostname"] and body["arch"] in ("amd64", "arm64")
         except Exception:
             return self.problem(400, "Bad Request", "The request needs a code, a hostname and an architecture.")
+        if code == "OLDC0000":
+            data = b"404 page not found\n"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if code == "EXPD0000" or (code == GOOD_CODE and state["used"]):
             return self.problem(410, "Gone", "This enrollment code has expired or was already used. Ask for a new one with: showmeshctl node enroll <node-id>")
         if code != GOOD_CODE:
-            return self.problem(404, "Not Found", "No enrollment code matches the one given. Check it, or ask for a new one with: showmeshctl node enroll <node-id>")
+            return self.problem(404, "Not Found", "No enrollment code matches the one given. Check it, or ask for a new one with: showmeshctl node enroll <node-id>", NOT_FOUND)
         state["used"] = True
         self.send(200, {
             "nodeId": NODE_ID,
             "brokerUrl": "tcp://192.0.2.10:1883",
             "mqttUsername": NODE_ID,
-            "mqttPassword": base64.urlsafe_b64encode(os.urandom(18)).decode(),
+            "mqttPassword": MQTT_PASSWORD,
             "apiToken": TOKEN,
             "coordinatorUrl": "http://127.0.0.1:%d" % PORT,
             "coordinatorPublicKey": PUBLIC_KEY,

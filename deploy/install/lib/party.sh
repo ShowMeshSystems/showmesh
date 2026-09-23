@@ -403,7 +403,7 @@ egg_credits() {
 "   powered by          coffee and MQTT"
 "   timing courtesy of  a PTP grandmaster somewhere"
 "   e-stop by           the big red button"
-"   NDI runtime         (not included, ask ADR-010)"
+"   NDI runtime         (not included, bring your own)"
 "   no photons          were harmed" "" ""
 "   thanks for coming. mind the cables on your way out." "" "")
   local line

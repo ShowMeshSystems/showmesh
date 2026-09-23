@@ -33,7 +33,7 @@ render_build_ndi_plugin() {
   [ -x "$script" ] || fail "This installer has no NDI plugin build script." "download a complete installer for version $SHOWMESH_VERSION"
   info "Building the NDI plugin on this machine. This installs a compiler and takes 10 to 30 minutes."
   out="$(mktemp -d)"
-  if ! "$script" "$out"; then
+  if ! with_default_umask "$script" "$out"; then
     fail "The NDI plugin did not build; the reason is printed above." "sudo $script $out"
   fi
   install -D -m 0644 -o root -g root "$out/libgstndi.so" "$(gst_plugin_dir)/libgstndi.so"
@@ -83,7 +83,7 @@ ndi_unpack_sdk() {
     fail "The NDI licence must be read and accepted at a terminal." "showmesh-install --ndi $file (from a terminal)"
   fi
   info "The NDI SDK installer shows its licence next. Read it and answer its question yourself."
-  (cd "$(dirname "$script")" && bash "./$(basename "$script")") ||
+  (cd "$(dirname "$script")" && with_default_umask bash "./$(basename "$script")") ||
     fail "The NDI SDK installer stopped, so its licence was not accepted." "showmesh-install --ndi $file"
 }
 

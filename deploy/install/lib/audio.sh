@@ -46,7 +46,7 @@ audio_setup_ptp() {
   case "$role" in follower|grandmaster|auto) ;; *) fail "The PTP role $role is not follower, grandmaster or auto." "showmesh-install --ptp-role follower" ;; esac
   local args=("$iface" "$domain" "$role")
   [ -n "$card" ] && args+=("$card")
-  if ! "$(ptp_script)" "${args[@]}"; then
+  if ! with_default_umask "$(ptp_script)" "${args[@]}"; then
     fail "The PTP audio clock setup stopped; the reason is printed above." "sudo $(ptp_script) ${args[*]}"
   fi
   ok "PTP audio clock set up on $iface, domain $domain, role $role"

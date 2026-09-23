@@ -12,6 +12,18 @@ info() { printf '    %s\n' "$*"; }
 ok() { printf '    ok: %s\n' "$*"; }
 warn() { printf '    warning: %s\n' "$*" >&2; }
 
+# RUN_TMP is this run's private scratch directory, removed when the installer exits or is interrupted.
+RUN_TMP="$(mktemp -d)"
+ENV_SET_PENDING=""
+trap 'rm -rf "$RUN_TMP"; [ -z "$ENV_SET_PENDING" ] || rm -f "$ENV_SET_PENDING" "$ENV_SET_PENDING.next"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# run_tmp prints a new private file under RUN_TMP.
+run_tmp() {
+  mktemp "$RUN_TMP/XXXXXX"
+}
+
 # fail prints the fact and the command that fixes it, then exits.
 fail() {
   printf '\nShowMesh install stopped. %s\n' "$1" >&2
@@ -76,7 +88,7 @@ detect_arch() {
   case "$raw" in
     amd64|x86_64) ARCH=amd64; MULTIARCH=x86_64-linux-gnu ;;
     arm64|aarch64) ARCH=arm64; MULTIARCH=aarch64-linux-gnu ;;
-    *) fail "This machine is $raw. ShowMesh installs on amd64 and arm64 only." "" ;;
+    *) fail "This machine is $raw. ShowMesh installs on amd64 and arm64 only." "the install command on an amd64 or arm64 machine running Debian 13" ;;
   esac
 }
 
@@ -99,12 +111,19 @@ have_systemd() {
   [ -d /run/systemd/system ]
 }
 
+# with_default_umask runs a command that installs system files with the usual 022 umask.
+with_default_umask() {
+  (umask 022 && "$@")
+}
+
 apt_install() {
+  local log
+  log="$(run_tmp)"
   info "Installing packages: $*"
-  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >/tmp/showmesh-apt.log 2>&1; then
-    if ! { apt-get update >>/tmp/showmesh-apt.log 2>&1 &&
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >>/tmp/showmesh-apt.log 2>&1; }; then
-      tail -n 15 /tmp/showmesh-apt.log >&2
+  if ! with_default_umask env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >"$log" 2>&1; then
+    if ! { with_default_umask apt-get update >>"$log" 2>&1 &&
+      with_default_umask env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >>"$log" 2>&1; }; then
+      tail -n 15 "$log" >&2
       fail "Debian could not install $*." "apt-get update && apt-get install -y $*"
     fi
   fi
@@ -117,19 +136,20 @@ env_get() {
 }
 
 # env_set FILE MODE KEY=VALUE... replaces or appends each key, keeping every other line.
+# Values reach awk through its environment, never its arguments, so they stay out of ps and keep backslashes.
 env_set() {
-  local file="$1" mode="$2" tmp pair key
+  local file="$1" mode="$2" tmp pair
   shift 2
   for pair in "$@"; do
-    case "$pair" in *$'\n'*) fail "A setting for $file contains a line break." "" ;; esac
+    case "$pair" in *$'\n'*) fail "A setting for $file contains a line break." "showmesh-install again, typing each value on one line" ;; esac
   done
   mkdir -p "$(dirname "$file")"
   tmp="$(mktemp "$file.XXXXXX")"
+  ENV_SET_PENDING="$tmp"
   [ -f "$file" ] && cat "$file" > "$tmp"
   for pair in "$@"; do
-    key="${pair%%=*}"
-    awk -v k="$key" -v line="$pair" '
-      BEGIN { done = 0 }
+    ENV_SET_KEY="${pair%%=*}" ENV_SET_LINE="$pair" awk '
+      BEGIN { k = ENVIRON["ENV_SET_KEY"]; line = ENVIRON["ENV_SET_LINE"]; done = 0 }
       index($0, k "=") == 1 { if (!done) { print line; done = 1 }; next }
       { print }
       END { if (!done) print line }' "$tmp" > "$tmp.next"
@@ -138,6 +158,15 @@ env_set() {
   chmod "$mode" "$tmp"
   chown root:root "$tmp" 2>/dev/null || true
   mv "$tmp" "$file"
+  ENV_SET_PENDING=""
+}
+
+# env_value_safe LABEL VALUE OPTION refuses a typed value that Compose or systemd would change when reading it back.
+env_value_safe() {
+  case "$2" in
+    *[\$\"\'\\#[:space:]]*)
+      fail "The $1 contains a \$, a quote, a backslash, a # or a space, and ShowMesh's settings files would change it." "showmesh-install $3 with a value that has none of those characters" ;;
+  esac
 }
 
 # lan_address prints the address other machines use to reach this one.
@@ -149,13 +178,13 @@ lan_address() {
   printf '%s' "$addr"
 }
 
-# http_request METHOD URL [BODY] [TOKEN] sets HTTP_STATUS, HTTP_BODY and HTTP_RETRY_AFTER.
+# http_request METHOD URL [BODY_FILE] [TOKEN] sets HTTP_STATUS, HTTP_BODY, HTTP_CONTENT_TYPE and HTTP_RETRY_AFTER.
 http_request() {
-  local method="$1" url="$2" body="${3:-}" token="${4:-}" out hdr
-  out="$(mktemp)"
-  hdr="$(mktemp)"
+  local method="$1" url="$2" body_file="${3:-}" token="${4:-}" out hdr
+  out="$(run_tmp)"
+  hdr="$(run_tmp)"
   local args=(-sS -m 15 -X "$method" -o "$out" -D "$hdr" -w '%{http_code}')
-  [ -n "$body" ] && args+=(-H 'Content-Type: application/json' --data-binary "$body")
+  [ -n "$body_file" ] && args+=(-H 'Content-Type: application/json' --data-binary "@$body_file")
   if [ -n "$token" ]; then
     HTTP_STATUS="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl "${args[@]}" -K - "$url" 2>/dev/null)" || HTTP_STATUS="000"
   else
@@ -163,6 +192,7 @@ http_request() {
   fi
   HTTP_BODY="$(cat "$out")"
   HTTP_RETRY_AFTER="$(tr -d '\r' < "$hdr" | awk -F': *' 'tolower($1) == "retry-after" {print $2}' | tail -n 1)"
+  HTTP_CONTENT_TYPE="$(tr -d '\r' < "$hdr" | awk -F': *' 'tolower($1) == "content-type" {print $2}' | tail -n 1)"
   rm -f "$out" "$hdr"
 }
 
@@ -186,10 +216,9 @@ release_fetch() {
 # release_verify NAME FILE checks FILE against the release's SHA256SUMS.
 release_verify() {
   local name="$1" file="$2" sums want got
-  sums="$(mktemp)"
+  sums="$(run_tmp)"
   release_fetch SHA256SUMS "$sums"
   want="$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1}' "$sums" | head -n 1)"
-  rm -f "$sums"
   if [ -z "$want" ]; then
     fail "The release's SHA256SUMS does not list $name, so it cannot be checked." "check that version $SHOWMESH_VERSION is a complete release"
   fi

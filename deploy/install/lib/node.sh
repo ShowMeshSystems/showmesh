@@ -17,7 +17,7 @@ node_install_packages() {
 node_fetch_agent() {
   local name tmp dest
   name="showmesh-node-agent_${SHOWMESH_VERSION}_linux_${ARCH}.tar.gz"
-  tmp="$(mktemp -d)"
+  tmp="$(mktemp -d "$RUN_TMP/agent.XXXXXX")"
   if [ -n "$OPT_AGENT_PACKAGE" ]; then
     step "Using the node agent package $OPT_AGENT_PACKAGE"
     [ -f "$OPT_AGENT_PACKAGE" ] || fail "There is no file at $OPT_AGENT_PACKAGE." "showmesh-install --agent-package <file>"
@@ -42,7 +42,7 @@ node_fetch_agent() {
 
 node_preflight() {
   step "Checking this machine can run the agent"
-  if ! "$AGENT_PKG_DIR/preflight.sh" --runtime-only; then
+  if ! with_default_umask "$AGENT_PKG_DIR/preflight.sh" --runtime-only; then
     fail "This machine is missing something the agent needs, listed above." "apt-get install -y ${NODE_RUNTIME_PACKAGES[*]}"
   fi
 }
@@ -104,15 +104,30 @@ valid_code() {
   [[ "$c" =~ ^[A-Za-z0-9]{8}$ ]]
 }
 
+# redeem_is_unknown_code is true when a 404 is the enrollment API's own not-found problem.
+redeem_is_unknown_code() {
+  local type
+  type="$(printf '%s' "$HTTP_BODY" | jq -r '.type // empty' 2>/dev/null)" || type=""
+  [[ "$type" == *not-found ]]
+}
+
 # redeem_code CODE redeems once. Returns 0 on success, 1 for a code problem, 2 when unreachable.
+# The code reaches jq through its environment and curl through a private file, never a command line.
 redeem_code() {
   local body
-  body="$(jq -nc --arg code "$1" --arg hostname "$(hostname)" --arg arch "$ARCH" \
-    '{code: $code, hostname: $hostname, arch: $arch}')"
+  body="$(run_tmp)"
+  REDEEM_CODE="$1" REDEEM_HOSTNAME="$(hostname)" REDEEM_ARCH="$ARCH" \
+    jq -nc '{code: env.REDEEM_CODE, hostname: env.REDEEM_HOSTNAME, arch: env.REDEEM_ARCH}' > "$body"
   http_request POST "$COORDINATOR_URL/api/v1/node-enrollments/redeem" "$body"
+  rm -f "$body"
   case "$HTTP_STATUS" in
     200) return 0 ;;
     000) return 2 ;;
+    404)
+      redeem_is_unknown_code ||
+        fail "The coordinator at $COORDINATOR_URL is older than this installer and cannot enroll nodes with a code." "upgrade the coordinator to ShowMesh $SHOWMESH_VERSION, then run this install command again"
+      info "$(problem_detail)"
+      return 1 ;;
     429)
       info "$(problem_detail)"
       [ -n "$HTTP_RETRY_AFTER" ] && info "The coordinator accepts another try in $HTTP_RETRY_AFTER seconds."
@@ -122,6 +137,8 @@ redeem_code() {
 }
 
 enroll_values_from_redeem() {
+  printf '%s' "$HTTP_BODY" | jq -e 'type == "object"' >/dev/null 2>&1 ||
+    fail "The coordinator accepted the code but did not answer with the node's settings." "showmeshctl node enroll <node-id> on the coordinator, then run this installer again with the new code"
   NODE_ID="$(printf '%s' "$HTTP_BODY" | jq -r '.nodeId // empty')"
   BROKER_URL="$(printf '%s' "$HTTP_BODY" | jq -r '.brokerUrl // empty')"
   MQTT_USERNAME="$(printf '%s' "$HTTP_BODY" | jq -r '.mqttUsername // empty')"
@@ -144,6 +161,7 @@ enroll_values_by_hand() {
   ask_secret MQTT_PASSWORD "Broker password (leave empty for none)"
   ask_secret API_TOKEN "API token for this node"
   COORDINATOR_PUBLIC_KEY=""
+  ENROLLED_BY_HAND=1
   [ -n "$NODE_ID" ] && [ -n "$BROKER_URL" ] || fail "The node ID and broker address are both required." "showmesh-install --reenroll"
 }
 
@@ -215,12 +233,12 @@ node_state_save() {
 node_started_at() {
   http_request GET "$COORDINATOR_URL/api/v1/nodes/$1" "" "$2"
   [ "$HTTP_STATUS" = "200" ] || return 0
-  printf '%s' "$HTTP_BODY" | jq -r '.node.startedAt // empty'
+  printf '%s' "$HTTP_BODY" | jq -r '.node.startedAt // empty' 2>/dev/null || true
 }
 
 node_install_agent() {
   step "Installing the agent service"
-  if ! "$AGENT_PKG_DIR/install.sh" "$AGENT_PKG_DIR/showmesh-agent-native"; then
+  if ! with_default_umask "$AGENT_PKG_DIR/install.sh" "$AGENT_PKG_DIR/showmesh-agent-native"; then
     fail "The agent service did not install; the reason is printed above." "sudo $AGENT_PKG_DIR/install.sh $AGENT_PKG_DIR/showmesh-agent-native"
   fi
   if ! have_systemd; then
@@ -235,8 +253,8 @@ node_wait_for_report() {
   while [ "$waited" -lt "$limit" ]; do
     http_request GET "$COORDINATOR_URL/api/v1/nodes/$node_id" "" "$token"
     if [ "$HTTP_STATUS" = "200" ]; then
-      state="$(printf '%s' "$HTTP_BODY" | jq -r '.node.controlPlane.state // empty')"
-      started="$(printf '%s' "$HTTP_BODY" | jq -r '.node.startedAt // empty')"
+      state="$(printf '%s' "$HTTP_BODY" | jq -r '.node.controlPlane.state // empty' 2>/dev/null)" || state=""
+      started="$(printf '%s' "$HTTP_BODY" | jq -r '.node.startedAt // empty' 2>/dev/null)" || started=""
       if [ "$state" = "online" ] && [ -n "$started" ] && [ "$started" != "$before" ]; then
         ok "node $node_id is online, agent started at $started"
         return 0
@@ -245,7 +263,25 @@ node_wait_for_report() {
     sleep 3
     waited=$((waited + 3))
   done
+  if [ "${ENROLLED_BY_HAND:-0}" -eq 1 ]; then
+    warn "Node $node_id has not reported to the coordinator at $COORDINATOR_URL after $limit seconds. Check the settings you typed with: journalctl -u showmesh-agent -n 50"
+    return 0
+  fi
   fail "Node $node_id has not reported to the coordinator at $COORDINATOR_URL after $limit seconds (last answer: HTTP $HTTP_STATUS)." "journalctl -u showmesh-agent -n 50"
+}
+
+# node_find_saved_coordinator finds the coordinator for a node enrolled before this installer saved one.
+node_find_saved_coordinator() {
+  if can_prompt; then
+    choose_coordinator
+    return
+  fi
+  local found=() line
+  while IFS= read -r line; do [ -n "$line" ] && found+=("$line"); done < <(discover_coordinators)
+  if [ "${#found[@]}" -eq 1 ]; then
+    COORDINATOR_URL="${found[0]}"
+    info "Found the coordinator at $COORDINATOR_URL on this network."
+  fi
 }
 
 run_node_role() {
@@ -261,6 +297,7 @@ run_node_role() {
     [ -n "$OPT_COORDINATOR" ] && COORDINATOR_URL="$(normalize_url "$OPT_COORDINATOR")"
     step "This node is already enrolled as $NODE_ID"
     info "Its settings are kept. To enroll it again, run: showmesh-install --reenroll"
+    [ -n "$COORDINATOR_URL" ] || node_find_saved_coordinator
   else
     choose_coordinator
     node_enroll
@@ -272,7 +309,8 @@ run_node_role() {
   [ "$kind" = "render" ] && render_ndi_runtime
   [ "$kind" = "audio" ] && audio_setup_ptp
   if [ -z "$COORDINATOR_URL" ]; then
-    fail "This node has no coordinator address saved, so its first report cannot be checked." "showmesh-install --coordinator http://<address>:8080"
+    warn "This node has no coordinator address saved, so the installer cannot check that it reports in. Save one with: showmesh-install --coordinator http://<address>:8080"
+    return 0
   fi
   if [ -z "$API_TOKEN" ]; then
     warn "This node has no API token, so the installer cannot ask the coordinator whether it reported in. Check the node list in the coordinator's UI."
