@@ -18,14 +18,14 @@ Even this build shells out to real GStreamer command-line tools
 library, so a correct install needs both the GStreamer runtime packages
 and the C build toolchain (build-time only).
 
-**NDI output is not part of this install.** The `ndisink` GStreamer element
-comes from the gst-plugins-rs NDI plugin, which this repository does not
-build, vendor, or ship: ADR-010 forbids redistributing the NDI runtime,
-and building that plugin is a separately owned recipe (not this issue's
-scope). `preflight.sh` reports whether `ndisink` currently resolves as
-informational output only; a render node that needs NDI must build that
-plugin by hand and point `GST_PLUGIN_PATH` at it in `agent.env` (see the
-template's comment), then re-run preflight to confirm.
+**The NDI GStreamer plugin ships in this package; the NDI runtime does
+not.** The release build carries `libgstndi.so` (see
+`deploy/node/ndi-plugin/README.md`), built from a pinned `gst-plugins-rs`
+revision for amd64 and arm64. It contains no NDI SDK code: it loads the
+proprietary NDI runtime with `dlopen` at run time, and ADR-010 still
+forbids redistributing that runtime, so you download and install it
+yourself. `preflight.sh` reports whether `ndisink` currently resolves,
+which tells you whether that runtime is present and found.
 
 ## Platform floor
 
