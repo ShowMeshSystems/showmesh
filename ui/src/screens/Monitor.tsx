@@ -115,7 +115,7 @@ export function Monitor() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const [kind, setKind] = useState<FleetKind>('all')
   const [searchParams, setSearchParams] = useSearchParams()
-  const [resourceParam, setResourceParam] = useState<string | null>(() => searchParams.get('resource'))
+  const resourceParam = searchParams.get('resource')
   const { nodeId: routeNodeId } = useParams<{ nodeId?: string }>()
 
   const counts = fleetCounts(model)
@@ -134,7 +134,6 @@ export function Monitor() {
       return
     }
     const next = key === selected ? null : key
-    setResourceParam(next)
     setSearchParams(next === null ? {} : { resource: next })
   }
   const closeInspector = () => {
@@ -142,7 +141,6 @@ export function Monitor() {
       navigate('/monitor/fleet')
       return
     }
-    setResourceParam(null)
     setSearchParams({})
   }
   const inspectorLabelledBy = routeNodeId !== undefined

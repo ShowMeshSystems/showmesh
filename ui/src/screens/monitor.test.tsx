@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import type { Event, FPPInstance, FPPPlaylistEntryObservation, Model, Node } from '../api'
@@ -657,5 +657,29 @@ describe('Monitor · Fleet · FPP inspector · playlist observation refused', ()
     renderScreen({ fpp: [healthy] })
     fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
     expect(screen.queryByText('Playlist reports are being refused')).not.toBeInTheDocument()
+  })
+
+  it('opens the inspector when a sibling link changes the resource search param while Monitor is already mounted, as the top-bar banner does', () => {
+    const refused = {
+      ...fpp('barn-player', 'healthy'),
+      instanceUuid: 'barn-uuid',
+      playlistObservationRefused: { reason: 'FPP reported a lower sequence than last accepted.', refusedAt: '2026-09-01T00:00:00Z' },
+    } as FPPInstance
+    render(
+      <ModelContext.Provider
+        value={{ ...initialModel(), fpp: [refused], serverTime: '2026-08-28T21:07:00Z', serverTimeReceivedAt: Date.now() }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet']}>
+          <Link to="/monitor/fleet?resource=fpp%3Abarn-player">Open Monitor</Link>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'Open Monitor' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog')).getByText('Playlist reports are being refused')).toBeInTheDocument()
   })
 })

@@ -958,6 +958,9 @@ func TestFPPInstanceListerSurfacesPlaylistObservationRefused(t *testing.T) {
 	if refused.Reason == "" {
 		t.Error("PlaylistObservationRefused.Reason is empty, want an operator-facing sentence")
 	}
+	if wantCmd := "showmeshctl fpp reset-observation-sequence --confirm uuid-a"; !strings.Contains(refused.Reason, wantCmd) {
+		t.Errorf("PlaylistObservationRefused.Reason = %q, want it to contain the runnable command %q", refused.Reason, wantCmd)
+	}
 	if !refused.RefusedAt.Equal(brokenAt.Truncate(time.Millisecond)) {
 		t.Errorf("PlaylistObservationRefused.RefusedAt = %v, want %v", refused.RefusedAt, brokenAt.Truncate(time.Millisecond))
 	}
