@@ -509,10 +509,8 @@ type FPPInstance struct {
 	DuplicateInstanceUUIDEndpointIDs []string `json:"duplicateInstanceUuidEndpointIds"`
 
 	// PlaylistObservationRefused is non-null exactly when this instance's
-	// playlist-entry reports are currently being refused (a sequence
-	// regression, most often a plugin reinstall or a wiped state
-	// directory). Cleared by this instance's next accepted report or by
-	// DELETE .../playlist-entry-observations/{instanceUuid}.
+	// playlist-entry reports are currently being refused. Cleared by the
+	// next accepted report or by the observation reset route.
 	PlaylistObservationRefused *FPPPlaylistObservationRefused `json:"playlistObservationRefused"`
 }
 

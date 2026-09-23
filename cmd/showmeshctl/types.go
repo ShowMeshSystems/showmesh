@@ -301,9 +301,7 @@ type fppInstance struct {
 	ShowParticipation instanceShowParticipation `json:"showParticipation"`
 
 	// PlaylistObservationRefused is non-nil exactly when this instance's
-	// playlist-entry reports are currently being refused (a sequence
-	// regression). Cleared by this instance's next accepted report or by
-	// "showmeshctl fpp reset-observation-sequence".
+	// playlist-entry reports are currently being refused.
 	PlaylistObservationRefused *fppPlaylistObservationRefused `json:"playlistObservationRefused"`
 }
 

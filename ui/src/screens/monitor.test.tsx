@@ -648,7 +648,8 @@ describe('Monitor · Fleet · FPP inspector · playlist observation refused', ()
     fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
     const inspector = within(screen.getByRole('dialog'))
     expect(inspector.getByText('Playlist reports are being refused')).toBeInTheDocument()
-    expect(inspector.getByText('FPP reported a lower sequence than last accepted.')).toBeInTheDocument()
+    expect(inspector.getByText((_, node) => node?.textContent?.includes('FPP reported a lower sequence than last accepted.') === true, { selector: 'p' })).toBeInTheDocument()
+    expect(inspector.getByText(/^Last refused /)).toBeInTheDocument()
   })
 
   it('renders no refusal notice when the instance carries none', () => {

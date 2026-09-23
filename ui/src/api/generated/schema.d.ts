@@ -3565,7 +3565,10 @@ export interface components {
         /** @description The operator-facing reason this instance's playlist-entry reports are currently being refused, and when it was recorded. */
         FPPPlaylistObservationRefused: {
             reason: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description The most recent refusal's time. A retried refusal while the condition is already recorded overwrites this to the newer time, so this is never the first refusal's time once more than one has occurred.
+             */
             refusedAt: string;
         };
         /** @description The uuid an FPP instance reported immediately before its current one, and when that change was first observed. */

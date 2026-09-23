@@ -82,10 +82,7 @@ type FPPInstanceView struct {
 	DuplicateInstanceUUIDEndpointIDs []string
 
 	// PlaylistObservationRefused is non-nil exactly when this endpoint's
-	// current InstanceUUID has a persisted sequence-regression marker
-	// (store.FPPPlaylistEntryObservationRecord.EvidenceBrokenAt) on its
-	// playlist-entry observation row. Nil whenever no observation row
-	// exists for this uuid, or its marker is unset.
+	// current instance uuid carries a persisted sequence-regression marker.
 	PlaylistObservationRefused *FPPPlaylistObservationRefusal
 }
 

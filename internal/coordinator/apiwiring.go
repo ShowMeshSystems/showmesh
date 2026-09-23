@@ -353,10 +353,8 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 			return nil, fmt.Errorf("coordinator: get fpp instance uuid for %q: %w", ep.ID, err)
 		}
 
-		// The refusal marker lives on the playlist-entry observation row,
-		// keyed by FPP's own SystemUUID (fppobservations.go's own request
-		// key), never by the configured endpoint id, so it can only be
-		// looked up once this endpoint's current uuid is known.
+		// The refusal marker is keyed by FPP's own SystemUUID, not the
+		// endpoint id, so it can only be looked up once instanceUUID is known.
 		var playlistObservationRefused *api.FPPPlaylistObservationRefusal
 		if instanceUUID != nil {
 			obsRec, err := l.st.GetFPPPlaylistEntryObservation(ctx, instanceUUID.UUID)
@@ -365,8 +363,8 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 				if obsRec.EvidenceBrokenAt != nil {
 					playlistObservationRefused = &api.FPPPlaylistObservationRefusal{
 						Reason: fmt.Sprintf(
-							"FPP reported a playlist sequence lower than the last one this coordinator accepted (sequence %d), so it is refusing further reports. Clear the playlist observation on the Monitor screen, or run showmeshctl fpp reset-observation-sequence.",
-							obsRec.Sequence,
+							"FPP %s reported a playlist sequence lower than the last one this coordinator accepted (sequence %d), so it is refusing further reports. Clear the playlist observation on the Monitor screen, or run showmeshctl fpp reset-observation-sequence.",
+							ep.ID, obsRec.Sequence,
 						),
 						RefusedAt: *obsRec.EvidenceBrokenAt,
 					}

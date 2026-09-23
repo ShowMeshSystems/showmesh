@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1835,28 +1836,26 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
 }
 
-// nightCheckFPPPluginReportsRefused is fpp-plugin-reports-refused
-// (IDENTIFIER-REGISTER.md's own reservation): one fleet-wide check, not
-// one per instance, since an operator clears the condition from the
-// Monitor screen the same way regardless of which show hit it. It fails
-// when any FPP instance this session binds (instanceIDs, the same set
-// nightCheckFPPReachable is run for) carries a refused playlist-entry
-// observation, reading it off [api.FPPLister.ListInstances]'s own
-// PlaylistObservationRefused rather than re-deriving it from the store a
-// second way.
+// nightCheckFPPPluginReportsRefused is fpp-plugin-reports-refused: one
+// fleet-wide check, failing when any bound instance carries a refused
+// playlist-entry observation, naming every refused instance in reason.
 func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instanceIDs map[string]bool) nightReadinessCheck {
 	const name = "fpp-plugin-reports-refused"
 	views, err := h.deps.FPP.ListInstances(ctx)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "failed to read fpp instance state: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "The coordinator could not read FPP instance state. Run readiness again."}
 	}
+	var reasons []string
 	for _, v := range views {
 		if !instanceIDs[v.InstanceID] || v.PlaylistObservationRefused == nil {
 			continue
 		}
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: v.PlaylistObservationRefused.Reason}
+		reasons = append(reasons, v.PlaylistObservationRefused.Reason)
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
+	if len(reasons) == 0 {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: strings.Join(reasons, " ")}
 }
 
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]

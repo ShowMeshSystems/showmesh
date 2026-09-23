@@ -7,8 +7,7 @@ import (
 )
 
 // This file is the test suite for nightCheckFPPPluginReportsRefused
-// (nightsessioncontrol.go): fpp-plugin-reports-refused, IDENTIFIER-
-// REGISTER.md's own reservation.
+// (nightsessioncontrol.go).
 
 func TestNightCheckFPPPluginReportsRefused_FailsWhenBoundInstanceIsRefused(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))

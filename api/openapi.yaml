@@ -10766,6 +10766,11 @@ components:
         refusedAt:
           type: string
           format: date-time
+          description: >-
+            The most recent refusal's time. A retried refusal while the
+            condition is already recorded overwrites this to the newer
+            time, so this is never the first refusal's time once more
+            than one has occurred.
     FPPInstanceUUIDChange:
       type: object
       description: >-

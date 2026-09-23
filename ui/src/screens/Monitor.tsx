@@ -457,7 +457,17 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       ))}
       <FallbackProgramGroup instance={instance} />
       {instance.playlistObservationRefused !== null && (
-        <Notice tone="bad" live="status" headline="Playlist reports are being refused" explanation={instance.playlistObservationRefused.reason} />
+        <Notice
+          tone="bad"
+          live="status"
+          headline="Playlist reports are being refused"
+          explanation={
+            <>
+              {instance.playlistObservationRefused.reason}{' '}
+              <span className="sm-small sm-faint">{`Last refused ${formatClock(instance.playlistObservationRefused.refusedAt) ?? 'at an unrecorded time'}.`}</span>
+            </>
+          }
+        />
       )}
       <div className="sm-inspector__actions">
         <Link to="/control">Open Live Control</Link>
