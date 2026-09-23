@@ -160,14 +160,16 @@ role_label() {
 
 # mint_local_code enrolls this host with its own coordinator and sets OPT_CODE.
 mint_local_code() {
-  local node_id="$OPT_NODE_ID" out errs
+  local node_id="$OPT_NODE_ID" out errs flags=(--json)
+  [ "${OPT_REENROLL:-0}" -eq 1 ] && flags+=(--reenroll)
+  [ -n "$node_id" ] || node_id="$(env_get "$AGENT_ENV" SHOWMESH_NODE_ID)"
   if [ -z "$node_id" ]; then
     node_id="$(hostname | tr 'A-Z_.' 'a-z--' | sed 's/^-*//; s/-*$//')"
     can_prompt && ask node_id "Node ID for this machine" "$node_id"
   fi
   step "Creating an enrollment code for node $node_id"
   errs="$(run_tmp)"
-  if ! out="$(showmeshctl node enroll --json "$node_id" 2>"$errs")"; then
+  if ! out="$(showmeshctl node enroll "${flags[@]}" "$node_id" 2>"$errs")"; then
     cat "$errs" >&2
     fail "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
   fi
