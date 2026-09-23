@@ -88,8 +88,9 @@ const (
 // for a node as a whole (mqttproto.AudioPayload.EngineRestoreState/
 // EngineRestoreAttempts/EngineRestoreNextAttemptMs/EngineRestoreLastReason)
 // -- the node-level counterpart to SignalSessionRestoreAttempts/
-// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below,
-// which only ever cover a session with a queued restore. State is one of
+// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below.
+// Attempts and LastReason are always current; NextAttemptMs reports
+// only while a restore is scheduled. State is one of
 // "idle", "scheduled", or "exhausted" -- see that field's own doc comment
 // for why a countdown or a boolean alone cannot make this distinction.
 // Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
@@ -153,7 +154,8 @@ const (
 // its own wire-boundary validation and was replaced by its package
 // default). SubstitutedFields names every refused field, joined with
 // "; " (matching fpp.warnings.summary's identical list-as-string
-// convention); Reason is present only while State is "substituted".
+// convention). SubstitutedFields and Reason are always current: empty
+// when State is "accepted", naming/explaining the substitution otherwise.
 // Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
 const (
 	SignalSettingsState             observation.SignalID = "node.audio.settings.state"
@@ -288,8 +290,8 @@ const (
 	// session's own standing relationship to its node's one LTC run —
 	// "held", "refused", or "none" — the surface that makes a refused
 	// claim legible on its own session, not only as a warn-level line in
-	// the node's log. Reason is present only when State is "refused",
-	// matching SignalSessionFaultReason's identical shape one signal up.
+	// the node's log. Reason is always current: empty except while State
+	// is "refused".
 	SignalSessionLTCClaimState  observation.SignalID = "audio_session.ltc.claim.state"
 	SignalSessionLTCClaimReason observation.SignalID = "audio_session.ltc.claim.reason"
 
@@ -299,11 +301,9 @@ const (
 	// deferred or re-queued restore (see the sibling change that
 	// introduces the pkg/audio.State value "restore_pending" for what
 	// State itself reports while this is happening).
-	// Attempts and NextAttemptMs report [observation.StateNotCollected]
-	// with a stated reason whenever the node reports no restore
-	// currently queued for this session; LastReason is present whenever
-	// Attempts is nonzero, matching SignalSessionFaultReason's identical
-	// shape.
+	// Attempts and LastReason are always current, 0/empty when nothing
+	// is queued; NextAttemptMs reports [observation.StateNotCollected]
+	// with a stated reason whenever no restore is currently queued.
 	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
 	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
 	SignalSessionRestoreLastReason    observation.SignalID = "audio_session.restore.last_reason"

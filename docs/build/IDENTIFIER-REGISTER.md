@@ -1018,8 +1018,8 @@ naming which `Settings` struct field was refused.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.settings.state` | shipped | SM-161 (`accepted` or `substituted`; `""` from an older agent reads as `accepted`) |
-| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; not_collected, not empty, whenever state is not `substituted`) |
-| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; not_collected whenever state is not `substituted`) |
+| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; empty and current when state is `accepted`) |
+| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; empty and current when state is `accepted`) |
 
 **One more node-level signal, SM-494.** `audio.node.silence`'s own
 result reports a per-session outcome and count directly in its

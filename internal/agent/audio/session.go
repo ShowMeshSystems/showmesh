@@ -1294,29 +1294,11 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	if item, ok := s.currentItemLocked(); ok {
 		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
 	}
-	if s.desired.Gain != nil || s.muted || len(s.duckedByAll) > 0 {
-		// Seeded with the computed INTENDED gain, effectiveGainLocked's
-		// composed configured/mute/duck/ceiling value, for a session
-		// with no loaded handle to observe yet, or whose position is
-		// mid-discontinuity this tick (the same s.handleLoaded &&
-		// s.timingKnown gate Position uses below). Once this snapshot's
-		// own fresh Observe below succeeds, that call's obs.Gain
-		// overwrites this with the engine's actual output, because the
-		// two are NOT the same value while a fade or a ceiling clamp is
-		// in flight: effectiveGainLocked is what the engine was last
-		// told to head toward, obs.Gain is where it actually is right
-		// now. Reported under audio_session.gain.effective either way:
-		// this is the wire-observable "what is this session actually
-		// outputting right now" (pkg/mqttproto, the coordinator's
-		// nodeaudio collector); each suppression reason above is itself
-		// enough evidence to report a gain even before any
-		// audio.gain.set has ever landed: effectiveGainLocked's own
-		// default (unity, reduced by whichever suppression is active) is
-		// well defined regardless.
-		snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
-	}
-	if s.desired.Ceiling != nil {
-		snap.HasCeiling, snap.Ceiling = true, *s.desired.Ceiling
+	// Always reported; a fresh Observe overwrites it with the engine's
+	// actual gain.
+	snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
+	if ceiling := s.resolveCeilingLocked(); ceiling != nil {
+		snap.HasCeiling, snap.Ceiling = true, *ceiling
 	}
 	snap.Ducked = len(s.duckedByAll) > 0
 	snap.DuckedBy = primaryDuckedByLocked(s.duckedByAll)

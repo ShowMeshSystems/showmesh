@@ -438,36 +438,19 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc L
 // fact about a node that has never substituted a field, never "not
 // collected" -- following [AudioPayload.SettingsState]'s own "\"\" reads
 // as accepted" rule for a report from an agent built before this field
-// existed. SubstitutedFields and Reason are collected only while State is
-// "substituted": an accepted revision has nothing to name and no
-// substitution to explain.
+// existed. SubstitutedFields and Reason are always current: empty when
+// State is "accepted", naming/explaining the substitution otherwise.
 func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
-	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
-	source := SourceFor(nodeID)
-
 	state := p.SettingsState
 	if state == "" {
 		state = "accepted"
 	}
 
-	obs := []observation.Observation{
+	return []observation.Observation{
 		buildValue(nodeID, SignalSettingsState, state, observedAt, rep),
+		buildValue(nodeID, SignalSettingsSubstitutedFields, strings.Join(p.SettingsSubstitutedFields, "; "), observedAt, rep),
+		buildValue(nodeID, SignalSettingsReason, p.SettingsReason, observedAt, rep),
 	}
-
-	if state == "substituted" {
-		obs = append(obs,
-			buildValue(nodeID, SignalSettingsSubstitutedFields, strings.Join(p.SettingsSubstitutedFields, "; "), observedAt, rep),
-			buildValue(nodeID, SignalSettingsReason, p.SettingsReason, observedAt, rep),
-		)
-	} else {
-		reason := "this node applied its most recent audio.settings.configure revision as written; no field was substituted"
-		obs = append(obs,
-			notCollected(res, SignalSettingsSubstitutedFields, source, reason, rep.receivedAt),
-			notCollected(res, SignalSettingsReason, source, reason, rep.receivedAt),
-		)
-	}
-
-	return obs
 }
 
 // engineRestoreObservations renders the four node.audio.engine.restore.*
@@ -479,9 +462,8 @@ func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 // only while State is "scheduled": 0 is otherwise genuinely ambiguous
 // between "never started" and "gave up", which State (not this signal)
 // exists to resolve, so reporting it not_collected rather than a
-// fabricated 0 keeps that resolution honest. LastReason is collected
-// only once Attempts is nonzero, matching sessionObservations' identical
-// RestoreLastReason gate one resource kind down.
+// fabricated 0 keeps that resolution honest. LastReason is always
+// current: empty until Attempts is nonzero.
 func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
@@ -503,11 +485,7 @@ func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observed
 		obs = append(obs, notCollected(res, SignalEngineRestoreNextAttemptMs, source, reason, rep.receivedAt))
 	}
 
-	if p.EngineRestoreAttempts > 0 {
-		obs = append(obs, buildValue(nodeID, SignalEngineRestoreLastReason, p.EngineRestoreLastReason, observedAt, rep))
-	} else {
-		obs = append(obs, notCollected(res, SignalEngineRestoreLastReason, source, "no automatic restore attempt has been made on this node", rep.receivedAt))
-	}
+	obs = append(obs, buildValue(nodeID, SignalEngineRestoreLastReason, p.EngineRestoreLastReason, observedAt, rep))
 
 	return obs
 }
@@ -691,11 +669,7 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	}
 	obs = append(obs, buildSessionValue(res, source, SignalSessionFadeState, fadeState, sessionAt, rep))
 
-	if sess.Ducked {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionMixDuckedBy, sess.DuckedBy, sessionAt, rep))
-	} else {
-		obs = append(obs, notCollected(res, SignalSessionMixDuckedBy, source, "session is not currently ducked", rep.receivedAt))
-	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionMixDuckedBy, sess.DuckedBy, sessionAt, rep))
 
 	if sess.HasAssetProbe {
 		obs = append(obs,
@@ -713,45 +687,30 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	if fault == "" {
 		fault = "none"
 	}
-	obs = append(obs, buildSessionValue(res, source, SignalSessionFaultKind, fault, sessionAt, rep))
-	if fault != "none" {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, sessionAt, rep))
-	} else {
-		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
-	}
+	obs = append(obs,
+		buildSessionValue(res, source, SignalSessionFaultKind, fault, sessionAt, rep),
+		buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, sessionAt, rep),
+	)
 
 	ltcClaimState := sess.LTCClaimState
 	if ltcClaimState == "" {
 		ltcClaimState = "none"
 	}
-	obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimState, ltcClaimState, sessionAt, rep))
-	if ltcClaimState == "refused" {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep))
-	} else {
-		obs = append(obs, notCollected(res, SignalSessionLTCClaimReason, source, "session's LTC claim was not refused", rep.receivedAt))
-	}
+	obs = append(obs,
+		buildSessionValue(res, source, SignalSessionLTCClaimState, ltcClaimState, sessionAt, rep),
+		buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep),
+	)
 
-	// Gated on RestorePending, not on RestoreAttempts > 0: attempts
-	// starting at 0 is genuinely ambiguous between "nothing queued" and
-	// "queued, but the automatic retry driver has not attempted it yet"
-	// — exactly the window an operator most needs to see, and the one a
-	// gate on the count alone reports as nothing at all.
+	// Attempts and last_reason always report a real, current value.
+	// next_attempt_ms below reports only while a restore is queued.
+	obs = append(obs,
+		buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
+		buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep),
+	)
 	if sess.RestorePending {
-		obs = append(obs,
-			buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
-			buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep),
-		)
-		if sess.RestoreAttempts > 0 {
-			obs = append(obs, buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep))
-		} else {
-			obs = append(obs, notCollected(res, SignalSessionRestoreLastReason, source, "a restore is queued but the automatic retry driver has not attempted it yet", rep.receivedAt))
-		}
+		obs = append(obs, buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep))
 	} else {
-		obs = append(obs,
-			notCollected(res, SignalSessionRestoreAttempts, source, "no restore is currently queued for this session", rep.receivedAt),
-			notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt),
-			notCollected(res, SignalSessionRestoreLastReason, source, "no restore is currently queued for this session", rep.receivedAt),
-		)
+		obs = append(obs, notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt))
 	}
 
 	if sess.GapKnown {
