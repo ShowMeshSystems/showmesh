@@ -35,7 +35,7 @@ the first entry.
    it was in. With no active session, level 1 behaves exactly as before. A
    failure to set the hold is reported in the response and the audit entry and
    never stops the stop from proceeding. A live cycle is closed as stopped by
-   the operator.
+   the operator once the targets have been stopped.
 
 2. **While held, nothing starts.** The night loop runs a reduced tick that
    starts no playlist, background audio bed, cue or announcement, on the same
@@ -56,7 +56,11 @@ the first entry.
 4. **When resume is refused.** `resume-show` is refused when no hold stands,
    while a weather delay is active, while the session is degraded, and in
    `preparing`, `fading-out` and `end-of-night-resting`, where no show can
-   start. The hold stays in place after a refusal.
+   start. It is also refused in `preshow`, because `start-night` has not run
+   and its readiness result, age and gate checks have never been applied; the
+   operator is told "The night has not started yet. Press Start Night to start
+   the show." In `preshow`, `start-night` clears the hold when it runs, after
+   those checks pass. The hold stays in place after any refusal.
 
 5. **Precedence.** A weather delay that starts while the night is held takes
    precedence: the loop runs the weather delay tick. When the weather delay
@@ -86,8 +90,10 @@ This supersedes the level 1 "no night-session interaction" rule stated in
   back with no hold.
 - A hold survives a coordinator restart, because it is on the record the loop
   reads every tick.
-- `resume-show` does not run a fresh readiness pass. The night was already
-  started; the launch path's own busy and evidence checks still apply.
+- `resume-show` does not run a fresh readiness pass. It is accepted only after
+  `start-night` has run and applied its readiness checks; the launch path's own
+  busy and evidence checks still apply. A night held in `preshow` continues
+  only through `start-night`, which applies those checks and clears the hold.
 - FPP's own scheduler is outside this decision. A schedule entry configured on
   the player can still start something after level 1, exactly as before.
 

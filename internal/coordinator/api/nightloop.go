@@ -350,7 +350,7 @@ func (h *handlers) nightCommit(ctx context.Context, now time.Time, sessionID, ex
 
 // nightSessionUnchanged re-reads the session immediately before the loop
 // starts output: a tick that read rec seconds ago may be racing an
-// operator stop that has since ended or moved the session.
+// operator stop that has since ended, moved or held the session.
 func (h *handlers) nightSessionUnchanged(ctx context.Context, rec store.NightSessionRecord) bool {
 	cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
@@ -359,6 +359,10 @@ func (h *handlers) nightSessionUnchanged(ctx context.Context, rec store.NightSes
 	}
 	if !ok || cur.ID != rec.ID || cur.State != rec.State {
 		h.logWarn("night loop: the night session changed under this tick; not starting output", "sessionId", rec.ID, "state", rec.State)
+		return false
+	}
+	if nightStopHoldStands(cur) {
+		h.logWarn("night loop: the show was stopped under this tick; not starting output", "sessionId", rec.ID, "state", rec.State)
 		return false
 	}
 	return true

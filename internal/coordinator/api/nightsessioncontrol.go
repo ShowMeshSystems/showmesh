@@ -1087,6 +1087,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		}
 
 		next := *current
+		next.StopHold = nil
 		next.State = nightStateTransitionToShow
 		next.StateEnteredAt = now
 		next.ArmedShowID = uuid.NewString()

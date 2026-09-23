@@ -806,8 +806,9 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 
 	// The hold is set first so the night loop cannot see the stopped
 	// player as a finished show and restart the resting playlist.
-	nightOutcome := h.nightEmergencyStopHold(ctx, now, issuer)
+	nightOutcome, cycleClose := h.nightEmergencyStopHold(ctx, now, issuer)
 	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
+	h.nightCloseStopHoldCycle(ctx, now, cycleClose)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.Stop.Actions, ac, clientAddr)
 

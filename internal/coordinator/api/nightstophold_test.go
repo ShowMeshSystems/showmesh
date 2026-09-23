@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -256,27 +258,193 @@ func TestNightSessionReadShowsTheHold(t *testing.T) {
 }
 
 func TestHeldTickStartsNoBackgroundBed(t *testing.T) {
+	for _, state := range []string{nightStatePreshow, nightStateEndOfNightResting} {
+		t.Run(state, func(t *testing.T) {
+			h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+			putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+			putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+			ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
+			rec.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: testNow}
+			if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+				t.Fatalf("set hold: %v", err)
+			}
+
+			h.nightTick(context.Background(), testNow)
+			if n := countDispatchedAction(pub, "audio.session.apply"); n != 0 {
+				t.Fatalf("audio.session.apply dispatched %d times while held, want 0", n)
+			}
+
+			rec.StopHold = nil
+			if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+				t.Fatalf("clear hold: %v", err)
+			}
+			h.nightAdvanceBackgroundAudio(context.Background(), testNow, mustGetCurrentSession(t, st))
+			if n := countDispatchedAction(pub, "audio.session.apply"); n == 0 {
+				t.Fatal("control: this bed configuration starts no bed even unheld, so the held assertion proves nothing")
+			}
+		})
+	}
+}
+
+// heldTickSession builds a session in state that, unheld, starts a
+// playlist on its next tick. End-of-night resting starts only the bed,
+// which TestHeldTickStartsNoBackgroundBed covers.
+func (r *resumeHarness) heldTickSession(state string) {
+	r.t.Helper()
+	switch state {
+	case nightStateLive:
+		r.createLiveSession()
+	case nightStateTransitionToShow:
+		lastTick := r.now
+		r.createSession(store.NightSessionRecord{State: state, StateEnteredAt: r.now, Cycle: 4,
+			BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &lastTick, LastTickAt: &lastTick})})
+	case nightStateTransitionToResting:
+		r.createSession(store.NightSessionRecord{State: state, StateEnteredAt: r.now.Add(-time.Second), Cycle: 3, FinalShowRequested: true})
+	default:
+		enteredAt := r.now.Add(-2 * time.Minute)
+		r.createSession(store.NightSessionRecord{State: state, StateEnteredAt: enteredAt, Cycle: 2,
+			ContentAnchorJSON: restingAnchorAt(nightAnchorPurposeRestingRepeat, enteredAt)})
+	}
+}
+
+func TestHeldTickStartsNothingInEveryPlayingState(t *testing.T) {
+	for _, state := range []string{nightStateTransitionToShow, nightStateTransitionToResting} {
+		t.Run(state, func(t *testing.T) {
+			control := newResumeHarness(t)
+			control.heldTickSession(state)
+			control.tickIdle(3)
+			if len(control.startPlaylistArgs()) == 0 {
+				t.Fatalf("control: an unheld %s session starts no playlist, so the held assertion proves nothing", state)
+			}
+
+			r := newResumeHarness(t)
+			r.heldTickSession(state)
+			r.levelOneStop()
+			r.tickIdle(5)
+			if starts := r.startPlaylistArgs(); len(starts) != 0 {
+				t.Fatalf("Start Playlist sent while held in %s: %v", state, starts)
+			}
+			if got := mustGetCurrentSession(t, r.st); got.State != state || got.StopHold == nil {
+				t.Fatalf("after held ticks: state %q hold %+v, want %q still held", got.State, got.StopHold, state)
+			}
+		})
+	}
+}
+
+func TestAHoldSetUnderATickStopsItsPlaylistStart(t *testing.T) {
+	control := newResumeHarness(t)
+	control.heldTickSession(nightStateTransitionToShow)
+	control.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, control.now)})
+	control.h.nightAdvanceTransitionToShow(context.Background(), control.now, mustGetCurrentSession(t, control.st))
+	if len(control.startPlaylistArgs()) != 1 {
+		t.Fatalf("control: unheld transition-to-show started %v, want the show once", control.startPlaylistArgs())
+	}
+
+	r := newResumeHarness(t)
+	r.heldTickSession(nightStateTransitionToShow)
+	stale := mustGetCurrentSession(t, r.st)
+	held := stale
+	held.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: r.now}
+	if err := r.st.UpdateNightSession(context.Background(), held, r.now); err != nil {
+		t.Fatalf("set hold: %v", err)
+	}
+	r.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, r.now)})
+	r.h.nightAdvanceTransitionToShow(context.Background(), r.now, stale)
+	if starts := r.startPlaylistArgs(); len(starts) != 0 {
+		t.Fatalf("Start Playlist sent by a tick that read the session before the hold: %v", starts)
+	}
+}
+
+func TestAHoldSetUnderATickStopsItsBed(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
-	rec.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: testNow}
-	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+	stale := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+	held := stale
+	held.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: testNow}
+	if err := st.UpdateNightSession(context.Background(), held, testNow); err != nil {
 		t.Fatalf("set hold: %v", err)
 	}
-
-	h.nightTick(context.Background(), testNow)
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, stale)
 	if n := countDispatchedAction(pub, "audio.session.apply"); n != 0 {
-		t.Fatalf("audio.session.apply dispatched %d times while held, want 0", n)
+		t.Fatalf("audio.session.apply dispatched %d times by a tick that read the session before the hold, want 0", n)
+	}
+}
+
+func TestResumeShowInPreshowIsRefusedAndStartNightClearsTheHold(t *testing.T) {
+	r := newResumeHarness(t)
+	enteredAt := r.now.Add(-2 * time.Minute)
+	r.createSession(store.NightSessionRecord{State: nightStatePreshow, StateEnteredAt: enteredAt,
+		ContentAnchorJSON: restingAnchorAt(nightAnchorPurposeRestingRepeat, enteredAt)})
+	r.levelOneStop()
+
+	code, body := r.post("/api/v1/night/commands/resume-show", ``)
+	if code != http.StatusConflict || !strings.Contains(body, nightResumeShowPreshowDetail) {
+		t.Fatalf("resume-show in preshow: %d %s, want 409 naming %q", code, body, nightResumeShowPreshowDetail)
+	}
+	if got := mustGetCurrentSession(t, r.st); got.State != nightStatePreshow || got.StopHold == nil {
+		t.Fatalf("a refused resume-show changed the session: %q hold %+v", got.State, got.StopHold)
 	}
 
-	rec.StopHold = nil
-	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
-		t.Fatalf("clear hold: %v", err)
+	if err := r.st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "sess-1", EpochID: "sess-1", CompletedAt: r.now, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("create readiness: %v", err)
 	}
-	h.nightAdvanceBackgroundAudio(context.Background(), testNow, mustGetCurrentSession(t, st))
-	if n := countDispatchedAction(pub, "audio.session.apply"); n == 0 {
-		t.Fatal("control: this bed configuration starts no bed even unheld, so the held assertion proves nothing")
+	if code, body := r.post("/api/v1/night/commands/start-night", ``); code != http.StatusAccepted {
+		t.Fatalf("start-night while held: %d %s, want 202", code, body)
+	}
+	if got := mustGetCurrentSession(t, r.st); got.State != nightStateTransitionToShow || got.StopHold != nil {
+		t.Fatalf("after start-night: %q hold %+v, want transition-to-show with no hold", got.State, got.StopHold)
+	}
+}
+
+func TestLevelOneTwiceWhileHeldIsANoOp(t *testing.T) {
+	r := newResumeHarness(t)
+	r.createLiveSession()
+	r.levelOneStop()
+	first := mustGetCurrentSession(t, r.st)
+
+	r.now = r.now.Add(time.Minute)
+	code, body := r.post("/api/v1/emergency-stop/stop", `{"idempotencyKey":"stop-2"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"outcome":"`+nightOutcomeIdempotentNoOp+`"`) {
+		t.Fatalf("second level 1: %d %s, want 200 with a no-op night outcome", code, body)
+	}
+	got := mustGetCurrentSession(t, r.st)
+	if got.StopHold == nil || !got.StopHold.At.Equal(first.StopHold.At) || got.State != first.State || got.Cycle != first.Cycle {
+		t.Fatalf("second level 1 changed the held session: %+v, want %+v", got, first)
+	}
+	outcomes, err := r.st.ListNightCycleOutcomes(context.Background(), "sess-1")
+	if err != nil || len(outcomes) != 1 {
+		t.Fatalf("cycle outcomes = %+v (err %v), want the one closed cycle", outcomes, err)
+	}
+}
+
+type failingHoldTxStore struct{ NightSessionStore }
+
+func (failingHoldTxStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
+	return errors.New("database is locked")
+}
+
+func TestAFailingHoldWriteStillStopsEveryTarget(t *testing.T) {
+	r := newResumeHarness(t)
+	r.createLiveSession()
+	r.h.deps.NightSessions = failingHoldTxStore{r.st}
+
+	w := httptest.NewRecorder()
+	r.h.handleEmergencyStop(w, httptest.NewRequest(http.MethodPost, "/api/v1/emergency-stop/stop", strings.NewReader(`{"idempotencyKey":"stop-1"}`)))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "hold step failed") {
+		t.Fatalf("level 1 with a failing hold write: %d %s, want 200 reporting the hold failure", w.Code, w.Body.String())
+	}
+	cmds, _ := r.fppCommands()
+	stopped := false
+	for _, c := range cmds {
+		stopped = stopped || strings.HasPrefix(c, "Stop")
+	}
+	if !stopped {
+		t.Fatalf("FPP commands = %v, want the player stopped despite the failed hold", cmds)
+	}
+	if got := mustGetCurrentSession(t, r.st); got.StopHold != nil {
+		t.Fatalf("hold = %+v, want none after the failed write", got.StopHold)
 	}
 }

@@ -17,9 +17,10 @@ import (
 // the hold and starts the show playlist from its first entry.
 
 const (
-	nightStopHoldReason         = "The show was stopped with Stop."
-	nightStopHoldCycleReason    = "The operator stopped the show before it finished."
-	nightResumeShowNoHoldDetail = "The show is not stopped, so there is nothing to resume."
+	nightStopHoldReason          = "The show was stopped with Stop."
+	nightStopHoldCycleReason     = "The operator stopped the show before it finished."
+	nightResumeShowNoHoldDetail  = "The show is not stopped, so there is nothing to resume."
+	nightResumeShowPreshowDetail = "The night has not started yet. Press Start Night to start the show."
 )
 
 // nightStopHoldStands reports whether rec carries a hold that still
@@ -46,15 +47,22 @@ func nightCommandAuditAction(cmd string) string {
 	return "night." + cmd
 }
 
+// nightStopHoldCycleClose names the live cycle a new hold interrupted, so
+// level 1 can close its outcome record after the targets are stopped.
+type nightStopHoldCycleClose struct {
+	sessionID string
+	cycle     int64
+}
+
 // nightEmergencyStopHold is level 1's night-session component. It never
 // aborts the stop: a failure is logged and returned in the outcome's Error.
-func (h *handlers) nightEmergencyStopHold(ctx context.Context, now time.Time, issuer identity.AuditEntry) v1.EmergencyStopNightSessionOutcome {
+func (h *handlers) nightEmergencyStopHold(ctx context.Context, now time.Time, issuer identity.AuditEntry) (v1.EmergencyStopNightSessionOutcome, *nightStopHoldCycleClose) {
 	var (
-		out        v1.EmergencyStopNightSessionOutcome
-		closeCycle int64
-		closeID    string
+		out       v1.EmergencyStopNightSessionOutcome
+		closeNext *nightStopHoldCycleClose
 	)
 	err := h.deps.NightSessions.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		closeNext = nil
 		cur, ok, err := tx.GetCurrentNightSession(ctx)
 		if err != nil {
 			return err
@@ -74,21 +82,26 @@ func (h *handlers) nightEmergencyStopHold(ctx context.Context, now time.Time, is
 		next := cur
 		next.StopHold = &store.NightSessionStopHold{Reason: nightStopHoldReason, At: now, Principal: principal}
 		if cur.State == nightStateLive {
-			closeCycle, closeID = cur.Cycle, cur.ID
+			closeNext = &nightStopHoldCycleClose{sessionID: cur.ID, cycle: cur.Cycle}
 		}
 		out.Outcome = nightOutcomeApplied
 		return tx.UpdateNightSession(ctx, next, now)
 	})
 	if err != nil {
 		h.logWarn("emergency stop: could not hold the night session; the stop still proceeded", "error", err)
-		return v1.EmergencyStopNightSessionOutcome{Present: out.Present, SessionID: out.SessionID, Error: "hold step failed: " + err.Error()}
+		return v1.EmergencyStopNightSessionOutcome{Present: out.Present, SessionID: out.SessionID, Error: "hold step failed: " + err.Error()}, nil
 	}
-	if closeID != "" {
-		if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, closeID, closeCycle, now, store.NightCycleOutcomeStopped, nightStopHoldCycleReason); err != nil && err != store.ErrNightCycleOutcomeNotFound {
-			h.logWarn("emergency stop: failed to close night cycle outcome record", "sessionId", closeID, "cycle", closeCycle, "error", err)
-		}
+	return out, closeNext
+}
+
+// nightCloseStopHoldCycle records the interrupted live cycle as stopped.
+func (h *handlers) nightCloseStopHoldCycle(ctx context.Context, now time.Time, c *nightStopHoldCycleClose) {
+	if c == nil {
+		return
 	}
-	return out
+	if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, c.sessionID, c.cycle, now, store.NightCycleOutcomeStopped, nightStopHoldCycleReason); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+		h.logWarn("emergency stop: failed to close night cycle outcome record", "sessionId", c.sessionID, "cycle", c.cycle, "error", err)
+	}
 }
 
 // nightTickDuringStopHold starts no playlist, bed, cue or announcement. A
@@ -118,7 +131,10 @@ func (h *handlers) nightResumeShowTx(ctx context.Context, tx *store.Tx, now time
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
-	case nightStatePreshow, nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
+	case nightStatePreshow:
+		p := nightStateRejectedProblem(nightResumeShowPreshowDetail)
+		return nightCommandOutcome{}, &p, nil
+	case nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
 	case nightStateEndOfNightResting:
 		p := nightStateRejectedProblem("The last show of the night has already played, so there is no show to resume. Fade out the night or end the session.")
 		return nightCommandOutcome{}, &p, nil

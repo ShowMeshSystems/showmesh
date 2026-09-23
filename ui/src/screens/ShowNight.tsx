@@ -61,7 +61,7 @@ import {
   Workbench,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { useResumeShow } from '../app/stopHold'
+import { RESUME_CONFIRM_TITLE, useResumeShow } from '../app/stopHold'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
@@ -460,6 +460,14 @@ export function ShowNight() {
           </Button>
         </ButtonRow>
         {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
+        <ConfirmDialog
+          open={resumeShow.confirmOpen}
+          title={RESUME_CONFIRM_TITLE}
+          detail={null}
+          confirmLabel="Resume"
+          onConfirm={resumeShow.onConfirm}
+          onCancel={resumeShow.onCancel}
+        />
         <LifecycleCommands
           dense
           groups={[

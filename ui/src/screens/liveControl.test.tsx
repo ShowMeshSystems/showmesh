@@ -340,6 +340,9 @@ describe('Live Control', () => {
     const resume = within(screen.getByRole('region', { name: 'Emergency stop' })).getByRole('button', { name: 'Resume' })
     expect(resume).toBeEnabled()
     fireEvent.click(resume)
+    const confirm = screen.getByRole('dialog', { name: 'Start the show playlist from its first song now?' })
+    expect(sent).toEqual([])
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Resume' }))
     await waitFor(() => expect(sent).toEqual(['resume-show']))
   })
 

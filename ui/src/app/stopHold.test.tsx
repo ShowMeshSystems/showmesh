@@ -1,12 +1,14 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Model } from '../api'
 import { initialModel } from '../api/domain'
 import { StopHoldShellBanner } from './StopHoldShellBanner'
 
+const getCurrentNightSession = vi.hoisted(() => vi.fn((): Promise<{ session: unknown }> => new Promise(() => {})))
+
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, getCurrentNightSession: () => new Promise(() => {}) }
+  return { ...actual, getCurrentNightSession }
 })
 
 const BANNER = 'The show is stopped. Press Resume on Live Control to start the show playlist from its first song.'
@@ -32,6 +34,25 @@ describe('StopHoldShellBanner', () => {
 
   it('shows nothing to a signed-out device', () => {
     renderBanner({ nightSession: held }, false)
+    expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
+  })
+
+  it('drops a hold the stream cleared when the stream resets, and reads again', async () => {
+    getCurrentNightSession.mockResolvedValueOnce({ session: held })
+    const view = renderBanner({ nightSession: null })
+    expect(await screen.findByRole('alert')).toHaveTextContent(BANNER)
+
+    const cleared = { state: 'transition-to-show' } as never
+    view.rerender(<StopHoldShellBanner model={{ ...initialModel(), nightSession: cleared }} authenticated />)
+    expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
+
+    let answer: (value: { session: unknown }) => void = () => {}
+    getCurrentNightSession.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    view.rerender(<StopHoldShellBanner model={{ ...initialModel(), nightSession: null }} authenticated />)
+    expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
+    expect(getCurrentNightSession).toHaveBeenCalledTimes(2)
+
+    await act(async () => answer({ session: cleared }))
     expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
   })
 })

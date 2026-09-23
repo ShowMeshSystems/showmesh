@@ -78,7 +78,7 @@ import {
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { useCurrentNightSession, useResumeShow } from '../app/stopHold'
+import { RESUME_CONFIRM_TITLE, useCurrentNightSession, useResumeShow } from '../app/stopHold'
 import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis } from '../domain/time'
@@ -789,6 +789,14 @@ export function LiveControl() {
             </Button>
           </ButtonRow>
           {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
+          <ConfirmDialog
+            open={resumeShow.confirmOpen}
+            title={RESUME_CONFIRM_TITLE}
+            detail={null}
+            confirmLabel="Resume"
+            onConfirm={resumeShow.onConfirm}
+            onCancel={resumeShow.onCancel}
+          />
           {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
           {hardStopArm !== null && armRemainingMs !== null && (
             <Notice
