@@ -1759,6 +1759,89 @@ func TestSnapshotReportsGainWhenSuppressedWithoutAnyExplicitGainSet(t *testing.T
 	}
 }
 
+// TestSnapshotReportsGainCurrentForAnOrdinarySession proves the vanilla
+// case TestSnapshotReportsGainWhenSuppressedWithoutAnyExplicitGainSet
+// does not cover: a session with no mute, no duck, and no gain.set ever
+// sent still reports a real, current gain (unity) rather than
+// HasGain=false. effectiveGainLocked's default is well defined
+// regardless of whether any suppression is active.
+func TestSnapshotReportsGainCurrentForAnOrdinarySession(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	const id = pkgaudio.SessionID("ordinary")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-a", []byte("a"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	snap := s.snapshotLocked(ctx)
+	s.mu.Unlock()
+
+	if !snap.HasGain {
+		t.Fatal("ordinary session with no gain.set, mute, or duck ever applied reports HasGain=false, want true")
+	}
+	if snap.Gain != pkgaudio.Gain(1) {
+		t.Fatalf("ordinary session gain = %v, want unity (1)", snap.Gain)
+	}
+}
+
+// TestSnapshotReportsBackgroundDefaultCeilingWhenNoneDeclared proves a
+// background session with no explicit audio.gain.ceiling still reports
+// the ceiling actually in effect once audio.settings.configure has
+// landed: [Session.resolveCeilingLocked]'s DefaultMaxBackgroundGain
+// fallback, the same ceiling [Session.clampToCeilingLocked] enforces.
+func TestSnapshotReportsBackgroundDefaultCeilingWhenNoneDeclared(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	settings := DefaultSettings
+	settings.DefaultMaxBackgroundGain = pkgaudio.Ceiling(0.3)
+	m.SetSettings(settings)
+
+	const id = pkgaudio.SessionID("bg-default-ceiling")
+	ref := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	snap := s.snapshotLocked(ctx)
+	s.mu.Unlock()
+
+	if !snap.HasCeiling {
+		t.Fatal("background session with no declared ceiling but a configured DefaultMaxBackgroundGain reports HasCeiling=false, want true")
+	}
+	if snap.Ceiling != pkgaudio.Ceiling(0.3) {
+		t.Fatalf("background session ceiling = %v, want the configured default 0.3", snap.Ceiling)
+	}
+}
+
+// TestSnapshotReportsNoCeilingBeforeSettingsConfigured is the converse:
+// a background session reports no ceiling at all before any
+// audio.settings.configure has ever landed, matching
+// [Session.resolveCeilingLocked]'s "nil before Configured" rule — never a
+// fabricated default the operator never actually set.
+func TestSnapshotReportsNoCeilingBeforeSettingsConfigured(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	const id = pkgaudio.SessionID("bg-unconfigured")
+	ref := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	snap := s.snapshotLocked(ctx)
+	s.mu.Unlock()
+
+	if snap.HasCeiling {
+		t.Fatalf("background session before any audio.settings.configure reports HasCeiling=true (ceiling %v), want false", snap.Ceiling)
+	}
+}
+
 // mutation target: checkFadeCompletionLocked judging completion against
 // fadeDispatchedTarget rather than the current effective gain. A mute
 // landing mid-fade cancels the ramp (applyEffectiveGainLocked drives the

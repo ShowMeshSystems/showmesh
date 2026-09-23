@@ -158,25 +158,37 @@ func (m *Manager) fadeToEffectiveGainBestEffortLocked(ctx context.Context, s *Se
 	}
 }
 
-// clampToCeilingLocked applies s's own declared ceiling if it has one;
-// otherwise, for a background-role session, once a real
-// audio.settings.configure has been delivered
-// ([Settings.Configured]), applies its DefaultMaxBackgroundGain — the
+// resolveCeilingLocked returns the ceiling actually in effect for s: its
+// own declared ceiling if it has one; otherwise, for a background-role
+// session, once a real audio.settings.configure has been delivered
+// ([Settings.Configured]), its DefaultMaxBackgroundGain — the
 // operator-configured ceiling a background bed gets when it declares
-// none itself. Before any audio.settings has ever been delivered, or for
-// any other session role, a session with no declared ceiling stays
-// unclamped, matching this package's pre-existing behavior. Reports the
-// clamp either way so a caller can carry it as outcome evidence rather
-// than silently applying an unreported value. Caller holds s.mu.
-func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.CeilingResult, error) {
-	ceiling := s.desired.Ceiling
-	if ceiling == nil && s.desired.SourceRole != nil && *s.desired.SourceRole == pkgaudio.SourceRoleBackground {
+// none itself. nil (no ceiling applies) before any audio.settings has
+// ever been delivered, or for any other session role with none declared.
+// The single source of truth [clampToCeilingLocked] enforces and the
+// snapshot's audio_session.gain.ceiling reports, so the two can never
+// disagree. Caller holds s.mu.
+func (s *Session) resolveCeilingLocked() *pkgaudio.Ceiling {
+	if s.desired.Ceiling != nil {
+		return s.desired.Ceiling
+	}
+	if s.desired.SourceRole != nil && *s.desired.SourceRole == pkgaudio.SourceRoleBackground {
 		settings := s.mgr.SettingsSnapshot()
 		if settings.Configured {
 			c := settings.DefaultMaxBackgroundGain
-			ceiling = &c
+			return &c
 		}
 	}
+	return nil
+}
+
+// clampToCeilingLocked applies [Session.resolveCeilingLocked]'s ceiling to
+// requested, or leaves it unclamped when none applies, matching this
+// package's pre-existing behavior. Reports the clamp either way so a
+// caller can carry it as outcome evidence rather than silently applying
+// an unreported value. Caller holds s.mu.
+func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.CeilingResult, error) {
+	ceiling := s.resolveCeilingLocked()
 	if ceiling == nil {
 		if err := requested.Validate(); err != nil {
 			return pkgaudio.CeilingResult{}, err

@@ -703,11 +703,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep),
 	)
 
-	// Gated on RestorePending, not on RestoreAttempts > 0: attempts
-	// starting at 0 is genuinely ambiguous between "nothing queued" and
-	// "queued, but the automatic retry driver has not attempted it yet"
-	// — exactly the window an operator most needs to see, and the one a
-	// gate on the count alone reports as nothing at all.
+	// Attempts and last_reason always report a real, current value.
+	// next_attempt_ms below reports only while a restore is queued.
 	obs = append(obs,
 		buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
 		buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep),

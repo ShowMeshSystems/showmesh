@@ -379,6 +379,36 @@ func TestSessionGainSignalsReportDecibelsNotLinearMultiplier(t *testing.T) {
 	}
 }
 
+// TestSessionGainReportsCurrentUnityWithNoExplicitSet proves the
+// collector correctly surfaces the agent's own always-current gain
+// (internal/agent/audio's Session.snapshotLocked now reports HasGain on
+// every report): a session that never received an explicit
+// audio.gain.set, with no ceiling either, reports gain.effective as
+// current at 0 dB (unity) rather than not_collected.
+func TestSessionGainReportsCurrentUnityWithNoExplicitSet(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		HasGain: true, Gain: float64(pkgaudio.Gain(1)),
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	gain := findSessionObs(t, obs, SignalSessionGain)
+	if gain.Absence != "" {
+		t.Errorf("gain.effective absence = %q, want a current value", gain.Absence)
+	}
+	gainDb, ok := gain.Value.(float64)
+	if !ok || math.Abs(gainDb) > 0.01 {
+		t.Errorf("gain.effective value = %v (%T), want 0 dB (unity)", gain.Value, gain.Value)
+	}
+
+	ceiling := findSessionObs(t, obs, SignalSessionGainCeiling)
+	if ceiling.Absence != observation.StateNotCollected {
+		t.Errorf("gain.ceiling absence = %q, want %q when no ceiling applies", ceiling.Absence, observation.StateNotCollected)
+	}
+}
+
 // TestSessionStateReasonDrawsPlayingClaimDistinction proves AUDIO-ENGINE section 15's rule:
 // audio_session.state.reason states the claim-not-proof distinction
 // specifically for Playing (and Paused), never for a state that carries

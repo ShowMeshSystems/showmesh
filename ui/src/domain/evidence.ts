@@ -32,12 +32,7 @@ export const EVIDENCE_LABEL: Record<EvidenceState, string> = {
   unsupported: 'Unavailable',
 }
 
-/**
- * A signal's own value rendered for a generic signal list, distinguishing
- * a real empty string (a known fact, e.g. "no fault to explain") from a
- * blank cell: without this, "" and a genuinely unlisted value are
- * visually identical.
- */
+/** An empty string is a known empty value and renders as None. */
 export function displayValue(value: string | number | boolean): string {
   return value === '' ? 'None' : String(value)
 }
