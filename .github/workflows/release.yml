@@ -197,8 +197,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /root/.cargo/registry
-            /root/.cargo/git
+            ~/.cargo/registry
+            ~/.cargo/git
             /tmp/ndi-plugin-work/gst-plugins-rs/target
           key: ndi-plugin-amd64-${{ hashFiles('deploy/node/ndi-plugin/build-ndi-plugin.sh') }}
 
@@ -227,8 +227,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /root/.cargo/registry
-            /root/.cargo/git
+            ~/.cargo/registry
+            ~/.cargo/git
             /tmp/ndi-plugin-work/gst-plugins-rs/target
           key: ndi-plugin-arm64-${{ hashFiles('deploy/node/ndi-plugin/build-ndi-plugin.sh') }}
 

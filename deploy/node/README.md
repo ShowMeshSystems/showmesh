@@ -187,9 +187,9 @@ uploads will otherwise fail to register with no other symptom.
   that the ALSA tooling and elements exist, not that sound actually comes
   out of a real DAC. That is per-hardware commissioning, out of scope
   here.
-- Real NDI output. `ndisink` element resolution is reported as
-  informational only, and this repository does not build or verify that
-  element, see "What the agent does" above.
+- Real NDI output. The package carries the NDI plugin and `preflight.sh`
+  reports whether `ndisink` resolves, but whether frames reach a receiver
+  depends on the NDI runtime you install and your network.
 - That the systemd unit actually boots correctly on real hardware. It has
   been checked for syntactic validity (`systemd-analyze verify`) and
   built/installed/preflighted inside a container, but a plain container
