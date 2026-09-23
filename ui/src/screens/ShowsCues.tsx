@@ -14,7 +14,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, DeletePanel, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -35,9 +35,12 @@ import {
   slugify,
 } from './showsModel'
 
+/** One of this show's show.action objects, as the cue editor offers it. */
+type ShowActionOption = { id: string; label: string }
+
 type ListState =
   | { kind: 'loading' }
-  | { kind: 'loaded'; cues: ShowCueConfigResponse[]; playlists: ShowPlaylistConfigResponse[]; assets: Asset[] }
+  | { kind: 'loaded'; cues: ShowCueConfigResponse[]; playlists: ShowPlaylistConfigResponse[]; assets: Asset[]; actions: ShowActionOption[] }
   | { kind: 'failed'; reason: string }
 
 function useCues(showId: string): { state: ListState; reload: () => void; upsertCue: (response: ShowCueConfigResponse) => void } {
@@ -50,7 +53,7 @@ function useCues(showId: string): { state: ListState; reload: () => void; upsert
     fetchShowContents(showId)
       .then(async (contents) => {
         const [cues, playlists] = await Promise.all([fetchShowCues(contents.cues), fetchShowPlaylists(contents.playlists)])
-        if (!cancelled) setState({ kind: 'loaded', cues, playlists, assets: contents.assets })
+        if (!cancelled) setState({ kind: 'loaded', cues, playlists, assets: contents.assets, actions: contents.actions })
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
@@ -129,6 +132,7 @@ export function ShowsCues() {
   const selected = selectedId === null ? null : state.cues.find((c) => c.id === selectedId) ?? null
   const audioAssets = state.assets.filter((a) => a.mediaType === 'audio' && a.current)
   const existingIds = state.cues.map((c) => c.id)
+  const actionLabels = new Map(state.actions.map((a) => [a.id, a.label]))
 
   const closeInspector = () => { setCreating(false); setSelectedId(null) }
 
@@ -165,6 +169,7 @@ export function ShowsCues() {
             title="In a playlist"
             rows={inPlaylist}
             selectedId={selectedId}
+            actionLabels={actionLabels}
             usedByColumn
             onSelect={(id) => {
               setSelectedId(id)
@@ -182,6 +187,7 @@ export function ShowsCues() {
               hideTitle
               rows={unreachable}
               selectedId={selectedId}
+              actionLabels={actionLabels}
               stateColumn
               onSelect={(id) => {
                 setSelectedId(id)
@@ -202,6 +208,7 @@ export function ShowsCues() {
               hideTitle
               rows={announcements}
               selectedId={selectedId}
+              actionLabels={actionLabels}
               policyColumn
               onSelect={(id) => {
                 setSelectedId(id)
@@ -220,6 +227,7 @@ export function ShowsCues() {
             cue={selected}
             existingIds={existingIds}
             audioAssets={audioAssets}
+            showActions={state.actions}
             model={model}
             onSaved={(response) => {
               upsertCue(response)
@@ -245,6 +253,7 @@ export function ShowsCues() {
 function CueTable({
   rows,
   selectedId,
+  actionLabels,
   onSelect,
   usedByColumn = false,
   stateColumn = false,
@@ -254,6 +263,7 @@ function CueTable({
 }: {
   rows: CueRow[]
   selectedId: string | null
+  actionLabels: ReadonlyMap<string, string>
   onSelect: (id: string) => void
   usedByColumn?: boolean
   stateColumn?: boolean
@@ -301,7 +311,7 @@ function CueTable({
                   </td>
                   <td>
                     <span className="sm-chip-row">
-                      {row.kinds.length === 0 ? (
+                      {row.kinds.length === 0 && row.actions.length === 0 ? (
                         <span className="sm-small sm-faint">none</span>
                       ) : (
                         row.kinds.map((kind) => (
@@ -310,7 +320,14 @@ function CueTable({
                           </span>
                         ))
                       )}
+                      {row.actions.length > 0 && <span className="sm-chip">ACT</span>}
                     </span>
+                    {row.actions.length > 0 && (
+                      <>
+                        <br />
+                        <span className="sm-small sm-muted">Fires {row.actions.map((id) => actionLabels.get(id) ?? id).join(', then ')}</span>
+                      </>
+                    )}
                   </td>
                   {usedByColumn && <td className="sm-small sm-muted">{row.usedByPlaylists.join(', ')}</td>}
                   {stateColumn && (
@@ -431,6 +448,9 @@ function TargetNodeField({
 }
 
 
+/** The coordinator's own refusal of a cue whose only output is show actions. */
+const ACTIONS_ONLY_REASON = 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.'
+
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
   { kind: 'audio', title: 'Audience audio', description: 'Play an audio asset on the program bus' },
@@ -455,6 +475,7 @@ function CueEditor({
   cue,
   existingIds,
   audioAssets,
+  showActions,
   model,
   onSaved,
   onDeleted,
@@ -464,6 +485,7 @@ function CueEditor({
   cue: ShowCueConfigResponse | null
   existingIds: readonly string[]
   audioAssets: readonly Asset[]
+  showActions: readonly ShowActionOption[]
   model: ReturnType<typeof useModelContext>
   onSaved: (response: ShowCueConfigResponse) => void
   onDeleted: () => void
@@ -490,6 +512,7 @@ function CueEditor({
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
   const [announcementTargets, setAnnouncementTargets] = useState<string[]>(cue?.payload.outputs.announcement?.targets ?? [])
   const [announcementExcludeNodes, setAnnouncementExcludeNodes] = useState<string[]>(readCueOutputExcludeNodes(cue?.payload.outputs.announcement))
+  const [actions, setActions] = useState<string[]>(cue?.payload.outputs.actions ?? [])
   const audioNodes = useAudioNodes()
   const showAudioNodesState = useShowAudioNodes(showId)
   const ltcFrameRateState = useLtcFrameRate()
@@ -532,7 +555,9 @@ function CueEditor({
   }
 
   let blockReason: string | null = null
-  if (kinds.size === 0) blockReason = 'Pick at least one output.'
+  const unknownActions = actions.filter((actionId) => !showActions.some((a) => a.id === actionId))
+  if (kinds.size === 0) blockReason = actions.length > 0 ? ACTIONS_ONLY_REASON : 'Pick at least one output.'
+  else if (unknownActions.length > 0) blockReason = `${unknownActions.join(', ')} is not a show action in this show. Remove it to save.`
   else if (kinds.has('ltc') && !kinds.has('audio')) blockReason = 'LTC requires Audio to also be selected.'
   else if (kinds.has('announcement') && !kinds.has('audio')) blockReason = 'Announcement requires Audio to also be selected.'
   else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence name.'
@@ -575,6 +600,7 @@ function CueEditor({
       ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, targets: announcementTargets }
       : null,
     ltcFps: fps,
+    actions: actions.map((actionId) => showActions.find((a) => a.id === actionId)?.label ?? actionId),
   }
 
   const save = () => {
@@ -616,6 +642,7 @@ function CueEditor({
             },
           }
         : {}),
+      ...(actions.length > 0 ? { actions } : {}),
     }
     const payload: ConfigShowCue = { show: showId, name: name.trim(), outputs }
     setSaving(true)
@@ -821,6 +848,8 @@ function CueEditor({
         </div>
       )}
 
+      <CueActionsField value={actions} onChange={setActions} showActions={showActions} />
+
       <Callout>{cueActivationSummary(activationDraft)}</Callout>
 
       <div className="sm-inspector__actions">
@@ -865,6 +894,88 @@ function CueEditor({
         >
           <p className="sm-small sm-muted">Deleting a cue leaves any playlist entry that used it pointing at nothing.</p>
         </DeletePanel>
+      )}
+    </div>
+  )
+}
+
+/** The cue's show actions: an ordered list the operator adds to, reorders and trims. */
+function CueActionsField({
+  value,
+  onChange,
+  showActions,
+}: {
+  value: readonly string[]
+  onChange: (next: string[]) => void
+  showActions: readonly ShowActionOption[]
+}) {
+  const [pick, setPick] = useState('')
+  const available = showActions.filter((a) => !value.includes(a.id))
+  const move = (index: number, delta: -1 | 1) => {
+    const next = [...value]
+    const [item] = next.splice(index, 1)
+    next.splice(index + delta, 0, item as string)
+    onChange(next)
+  }
+  return (
+    <div className="sm-inspector__group">
+      <h3 className="sm-subsection__title">Show actions</h3>
+      <p className="sm-small sm-muted">Fired in this order each time the cue starts, before its timecode.</p>
+      {value.length === 0 ? (
+        <RuledStrip absence="empty" label="None" fact="This cue fires no show actions." />
+      ) : (
+        <ol className="sm-plain-list" aria-label="Show actions in firing order">
+          {value.map((actionId, index) => {
+            const action = showActions.find((a) => a.id === actionId)
+            const label = action?.label ?? actionId
+            return (
+              <li key={actionId} className="sm-step-row">
+                <span className="sm-handle" aria-hidden="true">
+                  ⠿
+                </span>
+                <div className="sm-step-row__meta">
+                  <span>
+                    {index + 1}. {label}
+                  </span>
+                  <span className="sm-data sm-small sm-faint">{actionId}</span>
+                  {action === undefined && <StatusPair tone="bad" label="Not in this show" />}
+                </div>
+                <ReorderButtons
+                  itemLabel={label}
+                  onMoveUp={() => move(index, -1)}
+                  onMoveDown={() => move(index, 1)}
+                  onRemove={() => onChange(value.filter((id) => id !== actionId))}
+                  moveUpReason={index === 0 ? 'Already first.' : undefined}
+                  moveDownReason={index === value.length - 1 ? 'Already last.' : undefined}
+                />
+              </li>
+            )
+          })}
+        </ol>
+      )}
+      {showActions.length === 0 ? (
+        <p className="sm-small sm-faint">This show has no show actions yet. Create one in Automation.</p>
+      ) : (
+        <div className="sm-inline-row">
+          <Select aria-label="Add a show action" value={pick} onChange={(e) => setPick(e.target.value)} disabled={available.length === 0}>
+            <option value="">{available.length === 0 ? 'Every show action is already added' : 'Choose a show action to add…'}</option>
+            {available.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label !== '' && a.label !== a.id ? `${a.label} · ${a.id}` : a.id}
+              </option>
+            ))}
+          </Select>
+          <Button
+            onClick={() => {
+              onChange([...value, pick])
+              setPick('')
+            }}
+            disabled={pick === ''}
+            title={pick === '' ? 'Choose a show action first.' : undefined}
+          >
+            Add action
+          </Button>
+        </div>
       )}
     </div>
   )

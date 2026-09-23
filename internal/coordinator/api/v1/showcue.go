@@ -45,6 +45,7 @@ type ConfigShowCueOutputs struct {
 	Audio        *ConfigShowCueAudioOutput        `json:"audio,omitempty"`
 	LTC          *ConfigShowCueLTCOutput          `json:"ltc,omitempty"`
 	Announcement *ConfigShowCueAnnouncementOutput `json:"announcement,omitempty"`
+	Actions      []string                         `json:"actions,omitempty"`
 }
 
 // ConfigShowCue is the "show.cue" configuration kind's decoded payload

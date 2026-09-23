@@ -604,7 +604,25 @@ function eventRow(event: Event): TimedRow {
 
 function auditSummary(entry: AuditEntry): string {
   const fact = entry.outcomeReason !== '' ? entry.outcomeReason : `${entry.action} on ${entry.target}`
-  return entry.outcome === '' ? fact : `${fact} (${entry.outcome})`
+  const summary = entry.outcome === '' ? fact : `${fact} (${entry.outcome})`
+  const actions = cueActivationActionsSummary(entry)
+  return actions === null ? summary : `${summary} ${actions}`
+}
+
+/** A cue.activate outcome entry's show action outcomes, each with its state and reason when recorded. */
+export function cueActivationActionsSummary(entry: AuditEntry): string | null {
+  if (entry.action !== 'cue.activate') return null
+  const raw = (entry.params as Record<string, unknown>)['actions']
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const parts = raw.map((item) => {
+    const a = item as { actionId?: unknown; label?: unknown; outcome?: unknown; outcomeState?: unknown; outcomeReason?: unknown }
+    const name = typeof a.label === 'string' && a.label !== '' ? a.label : String(a.actionId ?? 'unnamed action')
+    let part = `${name} ${typeof a.outcome === 'string' ? a.outcome : 'unreported'}`
+    if (typeof a.outcomeState === 'string' && a.outcomeState !== '') part += `, ${a.outcomeState}`
+    if (typeof a.outcomeReason === 'string' && a.outcomeReason !== '') part += `: ${a.outcomeReason}`
+    return part
+  })
+  return `Show actions: ${parts.join('; ')}.`
 }
 
 function auditRow(entry: AuditEntry): TimedRow {

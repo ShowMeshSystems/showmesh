@@ -164,6 +164,10 @@ type handlers struct {
 	// still be running well after that side effect is observed.
 	cueActivationFailToBlackWG sync.WaitGroup
 
+	// emergencyStops counts emergency stops fired since start, so a cue's
+	// show actions still queued can tell a stop happened and hold.
+	emergencyStops atomic.Int64
+
 	// cueActivationRefusalLog dedupes cueActivationTickOne's own "node did
 	// not confirm this activation" log line (cueactivationloop.go): keyed
 	// by instanceUuid+"|"+nodeId, it holds the last NodeOutcome already
