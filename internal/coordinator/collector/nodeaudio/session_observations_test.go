@@ -98,7 +98,7 @@ func TestSessionFaultSignalsDistinguishAllSeven(t *testing.T) {
 
 // TestSessionFaultNoneReportsReasonCurrentEmpty proves the converse: no
 // standing fault means FaultKind is the literal "none" and FaultReason is
-// a current empty value — never not_collected, since a session with no
+// a current empty value, never not_collected, since a session with no
 // fault has a known, empty reason.
 func TestSessionFaultNoneReportsReasonCurrentEmpty(t *testing.T) {
 	st := NewStore()
@@ -150,7 +150,7 @@ func TestSessionLTCClaimRefusedCarriesItsReason(t *testing.T) {
 
 // TestSessionLTCClaimHeldReasonCurrentEmpty proves the converse: a
 // session that holds the run reports state "held" and its reason as a
-// current empty value, never not_collected — the claim was not refused,
+// current empty value, never not_collected: the claim was not refused,
 // so an empty reason is the known, honest fact.
 func TestSessionLTCClaimHeldReasonCurrentEmpty(t *testing.T) {
 	st := NewStore()

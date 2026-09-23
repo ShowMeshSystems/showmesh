@@ -158,16 +158,9 @@ func (m *Manager) fadeToEffectiveGainBestEffortLocked(ctx context.Context, s *Se
 	}
 }
 
-// resolveCeilingLocked returns the ceiling actually in effect for s: its
-// own declared ceiling if it has one; otherwise, for a background-role
-// session, once a real audio.settings.configure has been delivered
-// ([Settings.Configured]), its DefaultMaxBackgroundGain — the
-// operator-configured ceiling a background bed gets when it declares
-// none itself. nil (no ceiling applies) before any audio.settings has
-// ever been delivered, or for any other session role with none declared.
-// The single source of truth [clampToCeilingLocked] enforces and the
-// snapshot's audio_session.gain.ceiling reports, so the two can never
-// disagree. Caller holds s.mu.
+// resolveCeilingLocked reports the ceiling in effect: declared, else the
+// background default once settings are configured, else none. The single
+// source [clampToCeilingLocked] enforces and the snapshot reports. Caller holds s.mu.
 func (s *Session) resolveCeilingLocked() *pkgaudio.Ceiling {
 	if s.desired.Ceiling != nil {
 		return s.desired.Ceiling
@@ -182,11 +175,7 @@ func (s *Session) resolveCeilingLocked() *pkgaudio.Ceiling {
 	return nil
 }
 
-// clampToCeilingLocked applies [Session.resolveCeilingLocked]'s ceiling to
-// requested, or leaves it unclamped when none applies, matching this
-// package's pre-existing behavior. Reports the clamp either way so a
-// caller can carry it as outcome evidence rather than silently applying
-// an unreported value. Caller holds s.mu.
+// clampToCeilingLocked clamps requested to [Session.resolveCeilingLocked]'s ceiling, or leaves it unclamped when none applies. Caller holds s.mu.
 func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.CeilingResult, error) {
 	ceiling := s.resolveCeilingLocked()
 	if ceiling == nil {

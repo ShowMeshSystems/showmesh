@@ -438,9 +438,8 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc L
 // fact about a node that has never substituted a field, never "not
 // collected" -- following [AudioPayload.SettingsState]'s own "\"\" reads
 // as accepted" rule for a report from an agent built before this field
-// existed. SubstitutedFields and Reason are collected only while State is
-// "substituted": an accepted revision has nothing to name and no
-// substitution to explain.
+// existed. SubstitutedFields and Reason are always current: empty when
+// State is "accepted", naming/explaining the substitution otherwise.
 func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	state := p.SettingsState
 	if state == "" {
@@ -463,9 +462,8 @@ func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 // only while State is "scheduled": 0 is otherwise genuinely ambiguous
 // between "never started" and "gave up", which State (not this signal)
 // exists to resolve, so reporting it not_collected rather than a
-// fabricated 0 keeps that resolution honest. LastReason is collected
-// only once Attempts is nonzero, matching sessionObservations' identical
-// RestoreLastReason gate one resource kind down.
+// fabricated 0 keeps that resolution honest. LastReason is always
+// current: empty until Attempts is nonzero.
 func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)

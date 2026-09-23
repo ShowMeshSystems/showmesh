@@ -1294,13 +1294,8 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	if item, ok := s.currentItemLocked(); ok {
 		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
 	}
-	// Always current: effectiveGainLocked's own default (unity, reduced by
-	// any active suppression) is well defined even before any
-	// audio.gain.set has ever landed. Seeded with the INTENDED gain;
-	// once this snapshot's own fresh Observe below succeeds, that call's
-	// obs.Gain overwrites this with the engine's actual output, because
-	// the two are NOT the same value while a fade or a ceiling clamp is
-	// in flight.
+	// Always reported; a fresh Observe overwrites it with the engine's
+	// actual gain.
 	snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
 	if ceiling := s.resolveCeilingLocked(); ceiling != nil {
 		snap.HasCeiling, snap.Ceiling = true, *ceiling

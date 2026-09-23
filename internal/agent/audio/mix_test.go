@@ -1821,7 +1821,7 @@ func TestSnapshotReportsBackgroundDefaultCeilingWhenNoneDeclared(t *testing.T) {
 // TestSnapshotReportsNoCeilingBeforeSettingsConfigured is the converse:
 // a background session reports no ceiling at all before any
 // audio.settings.configure has ever landed, matching
-// [Session.resolveCeilingLocked]'s "nil before Configured" rule — never a
+// [Session.resolveCeilingLocked]'s "nil before Configured" rule, never a
 // fabricated default the operator never actually set.
 func TestSnapshotReportsNoCeilingBeforeSettingsConfigured(t *testing.T) {
 	c := newClock(time.Now())
