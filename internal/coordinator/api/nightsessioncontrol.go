@@ -1680,6 +1680,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		}
 		checks = append(checks, h.nightCheckFPPReachable(ctx, now, id))
 	}
+	checks = append(checks, h.nightCheckFPPPluginReportsRefused(ctx, instanceIDs))
 
 	cueOffsets := append(nightParseCueOffsets(payload.EnterShow.Cues), nightParseCueOffsets(payload.EnterResting.Cues)...)
 	checks = append(checks, nightCheckRestingAssetDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset, cueOffsets))
@@ -1832,6 +1833,30 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 		reason = "fpp.reachable evidence state: " + string(obs[0].StateAt(now))
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
+}
+
+// nightCheckFPPPluginReportsRefused is fpp-plugin-reports-refused
+// (IDENTIFIER-REGISTER.md's own reservation): one fleet-wide check, not
+// one per instance, since an operator clears the condition from the
+// Monitor screen the same way regardless of which show hit it. It fails
+// when any FPP instance this session binds (instanceIDs, the same set
+// nightCheckFPPReachable is run for) carries a refused playlist-entry
+// observation, reading it off [api.FPPLister.ListInstances]'s own
+// PlaylistObservationRefused rather than re-deriving it from the store a
+// second way.
+func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instanceIDs map[string]bool) nightReadinessCheck {
+	const name = "fpp-plugin-reports-refused"
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "failed to read fpp instance state: " + err.Error()}
+	}
+	for _, v := range views {
+		if !instanceIDs[v.InstanceID] || v.PlaylistObservationRefused == nil {
+			continue
+		}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: v.PlaylistObservationRefused.Reason}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
 }
 
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]

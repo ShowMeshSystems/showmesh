@@ -299,12 +299,24 @@ type fppInstance struct {
 	// above: an older coordinator that predates it leaves it at its zero
 	// value, State "".
 	ShowParticipation instanceShowParticipation `json:"showParticipation"`
+
+	// PlaylistObservationRefused is non-nil exactly when this instance's
+	// playlist-entry reports are currently being refused (a sequence
+	// regression). Cleared by this instance's next accepted report or by
+	// "showmeshctl fpp reset-observation-sequence".
+	PlaylistObservationRefused *fppPlaylistObservationRefused `json:"playlistObservationRefused"`
 }
 
 // fppInstanceUUIDChange is fppInstance.InstanceUUIDChange's shape.
 type fppInstanceUUIDChange struct {
 	PreviousUUID string    `json:"previousUuid"`
 	ChangedAt    time.Time `json:"changedAt"`
+}
+
+// fppPlaylistObservationRefused is fppInstance.PlaylistObservationRefused's shape.
+type fppPlaylistObservationRefused struct {
+	Reason    string    `json:"reason"`
+	RefusedAt time.Time `json:"refusedAt"`
 }
 
 // acknowledgeFPPInstanceUUIDChangeResponse is the body of

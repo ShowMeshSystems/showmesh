@@ -87,6 +87,7 @@ const fpp = (instanceId: string, health: FPPInstance['health'], uuidChanged = fa
     lastPollAt: '2026-08-28T21:06:58Z',
     lastPollError: null,
     instanceUuidChange: uuidChanged ? { previousUuid: 'old', changedAt: '2026-08-28T20:54:00Z' } : null,
+    playlistObservationRefused: null,
   }) as unknown as FPPInstance
 
 function renderScreen(model: Partial<Model>, initialPath = '/monitor/fleet') {
@@ -625,5 +626,35 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
 
     expect(screen.queryByText('A’s verdict.')).not.toBeInTheDocument()
     expect(screen.queryByText(/^Checked /)).not.toBeInTheDocument()
+  })
+})
+
+// FPP inspector · playlist observation refused notice, beside the clear button.
+describe('Monitor · Fleet · FPP inspector · playlist observation refused', () => {
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => PENDING()
+  })
+  afterEach(cleanup)
+
+  it('shows the refusal reason beside the clear button when the instance carries the condition', () => {
+    const refused = {
+      ...fpp('barn-player', 'healthy'),
+      instanceUuid: 'barn-uuid',
+      playlistObservationRefused: { reason: 'FPP reported a lower sequence than last accepted.', refusedAt: '2026-09-01T00:00:00Z' },
+    } as FPPInstance
+    renderScreen({ fpp: [refused] })
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    const inspector = within(screen.getByRole('dialog'))
+    expect(inspector.getByText('Playlist reports are being refused')).toBeInTheDocument()
+    expect(inspector.getByText('FPP reported a lower sequence than last accepted.')).toBeInTheDocument()
+  })
+
+  it('renders no refusal notice when the instance carries none', () => {
+    const healthy = { ...fpp('barn-player', 'healthy'), instanceUuid: 'barn-uuid' } as FPPInstance
+    renderScreen({ fpp: [healthy] })
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    expect(screen.queryByText('Playlist reports are being refused')).not.toBeInTheDocument()
   })
 })

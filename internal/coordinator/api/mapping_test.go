@@ -407,6 +407,38 @@ func TestMapFPPInstanceResolvesMultiSourceObservations(t *testing.T) {
 	}
 }
 
+// TestMapFPPInstanceCarriesPlaylistObservationRefused proves mapFPPInstance
+// renders FPPInstanceView.PlaylistObservationRefused onto the wire, and
+// leaves it null when absent.
+func TestMapFPPInstanceCarriesPlaylistObservationRefused(t *testing.T) {
+	now := time.Now()
+	refusedAt := now.Add(-time.Minute)
+	fv := FPPInstanceView{
+		InstanceID: "player-01",
+		Endpoint:   "http://10.0.1.20",
+		PlaylistObservationRefused: &FPPPlaylistObservationRefusal{
+			Reason:    "sequence went backwards",
+			RefusedAt: refusedAt,
+		},
+	}
+	inst := mapFPPInstance(fv, v1.InstanceShowParticipation{}, now)
+	if inst.PlaylistObservationRefused == nil {
+		t.Fatal("mapFPPInstance: PlaylistObservationRefused = nil, want non-nil")
+	}
+	if inst.PlaylistObservationRefused.Reason != "sequence went backwards" {
+		t.Errorf("PlaylistObservationRefused.Reason = %q, want %q", inst.PlaylistObservationRefused.Reason, "sequence went backwards")
+	}
+	if inst.PlaylistObservationRefused.RefusedAt != formatTime(refusedAt) {
+		t.Errorf("PlaylistObservationRefused.RefusedAt = %q, want %q", inst.PlaylistObservationRefused.RefusedAt, formatTime(refusedAt))
+	}
+
+	noneFV := FPPInstanceView{InstanceID: "player-02", Endpoint: "http://10.0.1.21"}
+	noneInst := mapFPPInstance(noneFV, v1.InstanceShowParticipation{}, now)
+	if noneInst.PlaylistObservationRefused != nil {
+		t.Errorf("mapFPPInstance with no refusal: PlaylistObservationRefused = %+v, want nil", noneInst.PlaylistObservationRefused)
+	}
+}
+
 // --- deriveResolumeHealth ---
 //
 // This section is [TestDeriveInstanceHealth*]'s Resolume sibling, against

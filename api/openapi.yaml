@@ -10687,7 +10687,7 @@ components:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
          instanceUuidChange, duplicateInstanceUuidEndpointIds,
-         showParticipation]
+         showParticipation, playlistObservationRefused]
       properties:
         instanceId:
           type: string
@@ -10744,6 +10744,28 @@ components:
             duplicate.
           items:
             type: string
+        playlistObservationRefused:
+          oneOf:
+            - $ref: "#/components/schemas/FPPPlaylistObservationRefused"
+            - type: "null"
+          description: >-
+            Non-null exactly when this instance's playlist-entry reports
+            are currently being refused (a sequence regression, most often
+            a plugin reinstall or a wiped state directory). Cleared by
+            this instance's next accepted report or by
+            DELETE .../playlist-entry-observations/{instanceUuid}.
+    FPPPlaylistObservationRefused:
+      type: object
+      description: >-
+        The operator-facing reason this instance's playlist-entry reports
+        are currently being refused, and when it was recorded.
+      required: [reason, refusedAt]
+      properties:
+        reason:
+          type: string
+        refusedAt:
+          type: string
+          format: date-time
     FPPInstanceUUIDChange:
       type: object
       description: >-
@@ -19836,6 +19858,14 @@ components:
         threshold, and `not_verifiable` whenever this coordinator holds no
         current measurement for that node. A drifting show still runs;
         this is a warning, never a reason `outcome` blocks `start-night`.
+
+        It also checks `fpp-plugin-reports-refused`: one fleet-wide check,
+        not one per instance, that fails when any FPP instance this
+        session binds is currently refusing the plugin's playlist-entry
+        reports (a sequence regression, most often a plugin reinstall or a
+        wiped state directory), naming the reason in `reason`. Cleared by
+        the referenced instance's next accepted report or by
+        DELETE .../playlist-entry-observations/{instanceUuid}.
       required: [name, state, reason]
       properties:
         name:

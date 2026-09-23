@@ -4,6 +4,7 @@ import {
   AttentionRow,
   Button,
   ConnectionPill,
+  Notice,
   Panes,
   RuledStrip,
   Section,
@@ -455,6 +456,9 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
         </section>
       ))}
       <FallbackProgramGroup instance={instance} />
+      {instance.playlistObservationRefused !== null && (
+        <Notice tone="bad" live="status" headline="Playlist reports are being refused" explanation={instance.playlistObservationRefused.reason} />
+      )}
       <div className="sm-inspector__actions">
         <Link to="/control">Open Live Control</Link>
         <Link to="/monitor/signals">All signals</Link>
