@@ -35,7 +35,7 @@ and versions in its own repository, `ShowMeshSystems/fpp-showmesh`.
    forward to `1.0.0-rc.N` if it applies there. Never the other way round.
 8. **The FPP plugin versions on its own.** It lives in
    `ShowMeshSystems/fpp-showmesh` with its own root `VERSION` file (currently
-   `0.1.4`). It follows the same season rule for MAJOR, so a plugin and a
+   `0.1.5`). It follows the same season rule for MAJOR, so a plugin and a
    coordinator from the same season share a major number, but MINOR and PATCH
    move independently.
 9. **The first ShowMesh Core pre-release is `0.1.0`.**
