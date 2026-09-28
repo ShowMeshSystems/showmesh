@@ -45,11 +45,10 @@ First pre-release. Pre-alpha.
 - Night sessions, including the night session write path and night commands;
   each night cycle's outcome is now recorded and shown on the Show Night
   screen.
-- A three-level emergency stop: stop, stop with power down, and a held hard
-  stop. All three levels reliably black every render surface and silence
-  every audio node. The held hard stop now suspends the night session
-  instead of ending it, and resuming the show restarts it from its first
-  entry.
+- A three-level emergency stop: stop, stop with power down, and a hard
+  stop. Every level blacks every render surface and silences every audio
+  node. A level 1 stop holds the night session instead of ending it, and
+  Resume starts the show playlist from its first song.
 - A new media playlist configuration kind, with API routes, CLI verbs, and a
   Playlists screen in the operator UI; a night session can reference a media
   playlist for its background audio, with a picker on the Night screen.
@@ -137,10 +136,9 @@ First pre-release. Pre-alpha.
   operator can trigger a playlist-definition republish, and see which show
   playlists bind each FPP playlist definition.
 - Per-instance fallback programs with acknowledgement.
-- A native FPP plugin, released from its own repository, now at 0.1.5. The
-  plugin can be paired to the coordinator with a one-time code, and its
-  brightness ceiling can be written and read back, including from a slider
-  in the operator UI.
+- A native FPP plugin, released from its own repository, now at 0.1.5. It
+  adds seven FPP commands, from preparing the site to powering down the
+  presentation, so an FPP schedule entry can run the whole night.
 - The coordinator states plainly when it refuses an FPP instance's playlist
   reports.
 - Fixed: a show start that FPP never confirms no longer holds the night
