@@ -451,6 +451,14 @@ const (
 	nightDispatchRetryWindow  = 5 * time.Minute
 )
 
+// nightStartConfirmWindow bounds how long a playlist start FPP accepted may
+// go unconfirmed before the session degrades instead of waiting forever.
+const nightStartConfirmWindow = time.Minute
+
+func nightStartUnconfirmed(a nightContentAnchor, now time.Time) bool {
+	return !a.DispatchedAt.IsZero() && a.ObservedAt.IsZero() && now.Sub(a.DispatchedAt) >= nightStartConfirmWindow
+}
+
 // nightRefusalIsTerminal separates a refusal a later tick may clear (the
 // host is busy, or its evidence is not current yet) from one it cannot: a
 // missing instance, invalid parameters, or an authorization failure.
@@ -1176,6 +1184,11 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 			if nightFillAnchorFromObservation(ctx, h.deps.Observations, instanceID, obs, cur.DispatchedAt, now, &cur) {
 				return cur, true, true
 			}
+		}
+		if nightStartUnconfirmed(cur, now) {
+			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
+				"FPP did not report playlist %q playing on %q within a minute of starting it. The night closes at its next fade-out, or end the night session to close it now.",
+				playlist, instanceID))
 		}
 		return cur, false, false
 	}

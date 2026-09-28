@@ -1249,6 +1249,13 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // TYPE, never a named bool type (none exists anywhere in this repo), but
 // always a named value at the call site, so a reader never has to look up
 // what a literal true or false means here.
+// nightShowStartUnconfirmed is true when the show playlist was started but
+// FPP never reported it playing, so there is no show for a shutdown to wait on.
+func nightShowStartUnconfirmed(rec store.NightSessionRecord, now time.Time) bool {
+	a, ok := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	return ok && a.Purpose == nightAnchorPurposeShow && nightStartUnconfirmed(a, now)
+}
+
 func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string, force bool) (store.NightSessionRecord, bool) {
 	changed := false
 	if !rec.AdmissionClosed {
@@ -1262,7 +1269,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 		changed = true
 	}
 
-	deferring := !force && (rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted))
+	deferring := !force && (rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted && !nightShowStartUnconfirmed(rec, now)))
 	switch {
 	case rec.State == nightStateFadingOut || rec.State == nightStateStopped:
 		// Nothing left to fade.
