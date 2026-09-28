@@ -316,7 +316,7 @@ deploy-up-published:
 # The artifact contract is pinned (not invented here) so a separate
 # packaging repository's install script can fetch and verify against it
 # without coordinating a second change:
-#   tag:   fpp-plugin-v<VERSION>
+#   tag:   v<VERSION> on ShowMeshSystems/showmesh-fpp-plugin
 #   asset: showmesh-fpp-plugin_<VERSION>_linux_<ARCH>.tar.gz, ARCH in
 #          {amd64, arm64, armv7}
 #   sums:  showmesh-fpp-plugin_<VERSION>_SHA256SUMS, standard

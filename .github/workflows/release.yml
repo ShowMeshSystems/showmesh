@@ -3,17 +3,12 @@ name: Release
 # Publishes ShowMesh Core (coordinator, operator UI, node agent) from a
 # pushed release tag. workflow_dispatch runs the same pipeline as a proof
 # run: it builds and packages everything but does not create a GitHub
-# release or publish under a version-shaped tag.
-#
-# `v*` already does not match the FPP plugin's own `fpp-plugin-v<VERSION>`
-# tag shape (it does not start with "v"), and the exclusion pattern below
-# is kept anyway as an explicit, checked-in statement of that boundary
-# rather than relying on the coincidence.
+# release or publish under a version-shaped tag. The FPP plugin releases
+# from its own repository, so every tag here is a Core release.
 on:
   push:
     tags:
       - 'v*'
-      - '!fpp-plugin-v*'
   workflow_dispatch:
 
 # Default to read-only; only the jobs that publish escalate.
