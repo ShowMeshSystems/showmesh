@@ -11,7 +11,7 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
-## 0.1.0 - 2026-09-29
+## 0.1.0 - 2026-09-28
 
 First pre-release. Pre-alpha.
 
