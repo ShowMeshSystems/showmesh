@@ -14,5 +14,7 @@ export default defineConfig({
     // neither needs a browser, but both need real timers/network by
     // default, so nothing here mocks globals.
     restoreMocks: true,
+    // restoreMocks only restores spies since vitest 4; mockReset keeps vi.fn() mocks reset per test.
+    mockReset: true,
   },
 })
