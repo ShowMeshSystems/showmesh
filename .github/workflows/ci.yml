@@ -963,7 +963,7 @@ jobs:
           cache: true
 
       # A synthetic, clearly-non-release version for a CI run — the
-      # pinned tag format is fpp-plugin-v<VERSION>, and this is not that;
+      # plugin's release tag is v<VERSION> on ShowMeshSystems/showmesh-fpp-plugin, and this is not that;
       # it exists only so this job's own artifact filenames and manifest
       # are exercised end to end, matching what `make release-fpp-plugin`
       # (no VERSION override, defaulting to the top-level VERSION var)
