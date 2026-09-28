@@ -56,13 +56,17 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 CLONE_DIR="$WORK_DIR/gst-plugins-rs"
+# The directory can already exist without a clone: CI restores a cached
+# target/ into it before this runs, and git clone refuses a non-empty path.
 if [ -d "$CLONE_DIR/.git" ]; then
 	echo "build-ndi-plugin: reusing existing clone in $CLONE_DIR"
-	git -C "$CLONE_DIR" fetch --depth 1 origin "tag" "$GST_PLUGINS_RS_TAG"
-	git -C "$CLONE_DIR" checkout --detach FETCH_HEAD
 else
-	git clone --depth 1 --branch "$GST_PLUGINS_RS_TAG" "$GST_PLUGINS_RS_REPO" "$CLONE_DIR"
+	mkdir -p "$CLONE_DIR"
+	git -C "$CLONE_DIR" init -q
+	git -C "$CLONE_DIR" remote add origin "$GST_PLUGINS_RS_REPO"
 fi
+git -C "$CLONE_DIR" fetch --depth 1 origin "tag" "$GST_PLUGINS_RS_TAG"
+git -C "$CLONE_DIR" checkout -q --detach FETCH_HEAD
 
 (cd "$CLONE_DIR" && cargo build --release --locked -p gst-plugin-ndi)
 
