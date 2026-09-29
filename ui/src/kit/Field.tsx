@@ -128,3 +128,41 @@ export function ChoiceGroup({ label, help, error, options, value, onChange }: Ch
     </div>
   )
 }
+
+export type RadioCardOption = { value: string; title: ReactNode; desc?: ReactNode }
+
+type RadioCardListProps = {
+  /** Label the outcome of the choice, not the field. */
+  label: string
+  help?: ReactNode
+  options: readonly RadioCardOption[]
+  /** The checked option's value, or '' when none is chosen. */
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}
+
+/** A single choice from a short known list, drawn as one joined card. */
+export function RadioCardList({ label, help, options, value, onChange, disabled }: RadioCardListProps) {
+  const id = useId()
+  const helpId = help === undefined ? undefined : `${id}-help`
+  return (
+    <div className="sm-field">
+      <fieldset className="sm-radio-cards" aria-describedby={helpId} disabled={disabled}>
+        <legend className="sm-field__label">{label}</legend>
+        <div className="sm-choice-list">
+          {options.map((option) => (
+            <label key={option.value} className="sm-choice sm-choice--card">
+              <input type="radio" name={id} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+              <span className="sm-choice--card__body">
+                <span className="sm-choice--card__title">{option.title}</span>
+                {option.desc !== undefined && <span className="sm-choice--card__desc">{option.desc}</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {help !== undefined && <span className="sm-field__help" id={helpId}>{help}</span>}
+    </div>
+  )
+}

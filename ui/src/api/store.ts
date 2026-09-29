@@ -122,6 +122,7 @@ type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsS
 type SchemaAudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
 type SchemaConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
 type SchemaAudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
+type SchemaAudioRoutingChoicesResponse = components['schemas']['AudioRoutingChoicesResponse']
 type SchemaConfigAudioNode = components['schemas']['ConfigAudioNode']
 // Long-run program-to-LTC drift recordings: coordinator-recorded observation
 // history, not a config kind. Started/stopped behind audio:command, read
@@ -1201,6 +1202,19 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaAudioNodeConfigResponse>(
         `/config/audio.node/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/nodes/{nodeId}/audio/routing-choices`: the choices the node's own reported outputs offer. */
+  async getAudioRoutingChoices(nodeId: string): Promise<SchemaAudioRoutingChoicesResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAudioRoutingChoicesResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/routing-choices`,
         controller.signal,
       )
     } finally {

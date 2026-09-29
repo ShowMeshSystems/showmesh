@@ -29,6 +29,7 @@ import {
   Notice,
   NotWired,
   NotWiredBanner,
+  RadioCardList,
   RailBadge,
   RuledStrip,
   Section,
@@ -142,6 +143,7 @@ export function Specimen() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
+  const [radioCardValue, setRadioCardValue] = useState('1,2')
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -290,6 +292,16 @@ export function Specimen() {
             same route on two hosts never reads as one option. The route itself is a real, unbreakable device
             string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
           </p>
+          <RadioCardList
+            label="Program channels"
+            help="Channel pairs this output reports."
+            options={[
+              { value: '1,2', title: 'Channels 1 and 2', desc: 'Timecode can use 3 or 4.' },
+              { value: '3,4', title: 'Channels 3 and 4', desc: 'Timecode can use 1 or 2.' },
+            ]}
+            value={radioCardValue}
+            onChange={setRadioCardValue}
+          />
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">

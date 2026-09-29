@@ -3,7 +3,7 @@
  * fetching: every function here takes already-loaded data and returns a
  * fact or a verdict, so each is testable without a coordinator.
  */
-import type { FPPInstance, Node, NightSessionState, ResolumeInstance } from '../api'
+import type { AudioRoutingChoicesResponse, AudioRoutingRouteChoice, FPPInstance, Node, NightSessionState, ResolumeInstance } from '../api'
 import type { Tone } from '../kit'
 
 /** Mirrors monitorModel.ts's identical HEALTH_TONE map, kept as its own copy: settingsModel has no dependency on monitorModel. */
@@ -172,4 +172,22 @@ export function nodeClockVerdict(payload: {
 export function liveCycle(nightSession: NightSessionState | null): { cycle: number } | null {
   if (nightSession === null || nightSession.state !== 'live') return null
   return { cycle: nightSession.cycle }
+}
+
+export type RoutingEntryMode = 'choices' | 'manual'
+
+/** Choices when the node's own outputs are trustworthy and the saved placement is one of them; otherwise manual, so a saved placement stays exactly as it is. */
+export function defaultRoutingEntryMode(choices: AudioRoutingChoicesResponse): RoutingEntryMode {
+  if (choices.discovery !== 'available' || choices.routes.length === 0) return 'manual'
+  return choices.current !== undefined && !choices.current.offered ? 'manual' : 'choices'
+}
+
+export function channelListLabel(channels: readonly number[]): string {
+  if (channels.length === 1) return `Channel ${channels[0]}`
+  return `Channels ${channels.slice(0, -1).join(', ')} and ${channels[channels.length - 1]}`
+}
+
+export function channelCountLabel(route: AudioRoutingRouteChoice): string {
+  const noun = route.channels === 1 ? 'channel' : 'channels'
+  return route.channelBasis === 'atLeast' ? `at least ${route.channels} ${noun}` : `${route.channels} ${noun}`
 }

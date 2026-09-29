@@ -289,6 +289,26 @@
   padding: 0;
 }
 
+/* A radio card list (RadioCardList): a bare fieldset whose legend is the field label. */
+.sm-radio-cards {
+  display: grid;
+  gap: var(--s-2);
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.sm-radio-cards > legend {
+  padding: 0;
+  margin-bottom: var(--s-2);
+}
+
+.sm-radio-cards:disabled .sm-choice--card {
+  cursor: not-allowed;
+  color: var(--text-muted);
+}
+
 /* A checkbox option list drawn as one joined card, hairline dividers between rows. */
 .sm-choice-list {
   display: grid;

@@ -36,6 +36,7 @@ const stubs = vi.hoisted(() => ({
   getShowModeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAudioRoutingChoices: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNodeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   deleteAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -78,6 +79,7 @@ vi.mock('../api', async () => {
     getShowModeConfigRevisions: (...args: never[]) => stubs.getShowModeConfigRevisions(...args),
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getAudioNode: (...args: never[]) => stubs.getAudioNode(...args),
+    getAudioRoutingChoices: (...args: never[]) => stubs.getAudioRoutingChoices(...args),
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
     getAudioNodeConfigRevisions: (...args: never[]) => stubs.getAudioNodeConfigRevisions(...args),
     deleteAudioNode: (...args: never[]) => stubs.deleteAudioNode(...args),
@@ -1170,6 +1172,182 @@ describe('Settings › Node routing', () => {
       expect(screen.getByLabelText('Type audio-node-02 to confirm')).toHaveValue('')
       expect(screen.getByRole('button', { name: 'Delete node' })).toBeDisabled()
     })
+  })
+})
+
+describe('Settings › Node routing › choices from the node', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.getAudioRoutingChoices = () => new Promise(() => {})
+  })
+
+  const M4 = 'alsa_output.usb-MOTU_M4-00.pro-output-0'
+
+  function stored(payload: Record<string, unknown>) {
+    return {
+      serverTime: '2026-09-28T21:00:00Z',
+      kind: 'audio.node',
+      id: 'audio-node-01',
+      revision: 4,
+      payload: { outputLatency: { method: 'unmeasured' }, ...payload },
+      updatedAt: '2026-09-28T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'admin',
+      source: 'api',
+    }
+  }
+
+  const m4Route = {
+    route: M4,
+    interface: M4,
+    source: 'pipewire',
+    channels: 4,
+    channelBasis: 'inventory',
+    ltcCapable: true,
+    programGroups: [
+      { channels: [1, 2], ltcChannels: [3, 4], conflicts: [{ channel: 1, reason: 'Channel 1 carries program audio.' }, { channel: 2, reason: 'Channel 2 carries program audio.' }] },
+      { channels: [3, 4], ltcChannels: [1, 2], conflicts: [{ channel: 3, reason: 'Channel 3 carries program audio.' }, { channel: 4, reason: 'Channel 4 carries program audio.' }] },
+    ],
+  }
+
+  function choices(overrides: Record<string, unknown> = {}) {
+    return {
+      serverTime: '2026-09-28T21:00:00Z',
+      nodeId: 'audio-node-01',
+      discovery: 'available',
+      manualEntry: { allowed: true },
+      ltc: { available: true },
+      routes: [m4Route],
+      ...overrides,
+    }
+  }
+
+  function setUp(payload: Record<string, unknown>, choiceBody: unknown) {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: M4, show: '', currentRevision: 4, updatedAt: '2026-09-28T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(stored(payload))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', revisions: [] })
+    stubs.getAudioRoutingChoices = () => (choiceBody instanceof Error ? Promise.reject(choiceBody) : Promise.resolve(choiceBody))
+  }
+
+  it('offers program groups and only the LTC channels the chosen group leaves free, then saves the choice', async () => {
+    setUp(
+      { programRoute: M4, ltcRoute: M4, programChannels: [1, 2], ltcChannel: 3 },
+      choices({ current: { programRoute: M4, programChannels: [1, 2], ltcChannel: 3, offered: true } }),
+    )
+    let sent: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    const first = await screen.findByRole('radio', { name: /Channels 1 and 2/ })
+    expect(first).toBeChecked()
+    expect(screen.queryByRole('textbox', { name: 'Program channels' })).not.toBeInTheDocument()
+    const ltc = screen.getByRole('combobox', { name: 'Channel' }) as HTMLSelectElement
+    expect(Array.from(ltc.options).map((o) => o.value)).toEqual(['3', '4'])
+
+    fireEvent.click(screen.getByRole('radio', { name: /Channels 3 and 4/ }))
+    const ltcAfter = screen.getByRole('combobox', { name: 'Channel' }) as HTMLSelectElement
+    expect(Array.from(ltcAfter.options).map((o) => o.value)).toEqual(['', '1', '2'])
+    const save = screen.getByRole('button', { name: 'Save routing' })
+    expect(save).toBeDisabled()
+    expect(save).toHaveAttribute('title', 'Choose a timecode channel from the ones offered.')
+
+    fireEvent.change(ltcAfter, { target: { value: '1' } })
+    expect(save).not.toBeDisabled()
+    fireEvent.click(save)
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ programRoute: M4, programChannels: [3, 4], ltcRoute: M4, ltcChannel: 1 })
+  })
+
+  it('supports a program-only node and says why timecode is not offered', async () => {
+    const pch = {
+      route: 'hw:CARD=PCH,DEV=0', interface: 'hw:CARD=PCH', source: 'alsa', channels: 2, channelBasis: 'atLeast', ltcCapable: false,
+      ltcReason: 'This output has no spare channel for timecode. Choose program only, or pick an output with three or more channels.',
+      programGroups: [{ channels: [1, 2], ltcChannels: [], conflicts: [] }],
+    }
+    setUp(
+      { programRoute: 'hw:CARD=PCH,DEV=0', programChannels: [1, 2], role: 'program' },
+      choices({ routes: [pch], ltc: { available: false, reason: 'No output on this node has a spare channel for timecode. Choose program only.' } }),
+    )
+    let sent: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await screen.findByRole('radio', { name: /Channels 1 and 2/ })
+    expect(screen.getByRole('option', { name: 'hw:CARD=PCH,DEV=0, at least 2 channels' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'On' })).toBeDisabled()
+    expect(screen.getByText('No output on this node has a spare channel for timecode. Choose program only.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Program' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ programRoute: 'hw:CARD=PCH,DEV=0', programChannels: [1, 2] })
+    expect(sent).not.toHaveProperty('ltcChannel')
+  })
+
+  it('explains stale discovery and keeps the manual fields, with no choices offered', async () => {
+    setUp(
+      { programRoute: M4, programChannels: [1, 2] },
+      choices({ discovery: 'stale', reason: 'This node is offline, so its outputs may have changed. Bring the node online to choose from its outputs.', routes: [], ltc: { available: false } }),
+    )
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    expect(await screen.findByText(/This node is offline, so its outputs may have changed/)).toBeInTheDocument()
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'From the node' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Program channels')).toHaveValue('1, 2')
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+  })
+
+  it('opens a saved placement the node does not offer in manual entry, unchanged, and can switch to the choices', async () => {
+    setUp(
+      { programRoute: M4, programChannels: [2, 3] },
+      choices({ current: { programRoute: M4, programChannels: [2, 3], offered: false, reason: 'The saved channels are not among this output\'s choices and stay in use as saved. Pick a choice, or keep them through manual entry.' } }),
+    )
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    expect(await screen.findByText(/stay in use as saved/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enter by hand', pressed: true })).toBeInTheDocument()
+    expect(screen.getByLabelText('Program channels')).toHaveValue('2, 3')
+    expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'From the node' }))
+    expect(await screen.findByRole('radio', { name: /Channels 1 and 2/ })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Save routing' })).toHaveAttribute('title', 'Choose the program channels.')
+  })
+
+  it('falls back to manual entry when the choices cannot be read', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, new ApiError('You do not have permission to read this.', 403, 'https://showmesh.dev/problems/forbidden'))
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    expect(await screen.findByText(/Enter channels by hand below/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Program channels')).toHaveValue('1, 2')
+  })
+
+  it('shows a save failure and withholds save without config:write', async () => {
+    setUp(
+      { programRoute: M4, ltcRoute: M4, programChannels: [1, 2], ltcChannel: 3 },
+      choices({ current: { programRoute: M4, programChannels: [1, 2], ltcChannel: 3, offered: true } }),
+    )
+    stubs.putAudioNode = () => Promise.reject(new ApiError('Channel 5 does not exist on this output, which has 4 channels. Choose a channel from 1 to 4.', 400, 'https://showmesh.dev/problems/invalid-parameter'))
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    fireEvent.click(await screen.findByRole('radio', { name: /Channels 3 and 4/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Channel' }), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    expect(await screen.findByText(/Channel 5 does not exist/)).toBeInTheDocument()
+
+    cleanup()
+    renderAt('/settings/node-routing', { nodes: [], session: signedIn(['observation:read']) })
+    fireEvent.click(await screen.findByRole('radio', { name: /Channels 3 and 4/ }))
+    expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled()
   })
 })
 
