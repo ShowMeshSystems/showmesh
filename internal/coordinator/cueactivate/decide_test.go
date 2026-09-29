@@ -272,6 +272,41 @@ func TestDecideResolvedActivationCarriesEveryPinnedIdentity(t *testing.T) {
 	}
 }
 
+func TestDecideResolvedActivationNamesTheNextEntrysCue(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putLTCCue(t, st, "cue-2", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	p := singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, "")
+	p.Entries = append(p.Entries, config.ShowPlaylistEntry{
+		ID: "entry-2", Cue: "cue-2",
+		FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1},
+	})
+	putPlaylist(t, st, "playlist-1", p)
+
+	for _, tc := range []struct{ entryID, cueID, wantNext string }{
+		{"entry-1", "cue-1", "cue-2"},
+		{"entry-2", "cue-2", ""},
+	} {
+		dec, err := Decide(context.Background(), st, resolvedResult("show-1", "playlist-1", 1, tc.entryID, tc.cueID, 1), baseObservation("inst-1"), "inst-1", nil, nil)
+		if err != nil {
+			t.Fatalf("Decide(%s): %v", tc.entryID, err)
+		}
+		act, ok := dec.Activations["node-1"]
+		if !ok {
+			t.Fatalf("Decide(%s): no activation for node-1", tc.entryID)
+		}
+		if act.NextCueID != tc.wantNext {
+			t.Errorf("Decide(%s): NextCueID = %q, want %q", tc.entryID, act.NextCueID, tc.wantNext)
+		}
+	}
+}
+
 // --- Authorize: independent refusal, never a partial dispatch ---
 
 func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {

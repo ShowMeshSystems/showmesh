@@ -242,7 +242,11 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	// hashCache is shared between asset.fetch's own post-write verification
 	// and cue.activate's assetPresent check (cueactivationops.go), so a
 	// large asset already verified once is never re-hashed whole again.
+	// Render shares it, so a sequence swap does not re-hash either.
 	hashCache := newVerifiedHashCache()
+	if render != nil && render.hashCache != nil {
+		hashCache = render.hashCache
+	}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken, hashCache: hashCache}
 	remove := assetRemoveOperation{dir: assetDir}
 	mediaProbe := mediaProbeOperation{dir: assetDir}

@@ -118,6 +118,24 @@ func (o *cueActivationOperation) heldStateAndEntry(cueID string) (held cueauth.H
 	return held, cuecatalog.Entry{}, false, nil
 }
 
+// nextRenderOutput resolves the render output of the Cue act names as
+// coming next, from the same held catalog act was just authorized against.
+// nil when there is none or the held catalog has moved on.
+func (o *cueActivationOperation) nextRenderOutput(act cueactivation.Activation) *cuecatalog.RenderOutput {
+	if act.NextCueID == "" {
+		return nil
+	}
+	held, entry, found, err := o.heldStateAndEntry(act.NextCueID)
+	if err != nil || !found || entry.Outputs.Render == nil {
+		return nil
+	}
+	if held.Show != act.Show || held.Generation != act.Generation || held.CatalogRevision != act.CatalogRevision {
+		return nil
+	}
+	out := *entry.Outputs.Render
+	return &out
+}
+
 // assetPresent reports whether the file named filename is present under
 // this node's asset directory and, when hashes is non-empty, that its
 // content hash matches [firstAssetHash](hashes) — the SAME single hash
@@ -164,12 +182,19 @@ func (o *cueActivationOperation) assetPresent(filename string, hashes []string) 
 // (and caching the result) only on a miss so a missing or altered file
 // still hashes, and still fails, exactly as before this cache existed.
 func (o *cueActivationOperation) hashFileCached(path string) (string, error) {
+	return cachedHashFile(o.hashCache, path)
+}
+
+// cachedHashFile is hashFile answered from cache when path's size and
+// modification time are unchanged since it was last hashed. A nil cache
+// always hashes.
+func cachedHashFile(cache *verifiedHashCache, path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	if o.hashCache != nil {
-		if hash, ok := o.hashCache.get(path, info.Size(), info.ModTime()); ok {
+	if cache != nil {
+		if hash, ok := cache.get(path, info.Size(), info.ModTime()); ok {
 			return hash, nil
 		}
 	}
@@ -177,8 +202,8 @@ func (o *cueActivationOperation) hashFileCached(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if o.hashCache != nil {
-		o.hashCache.set(path, info.Size(), info.ModTime(), hash)
+	if cache != nil {
+		cache.set(path, info.Size(), info.ModTime(), hash)
 	}
 	return hash, nil
 }
@@ -286,6 +311,9 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		} else if err := o.render.activateRender(act, *entry.Outputs.Render, now); err != nil {
 			applyErrs = append(applyErrs, err.Error())
 		}
+	}
+	if o.render != nil {
+		o.render.queueNextRender(act, act.NextCueID, o.nextRenderOutput(act))
 	}
 	if entry.Outputs.Audio != nil {
 		concurrentAnnouncementReason := ""

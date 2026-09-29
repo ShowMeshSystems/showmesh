@@ -43,7 +43,8 @@ import (
 // reaching the pipeline before the new one's first frame does. This is
 // deliberate, and — per buildAssignedSpec's own "no in-place source swap"
 // constraint — is not currently avoidable; it is not hidden here, and it
-// must not be discovered later on a wall.
+// must not be discovered later on a wall. A planned change avoids it: the
+// writer switches to the queued next sequence itself (rendernextsequence.go).
 func (o *renderOperations) activateRender(act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
 	assignments, err := o.store.Load()
 	if err != nil {
@@ -113,7 +114,12 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// is real running state, not the persisted assignment alone — see
 	// surfaceAlreadyActivated's own doc comment for why a dark surface
 	// whose store already names the right file must still be repaired.
-	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID)) {
+	ahead, staleAhead := o.settleQueuedRender(a.SurfaceID, act, out)
+	if ahead {
+		return o.confirmAheadSwitch(a, act, out, now)
+	}
+
+	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID) && !staleAhead) {
 		// Build item 2: this branch is only reached with a CONFIRMED
 		// running writer (surfaceAlreadyActivated requires it), so the
 		// surface is already resuming content and render.surface.blackout's
@@ -161,7 +167,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	params["catalogRevision"] = act.CatalogRevision
 
 	// Validate the NEW file before anything about the OLD one is touched.
-	spec, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params, o.logger)
+	spec, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params, o.hashCache, o.logger)
 	if err != nil {
 		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
@@ -246,6 +252,37 @@ func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cuea
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
 		return fmt.Errorf("surface %q: could not save its refreshed assignment: %w", a.SurfaceID, err)
+	}
+	return nil
+}
+
+// confirmAheadSwitch records act as the surface's assignment when its
+// writer already switched to act's verified sequence as the timeline
+// started it, so the activation neither re-opens the file nor restarts the
+// writer.
+func (o *renderOperations) confirmAheadSwitch(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
+	var params map[string]any
+	if err := json.Unmarshal(a.RawParams, &params); err != nil {
+		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
+	}
+	params["fseqFilename"] = out.Filename
+	params["fseqContentHash"] = firstAssetHash(out.AssetHashes)
+	params["show"] = act.Show
+	params["generation"] = float64(act.Generation)
+	params["catalogRevision"] = act.CatalogRevision
+
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
+	}
+	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
+	if err := o.store.Upsert(pipeline.Assignment{
+		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
+	}); err != nil {
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
+	}
+	if err := o.clearHeldBlack(a.SurfaceID); err != nil {
+		o.logger.Warn("cue.activate (render): failed to clear held-black flag", "surface_id", a.SurfaceID, "error", err)
 	}
 	return nil
 }

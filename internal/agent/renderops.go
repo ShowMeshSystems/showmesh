@@ -217,6 +217,14 @@ type frameWriterHandle struct {
 	fw     *pipeline.FrameWriter
 	fseq   *fseq.File
 	cancel context.CancelFunc
+
+	// filename is the sequence fw draws. queued is the next sequence handed
+	// to fw and not yet drawn; ahead is a queued sequence fw switched to
+	// before its own activation arrived. All three are guarded by
+	// renderOperations.mu.
+	filename string
+	queued   *queuedRender
+	ahead    *queuedRender
 }
 
 // renderOperations holds the four render.* allowlisted operations' shared
@@ -302,6 +310,15 @@ type renderOperations struct {
 	// weatherDelay, when set, holds every frame writer's timeline at
 	// stopped during a delay, so MultiSync cannot drive content.
 	weatherDelay *WeatherDelayHolder
+
+	// hashCache is shared with asset.fetch and cue.activate's asset check.
+	hashCache *verifiedHashCache
+
+	// queueGen invalidates a next-sequence preparation still in flight when
+	// a later activation settles or replaces that surface's queue. Guarded
+	// by mu. queueing lets a test wait for preparations to finish.
+	queueGen map[string]uint64
+	queueing sync.WaitGroup
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, holdBlackStore *pipeline.HoldBlackStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
@@ -329,6 +346,7 @@ func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentSto
 		writers:             make(map[string]*frameWriterHandle),
 		holdBlack:           holdBlack,
 		holdBlackDefaultAll: holdBlackDefaultAll,
+		hashCache:           newVerifiedHashCache(),
 	}
 }
 
@@ -541,6 +559,7 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	if h.fseq != nil {
 		_ = h.fseq.Close()
 	}
+	o.closeTakenQueue(h, h.fw.TakeQueued())
 }
 
 // hasRunningFrameWriter reports whether surfaceID currently has a live
@@ -800,7 +819,7 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 // content or not: this must draw and report its own configured idle
 // output honestly, never a content-free pipeline with no frame writer and
 // no output.mode/output.failure evidence at all.
-func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
+func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, hashCache *verifiedHashCache, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
 	a, ok, err := buildFSEQAssignment(action, surfaceID, params, logger)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, err
@@ -818,7 +837,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 	}
 
 	path := filepath.Join(assetDir, a.fseqFilename)
-	gotHash, err := hashFile(path)
+	gotHash, err := cachedHashFile(hashCache, path)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
 	}
@@ -861,7 +880,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
 	const action = "render.surface.apply"
 
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.hashCache, o.logger)
 	if err != nil {
 		return err
 	}
@@ -938,7 +957,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	// was told the apply failed, so nothing looked wrong, but the next boot
 	// would resume the broken one (or fail per finding 9) with the good one
 	// permanently gone. Validate, then persist only what actually passed.
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.hashCache, o.logger)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -1022,10 +1041,15 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	h := &frameWriterHandle{fw: fw, fseq: f, cancel: cancel, filename: a.fseqFilename}
+	fw.SetQueueHandlers(
+		func(q *pipeline.QueuedSequence) { o.queuedSequenceStarted(surfaceID, h, q) },
+		func(q *pipeline.QueuedSequence) { o.queuedSequenceDropped(h, q) },
+	)
 	go fw.Run(ctx)
 
 	o.mu.Lock()
-	o.writers[surfaceID] = &frameWriterHandle{fw: fw, fseq: f, cancel: cancel}
+	o.writers[surfaceID] = h
 	o.mu.Unlock()
 	return nil
 }
