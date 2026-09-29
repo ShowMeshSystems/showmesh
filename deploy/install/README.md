@@ -66,7 +66,7 @@ with a drop policy (Debian 13 ships none of these by default).
 | Detected | What the installer does |
 | --- | --- |
 | ufw active | Opens exactly the ports the installed role needs with `ufw allow`, each carrying a comment naming ShowMesh. Re-running adds nothing twice; ufw already skips a rule it already has. |
-| firewalld running | Writes a custom `showmesh` service listing those ports to `/etc/firewalld/services/showmesh.xml` and adds it to the default zone. |
+| firewalld running | Defines a permanent `showmesh` service listing those ports, adds it to every active zone that has an interface, and opens the same ports in the running zone. It never reloads firewalld, so runtime-only rules survive. |
 | Raw nftables, input chain policy drop | Prints the exact `accept` rules to add and the file nftables loads them from (`/etc/nftables.conf` on Debian). An accept rule in a separate table cannot override a drop in the owner's own chain, so nothing is changed. |
 | No firewall active | Prints one line and changes nothing. |
 
@@ -86,8 +86,8 @@ active: an nftables table named `showmesh_host` in
 `/etc/nftables.d/showmesh-host.nft`, included from `/etc/nftables.conf`
 (backed up once before the first edit), with a drop policy on the input
 chain, established/related and loopback traffic, Docker's bridge interfaces,
-ICMP, IGMP, mDNS and SSH allowed, and the role's own ports on top. It never
-runs `nft flush ruleset`, so Docker's own tables survive. `--no-firewall`
+ICMP, IGMP, mDNS and SSH (every port `sshd -T` reports, or 22) allowed, and the role's own ports on top. It never
+runs `nft flush ruleset`, so Docker's own tables survive. The table is checked with `nft -c` before `nftables.conf` is touched, and when `nftables.conf` already declares tables that are not loaded, the installer warns and does not enable the nftables service over them. `--no-firewall`
 skips firewall setup entirely.
 
 ## NDI

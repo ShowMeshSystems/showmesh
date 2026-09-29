@@ -29,6 +29,8 @@ run_lib_case() {
 
 run_lib_case firewalld        "--cap-add=NET_ADMIN --cap-add=NET_RAW"
 run_lib_case nftables-drop    "--cap-add=NET_ADMIN"
+run_lib_case nftables-forward-drop "--cap-add=NET_ADMIN"
+run_lib_case ssh-port         "--cap-add=NET_ADMIN"
 run_lib_case none             ""
 run_lib_case firewall-flag    "--privileged"
 run_lib_case no-firewall-flag "--cap-add=NET_ADMIN"

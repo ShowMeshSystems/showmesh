@@ -7,7 +7,7 @@
 # needs; see run_firewall_bench.sh.
 set -uo pipefail
 
-CASE="${1:?usage: run_firewall_lib_proof.sh firewalld|nftables-drop|none|firewall-flag|no-firewall-flag}"
+CASE="${1:?usage: run_firewall_lib_proof.sh firewalld|nftables-drop|nftables-forward-drop|ssh-port|none|firewall-flag|no-firewall-flag}"
 FAILED=0
 
 check() {
@@ -42,13 +42,15 @@ firewalld)
   cat /tmp/first.log
   check "every render port is opened in firewalld" \
     "grep -q 'tcp 80 .*is open in firewalld' /tmp/first.log && grep -q 'udp 5353 .*is open in firewalld' /tmp/first.log && grep -q 'tcp 5959-5999 .*is open in firewalld' /tmp/first.log"
-  firewall-cmd --list-services > /tmp/services.txt
-  check "the showmesh service is in the default zone" "grep -qw showmesh /tmp/services.txt"
+  firewall-cmd --permanent --list-services > /tmp/services.txt
+  firewall-cmd --list-ports > /tmp/ports.txt
+  check "the showmesh service is in the zone's permanent config" "grep -qw showmesh /tmp/services.txt"
+  check "the runtime zone has the ports without a reload" "grep -qw 5959-5999/udp /tmp/ports.txt && grep -qw 80/tcp /tmp/ports.txt"
   check "the service definition names ShowMesh" "grep -q '<short>ShowMesh</short>' /etc/firewalld/services/showmesh.xml"
 
   firewall_setup render "" > /tmp/second.log 2>&1
   cat /tmp/second.log
-  firewall-cmd --list-services | tr ' ' '\n' > /tmp/services-after.txt
+  firewall-cmd --permanent --list-services | tr ' ' '\n' > /tmp/services-after.txt
   check "a second run stays idempotent (one showmesh entry)" "[ \"\$(grep -cx showmesh /tmp/services-after.txt)\" = 1 ]"
   ;;
 
@@ -64,6 +66,31 @@ nftables-drop)
   check "a foreign drop-policy ruleset is left unchanged" "diff -q /tmp/ruleset-before.txt /tmp/ruleset-after.txt >/dev/null"
   check "the warning names the file nftables loads on Debian" "grep -q '/etc/nftables.conf' /tmp/warn.log"
   check "the warning lists this role's rules" "grep -q 'udp dport 32320 accept' /tmp/warn.log && grep -q 'udp dport 5353 accept' /tmp/warn.log"
+  ;;
+
+nftables-forward-drop)
+  apt-get install -y -qq --no-install-recommends nftables >/dev/null 2>&1
+  nft add table inet ownertable
+  nft add chain inet ownertable input '{ type filter hook input priority 0; policy accept; }'
+  nft add table ip dockerlike
+  nft add chain ip dockerlike FORWARD '{ type filter hook forward priority 0; policy drop; }'
+  export OPT_FIREWALL=""
+  firewall_setup audio "" > /tmp/fwd.log 2>&1
+  cat /tmp/fwd.log
+  check "an accept-policy input chain plus a drop-policy FORWARD chain is not a drop host" \
+    "[ \"\$FIREWALL_KIND\" = none ] && grep -q 'No firewall is active' /tmp/fwd.log"
+  ;;
+
+ssh-port)
+  apt-get install -y -qq --no-install-recommends nftables netbase >/dev/null 2>&1
+  mkdir -p /tmp/fakebin
+  printf '#!/bin/sh\nprintf "port 2222\\nport 22022\\nlistenaddress 0.0.0.0\\n"\n' > /tmp/fakebin/sshd
+  chmod +x /tmp/fakebin/sshd
+  check "sshd's ports are read" "[ \"\$(PATH=/tmp/fakebin:\$PATH firewall_ssh_ports | paste -sd,)\" = 2222,22022 ]"
+  check "22 is the fallback when sshd is absent" "[ \"\$(PATH=/usr/bin:/bin firewall_ssh_ports)\" = 22 ]"
+  PATH=/tmp/fakebin:$PATH firewall_write_host_table audio "" /tmp/host.nft
+  check "the table accepts every sshd port" "grep -q 'tcp dport { 2222,22022 } accept' /tmp/host.nft"
+  check "the table passes nft -c" "nft -c -f /tmp/host.nft"
   ;;
 
 none)
