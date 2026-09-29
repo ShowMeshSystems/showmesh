@@ -414,6 +414,8 @@ Commands:
   audio settings revisions             list audio.settings revision history, newest first
   audio node list                      enumerate audio.node objects (id is the node id)
   audio node get <nodeId>              show one node's audio placement
+  audio node choices <nodeId>          show the program and LTC channels the node's own
+                                        outputs offer
   audio node set <nodeId>              write a new audio.node revision (write, full
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)

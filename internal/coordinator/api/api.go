@@ -2526,6 +2526,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
 	mux.HandleFunc("DELETE /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteAudioNode))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/audio/routing-choices", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioRoutingChoices))
 
 	// GET/PUT /api/v1/config/fppconnect.settings (Track E phase 2 seam
 	// FC1a, ADR-044 decision 5): the enable flag and the two byte caps

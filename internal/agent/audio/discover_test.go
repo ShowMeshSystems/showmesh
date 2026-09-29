@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -361,5 +362,29 @@ func TestDiscoverPipeWireTruncatesAtMaxProbedDevices(t *testing.T) {
 	pw := DiscoverPipeWire(context.Background(), fakePipeWireEnumerator{present: true, nodes: nodes})
 	if len(pw.Routes) != maxProbedDevices {
 		t.Errorf("PipeWireDiscovery.Routes has %d entries, want exactly maxProbedDevices=%d", len(pw.Routes), maxProbedDevices)
+	}
+}
+
+func TestRouteInterface(t *testing.T) {
+	for route, want := range map[string]string{
+		"hw:CARD=M4,DEV=0":       "hw:CARD=M4",
+		"plughw:CARD=M4,DEV=1":   "plughw:CARD=M4",
+		"hw:1,0":                 "hw:1",
+		"alsa_output.usb-M4.pro": "alsa_output.usb-M4.pro",
+	} {
+		if got := RouteInterface(route); got != want {
+			t.Errorf("RouteInterface(%q) = %q, want %q", route, got, want)
+		}
+	}
+}
+
+func TestDiscoverPipeWireReportsTruncation(t *testing.T) {
+	nodes := make([]PipeWireNode, maxProbedDevices+1)
+	for i := range nodes {
+		nodes[i] = PipeWireNode{Name: fmt.Sprintf("sink-%d", i), Channels: 2}
+	}
+	pw := DiscoverPipeWire(context.Background(), fakePipeWireEnumerator{present: true, nodes: nodes})
+	if !pw.Truncated || len(pw.Routes) != maxProbedDevices {
+		t.Errorf("Truncated=%v routes=%d, want true and %d", pw.Truncated, len(pw.Routes), maxProbedDevices)
 	}
 }

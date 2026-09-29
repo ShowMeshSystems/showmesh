@@ -172,3 +172,73 @@ type AudioNodeConfigResponse struct {
 	CreatedByPrincipalName *string         `json:"createdByPrincipalName"`
 	Source                 string          `json:"source"`
 }
+
+// AudioRoutingChoicesResponse is the body of GET
+// /nodes/{nodeId}/audio/routing-choices: the program and LTC choices the
+// node's own reported outputs support, resolved by the coordinator.
+type AudioRoutingChoicesResponse struct {
+	ServerTime string `json:"serverTime"`
+	NodeID     string `json:"nodeId"`
+	Discovery  string `json:"discovery"`
+	Reason     string `json:"reason,omitempty"`
+	// DiscoveryDetail is the node's own diagnostic text, never operator copy.
+	DiscoveryDetail string                    `json:"discoveryDetail,omitempty"`
+	ManualEntry     AudioRoutingManualEntry   `json:"manualEntry"`
+	LTC             AudioRoutingLTC           `json:"ltc"`
+	Routes          []AudioRoutingRouteChoice `json:"routes"`
+	Current         *AudioRoutingCurrent      `json:"current,omitempty"`
+	Clock           *AudioRoutingClock        `json:"clock,omitempty"`
+}
+
+// AudioRoutingManualEntry says whether hand-typed channels are accepted.
+type AudioRoutingManualEntry struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// AudioRoutingLTC says whether any choice on the node can carry LTC.
+type AudioRoutingLTC struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// AudioRoutingRouteChoice is one reported output and its program groups.
+type AudioRoutingRouteChoice struct {
+	Route         string              `json:"route"`
+	Interface     string              `json:"interface"`
+	Source        string              `json:"source"`
+	Channels      int                 `json:"channels"`
+	ChannelBasis  string              `json:"channelBasis"`
+	LTCCapable    bool                `json:"ltcCapable"`
+	LTCReason     string              `json:"ltcReason,omitempty"`
+	ProgramGroups []AudioProgramGroup `json:"programGroups"`
+}
+
+// AudioProgramGroup is one offered set of program channels.
+type AudioProgramGroup struct {
+	Channels    []int                  `json:"channels"`
+	LTCChannels []int                  `json:"ltcChannels"`
+	Conflicts   []AudioChannelConflict `json:"conflicts"`
+}
+
+// AudioChannelConflict names a channel not offered for LTC and why.
+type AudioChannelConflict struct {
+	Channel int    `json:"channel"`
+	Reason  string `json:"reason"`
+}
+
+// AudioRoutingCurrent is the stored placement and whether it is offered.
+type AudioRoutingCurrent struct {
+	ProgramRoute    string `json:"programRoute"`
+	ProgramChannels []int  `json:"programChannels"`
+	LTCChannel      int    `json:"ltcChannel,omitempty"`
+	Offered         bool   `json:"offered"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+// AudioRoutingClock is the configured node's local clock.
+type AudioRoutingClock struct {
+	LocalClock   string `json:"localClock"`
+	Source       string `json:"source"`
+	Verification string `json:"verification"`
+}
