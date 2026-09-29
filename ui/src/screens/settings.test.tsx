@@ -152,7 +152,7 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(9)
+    expect(tabs).toHaveLength(10)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
@@ -160,6 +160,7 @@ describe('Settings tab strip', () => {
       'Appearance',
       'Audio defaults',
       'Node routing',
+      'Node enrollment',
       'Mode',
       'Resolume',
       'Access ↗',

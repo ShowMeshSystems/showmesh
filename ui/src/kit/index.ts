@@ -22,6 +22,7 @@ export { Popover } from './Popover'
 export { Drawer } from './Drawer'
 export { ConfirmDialog } from './ConfirmDialog'
 export { DeletePanel } from './DeletePanel'
+export { OneTimeSecret } from './OneTimeSecret'
 export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,

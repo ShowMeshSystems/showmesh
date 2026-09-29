@@ -29,6 +29,7 @@ import {
   Notice,
   NotWired,
   NotWiredBanner,
+  OneTimeSecret,
   RailBadge,
   RuledStrip,
   Section,
@@ -718,6 +719,27 @@ export function Specimen() {
           >
             <p className="sm-small sm-muted">Deleting a cue removes only this object; nothing else in the reference graph names a cue id.</p>
           </DeletePanel>
+        </SpecSection>
+
+        <SpecSection
+          number="15 · One-time secret"
+          id="specimen-secret"
+          title="A value the coordinator will never hand back again"
+          detail="Large, monospace, and copyable. Dismissing it is the only way back to the ordinary view; a later read of the same resource never carries the value again."
+        >
+          <OneTimeSecret
+            headline="This code will not be shown again. Copy it now."
+            value="Q7XR-9K2M"
+            detail={
+              <>
+                <p>Expires at 21:22:00, in 15 minutes.</p>
+                <p>
+                  Run this on the node: <span className="sm-data">sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M</span>
+                </p>
+              </>
+            }
+            onDismiss={() => {}}
+          />
         </SpecSection>
       </div>
     </div>
