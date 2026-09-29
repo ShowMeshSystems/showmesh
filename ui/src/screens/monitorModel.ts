@@ -1,6 +1,12 @@
 import type { AuditEntry, Capability, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
 import { countSignals, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import {
+  audioSettingSubstitution,
+  audioSettingSubstitutionSentence,
+  isSubstitutedState,
+  SUBSTITUTION_DETAIL_SIGNALS,
+} from '../domain/audioSettingsSubstitution'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
 
 /** Connection state, in the terms Monitor's own pill labels use. */
@@ -189,8 +195,19 @@ export type InspectorRow = {
  * was never advertised, not that its path is failing.
  */
 export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow[]; absent: string | null }[] {
+  const substitution = audioSettingSubstitution(node)
   const observationRows = (entries: Node['render'], prefix: string, limit = 6): InspectorRow[] =>
     entries.slice(0, limit).map((entry, index) => {
+      if (substitution !== null && isSubstitutedState(entry)) {
+        return {
+          key: `${prefix}:${entry.signal}:${index}`,
+          label: 'Audio setting',
+          value: audioSettingSubstitutionSentence(node.label ?? node.nodeId, substitution),
+          state: 'substituted',
+          detail: substitution.reason === null ? null : `The node reported: ${substitution.reason}`,
+          tone: 'warn' as Tone,
+        }
+      }
       const alignmentLabel =
         entry.signal === 'node.audio.clock.alignment.state' && entry.state === 'current'
           ? entry.value === 'beyond_threshold'
@@ -238,7 +255,11 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
     {
       name: 'Audio',
       // Unlimited: alignment rows must survive regardless of collector order.
-      rows: observationRows(node.audio, 'audio', node.audio.length),
+      rows: observationRows(
+        substitution === null ? node.audio : node.audio.filter((entry) => !SUBSTITUTION_DETAIL_SIGNALS.includes(entry.signal)),
+        'audio',
+        node.audio.length,
+      ),
       absent:
         node.audio.length === 0
           ? 'This node has never claimed an audio capability, so there is nothing to observe. That is not the same as an audio path that is failing.'
