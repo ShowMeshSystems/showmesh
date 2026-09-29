@@ -7266,9 +7266,12 @@ paths:
         defaults a transport. This is a FULL REPLACEMENT: every field is
         required on every write (this payload has no optional/defaulted
         key), so the request and response share the same
-        ConfigShowSurface shape. A second surface assigned to the same
-        node is accepted (ADR-026's `N=1` is a scope limit on the
-        renderer, not a schema rule). Optionally carries
+        ConfigShowSurface shape. A second surface on the same show and node
+        is accepted unless its channel range overlaps another surface's
+        (refused on `channelRange`) or both use NDI with the same
+        `sourceName` (refused on `output.ndi.sourceName`); both are `400`
+        with the operator message in `detail`. Surfaces in different
+        shows may share channels and NDI names. Optionally carries
         `If-Match`/`If-None-Match` (opt-in; see those parameters): refused
         with `409` when the precondition names a revision that is no
         longer current.

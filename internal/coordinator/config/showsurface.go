@@ -84,9 +84,9 @@ func rejectUnknownKeysUnder(fields map[string]json.RawMessage, known map[string]
 
 // ShowSurfacePayload is config_revisions.payload_json's decoded, VALIDATED
 // shape for [ShowSurfaceConfigKind]. A second surface assigned to the same
-// node is a valid payload on its own terms — ADR-026's N=1 is a scope
-// limit on the renderer, not a schema rule, and nothing in this file
-// checks for a collision with any other stored surface.
+// node is a valid payload on its own terms. DecodeShowSurfacePayload checks
+// one payload alone; [CheckShowSurfaceConflict] checks it against the other
+// surfaces of the same show and node.
 type ShowSurfacePayload struct {
 	Show         string                  `json:"show"`
 	Name         string                  `json:"name"`
@@ -424,4 +424,42 @@ func decodeShowSurfaceOutput(top map[string]json.RawMessage) (ShowSurfaceOutput,
 		Code: ValidationCodeFieldInvalid, Field: "output.transport",
 		Detail: "transport must be one of ndi or hdmi",
 	}
+}
+
+// OtherShowSurface is a stored show.surface a candidate is compared with.
+type OtherShowSurface struct {
+	ID      string
+	Payload ShowSurfacePayload
+}
+
+// CheckShowSurfaceConflict refuses a candidate whose channel range overlaps,
+// or whose NDI source name equals, that of another surface with the same show
+// and node. The candidate's own id is skipped, and NDI names are compared
+// exactly as stored because the agent hands them to the NDI sink unchanged.
+func CheckShowSurfaceConflict(id string, candidate ShowSurfacePayload, others []OtherShowSurface) *ValidationError {
+	candStart := candidate.ChannelRange.StartChannel
+	candEnd := candStart + candidate.ChannelRange.ChannelCount - 1
+	for _, o := range others {
+		p := o.Payload
+		if o.ID == id || p.Show != candidate.Show || p.Node != candidate.Node {
+			continue
+		}
+		start := p.ChannelRange.StartChannel
+		end := start + p.ChannelRange.ChannelCount - 1
+		if candStart <= end && start <= candEnd {
+			return &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "channelRange",
+				Detail: fmt.Sprintf("Channels %d to %d overlap the surface %s on this node. Choose a start channel after %d or move one surface to another node.",
+					start, end, p.Name, end),
+			}
+		}
+		if candidate.Output.NDI != nil && p.Output.NDI != nil && candidate.Output.NDI.SourceName == p.Output.NDI.SourceName {
+			return &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "output.ndi.sourceName",
+				Detail: fmt.Sprintf("The NDI name %s is already used by the surface %s on this node. Choose a different NDI name.",
+					p.Output.NDI.SourceName, p.Name),
+			}
+		}
+	}
+	return nil
 }
