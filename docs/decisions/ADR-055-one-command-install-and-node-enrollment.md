@@ -2,6 +2,10 @@
 
 Status: Accepted (owner, 2026-09-23)
 Date: 2026-09-23
+Amended: 2026-09-28 - the owner ruled that the static banner, coloured step
+headers, check lines and spinners are the installer's default output, and that
+only animation and the hidden modes stay behind `--party`. Decision 9 carries
+the ruling.
 
 ## Context
 
@@ -161,6 +165,19 @@ words, per section 5.1 of the UI design guide. A refusal names the exact
 command that fixes it. Decorative output (animation, colour effects, hidden
 modes) runs only when the operator asks for it with `--party`, only on the
 opening and success screens, and never in front of a refusal or an error.
+
+**Amended 2026-09-28: the laid-out install screen is the default, and `--party`
+keeps only animation and the hidden modes.** The paragraph above gated all
+colour behind `--party`, which left a first install reading as one
+undifferentiated wall of text on the screen an operator watches most closely.
+The owner ruled
+on 2026-09-28 that a plain install shows the static ShowMesh banner, coloured
+step headers, check lines marked with a tick or a warning sign, and a spinner
+beside a step that takes time. Output that is not a terminal, `NO_COLOR` and
+`TERM=dumb` each get the same text with no escape sequences, so a captured
+install reads the same as it always did. Refusals and errors stay plain and
+uncoloured, as the paragraph above already required, and animation, the
+opening and success sequences and the hidden modes still need `--party`.
 
 ## Consequences
 
