@@ -120,6 +120,13 @@ func (o *renderOperations) prepareQueuedRender(surfaceID string, gen uint64, act
 		_ = f.Close()
 		return
 	}
+	if err := o.stepTimeConflictLocked(surfaceID, f.StepTimeMS()); err != nil {
+		o.mu.Unlock()
+		_ = f.Close()
+		o.logger.Warn("render: the next sequence runs at a different frame timing than another surface, so it will be refused when its Cue starts",
+			"surface_id", surfaceID, "sequence", next.Filename, "error", err)
+		return
+	}
 	q, displaced, err := h.fw.Queue(next.Filename, f)
 	if err != nil {
 		o.mu.Unlock()
@@ -213,7 +220,7 @@ func (o *renderOperations) queuedSequenceStarted(surfaceID string, h *frameWrite
 	stepTimeMS := h.fseq.StepTimeMS()
 	o.mu.Unlock()
 	closeFSEQ(previous)
-	o.applyTimelineStepTime(surfaceID, stepTimeMS)
+	o.applyTimelineStepTime(stepTimeMS)
 }
 
 // queuedSequenceDropped runs on the writer's goroutine when a held-black

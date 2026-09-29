@@ -172,6 +172,10 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
 	_ = spec // This swap deliberately never re-applies the pipeline spec — see startFrameWriter call below.
+	if err := o.checkStepTimeAgainstOthers(a.SurfaceID, f.StepTimeMS()); err != nil {
+		_ = f.Close()
+		return err
+	}
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
@@ -199,13 +203,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
 	}
-	// The SHARED timeline step time moves only after the new writer is
-	// actually running — never before, or a startFrameWriter failure above
-	// would already have left every OTHER surface on this node stepping to
-	// a file that is not running (o.timeline is one shared instance across
-	// every surface on this node, applyTimelineStepTime's own "SHARED-
-	// TIMELINE DECISION" doc comment, renderops.go).
-	o.applyTimelineStepTime(a.SurfaceID, f.StepTimeMS())
+	o.applyTimelineStepTime(f.StepTimeMS())
 
 	// Build item 2: the new writer is confirmed running now, so this swap
 	// resumes content and render.surface.blackout's held-black flag clears

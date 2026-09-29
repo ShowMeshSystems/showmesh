@@ -291,13 +291,6 @@ type renderOperations struct {
 	// entry for — see holdBlackDefaultAll's own "never reset as a whole".
 	holdBlackDefaultMaterialized bool
 
-	// timelineStepOwner and timelineStepMS record which surface last set
-	// o.timeline's shared step time, and to what value — see
-	// applyTimelineStepTime's own doc comment for why a shared Timeline
-	// needs this at all. "" means no surface has ever set one.
-	timelineStepOwner string
-	timelineStepMS    byte
-
 	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
 	// to [pipeline.ProbeNDISend]. nil (the production default, set by
 	// [newRenderOperations]) selects the real process starter; tests in
@@ -585,65 +578,48 @@ func (o *renderOperations) hasRunningFrameWriter(surfaceID string) bool {
 	return ok
 }
 
-// applyTimelineStepTime is finding 6's fix: [multisync.Timeline.
-// SetStepTime] was never called in production, so the timeline ran
-// permanently at [multisync.DefaultStepTime] regardless of what any real
-// FSEQ actually specified — wrong for the first second of every show (see
-// pkg/multisync/timeline.go's positionFromPacketLocked, which falls back to
-// FrameNumber*stepTime whenever SecondsElapsed is unusable) and for any FPP
-// 8.x master.
-//
-// SHARED-TIMELINE DECISION (build contract seam B3, "decide what happens
-// when two surfaces have different step times... do not silently let the
-// last apply win"): this node's Timeline is one shared instance across
-// every surface (ADR-026 N=1 is a renderer scope limit, not a reason to
-// build N timelines), but step time is read from each surface's own FSEQ,
-// so two surfaces with differently-authored FSEQs could disagree. The rule
-// here is FIRST SURFACE WINS: whichever surface's apply set the step time
-// first keeps it for as long as it remains applied (see
-// releaseTimelineStepTimeIfOwner); a later surface reporting a DIFFERENT
-// step time never silently overrides it — it is logged loudly instead, so
-// the conflict is visible rather than swallowed as "whoever applied most
-// recently." A same-surface re-apply with a changed FSEQ still updates its
-// own value. This is deliberately not "last apply wins": that would make
-// the position every OTHER surface renders from silently drift depending on
-// dispatch order, which is worse than picking one surface and saying so.
-// Today's coordinator-side validation only ever assigns one surface per
-// node (N=1), so this conflict path is not currently reachable in
-// production; it exists so a future N>1 node degrades loudly instead of
-// silently the day that changes.
-func (o *renderOperations) applyTimelineStepTime(surfaceID string, stepTimeMS byte) {
-	o.mu.Lock()
-	owner := o.timelineStepOwner
-	current := o.timelineStepMS
-	sameOwnerOrUnowned := owner == "" || owner == surfaceID
-	conflict := !sameOwnerOrUnowned && current != stepTimeMS
-	if sameOwnerOrUnowned {
-		o.timelineStepOwner = surfaceID
-		o.timelineStepMS = stepTimeMS
-	}
-	o.mu.Unlock()
-
-	if conflict {
-		o.logger.Warn("render: surface's FSEQ step time conflicts with the shared timeline's current owner; keeping the owner's step time rather than silently overriding it",
-			"surface_id", surfaceID, "requested_step_ms", stepTimeMS, "owner_surface_id", owner, "owner_step_ms", current)
-		return
-	}
-	o.timeline.SetStepTime(time.Duration(stepTimeMS) * time.Millisecond)
+// stepTimeConflictError is shown to the operator verbatim, so it reads as a
+// sentence.
+type stepTimeConflictError struct {
+	stepTimeMS      byte
+	otherSurfaceID  string
+	otherStepTimeMS byte
 }
 
-// releaseTimelineStepTimeIfOwner clears the shared timeline's step-time
-// ownership when the OWNING surface is the one being cleared, so a
-// subsequently-applied surface (with a different FSEQ) can claim it rather
-// than being permanently blocked by a surface that no longer exists. A
-// no-op for any other surface: clearing a non-owning surface must never
-// affect the timeline another surface is actively depending on.
-func (o *renderOperations) releaseTimelineStepTimeIfOwner(surfaceID string) {
+func (e stepTimeConflictError) Error() string {
+	return fmt.Sprintf("This sequence runs at %d ms per frame but the surface %s on this node is playing a %d ms sequence. Render both sequences at the same frame timing in xLights.",
+		e.stepTimeMS, e.otherSurfaceID, e.otherStepTimeMS)
+}
+
+// checkStepTimeAgainstOthers refuses a step time that differs from the one
+// any other surface holding FSEQ content plays: every surface shares one
+// timeline. An idle surface has no step time and never conflicts.
+func (o *renderOperations) checkStepTimeAgainstOthers(surfaceID string, stepTimeMS byte) error {
 	o.mu.Lock()
-	if o.timelineStepOwner == surfaceID {
-		o.timelineStepOwner = ""
+	defer o.mu.Unlock()
+	return o.stepTimeConflictLocked(surfaceID, stepTimeMS)
+}
+
+func (o *renderOperations) stepTimeConflictLocked(surfaceID string, stepTimeMS byte) error {
+	ids := make([]string, 0, len(o.writers))
+	for id := range o.writers {
+		ids = append(ids, id)
 	}
-	o.mu.Unlock()
+	sort.Strings(ids)
+	for _, id := range ids {
+		h := o.writers[id]
+		if id == surfaceID || h.fseq == nil || h.fseq.StepTimeMS() == stepTimeMS {
+			continue
+		}
+		return stepTimeConflictError{stepTimeMS: stepTimeMS, otherSurfaceID: id, otherStepTimeMS: h.fseq.StepTimeMS()}
+	}
+	return nil
+}
+
+// applyTimelineStepTime sets the shared timeline's step time from an FSEQ
+// that checkStepTimeAgainstOthers already accepted.
+func (o *renderOperations) applyTimelineStepTime(stepTimeMS byte) {
+	o.timeline.SetStepTime(time.Duration(stepTimeMS) * time.Millisecond)
 }
 
 // buildFSEQAssignment parses a render.surface.apply params map. channelRange,
@@ -890,6 +866,12 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 	if err != nil {
 		return err
 	}
+	if f != nil {
+		if err := o.checkStepTimeAgainstOthers(surfaceID, f.StepTimeMS()); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
 	if err := o.sup.Apply(spec); err != nil {
 		if f != nil {
 			_ = f.Close()
@@ -898,7 +880,7 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 	}
 	o.recordDegradedTransportEvidence(surfaceID, sinkOutcome, time.Now().UTC())
 	if f != nil {
-		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
+		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
 		if f != nil {
@@ -967,6 +949,12 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	if err != nil {
 		return OperationResult{}, err
 	}
+	if f != nil {
+		if err := o.checkStepTimeAgainstOthers(surfaceID, f.StepTimeMS()); err != nil {
+			_ = f.Close()
+			return OperationResult{}, err
+		}
+	}
 
 	if err := o.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: rawParams, AppliedAt: executedAt, Auth: auth}); err != nil {
 		if f != nil {
@@ -996,11 +984,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	// stdin.
 	o.stopFrameWriter(surfaceID)
 	if f != nil {
-		// Finding 6: the shared Timeline's step time comes from whichever
-		// surface owns it — see applyTimelineStepTime's own doc comment for
-		// the shared-timeline decision. An idle writer (f == nil) owns no
-		// content and therefore no step time to contribute.
-		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
+		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
 		if f != nil {
@@ -1077,7 +1061,6 @@ func (o *renderOperations) clearSurface(ctx context.Context, params map[string]a
 	executedAt := now()
 
 	o.stopFrameWriter(surfaceID)
-	o.releaseTimelineStepTimeIfOwner(surfaceID)
 
 	if err := o.sup.Clear(surfaceID); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
