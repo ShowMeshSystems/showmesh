@@ -33,7 +33,7 @@ docker run -d --privileged --name "$NAME" --hostname inst-coord -v "$REPO":/repo
   debian:13 sleep infinity >/dev/null || exit 1
 
 echo "=== starting dockerd inside the bench container ==="
-in_box 'apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends docker.io docker-cli docker-compose ca-certificates curl >/dev/null' || exit 1
+in_box 'apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends docker.io docker-cli docker-compose ca-certificates curl sqlite3 python3 >/dev/null' || exit 1
 # shellcheck disable=SC2016
 in_box '(dockerd >/var/log/dockerd.log 2>&1 &); for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; tail -n 20 /var/log/dockerd.log; exit 1' || {
   echo "dockerd did not start inside the bench container"; exit 1; }
@@ -66,6 +66,28 @@ check "no world-readable file under /etc/showmesh or /opt/showmesh/coordinator h
 check "the installer left nothing in /tmp named for ShowMesh" "in_box '! ls /tmp/showmesh-* >/dev/null 2>&1'"
 pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')"
 
+VOL=/var/lib/docker/volumes/showmesh_showmesh-data/_data
+DB="$(in_box "ls $VOL/*.db | head -n 1")"
+in_box "sqlite3 $DB \"PRAGMA busy_timeout=5000; INSERT INTO nodes(node_id, agent_version, hello_observed_at, hello_provenance, first_seen_at, updated_at) VALUES ('bench-old', '0.0.0-bench1', '2026-09-01T00:00:00.000000000Z', 'agent_report', '2026-09-01T00:00:00.000000000Z', '2026-09-01T00:00:00.000000000Z'), ('bench-cur', '0.0.0-bench2', '2026-09-01T00:00:00.000000000Z', 'agent_report', '2026-09-01T00:00:00.000000000Z', '2026-09-01T00:00:00.000000000Z');\"" >/dev/null
+check "the bench seeded two node rows" "[ \"\$(in_box \"sqlite3 $DB 'SELECT count(*) FROM nodes'\")\" = 2 ]"
+
+# A night is running: the upgrade must refuse and change nothing.
+in_box 'cp /etc/showmesh/showmeshctl.env /root/ctl.env.orig
+  (python3 /repo/bench/node-install/fake_night_server.py 18081 live >/dev/null 2>&1 &)
+  sleep 1
+  sed -i "s#^SHOWMESH_SERVER=.*#SHOWMESH_SERVER=http://127.0.0.1:18081#" /etc/showmesh/showmeshctl.env'
+run_install 0.0.0-bench2 --yes
+check "an upgrade during a night is refused" "[ $? -ne 0 ]"
+check "the refusal names the night session and its state" "in_box 'grep -q \"A night session is running (state: live)\" /tmp/install-0.0.0-bench2.log'"
+check "the refusal gives the showmeshctl command that ends the night" "in_box 'grep -q \"showmeshctl night power-down-presentation\" /tmp/install-0.0.0-bench2.log'"
+check "the refusal changed nothing: no backup, still on bench1" "in_box '[ ! -d /var/backups/showmesh ] || [ -z \"\$(ls /var/backups/showmesh)\" ]; grep -qx SHOWMESH_RELEASE_VERSION=0.0.0-bench1 /opt/showmesh/coordinator/.env'"
+check "the coordinator is still running after the refusal" "in_box 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null'"
+in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env
+  sed -i "s#^SHOWMESH_SERVER=.*#SHOWMESH_SERVER=http://127.0.0.1:1#" /etc/showmesh/showmeshctl.env'
+run_install 0.0.0-bench2 --yes
+check "a coordinator that does not answer refuses the upgrade" "[ $? -ne 0 ] && in_box 'grep -q \"cannot tell whether a night is running\" /tmp/install-0.0.0-bench2.log'"
+in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env'
+
 run_install 0.0.0-bench2 --yes
 check "upgrade succeeds with no options" "[ $? -eq 0 ]"
 check "upgrade runs the bench2 images" "in_box 'cd /opt/showmesh/coordinator && docker compose -f docker-compose.yml -f docker-compose.published.yml ps --format \"{{.Image}}\" | grep -c 0.0.0-bench2 | grep -qx 2'"
@@ -74,6 +96,28 @@ check "upgrade keeps the broker login" "[ \"\$(in_box 'grep ^SHOWMESH_MQTT_PASSW
 check "the address given on the first install survives a rerun without it" "in_box 'grep -qx SHOWMESH_PUBLIC_URL=http://192.0.2.44:8080 /opt/showmesh/coordinator/.env'"
 check "no world-readable secret after the upgrade either" "in_box '$no_readable_secret'"
 check "upgrade saw the broker accept the login again" "in_box 'grep -q \"ok: the broker accepts the coordinator.s login\" /tmp/install-0.0.0-bench2.log'"
+
+check "the upgrade made a dated backup named for the old version" "in_box 'ls -d /var/backups/showmesh/*-0.0.0-bench1 | grep -q .'"
+check "the upgrade printed where the backup is and how to restore it" "in_box 'grep -q \"backup saved in /var/backups/showmesh/\" /tmp/install-0.0.0-bench2.log && grep -q \"RESTORE.txt\" /tmp/install-0.0.0-bench2.log'"
+check "the backup holds the settings and the broker files" "in_box 'b=\$(ls -d /var/backups/showmesh/*-0.0.0-bench1 | tail -n 1); grep -qx SHOWMESH_RELEASE_VERSION=0.0.0-bench1 \$b/coordinator.env && [ -f \$b/mosquitto/passwd ]'"
+# Restore the backup into a scratch volume and read the seeded rows back.
+in_box 'b=$(ls -d /var/backups/showmesh/*-0.0.0-bench1 | tail -n 1)
+  docker run --rm -v inst-scratch:/data -v $b:/backup:ro --entrypoint sh eclipse-mosquitto:2.0.22 -c "find /data -mindepth 1 -delete && cp -a /backup/data/. /data/"'
+check "the backup restores into a scratch volume and the seeded nodes read back" "in_box 'sqlite3 /var/lib/docker/volumes/inst-scratch/_data/\$(basename $DB) \"SELECT group_concat(node_id) FROM (SELECT node_id FROM nodes ORDER BY node_id)\" | grep -qx bench-cur,bench-old'"
+check "the restored database passes an integrity check" "in_box '[ \"\$(sqlite3 /var/lib/docker/volumes/inst-scratch/_data/\$(basename $DB) \"PRAGMA integrity_check\")\" = ok ]'"
+check "the upgrade prints the command for a node on the old version" "in_box 'grep -q \"bench-old (0.0.0-bench1): curl -fsSL file:///repo/dist/inst-bench/0.0.0-bench2/get-showmesh.sh | sudo bash -s -- --yes\" /tmp/install-0.0.0-bench2.log'"
+check "a node already on the new version is listed as current" "in_box 'grep -q \"Already on 0.0.0-bench2: bench-cur\" /tmp/install-0.0.0-bench2.log && ! grep -q \"bench-cur (\" /tmp/install-0.0.0-bench2.log'"
+
+# --force upgrades through a running night with a one-line warning.
+in_box 'sed -i "s#^SHOWMESH_SERVER=.*#SHOWMESH_SERVER=http://127.0.0.1:18081#" /etc/showmesh/showmeshctl.env'
+run_install 0.0.0-bench2 --yes --force
+check "--force upgrades through a running night" "[ $? -eq 0 ]"
+check "--force prints a warning naming the night" "in_box 'grep -q \"warning: A night session is running (state: live).*Continuing because --force was given\" /tmp/install-0.0.0-bench2.log'"
+in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env'
+in_box 'ls -d /var/backups/showmesh/*/ | wc -l | grep -qx 2' && echo "two backups after two upgrades"
+in_box 'for i in 1 2 3 4 5 6 7; do mkdir /var/backups/showmesh/2000010${i}T000000Z-old; done'
+run_install 0.0.0-bench2 --yes
+check "only the newest five backups are kept" "in_box '[ \$(ls /var/backups/showmesh | wc -l) -eq 5 ]'"
 
 echo
 if [ "$FAILED" -gt 0 ]; then

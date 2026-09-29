@@ -46,6 +46,16 @@ A second run upgrades in place. It keeps `.env`, broker logins, the
 administrator token, `agent.env` and node state, and it skips enrollment
 unless `--reenroll` is given.
 
+Before an upgrade changes anything, the installer asks the coordinator whether
+a night session is running and refuses if one is (or if it cannot be asked),
+unless `--force` is given. It then stops the coordinator briefly, copies its
+database, `.env` and broker files to `/var/backups/showmesh/<time>-<old
+version>/` with the restore steps in `RESTORE.txt`, and keeps the newest five
+backups. If the copy fails, nothing is upgraded. A coordinator upgrade ends by
+printing the one-line upgrade command for each node that is not yet on the new
+version. An enrolled node's upgrade asks the same night question when it can,
+and only warns when it cannot.
+
 ## Unattended runs
 
 `--yes`, or no terminal, means the installer never asks. Anything it would
