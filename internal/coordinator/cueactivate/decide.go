@@ -456,11 +456,45 @@ func decideResolved(ctx context.Context, st *store.Store, active assetsync.Activ
 	if err != nil {
 		return Decision{}, err
 	}
+	nextCueID, err := nextEntryCueID(ctx, st, result.PlaylistID, result.PlaylistRevision, result.EntryID)
+	if err != nil {
+		return Decision{}, err
+	}
+	for nodeID, act := range activations {
+		act.NextCueID = nextCueID
+		activations[nodeID] = act
+	}
 	// A resolved Cue with zero participating nodes (no surface, no
 	// audio.node, anywhere in this Show) is a real but inert case, never
 	// an error: Decision.Activations is simply empty and there is nothing
 	// for a caller to dispatch or authorize.
 	return Decision{State: StateActivated, Reason: result.Reason, Activations: activations}, nil
+}
+
+// nextEntryCueID is the Cue of the entry after entryID in the pinned
+// playlist revision, or "" at the last entry. Never wraps: whether FPP
+// repeats the playlist is not known here.
+func nextEntryCueID(ctx context.Context, st *store.Store, playlistID string, playlistRevision int64, entryID string) (string, error) {
+	if playlistID == "" || entryID == "" {
+		return "", nil
+	}
+	rev, err := st.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, playlistID, playlistRevision)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigRevisionNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read show.playlist %q revision %d: %w", playlistID, playlistRevision, err)
+	}
+	var p config.ShowPlaylistPayload
+	if err := json.Unmarshal([]byte(rev.PayloadJSON), &p); err != nil {
+		return "", nil
+	}
+	for i, e := range p.Entries {
+		if e.ID == entryID && i+1 < len(p.Entries) {
+			return p.Entries[i+1].Cue, nil
+		}
+	}
+	return "", nil
 }
 
 // resolveActivationsForCue builds one [cueactivation.Activation] per node

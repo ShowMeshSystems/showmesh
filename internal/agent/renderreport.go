@@ -22,8 +22,13 @@ const renderReportPublishTimeout = 5 * time.Second
 // see [renderOperations.knownHeldBlackSurfaceIDs]'s own doc comment for
 // why that gap exists. A narrow interface, not *renderOperations itself,
 // so this file's tests can supply a fake rather than a whole render stack.
+//
+// drawnAhead reports the sequence a surface's writer switched to ahead of
+// its activation, which is what the surface draws until that activation
+// is persisted.
 type heldBlackLister interface {
 	knownHeldBlackSurfaceIDs() []string
+	drawnAhead(surfaceID string) (queuedRender, bool)
 }
 
 // runRenderReport publishes this node's render pipeline health to nodeID's
@@ -111,6 +116,11 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		rep := toRenderSurfaceReport(s)
 		if a, ok := assignments[s.SurfaceID]; ok {
 			applyContentIdentity(&rep, a, now(), logger)
+		}
+		if heldBlack != nil {
+			if q, ok := heldBlack.drawnAhead(s.SurfaceID); ok {
+				applyAheadIdentity(&rep, q, now())
+			}
 		}
 		surfaces = append(surfaces, rep)
 		reported[s.SurfaceID] = struct{}{}
@@ -312,6 +322,20 @@ func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignm
 		rep.Show = a.Auth.Show
 		rep.Generation = a.Auth.Generation
 	}
+	rep.ContentObservedAt = observedAt
+}
+
+// applyAheadIdentity stamps rep with the sequence the writer switched to
+// ahead of its activation, replacing the persisted identity it no longer
+// draws.
+func applyAheadIdentity(rep *mqttproto.RenderSurfaceReport, q queuedRender, observedAt time.Time) {
+	rep.FSEQFilename = q.filename
+	rep.FSEQContentHash = q.contentHash
+	rep.CueID = q.cueID
+	rep.CatalogRevision = q.catalogRevision
+	rep.Show = q.show
+	rep.Generation = q.generation
+	rep.ContentIdentityReason = ""
 	rep.ContentObservedAt = observedAt
 }
 

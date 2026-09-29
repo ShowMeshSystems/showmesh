@@ -56,6 +56,7 @@ type catalogDeployWireParams struct {
 type catalogDeployOperation struct {
 	nodeID string
 	store  *heldcatalog.FileStore
+	render *renderOperations
 }
 
 // sortCatalogEntries returns a copy of entries, sorted by CueID with each
@@ -146,6 +147,7 @@ func (o *catalogDeployOperation) deploy(_ context.Context, params map[string]any
 			action, computed, wire.Revision, wire.Show, wire.Generation)
 	}
 
+	previous, hadPrevious, previousErr := o.store.Load()
 	executedAt := now()
 	rec := heldcatalog.HeldCatalog{
 		Show: wire.Show, Generation: wire.Generation, Node: o.nodeID,
@@ -153,6 +155,9 @@ func (o *catalogDeployOperation) deploy(_ context.Context, params map[string]any
 	}
 	if err := o.store.Save(rec); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: persisting held catalog: %w", action, err)
+	}
+	if previousErr != nil || !hadPrevious || previous.Show != rec.Show || previous.Generation != rec.Generation || previous.Revision != rec.Revision {
+		o.render.heldCatalogChanged(rec.Show, rec.Generation, rec.Revision)
 	}
 
 	// Read the persisted record back before reporting Confirmed, matching
