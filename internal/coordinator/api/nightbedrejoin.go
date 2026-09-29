@@ -24,13 +24,27 @@ import (
 // and only an operator ending and restarting the night recovers it.
 //
 // The evidence is the node's OWN report, never a timer, a boot id
-// comparison, or a clock difference: the node once confirmed an apply for
+// comparison, or a clock difference. The node once confirmed an apply for
 // this bed, it is publishing audio reports this coordinator currently
-// holds, those reports were recorded AFTER its own latest resolved step,
-// and they carry no state at all for the bed session. That is the node
-// saying the session is gone. [observation.Observation.CollectedAt] is
-// this coordinator's own record time, so the fence compares one clock
-// with itself.
+// holds, and those reports were recorded AFTER its own latest resolved
+// step. On that footing there are two ways the bed can be gone, and the
+// agent produces BOTH after a restart depending on whether its own
+// persisted session survived:
+//
+//   - the report carries no state at all for the bed session, which is
+//     the session having been retired or never restored; or
+//   - it carries one that is stopped, failed, ready or unknown while this
+//     node's own ledger says the bed should be playing, which is the
+//     agent having restored the record without resuming playback.
+//
+// [observation.Observation.CollectedAt] is this coordinator's own record
+// time, so the fence compares one clock with itself.
+//
+// All of this runs only from [handlers.nightAdvanceBackgroundAudioForNode],
+// which nightTick calls only in the states the bed is supposed to be
+// audible in (nightloop.go): preshow, the resting gap between shows, and
+// the resting state at the end of the night. A bed held down for a show
+// is never "recovered" back over it.
 //
 // Repair is [handlers.nightGiveNodeTheBedNow]: one fresh apply under a
 // new revision, after which the ordinary per-node machine advances
@@ -48,6 +62,7 @@ const (
 	audioSessionItemIDSignalID     observation.SignalID = "audio_session.playlist.item_id"
 	audioSessionItemIndexSignalID  observation.SignalID = "audio_session.playlist.item_index"
 	audioSessionPositionMsSignalID observation.SignalID = "audio_session.position_ms"
+	audioSessionStaleSignalID      observation.SignalID = "audio_session.stale"
 )
 
 // audioNodeEngineStateSignalID is the one node-level audio signal every
@@ -83,6 +98,95 @@ func nightBedNodeReportsAudioSince(audio NodeAudioLister, now, notBefore time.Ti
 	return false
 }
 
+// nightBedSessionReportLimit mirrors mqttproto's own unexported
+// maxAudioSessions, the cap a node truncates its session list to, exactly
+// as internal/agent/audioreport.go's audioSessionReportLimit mirrors it
+// from the other side: this package must not import either. A node
+// currently reporting fewer sessions than this cannot have truncated the
+// bed session out of its report, which is the one thing that could make a
+// still-playing bed look absent.
+const nightBedSessionReportLimit = 16
+
+// nightBedSessionReading is what nodeID's current report says about one
+// audio session: whether it appears at all, the state it claims, and
+// whether the node marked that claim stale (it could not read the session
+// fresh this tick because it was inside an in-flight engine call, so the
+// values are its last known evidence rather than current).
+type nightBedSessionReading struct {
+	Present bool
+	State   string
+	Stale   bool
+}
+
+// nightBedReadSession walks nodeID's observations once for sessionID.
+// Present is false only when the node's current report carries no state
+// for this session at all: a STALE reading is Present with Stale true,
+// never mistaken for an absent one, because a node that is merely busy is
+// not a node that lost the bed.
+func nightBedReadSession(audio NodeAudioLister, now time.Time, nodeID, sessionID string) nightBedSessionReading {
+	var out nightBedSessionReading
+	for _, o := range audio.NodeAudioObservations(nodeID) {
+		if o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
+			continue
+		}
+		switch o.Signal {
+		case audioSessionStateSignalID:
+			if o.StateAt(now) != observation.StateCurrent {
+				continue
+			}
+			if v, ok := o.Value.(string); ok && v != "" {
+				out.Present, out.State = true, v
+			}
+		case audioSessionStaleSignalID:
+			if v, ok := o.Value.(bool); ok {
+				out.Stale = v
+			}
+		}
+	}
+	return out
+}
+
+// nightBedNodeSessionCount is how many distinct audio sessions nodeID's
+// current report carries, so an absent bed session can be separated from
+// a report that hit [nightBedSessionReportLimit] and dropped it.
+func nightBedNodeSessionCount(audio NodeAudioLister, nodeID string) int {
+	seen := map[string]struct{}{}
+	for _, o := range audio.NodeAudioObservations(nodeID) {
+		if o.Resource.Kind == observation.ResourceAudioSession {
+			seen[o.Resource.ID] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
+// nightBedStepShouldLeaveBedPlaying reports whether a confirmed step of
+// this kind leaves the bed playing on its node. It is what makes a
+// reported "stopped" mean the bed was lost rather than deliberately
+// suspended: a confirmed pause or stop is this controller's own doing.
+func nightBedStepShouldLeaveBedPlaying(kind string) bool {
+	switch kind {
+	case nightBGStepStart, nightBGStepResume, nightBGStepFadeUp, nightBGStepExpiryRefresh:
+		return true
+	}
+	return false
+}
+
+// nightBedReportedStateIsLost reports whether a state the node claims for
+// the bed session, while this node's ledger says the bed should be
+// playing, means playback is no longer running.
+//
+// Deliberately NOT lost: completed, which a bed configured not to repeat
+// reaches legitimately and which re-applying would loop forever;
+// restore_pending, which is the node's own restore driver already working
+// on it; and preparing or stopping, which are both in transit.
+func nightBedReportedStateIsLost(state string) bool {
+	switch pkgaudio.State(state) {
+	case pkgaudio.StateStopped, pkgaudio.StateFailed, pkgaudio.StateUnknown, pkgaudio.StateReady:
+		return true
+	}
+	return false
+}
+
 // nightBedNodeEverHeldTheBed reports whether nodeID ever confirmed an
 // apply for this bed: the evidence that it once held the session, which
 // is what separates "this node lost the bed" from "this node never
@@ -98,19 +202,27 @@ func nightBedNodeEverHeldTheBed(steps []nightBackgroundAudioHistoryRow) bool {
 	return false
 }
 
-// nightBedNodeLostSession reports whether nodeID's bed session is gone
-// from a node that once held it, and returns the step the loss is
-// attributed to. That step's DispatchedAt is what fences the report: an
-// audio report this coordinator recorded before that dispatch cannot
-// describe its result.
+// nightBedNodeLostSession reports whether nodeID has lost a bed it once
+// held, and returns the step the loss is attributed to. That step's
+// DispatchedAt is what fences the report: an audio report this
+// coordinator recorded before that dispatch cannot describe its result.
 //
 // A step still in flight is left alone; so is a node whose own latest
-// step is already a rejoin ([nightBedRejoinNotePrefix]), which bounds
-// this to ONE recovery attempt before the ordinary per-step rules take
-// the node back. A confirmed pause is included on purpose: an agent that
-// restarts while the bed is paused for a show comes back holding nothing,
-// and the resume after that show would be refused with nothing to
-// self-heal it.
+// step is already a rejoin ([nightBedRejoinNotePrefix]), and so is one
+// whose latest step the node itself refused. Together those bound this to
+// ONE recovery attempt per genuine loss, after which the ordinary
+// per-step rules take the node back.
+//
+// An ABSENT session counts whatever the latest step was, including a
+// confirmed pause: an agent that restarts while the bed is paused for a
+// show comes back holding nothing, and the resume after that show would
+// be refused with nothing to self-heal it. It counts only when the node's
+// report cannot have truncated the session away.
+//
+// A PRESENT session counts only when the node claims a state playback is
+// not running in AND this node's ledger says the bed should be playing,
+// so a bed this controller paused or stopped on purpose is never
+// "recovered" back over a show. A stale claim never counts at all.
 func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessionID string, steps []nightBackgroundAudioHistoryRow) (nightBackgroundAudioHistoryRow, bool) {
 	if len(steps) == 0 || !nightBedNodeEverHeldTheBed(steps) {
 		return nightBackgroundAudioHistoryRow{}, false
@@ -122,14 +234,51 @@ func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessi
 	if _, isRejoin := decodeNightBedRejoinNote(latest.Row.OutcomeReason); isRejoin {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
+	// A node whose latest step it REFUSED is answering, and answering no.
+	// Re-applying the bed at it cannot improve on that, and doing so every
+	// time its report comes back would be the per-tick resend this work
+	// exists to remove, wearing a different hat. The refusal and its
+	// reason stay recorded for an operator.
+	if nightBedStepNodeRefused(latest.Row) {
+		return nightBackgroundAudioHistoryRow{}, false
+	}
 	if !nightBedNodeReportsAudioSince(audio, now, *latest.Row.DispatchedAt, nodeID) {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
-	if _, reported := nightBackgroundAudioReportedSessionState(audio, now, time.Time{}, nodeID, sessionID); reported {
-		return nightBackgroundAudioHistoryRow{}, false
+	if nightBedSessionLost(audio, now, nodeID, sessionID, latest) {
+		return latest, true
 	}
-	return latest, true
+	return nightBackgroundAudioHistoryRow{}, false
 }
+
+// nightBedSessionLost is [nightBedNodeLostSession]'s own reading of the
+// node's report, split out so the not-playing surface and the refusal
+// rule can ask the same question without re-deriving the ledger fence.
+func nightBedSessionLost(audio NodeAudioLister, now time.Time, nodeID, sessionID string, latest nightBackgroundAudioHistoryRow) bool {
+	reading := nightBedReadSession(audio, now, nodeID, sessionID)
+	if !reading.Present {
+		return nightBedNodeSessionCount(audio, nodeID) < nightBedSessionReportLimit
+	}
+	if reading.Stale {
+		return false
+	}
+	return nightBedStepShouldLeaveBedPlaying(latest.Step.Kind) && nightBedReportedStateIsLost(reading.State)
+}
+
+// nightBedPositionEvidenceMaxAge bounds how old a peer's own position
+// reading may be before this coordinator stops extrapolating from it.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED. The node audio collector holds a
+// reading as current for 45 s (nodeaudio.DefaultValidFor), which is
+// longer than some bed items run: extrapolating that far forward can
+// name a position past the end of the item, and the agent's own engine
+// answers a start at or past EOS by presenting nothing while the session
+// still reports playing, which is silence this controller could not then
+// see. The coordinator cannot clamp instead, because it has no item
+// duration to clamp against: nothing in the asset store records one. So
+// a reading older than this is dropped and the node starts the bed from
+// its first item, which is audible rather than silent.
+const nightBedPositionEvidenceMaxAge = 10 * time.Second
 
 // nightBedPeerPlaybackPoint is the item and position a node OTHER than
 // exclude currently reports for sessionID, advanced by the time since
@@ -161,10 +310,52 @@ func nightBedPeerPlaybackPoint(audio NodeAudioLister, now time.Time, sessionID s
 		if elapsed < 0 {
 			elapsed = 0
 		}
+		if elapsed > nightBedPositionEvidenceMaxAge {
+			continue
+		}
 		return nightBedPlaybackPoint{
 			FromNodeID: nodeID, ItemID: itemID, Index: index,
 			PositionMs: positionMs + elapsed.Milliseconds(),
 		}, true
+	}
+	return nightBedPlaybackPoint{}, false
+}
+
+// nightBedStartPointRefusedReason is the recorded reason for the one
+// retry a refused playback point gets.
+const nightBedStartPointRefusedReason = "the position read from another speaker was refused, so the background music starts from its first track here"
+
+// nightBedJoinPoint is where a node joining a running bed should begin:
+// the position a node still PLAYING the bed reports, or, when the bed is
+// paused on every other node, the resume point those nodes will come back
+// on. The second case is what a node rejoining while the bed is held down
+// for a show needs; starting it at item zero there would put it on a
+// different track the moment the others resume.
+//
+// The paused case prefers the program+ltc node's own bookmark, the same
+// one [handlers.nightResumeMultiNodeBackgroundAudio] pushes to every
+// listed node, so a node that rejoins and a node that merely resumes end
+// up at the same place.
+func (h *handlers) nightBedJoinPoint(ctx context.Context, now time.Time, sessionID string, nodeIDs []string, exclude string, history []nightBackgroundAudioHistoryRow) (nightBedPlaybackPoint, bool) {
+	if point, ok := nightBedPeerPlaybackPoint(h.deps.Audio, now, sessionID, nodeIDs, exclude); ok {
+		return point, true
+	}
+	ordered := make([]string, 0, len(nodeIDs))
+	if programLTC, has, err := h.nightBedProgramLTCNode(ctx, nodeIDs); err == nil && has && programLTC != exclude {
+		ordered = append(ordered, programLTC)
+	}
+	for _, nodeID := range nodeIDs {
+		if nodeID != exclude && nodeID != nightBedScheduleNodeID && !nightBedContainsNode(ordered, nodeID) {
+			ordered = append(ordered, nodeID)
+		}
+	}
+	for _, nodeID := range ordered {
+		if bm := nightBedNodeLatestPauseBookmark(history, nodeID); bm.Known {
+			return nightBedPlaybackPoint{
+				FromNodeID: nodeID, ItemID: bm.ItemID,
+				Index: int64(bm.Index), PositionMs: bm.PositionMs,
+			}, true
+		}
 	}
 	return nightBedPlaybackPoint{}, false
 }
@@ -198,6 +389,49 @@ func nightBedReportedItemAndPosition(audio NodeAudioLister, now time.Time, nodeI
 		return "", 0, 0, time.Time{}, false
 	}
 	return itemID, index, positionMs, collectedAt, true
+}
+
+// nightBedStartPointNotePrefix tags a start row with whether it carried a
+// playback point, so the one retry below can tell "this start named a
+// position the node refused" from "this start already dropped it".
+const nightBedStartPointNotePrefix = "bedStartPoint="
+
+// nightBedStartPointNote records whether the start that wrote it had its
+// playback point dropped.
+type nightBedStartPointTag struct {
+	Dropped bool `json:"dropped"`
+}
+
+func encodeNightBedStartPointTag(t nightBedStartPointTag) string {
+	b, _ := json.Marshal(t)
+	return nightBedStartPointNotePrefix + string(b)
+}
+
+func decodeNightBedStartPointTag(reason string) (nightBedStartPointTag, bool) {
+	idx := strings.Index(reason, nightBedStartPointNotePrefix)
+	if idx < 0 {
+		return nightBedStartPointTag{}, false
+	}
+	var t nightBedStartPointTag
+	if err := json.Unmarshal([]byte(reason[idx+len(nightBedStartPointNotePrefix):]), &t); err != nil {
+		return nightBedStartPointTag{}, false
+	}
+	return t, true
+}
+
+// nightBedStartPointWasRefused reports whether row is a start the node
+// refused that had named a playback point, and which has not already been
+// retried without one. A point can be refused for a reason nothing here
+// can fix, most plainly a media.playlist edited while the night runs so
+// the item the others are on is no longer at that index on this node; one
+// retry without the point then gets the node playing from the bed's first
+// item instead of leaving it silent.
+func nightBedStartPointWasRefused(row store.NightCueOutboxRecord) bool {
+	if !nightBedStepNodeRefused(row) {
+		return false
+	}
+	tag, ok := decodeNightBedStartPointTag(row.OutcomeReason)
+	return ok && !tag.Dropped
 }
 
 // nightBedRejoinNotePrefix tags the JSON fragment a rejoin apply row's
@@ -299,17 +533,33 @@ func (h *handlers) nightBedRecoverLostSessionForNode(ctx context.Context, now ti
 // nightBedStepNodeRefused reports whether row records a step the NODE
 // itself answered with a refusal, as opposed to one that failed before
 // reaching it, one that has not been answered yet, or one this
-// coordinator's own acceptance ledger refused before dispatch. A node's
-// refusal is an answer: the same command under a fresh revision gets the
-// same answer, so it is not re-sent. Everything else still retries, and
-// a ledger refusal in particular is CURED by a fresh revision
-// ([nightPersistLedgerRefusal] records one with no dispatch instant and
-// its own fixed reason).
+// coordinator's own acceptance ledger refused before dispatch (which is
+// CURED by a fresh revision: [nightPersistLedgerRefusal] records one with
+// no dispatch instant and its own fixed reason).
 func nightBedStepNodeRefused(row store.NightCueOutboxRecord) bool {
 	if row.State != nightCueStateResolved || row.Outcome != nightCueOutcomeRefused {
 		return false
 	}
 	return row.DispatchedAt != nil && row.OutcomeReason != nightLedgerRefusalOperatorReason
+}
+
+// nightBedRefusalIsFinal reports whether re-sending row's step could
+// possibly do any good. Only one refusal is final: one the node answered
+// while its bed session is gone, because there is nothing left on that
+// node for the command to address and the rejoin path owns putting it
+// back.
+//
+// Every other refusal stays retryable, which matters most for the exact
+// case an agent restart produces: [audio.Manager.Resume] refuses with
+// "No audio engine is connected yet. Retry once one connects." until the
+// node's own engine binding arrives, and a rule that treated that as
+// final would leave the node silent for the night.
+func (h *handlers) nightBedRefusalIsFinal(now time.Time, nodeID, sessionID string, row store.NightCueOutboxRecord) bool {
+	if !nightBedStepNodeRefused(row) {
+		return false
+	}
+	reading := nightBedReadSession(h.deps.Audio, now, nodeID, sessionID)
+	return !reading.Present && nightBedNodeSessionCount(h.deps.Audio, nodeID) < nightBedSessionReportLimit
 }
 
 // nightBedPointOrNil is the pointer form [handlers.nightBackgroundAudioStartScheduled]
@@ -323,9 +573,11 @@ func nightBedPointOrNil(point nightBedPlaybackPoint, has bool) *nightBedPlayback
 
 // nightBedStartPointNote is the operator-facing note a start carrying a
 // playback point records: fact first, then what it means for the sound.
+// The item's own id is this controller's internal handle for a playlist
+// entry, not a track name an operator would recognise, so it is not shown.
 func nightBedStartPointNote(point nightBedPlaybackPoint) string {
-	return fmt.Sprintf("this speaker was given the background music from where %s is playing it, track %s at about %d seconds in, so it may be slightly behind the others",
-		point.FromNodeID, point.ItemID, point.PositionMs/1000)
+	return fmt.Sprintf("This speaker was given the background music from about %d seconds into the track %s is playing, so it may be slightly behind the others.",
+		point.PositionMs/1000, point.FromNodeID)
 }
 
 // nightBedNodesNotPlaying answers "which speakers is the background music
@@ -353,24 +605,44 @@ func nightBedNodesNotPlaying(ctx context.Context, deps Dependencies, rec store.N
 	if len(configured) == 0 {
 		return out
 	}
+	history := make([]nightBackgroundAudioHistoryRow, 0, len(rows))
 	dispatched := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		if _, nodeID, ok := nightParseBackgroundAudioRow(row); ok {
+		step, nodeID, ok := nightParseBackgroundAudioRow(row)
+		history = append(history, nightBackgroundAudioHistoryRow{Step: step, Row: row, NodeID: nodeID, Parsed: ok})
+		if ok {
 			dispatched[nodeID] = true
 		}
 	}
 	sessionID := nightBackgroundAudioSessionID(rec)
 	for _, nodeID := range configured {
-		if !dispatched[nodeID] {
+		if !dispatched[nodeID] || nightBedNodeDeliberatelySuspended(history, nodeID) {
 			continue
 		}
-		state, reported := nightBackgroundAudioReportedSessionState(deps.Audio, now, time.Time{}, nodeID, sessionID)
-		if reported && state == string(pkgaudio.StatePlaying) {
+		reading := nightBedReadSession(deps.Audio, now, nodeID, sessionID)
+		if reading.Present && reading.State == string(pkgaudio.StatePlaying) {
 			continue
 		}
-		out = append(out, v1.NightBedNodeNotPlaying{NodeID: nodeID, Reason: nightBedNotPlayingReason(deps.Audio, now, nodeID, state, reported)})
+		out = append(out, v1.NightBedNodeNotPlaying{NodeID: nodeID, Reason: nightBedNotPlayingReason(deps.Audio, now, nodeID, reading)})
 	}
 	return out
+}
+
+// nightBedNodeDeliberatelySuspended reports whether this controller's own
+// latest step for nodeID is a confirmed pause or stop, which is the bed
+// being held down for a show rather than a speaker that dropped out. Such
+// a node is never named as not playing: it is not playing because it was
+// told not to.
+func nightBedNodeDeliberatelySuspended(history []nightBackgroundAudioHistoryRow, nodeID string) bool {
+	latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID)
+	if !ok || latest.Row.State != nightCueStateResolved || latest.Row.Outcome != nightCueOutcomeConfirmed {
+		return false
+	}
+	switch latest.Step.Kind {
+	case nightBGStepPause, nightBGStepStop, nightBGStepFadeDown:
+		return true
+	}
+	return false
 }
 
 // nightBedNotPlayingReason states what this coordinator actually knows
@@ -378,15 +650,19 @@ func nightBedNodesNotPlaying(ctx context.Context, deps Dependencies, rec store.N
 // never collapsed into one: the node is not reporting at all, it is
 // reporting and has no background music session, or it has one that is
 // not playing.
-func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID, state string, reported bool) string {
+func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID string, reading nightBedSessionReading) string {
 	switch {
 	case !nightBedNodeReportsAudioSince(audio, now, time.Time{}, nodeID):
 		return "This speaker is not reporting its audio, so whether the background music is playing on it is unknown. Check that the node is powered on and connected."
-	case !reported:
+	case reading.Stale:
+		return "This speaker was too busy to report the background music this time, so what it is doing now is unknown. It reports again on its next cycle."
+	case !reading.Present:
 		return "This speaker is no longer holding the background music this night started. The coordinator gives it the music again on its next check."
-	case state == string(pkgaudio.StatePaused):
+	case nightBedReportedStateIsLost(reading.State):
+		return "The background music this night started is no longer playing on this speaker. The coordinator starts it again on its next check."
+	case reading.State == string(pkgaudio.StatePaused):
 		return "The background music is paused on this speaker. It starts again when the coordinator brings the speakers back together."
 	default:
-		return "This speaker is not playing the background music it was given. The coordinator brings it back with the other speakers on its next check."
+		return "This speaker is not playing the background music it was given, and the coordinator is not changing that on its own. Check the speaker if the music does not come back."
 	}
 }

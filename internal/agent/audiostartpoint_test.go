@@ -247,3 +247,47 @@ func TestStartSessionWithAStartPointNamingAnItemThePlaylistDoesNotHaveIsRefused(
 		t.Fatalf("start outcome = %q (%s), want refused", outcome, reason)
 	}
 }
+
+// TestStartSessionWithAStartPositionPastTheItemIsAcceptedHere records
+// where the guard against an over-run position actually lives, which is
+// NOT this agent: a position past the end of the item is accepted and the
+// session reports playing.
+//
+// Against the real GStreamer engine this is worse than it looks here: its
+// own Start reaches EOS during prepare and returns without ever going to
+// PLAYING (internal/agent/audio/gstengine/methods.go), while
+// [audio.Manager.start] records StatePlaying from a non-error return
+// regardless, so the session claims to be playing while presenting
+// nothing. READ FROM THE CODE, NOT MEASURED: the fake engine models no
+// EOS at all, so nothing here can prove the real engine's behaviour, and
+// this test deliberately does not claim to.
+//
+// The coordinator is what keeps that case from arising: it will not
+// extrapolate a peer's reported position it has held for too long
+// (nightBedPositionEvidenceMaxAge), because it has no item duration to
+// clamp against.
+func TestStartSessionWithAStartPositionPastTheItemIsAcceptedHere(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ops := audioSessionOperations(mgr)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-start-point-7")
+
+	startPointPlaylistFixture(t, mgr, ctx, id, dir)
+
+	startOp := ops[string(pkgaudio.OperationSessionStart)]
+	res, err := startOp(ctx, wireCmdParams(t, "audio.session.start", map[string]any{
+		"sessionId": string(id), "invocationId": "inv-start", "revision": 2,
+		pkgaudio.ParamStartItemID:     "item-b",
+		pkgaudio.ParamStartIndex:      1,
+		pkgaudio.ParamStartPositionMs: 86_400_000,
+	}), clock.now)
+	if err != nil {
+		t.Fatalf("startOp: %v", err)
+	}
+	outcome, reason := sessionOutcomeReason(t, res)
+	if outcome != string(pkgaudio.OutcomeStarted) {
+		t.Fatalf("start outcome = %q (%s), want started: this agent does not bound the position", outcome, reason)
+	}
+}
