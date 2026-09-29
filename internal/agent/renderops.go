@@ -315,10 +315,15 @@ type renderOperations struct {
 	hashCache *verifiedHashCache
 
 	// queueGen invalidates a next-sequence preparation still in flight when
-	// a later activation settles or replaces that surface's queue. Guarded
+	// a later activation settles or replaces that surface's queue, or its
+	// writer stops. Guarded
 	// by mu. queueing lets a test wait for preparations to finish.
 	queueGen map[string]uint64
 	queueing sync.WaitGroup
+
+	// heldCatalog is the catalog last deployed while this process ran, nil
+	// until then. A preparation authorized under another one never queues.
+	heldCatalog *catalogIdentity
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, holdBlackStore *pipeline.HoldBlackStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
@@ -547,6 +552,7 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	h, ok := o.writers[surfaceID]
 	if ok {
 		delete(o.writers, surfaceID)
+		o.bumpQueueGenLocked(surfaceID)
 	}
 	o.mu.Unlock()
 	if !ok {

@@ -16,35 +16,40 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
-// verifiedHashCache caches hashFile's own answer per path, keyed also by
-// size and modification time: a hit only when both are unchanged since the
-// cached hash was computed, shared by assetPresent below and by
-// assetFetchOperation's own post-write verification (assets.go), so a
-// large asset already verified once is never re-hashed whole on every
-// cue.activate.
+// verifiedHashCache caches hashFile's own answer per path, trusted only
+// while the file is the same one (device and inode, so a rename-replace is
+// a miss) with the same size and modification time, shared by assetPresent
+// below and by assetFetchOperation's own post-write verification
+// (assets.go), so a large asset already verified once is never re-hashed
+// whole on every cue.activate.
 type verifiedHashCache struct {
 	mu      sync.Mutex
-	entries map[string]hashCacheEntry
+	entries map[string]verifiedHash
+}
+
+type verifiedHash struct {
+	info os.FileInfo
+	hash string
 }
 
 func newVerifiedHashCache() *verifiedHashCache {
-	return &verifiedHashCache{entries: make(map[string]hashCacheEntry)}
+	return &verifiedHashCache{entries: make(map[string]verifiedHash)}
 }
 
-func (c *verifiedHashCache) get(path string, size int64, modTime time.Time) (string, bool) {
+func (c *verifiedHashCache) get(path string, info os.FileInfo) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[path]
-	if !ok || e.size != size || !e.modTime.Equal(modTime) {
+	if !ok || !os.SameFile(e.info, info) || e.info.Size() != info.Size() || !e.info.ModTime().Equal(info.ModTime()) {
 		return "", false
 	}
 	return e.hash, true
 }
 
-func (c *verifiedHashCache) set(path string, size int64, modTime time.Time, hash string) {
+func (c *verifiedHashCache) set(path string, info os.FileInfo, hash string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[path] = hashCacheEntry{size: size, modTime: modTime, hash: hash}
+	c.entries[path] = verifiedHash{info: info, hash: hash}
 }
 
 // This file is TRACK-H-cues-and-playlists.md section H4's node-agent
@@ -178,15 +183,15 @@ func (o *cueActivationOperation) assetPresent(filename string, hashes []string) 
 }
 
 // hashFileCached answers path's content hash from o.hashCache when its
-// size and modification time still match a prior verification, hashing
+// identity, size and modification time still match a prior verification, hashing
 // (and caching the result) only on a miss so a missing or altered file
 // still hashes, and still fails, exactly as before this cache existed.
 func (o *cueActivationOperation) hashFileCached(path string) (string, error) {
 	return cachedHashFile(o.hashCache, path)
 }
 
-// cachedHashFile is hashFile answered from cache when path's size and
-// modification time are unchanged since it was last hashed. A nil cache
+// cachedHashFile is hashFile answered from cache when path is the same file,
+// same size and same modification time as when last hashed. A nil cache
 // always hashes.
 func cachedHashFile(cache *verifiedHashCache, path string) (string, error) {
 	info, err := os.Stat(path)
@@ -194,7 +199,7 @@ func cachedHashFile(cache *verifiedHashCache, path string) (string, error) {
 		return "", err
 	}
 	if cache != nil {
-		if hash, ok := cache.get(path, info.Size(), info.ModTime()); ok {
+		if hash, ok := cache.get(path, info); ok {
 			return hash, nil
 		}
 	}
@@ -203,7 +208,7 @@ func cachedHashFile(cache *verifiedHashCache, path string) (string, error) {
 		return "", err
 	}
 	if cache != nil {
-		cache.set(path, info.Size(), info.ModTime(), hash)
+		cache.set(path, info, hash)
 	}
 	return hash, nil
 }

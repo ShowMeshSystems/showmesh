@@ -239,3 +239,58 @@ func TestRenderReportNamesTheSequenceDrawnAheadOfItsActivation(t *testing.T) {
 		t.Fatalf("report names %q %q cue %q revision %q, want the kpop.fseq sequence the surface draws", rep.FSEQFilename, rep.FSEQContentHash, rep.CueID, rep.CatalogRevision)
 	}
 }
+
+func TestPreparationStillRunningAtASurfaceApplyQueuesNothing(t *testing.T) {
+	r := newNextSequenceRig(t)
+	r.play("wake.fseq")
+	r.activate("act-1", "cue-1", "rev-a", "")
+	r.renderOps.mu.Lock()
+	gen := r.renderOps.queueGen["surface-1"]
+	r.renderOps.mu.Unlock()
+
+	setupActivatedSurface(t, r.renderOps, r.dir, "wake.fseq", r.clock)
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	r.renderOps.prepareQueuedRender("surface-1", gen, act, "cue-2", r.kpop)
+	if h := r.handle(); h.queued != nil {
+		t.Fatalf("a preparation started before the apply queued %+v on the new writer", h.queued)
+	}
+}
+
+func TestCatalogDeployBetweenQueueingAndTheSwitchDrawsBlackThenActivatesNormally(t *testing.T) {
+	r := newNextSequenceRig(t)
+	r.play("wake.fseq")
+	r.activate("act-1", "cue-1", "rev-a", "cue-2")
+	if h := r.handle(); h.queued == nil {
+		t.Fatalf("after cue-1's activation nothing is queued, want kpop.fseq")
+	}
+
+	wake, kpop := r.wake, r.kpop
+	entries := []cuecatalog.Entry{
+		{CueID: "cue-1", CueRevision: 1, Outputs: cuecatalog.Outputs{Render: &wake}},
+		{CueID: "cue-2", CueRevision: 1, Outputs: cuecatalog.Outputs{Render: &kpop}},
+	}
+	revision := computeExpectedRevision(t, "show-1", testNodeID, 2, entries)
+	deploy := &catalogDeployOperation{nodeID: testNodeID, store: r.catalog, render: r.renderOps}
+	if _, err := deploy.deploy(context.Background(), paramsFromWire(t, catalogDeployWireParams{Show: "show-1", Generation: 2, Revision: revision, Entries: entries}), r.clock.now); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if h := r.handle(); h.queued != nil {
+		t.Fatalf("after a catalog deploy %+v is still queued", h.queued)
+	}
+
+	r.play("kpop.fseq")
+	r.waitFor("the stale black output", func() bool { return r.drawing() == pipeline.DrawingStale })
+	if h := r.handle(); h.ahead != nil || h.filename != "wake.fseq" {
+		t.Fatalf("the writer switched after a catalog deploy: ahead=%+v filename=%q", h.ahead, h.filename)
+	}
+
+	act := testActivation("act-2", "cue-2", 1, "show-1", 2, revision, 0)
+	result, err := r.op.activate(context.Background(), activationParams(t, act), r.clock.now)
+	if err != nil || !result.Confirmed {
+		t.Fatalf("cue-2's activation under the new catalog = %+v, %v, want confirmed", result, err)
+	}
+	r.waitFor("content drawn from kpop.fseq", func() bool { return r.drawing() == pipeline.DrawingContent })
+	if got := r.persistedFilename(); got != "kpop.fseq" {
+		t.Fatalf("persisted filename after cue-2's activation = %q, want kpop.fseq", got)
+	}
+}

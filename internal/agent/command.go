@@ -267,7 +267,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		ops["render.transport.probe"] = render.probeTransport
 	}
 	if catalogStore != nil {
-		catalogDeploy := &catalogDeployOperation{nodeID: nodeID, store: catalogStore}
+		catalogDeploy := &catalogDeployOperation{nodeID: nodeID, store: catalogStore, render: render}
 		ops["cuecatalog.deploy"] = catalogDeploy.deploy
 
 		// "cue.activate" (Track H seam H4): needs the held catalog store

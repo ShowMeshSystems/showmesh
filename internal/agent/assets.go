@@ -214,7 +214,7 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 	confirmed, readBackSize := readBackAssetFunc(finalPath, contentHash)
 	if confirmed && o.hashCache != nil {
 		if info, statErr := os.Stat(finalPath); statErr == nil {
-			o.hashCache.set(finalPath, info.Size(), info.ModTime(), contentHash)
+			o.hashCache.set(finalPath, info, contentHash)
 		}
 	}
 

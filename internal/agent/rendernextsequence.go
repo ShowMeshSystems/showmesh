@@ -60,6 +60,29 @@ func (o *renderOperations) queueNextRender(act cueactivation.Activation, nextCue
 	}
 }
 
+// heldCatalogChanged records the catalog this node now holds and drops
+// every queued sequence, so nothing verified under an older catalog draws.
+func (o *renderOperations) heldCatalogChanged(show string, generation int64, revision string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.heldCatalog = &catalogIdentity{show: show, generation: generation, revision: revision}
+	o.mu.Unlock()
+	o.queueNextRender(cueactivation.Activation{}, "", nil)
+}
+
+// catalogIdentity names one held catalog.
+type catalogIdentity struct {
+	show       string
+	generation int64
+	revision   string
+}
+
+func (c *catalogIdentity) authorizes(act cueactivation.Activation) bool {
+	return c == nil || (c.show == act.Show && c.generation == act.Generation && c.revision == act.CatalogRevision)
+}
+
 func (o *renderOperations) bumpQueueGenLocked(surfaceID string) uint64 {
 	if o.queueGen == nil {
 		o.queueGen = make(map[string]uint64)
@@ -92,7 +115,7 @@ func (o *renderOperations) prepareQueuedRender(surfaceID string, gen uint64, act
 
 	o.mu.Lock()
 	h, ok := o.writers[surfaceID]
-	if !ok || h.fseq == nil || o.queueGen[surfaceID] != gen || h.filename == next.Filename {
+	if !ok || h.fseq == nil || o.queueGen[surfaceID] != gen || h.filename == next.Filename || !o.heldCatalog.authorizes(act) {
 		o.mu.Unlock()
 		_ = f.Close()
 		return
