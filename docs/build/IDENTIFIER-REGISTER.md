@@ -1437,7 +1437,7 @@ The store schema version, bumped by migrations in
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
 | v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
-| v46+ | unallocated | free |
+| v46+ | unallocated | free. v46 and v47 were reserved 2026-09-28 for audio rejoin and routing work and released unused |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1640,6 +1640,8 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Node-reported audio routing choices (2026-09-28) own `/api/v1/nodes/{nodeId}/audio/routing-choices`** and the `showmeshctl audio node choices` subcommand. The agent reports the evidence as `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes on the existing `audio.output.local` capability; no new capability id.
 
 **The long-run drift recording (2026-09-11) owns every path under
 `/api/v1/nodes/{nodeId}/audio/alignment-runs`**, and the `showmeshctl audio
