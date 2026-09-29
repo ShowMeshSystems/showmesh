@@ -7178,8 +7178,37 @@ export interface components {
             /** Format: date-time */
             resolvedAt: string | null;
         };
-        /** @description resting.backgroundAudio's own durable step log for the current cycle, or the stated reason it could not be read. Empty `steps` with `state` "recorded" means backgroundAudio is not configured at all, or has never been started this cycle. */
+        NightBackgroundAudioPlanItem: {
+            /** @description Playing order, counted from 1. */
+            position: number;
+            itemId: string;
+            show: string;
+            sequence: string;
+            /** @description The audio node that holds this item's file. */
+            target: string;
+        };
+        /** @description The background audio the session will play, read from its own pinned configuration revision so it never reports another revision's items. It is available before the bed starts and is not replaced by the step log. `state` "recorded" with `configured` false means the revision has no background audio; `configured` true with no steps means it is set up but has not started this cycle. `state` "unknown" carries the `reason` the plan could not be read, for example a missing media playlist. */
+        NightBackgroundAudioPlan: {
+            /** @enum {string} */
+            state: "recorded" | "unknown";
+            reason: string;
+            configured: boolean;
+            /** @description The media playlist the bed plays, or empty when the pinned revision lists the items inline. */
+            mediaPlaylist: string;
+            /** @enum {string} */
+            repeat: "" | "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "" | "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "" | "sequential" | "gapless" | "crossfade";
+            crossfadeMs: number | null;
+            /** @description The audio nodes the bed will play on. */
+            nodes: string[];
+            items: components["schemas"]["NightBackgroundAudioPlanItem"][];
+        };
+        /** @description resting.backgroundAudio's own durable step log for the current cycle, or the stated reason it could not be read. Empty `steps` with `state` "recorded" means nothing has been played this cycle; `plan.configured` says whether the session has any background audio to play. */
         NightBackgroundAudio: {
+            plan: components["schemas"]["NightBackgroundAudioPlan"];
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             /** @description Usually only meaningful when state is not "recorded". The one exception: reason may be non-empty while state is "recorded", in which case it describes pinnedMaxGainDb alone (why that one field is null) and says nothing about steps, which are unaffected and reported as read. */
