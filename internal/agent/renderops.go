@@ -291,6 +291,11 @@ type renderOperations struct {
 	// entry for — see holdBlackDefaultAll's own "never reset as a whole".
 	holdBlackDefaultMaterialized bool
 
+	// stepReserved holds the FSEQ step time of a surface whose apply, swap
+	// or resume passed the conflict check but has not yet installed its
+	// frame writer. Guarded by mu.
+	stepReserved map[string]byte
+
 	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
 	// to [pipeline.ProbeNDISend]. nil (the production default, set by
 	// [newRenderOperations]) selects the real process starter; tests in
@@ -591,27 +596,59 @@ func (e stepTimeConflictError) Error() string {
 		e.stepTimeMS, e.otherSurfaceID, e.otherStepTimeMS)
 }
 
-// checkStepTimeAgainstOthers refuses a step time that differs from the one
-// any other surface holding FSEQ content plays: every surface shares one
-// timeline. An idle surface has no step time and never conflicts.
-func (o *renderOperations) checkStepTimeAgainstOthers(surfaceID string, stepTimeMS byte) error {
+// reserveStepTime refuses a step time that differs from the one any other
+// surface holding FSEQ content plays, or has reserved, because every surface
+// shares one timeline. Surfaces in skip are being moved to the same sequence
+// together and are not compared. An idle surface never conflicts. On success
+// the step time stays reserved until the surface's frame writer is installed
+// or releaseStepReservation runs.
+func (o *renderOperations) reserveStepTime(surfaceID string, stepTimeMS byte, skip map[string]bool) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.stepTimeConflictLocked(surfaceID, stepTimeMS)
+	if err := o.stepTimeConflictLocked(surfaceID, stepTimeMS, skip, false); err != nil {
+		return err
+	}
+	if o.stepReserved == nil {
+		o.stepReserved = make(map[string]byte)
+	}
+	o.stepReserved[surfaceID] = stepTimeMS
+	return nil
 }
 
-func (o *renderOperations) stepTimeConflictLocked(surfaceID string, stepTimeMS byte) error {
-	ids := make([]string, 0, len(o.writers))
-	for id := range o.writers {
-		ids = append(ids, id)
+func (o *renderOperations) releaseStepReservation(surfaceID string) {
+	o.mu.Lock()
+	delete(o.stepReserved, surfaceID)
+	o.mu.Unlock()
+}
+
+// stepTimeConflictLocked compares stepTimeMS with every other surface's
+// step time: a reservation first, else the queued sequence when
+// useQueued is set and one is queued, else the sequence it plays.
+func (o *renderOperations) stepTimeConflictLocked(surfaceID string, stepTimeMS byte, skip map[string]bool, useQueued bool) error {
+	steps := make(map[string]byte, len(o.writers)+len(o.stepReserved))
+	for id, h := range o.writers {
+		if h.fseq == nil {
+			continue
+		}
+		steps[id] = h.fseq.StepTimeMS()
+		if useQueued && h.queued != nil {
+			steps[id] = h.queued.file.StepTimeMS()
+		}
+	}
+	for id, step := range o.stepReserved {
+		steps[id] = step
+	}
+	ids := make([]string, 0, len(steps))
+	for id := range steps {
+		if id != surfaceID && !skip[id] {
+			ids = append(ids, id)
+		}
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		h := o.writers[id]
-		if id == surfaceID || h.fseq == nil || h.fseq.StepTimeMS() == stepTimeMS {
-			continue
+		if steps[id] != stepTimeMS {
+			return stepTimeConflictError{stepTimeMS: stepTimeMS, otherSurfaceID: id, otherStepTimeMS: steps[id]}
 		}
-		return stepTimeConflictError{stepTimeMS: stepTimeMS, otherSurfaceID: id, otherStepTimeMS: h.fseq.StepTimeMS()}
 	}
 	return nil
 }
@@ -867,13 +904,14 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 		return err
 	}
 	if f != nil {
-		if err := o.checkStepTimeAgainstOthers(surfaceID, f.StepTimeMS()); err != nil {
+		if err := o.reserveStepTime(surfaceID, f.StepTimeMS(), nil); err != nil {
 			_ = f.Close()
 			return err
 		}
 	}
 	if err := o.sup.Apply(spec); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return fmt.Errorf("%s: %w", action, err)
@@ -883,6 +921,7 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		o.releaseStepReservation(surfaceID)
 		if f != nil {
 			_ = f.Close()
 		}
@@ -950,7 +989,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, err
 	}
 	if f != nil {
-		if err := o.checkStepTimeAgainstOthers(surfaceID, f.StepTimeMS()); err != nil {
+		if err := o.reserveStepTime(surfaceID, f.StepTimeMS(), nil); err != nil {
 			_ = f.Close()
 			return OperationResult{}, err
 		}
@@ -958,6 +997,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 
 	if err := o.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: rawParams, AppliedAt: executedAt, Auth: auth}); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return OperationResult{}, fmt.Errorf("%s: persisting assignment: %w", action, err)
@@ -972,6 +1012,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 
 	if err := o.sup.Apply(spec); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
@@ -987,6 +1028,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		o.releaseStepReservation(surfaceID)
 		if f != nil {
 			_ = f.Close()
 		}
@@ -1036,10 +1078,12 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 		func(q *pipeline.QueuedSequence) { o.queuedSequenceStarted(surfaceID, h, q) },
 		func(q *pipeline.QueuedSequence) { o.queuedSequenceDropped(h, q) },
 	)
+	fw.SetSwitchGuard(func(q *pipeline.QueuedSequence) bool { return o.allowQueuedSwitch(surfaceID, h, q) })
 	go fw.Run(ctx)
 
 	o.mu.Lock()
 	o.writers[surfaceID] = h
+	delete(o.stepReserved, surfaceID)
 	o.mu.Unlock()
 	return nil
 }

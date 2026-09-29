@@ -282,9 +282,10 @@ type FrameWriter struct {
 	// queued is handed over by [FrameWriter.Queue] from any goroutine and
 	// taken by exactly one side through Swap or CompareAndSwap, which is
 	// what decides who owns (and closes) its source.
-	queued   atomic.Pointer[QueuedSequence]
-	onSwitch func(*QueuedSequence)
-	onDrop   func(*QueuedSequence)
+	queued      atomic.Pointer[QueuedSequence]
+	onSwitch    func(*QueuedSequence)
+	allowSwitch func(*QueuedSequence) bool
+	onDrop      func(*QueuedSequence)
 
 	stop chan struct{}
 	done chan struct{}

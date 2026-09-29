@@ -55,7 +55,7 @@ func (o *renderOperations) queueNextRender(act cueactivation.Activation, nextCue
 		o.queueing.Add(1)
 		go func(surfaceID string, gen uint64) {
 			defer o.queueing.Done()
-			o.prepareQueuedRender(surfaceID, gen, act, nextCueID, *next)
+			o.prepareQueuedRender(surfaceID, gen, surfaces, act, nextCueID, *next)
 		}(surfaceID, gen)
 	}
 }
@@ -93,8 +93,10 @@ func (o *renderOperations) bumpQueueGenLocked(surfaceID string) uint64 {
 
 // prepareQueuedRender verifies next against its catalog hash, opens it,
 // and hands it to surfaceID's writer, unless a later activation has
-// already settled or replaced this surface's queue.
-func (o *renderOperations) prepareQueuedRender(surfaceID string, gen uint64, act cueactivation.Activation, nextCueID string, next cuecatalog.RenderOutput) {
+// already settled or replaced this surface's queue. Surfaces in receiving
+// get the same sequence, so only surfaces outside it are compared for frame
+// timing.
+func (o *renderOperations) prepareQueuedRender(surfaceID string, gen uint64, receiving map[string]uint64, act cueactivation.Activation, nextCueID string, next cuecatalog.RenderOutput) {
 	wantHash := firstAssetHash(next.AssetHashes)
 	if wantHash == "" {
 		return
@@ -120,7 +122,11 @@ func (o *renderOperations) prepareQueuedRender(surfaceID string, gen uint64, act
 		_ = f.Close()
 		return
 	}
-	if err := o.stepTimeConflictLocked(surfaceID, f.StepTimeMS()); err != nil {
+	skip := make(map[string]bool, len(receiving))
+	for id := range receiving {
+		skip[id] = true
+	}
+	if err := o.stepTimeConflictLocked(surfaceID, f.StepTimeMS(), skip, true); err != nil {
 		o.mu.Unlock()
 		_ = f.Close()
 		o.logger.Warn("render: the next sequence runs at a different frame timing than another surface, so it will be refused when its Cue starts",
@@ -221,6 +227,26 @@ func (o *renderOperations) queuedSequenceStarted(surfaceID string, h *frameWrite
 	o.mu.Unlock()
 	closeFSEQ(previous)
 	o.applyTimelineStepTime(stepTimeMS)
+}
+
+// allowQueuedSwitch runs on the writer's goroutine just before it switches
+// to q. It refuses the switch when the queued sequence's step time differs
+// from another surface's, counting a peer's own queued sequence as the one it
+// is about to play, so the shared timeline never moves under another surface.
+func (o *renderOperations) allowQueuedSwitch(surfaceID string, h *frameWriterHandle, q *pipeline.QueuedSequence) bool {
+	o.mu.Lock()
+	if h.queued == nil || h.queued.seq != q {
+		o.mu.Unlock()
+		return true
+	}
+	err := o.stepTimeConflictLocked(surfaceID, h.queued.file.StepTimeMS(), nil, true)
+	o.mu.Unlock()
+	if err != nil {
+		o.logger.Warn("render: the next sequence was not started because it runs at a different frame timing than another surface",
+			"surface_id", surfaceID, "sequence", q.Filename, "error", err)
+		return false
+	}
+	return true
 }
 
 // queuedSequenceDropped runs on the writer's goroutine when a held-black

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 type stepFixture struct {
@@ -187,4 +191,276 @@ func TestResumeRefusesSurfaceWithDifferentStepTime(t *testing.T) {
 	if got := f.writerFile("right"); got != "" {
 		t.Fatalf("refused resume started a writer for %q", got)
 	}
+}
+
+// timelineStepMS reads back the shared timeline's step time by starting a
+// sequence at frame 10 with no usable elapsed seconds.
+func (f *stepFixture) timelineStepMS() int64 {
+	f.t.Helper()
+	tl := f.ops.timeline
+	tl.Observe(multisync.SyncPacket{Action: multisync.SyncActionOpen, Filename: "probe.fseq", FileType: multisync.SyncFileTypeSequence}, "master-1")
+	tl.Observe(multisync.SyncPacket{Action: multisync.SyncActionStart, Filename: "probe.fseq", FileType: multisync.SyncFileTypeSequence, FrameNumber: 10}, "master-1")
+	return tl.Snapshot().PositionMS / 10
+}
+
+func (f *stepFixture) requireTimelineStep(want int64) {
+	f.t.Helper()
+	if got := f.timelineStepMS(); got != want {
+		f.t.Fatalf("shared timeline step time = %d ms, want %d ms", got, want)
+	}
+}
+
+func (f *stepFixture) renderOutput(file string, stepMS byte) cuecatalog.RenderOutput {
+	f.t.Helper()
+	path := writeSynthFSEQ(f.t, f.dir, file, 12, 10, stepMS)
+	hash, err := hashFile(path)
+	if err != nil {
+		f.t.Fatalf("hashFile: %v", err)
+	}
+	return cuecatalog.RenderOutput{Sequence: "seq-" + file, Filename: file, AssetHashes: []string{hash}}
+}
+
+func openFDCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Skipf("cannot list open files: %v", err)
+	}
+	return len(entries)
+}
+
+func TestConcurrentAppliesWithDifferentStepTimesLetExactlyOneWin(t *testing.T) {
+	for round := 0; round < 25; round++ {
+		f := newStepFixture(t)
+		pa := f.params("left", "a.fseq", 50)
+		pb := f.params("right", "b.fseq", 25)
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i, p := range []map[string]any{pa, pb} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, errs[i] = f.ops.applySurface(context.Background(), p, f.clock.now)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if (errs[0] == nil) == (errs[1] == nil) {
+			t.Fatalf("round %d: errors = %v, %v, want exactly one refusal", round, errs[0], errs[1])
+		}
+		f.ops.mu.Lock()
+		writers, reserved := len(f.ops.writers), len(f.ops.stepReserved)
+		f.ops.mu.Unlock()
+		if writers != 1 || reserved != 0 {
+			t.Fatalf("round %d: %d writers and %d reservations, want 1 and 0", round, writers, reserved)
+		}
+	}
+}
+
+func TestSuccessfulAppliesSetTheSharedTimelineStepTime(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 50); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 50); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	f.requireTimelineStep(50)
+	f.clear("right")
+	if err := f.apply("left", "c.fseq", 25); err != nil {
+		t.Fatalf("lone re-apply: %v", err)
+	}
+	f.requireTimelineStep(25)
+}
+
+func TestRefusedApplyLeavesTheSharedTimelineStepTime(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 50); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	_ = f.apply("right", "b.fseq", 25)
+	f.requireTimelineStep(50)
+}
+
+func TestResumeRefusalKeepsSavedAssignmentAndFirstStepTime(t *testing.T) {
+	f := newStepFixture(t)
+	right := f.params("right", "b.fseq", 25)
+	raw := []byte(`{"surfaceId":"right"}`)
+	if err := f.store.Upsert(pipeline.Assignment{SurfaceID: "right", RawParams: raw, AppliedAt: f.clock.now()}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := f.ops.ResumeAssignment("left", f.params("left", "a.fseq", 50)); err != nil {
+		t.Fatalf("first resume: %v", err)
+	}
+	if err := f.ops.ResumeAssignment("right", right); err == nil {
+		t.Fatalf("second resume with a different step time succeeded, want refusal")
+	}
+	if got := f.savedFilename("right"); !strings.Contains(got, `"right"`) {
+		t.Fatalf("saved assignment for the refused surface = %q, want it kept", got)
+	}
+	f.requireTimelineStep(50)
+	f.ops.mu.Lock()
+	reserved := len(f.ops.stepReserved)
+	f.ops.mu.Unlock()
+	if reserved != 0 {
+		t.Fatalf("%d step time reservations left after a refused resume", reserved)
+	}
+}
+
+func TestCueActivationRefusalLeavesOldWriterAssignmentAndClosesFile(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	out := f.renderOutput("new.fseq", 50)
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	all, err := f.store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	var left pipeline.Assignment
+	for _, a := range all {
+		if a.SurfaceID == "left" {
+			left = a
+		}
+	}
+	before := f.savedFilename("left")
+	fds := openFDCount(t)
+	err = f.ops.activateSurfaceRender(left, act, out, map[string]bool{"left": true}, f.clock.now)
+	if err == nil || !strings.Contains(err.Error(), `surface "left": This sequence runs at 50 ms per frame but the surface right`) {
+		t.Fatalf("error = %v, want a refusal that names surface left", err)
+	}
+	if got := f.writerFile("left"); got != "a.fseq" {
+		t.Fatalf("left writer file = %q, want a.fseq", got)
+	}
+	if got := f.savedFilename("left"); got != before {
+		t.Fatalf("saved assignment changed to %s", got)
+	}
+	if got := openFDCount(t); got != fds {
+		t.Fatalf("open files went from %d to %d, want the refused file closed", fds, got)
+	}
+	f.requireTimelineStep(25)
+}
+
+func TestCueActivationMovesAllSurfacesToANewStepTimeTogether(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	out := f.renderOutput("new.fseq", 50)
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	if err := f.ops.activateRender(act, out, f.clock.now); err != nil {
+		t.Fatalf("activateRender: %v", err)
+	}
+	for _, id := range []string{"left", "right"} {
+		if got := f.writerFile(id); got != "new.fseq" {
+			t.Fatalf("%s writer file = %q, want new.fseq", id, got)
+		}
+	}
+	f.requireTimelineStep(50)
+}
+
+func (f *stepFixture) queueOn(surfaceID string, receiving []string, out cuecatalog.RenderOutput) {
+	f.t.Helper()
+	f.ops.mu.Lock()
+	gen := f.ops.bumpQueueGenLocked(surfaceID)
+	set := make(map[string]uint64, len(receiving))
+	for _, id := range receiving {
+		set[id] = 0
+	}
+	f.ops.mu.Unlock()
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	f.ops.prepareQueuedRender(surfaceID, gen, set, act, "cue-2", out)
+}
+
+func (f *stepFixture) queuedFile(surfaceID string) string {
+	f.ops.mu.Lock()
+	defer f.ops.mu.Unlock()
+	if h, ok := f.ops.writers[surfaceID]; ok && h.queued != nil {
+		return h.queued.filename
+	}
+	return ""
+}
+
+func TestNextSequenceIsQueuedOnASingleSurfaceNode(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	f.queueOn("left", []string{"left"}, f.renderOutput("next.fseq", 50))
+	if got := f.queuedFile("left"); got != "next.fseq" {
+		t.Fatalf("queued = %q, want next.fseq", got)
+	}
+}
+
+func TestNextSequenceWithADifferentStepTimeIsNotQueuedWhileAnotherSurfaceKeepsPlaying(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	out := f.renderOutput("next.fseq", 50)
+	f.queueOn("left", []string{"left"}, out)
+	if got := f.queuedFile("left"); got != "" {
+		t.Fatalf("queued = %q, want nothing while the right surface keeps its 25 ms sequence", got)
+	}
+	f.clear("right")
+	f.queueOn("left", []string{"left"}, out)
+	if got := f.queuedFile("left"); got != "next.fseq" {
+		t.Fatalf("queued after the other surface cleared = %q, want next.fseq", got)
+	}
+}
+
+func TestNextSequenceQueuedOnEverySurfaceMayChangeStepTimeTogether(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	out := f.renderOutput("next.fseq", 50)
+	both := []string{"left", "right"}
+	f.queueOn("left", both, out)
+	f.queueOn("right", both, out)
+	for _, id := range both {
+		if got := f.queuedFile(id); got != "next.fseq" {
+			t.Fatalf("%s queued = %q, want next.fseq", id, got)
+		}
+	}
+	f.ops.mu.Lock()
+	err := f.ops.stepTimeConflictLocked("left", 50, nil, true)
+	f.ops.mu.Unlock()
+	if err != nil {
+		t.Fatalf("switch-time check with both surfaces queued: %v", err)
+	}
+}
+
+func TestQueuedSwitchIsRefusedWhenAnotherSurfaceWillNotChange(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	f.queueOn("left", []string{"left", "right"}, f.renderOutput("next.fseq", 50))
+	f.ops.mu.Lock()
+	h := f.ops.writers["left"]
+	q := h.queued.seq
+	f.ops.mu.Unlock()
+	if f.ops.allowQueuedSwitch("left", h, q) {
+		t.Fatalf("switch allowed while right still plays 25 ms with nothing queued")
+	}
+	f.requireTimelineStep(25)
 }

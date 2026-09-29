@@ -54,9 +54,13 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 		return fmt.Errorf("no surface is assigned on this node, so Cue %q's projection could not be activated", act.CueID)
 	}
 
+	set := make(map[string]bool, len(assignments))
+	for _, a := range assignments {
+		set[a.SurfaceID] = true
+	}
 	var errs []string
 	for _, a := range assignments {
-		if err := o.activateSurfaceRender(a, act, out, now); err != nil {
+		if err := o.activateSurfaceRender(a, act, out, set, now); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -79,8 +83,10 @@ func firstAssetHash(hashes []string) string {
 }
 
 // activateSurfaceRender swaps one surface's rendered FSEQ to out's
-// resolved sequence, under act's authorization tuple.
-func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
+// resolved sequence, under act's authorization tuple. set is every surface
+// this activation swaps to the same sequence; only surfaces outside it are
+// compared for frame timing.
+func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, set map[string]bool, now func() time.Time) error {
 	const action = "cue.activate (render)"
 
 	if out.Filename == "" {
@@ -172,13 +178,14 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
 	_ = spec // This swap deliberately never re-applies the pipeline spec — see startFrameWriter call below.
-	if err := o.checkStepTimeAgainstOthers(a.SurfaceID, f.StepTimeMS()); err != nil {
+	if err := o.reserveStepTime(a.SurfaceID, f.StepTimeMS(), set); err != nil {
 		_ = f.Close()
-		return err
+		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
@@ -186,6 +193,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
@@ -200,6 +208,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// pipeline restart.
 	o.stopFrameWriter(a.SurfaceID)
 	if err := o.startFrameWriter(a.SurfaceID, f, parsedA); err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
 	}
