@@ -48,7 +48,7 @@ coord_install_bundle() {
   for f in mosquitto.conf acl.conf; do
     install -m 0644 "$src/mosquitto/$f" "$COORDINATOR_DIR/mosquitto/$f"
   done
-  for f in generate-credentials.sh add-agent-credential.sh; do
+  for f in generate-credentials.sh add-agent-credential.sh run-with-reload.sh; do
     install -m 0755 "$src/mosquitto/$f" "$COORDINATOR_DIR/mosquitto/$f"
   done
   ok "bundle files updated; .env and broker logins are kept"

@@ -589,7 +589,12 @@ package-installer:
 	install -m 0644 deploy/install/lib/*.sh $(INSTALLER_STAGE)/lib/
 	install -m 0644 deploy/docker-compose.yml deploy/docker-compose.published.yml $(INSTALLER_STAGE)/coordinator/
 	install -m 0644 deploy/mosquitto/mosquitto.conf deploy/mosquitto/acl.conf $(INSTALLER_STAGE)/coordinator/mosquitto/
-	install -m 0755 deploy/mosquitto/generate-credentials.sh deploy/mosquitto/add-agent-credential.sh $(INSTALLER_STAGE)/coordinator/mosquitto/
+	install -m 0755 deploy/mosquitto/generate-credentials.sh deploy/mosquitto/add-agent-credential.sh deploy/mosquitto/run-with-reload.sh $(INSTALLER_STAGE)/coordinator/mosquitto/
+	# Every /mosquitto/config file the Compose bundle names must be in the bundle, or the broker cannot start.
+	for f in $$(grep -ho '/mosquitto/config/[A-Za-z0-9._-]*' deploy/docker-compose.yml deploy/docker-compose.published.yml deploy/mosquitto/mosquitto.conf | sort -u); do \
+		case "$${f##*/}" in passwd|acl.generated.conf) continue ;; esac; \
+		[ -f "$(INSTALLER_STAGE)/coordinator/mosquitto/$${f##*/}" ] || { echo "package-installer: the bundle is missing mosquitto/$${f##*/}, which the Compose bundle uses" >&2; exit 1; }; \
+	done
 	install -m 0755 deploy/node/install-ptp-audio.sh deploy/node/verify-ptp-audio.sh $(INSTALLER_STAGE)/node/
 	cp -R deploy/node/ptp-audio $(INSTALLER_STAGE)/node/
 	cp -R deploy/node/ndi-plugin $(INSTALLER_STAGE)/node/
