@@ -862,12 +862,12 @@ export class ApiStore {
    * means the plugin agreed to resend, never that a definition arrived:
    * read [listFPPPlaylistDefinitions] for that.
    */
-  async republishFPPPlaylistDefinitions(instanceId: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+  async republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
     const controller = this.beginSideCall()
     try {
       return await this.client.postJson<SchemaFPPDefinitionRepublishResponse>(
         `/fpp/${encodeURIComponent(instanceId)}/playlist-definitions/republish`,
-        {},
+        requestId === undefined ? {} : { requestId },
         controller.signal,
       )
     } finally {

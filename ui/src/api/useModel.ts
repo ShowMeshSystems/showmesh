@@ -247,8 +247,8 @@ export function getFPPPlaylistDefinition(
   return store.getFPPPlaylistDefinition(instanceUuid, playlistHash)
 }
 
-export function republishFPPPlaylistDefinitions(instanceId: string): Promise<SchemaFPPDefinitionRepublishResponse> {
-  return store.republishFPPPlaylistDefinitions(instanceId)
+export function republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+  return store.republishFPPPlaylistDefinitions(instanceId, requestId)
 }
 
 export function getFPPPlaylistDefinitionEntries(

@@ -526,6 +526,13 @@ describe('Shows · Playlists tab editing', () => {
       }
     }
 
+    function republishBody(overrides: Record<string, unknown> = {}) {
+      return {
+        serverTime: '2026-08-30T21:00:00Z',
+        republish: { instanceId: 'fpp-main', requestId: 'req-1', applied: true, definitionsCleared: 3, definitionsHeld: 0, definitionsRefusedTerminally: 0, sweepPending: true, ...overrides },
+      }
+    }
+
     afterEach(() => {
       vi.useRealTimers()
     })
@@ -533,13 +540,13 @@ describe('Shows · Playlists tab editing', () => {
     it('asks the coordinator for the host the playlist is bound to, then shows sent and, when a newer copy is stored, landed', async () => {
       await openReady()
       definitionsOverTime([['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z', '2026-08-30T21:05:00Z']])
-      const republish = vi.fn(() => Promise.resolve({}))
+      const republish = vi.fn<(instanceId: string, requestId?: string) => Promise<unknown>>(() => Promise.resolve(republishBody()))
       stubs.republishFPPPlaylistDefinitions = republish
       vi.useFakeTimers({ shouldAdvanceTime: true })
 
       fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
 
-      await waitFor(() => expect(republish).toHaveBeenCalledWith('fpp-main'))
+      await waitFor(() => expect(republish).toHaveBeenNthCalledWith(1, 'fpp-main'))
       expect(await screen.findByText('Sent')).toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
       await vi.advanceTimersByTimeAsync(3_000)
@@ -548,7 +555,7 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.queryByText('Sent')).not.toBeInTheDocument()
     })
 
-    it('reads unconfirmed, saying the host did not answer, when the request is refused because the plugin gave no usable result', async () => {
+    it('reads unconfirmed, saying the host gave no usable answer, when the request is refused because the plugin gave no usable result', async () => {
       await openReady()
       definitionsOverTime([[]])
       stubs.republishFPPPlaylistDefinitions = () => Promise.reject(new ApiError('the host timed out', 502))
@@ -556,7 +563,7 @@ describe('Shows · Playlists tab editing', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
 
       expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
-      expect(screen.getByText(/The FPP host did not answer the request/)).toBeInTheDocument()
+      expect(screen.getByText(/The FPP host gave no usable answer/)).toBeInTheDocument()
       expect(screen.queryByText('Sent')).not.toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Re-import' })).not.toBeDisabled()
@@ -565,7 +572,7 @@ describe('Shows · Playlists tab editing', () => {
     it('reads unconfirmed after 30 seconds when no newer copy is stored', async () => {
       await openReady()
       definitionsOverTime([['2026-08-30T20:00:00Z']])
-      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve({})
+      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve(republishBody())
       vi.useFakeTimers({ shouldAdvanceTime: true })
 
       fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
@@ -577,6 +584,69 @@ describe('Shows · Playlists tab editing', () => {
       expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
       expect(screen.getByText(/within 30 seconds/)).toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+    })
+
+    it('resends the same request id while polling, and reads landed when a newer copy arrives', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z', '2026-08-30T21:05:00Z']])
+      const republish = vi.fn<(instanceId: string, requestId?: string) => Promise<unknown>>(() => Promise.resolve(republishBody()))
+      stubs.republishFPPPlaylistDefinitions = republish
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      expect(republish).toHaveBeenNthCalledWith(2, 'fpp-main', 'req-1')
+      expect(await screen.findByText('Landed')).toBeInTheDocument()
+    })
+
+    it('says the host sent its playlists again and ShowMesh already had this one when the sweep ends with no newer copy', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z']])
+      let calls = 0
+      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve(republishBody({ applied: calls++ === 0, sweepPending: calls === 1 }))
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      expect(await screen.findByText('Resent')).toBeInTheDocument()
+      expect(screen.getByText(/already had this one/)).toBeInTheDocument()
+      expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument()
+      expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+    })
+
+    it('says some playlists were not resent, and that restarting the plugin clears it, when the sweep ends with refused playlists', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z']])
+      let calls = 0
+      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve(republishBody({ definitionsRefusedTerminally: 2, sweepPending: calls++ === 0 }))
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      expect(await screen.findByText(/did not resend some playlists/)).toBeInTheDocument()
+      expect(screen.getByText(/Restart the ShowMesh plugin/)).toBeInTheDocument()
+      expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+    })
+
+    it('stops polling when the tab unmounts mid-wait', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z']])
+      const republish = vi.fn<(instanceId: string, requestId?: string) => Promise<unknown>>(() => Promise.resolve(republishBody()))
+      stubs.republishFPPPlaylistDefinitions = republish
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      cleanup()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(republish).toHaveBeenCalledTimes(1)
     })
 
     it('is disabled without fpp:command and names the missing scope', async () => {
