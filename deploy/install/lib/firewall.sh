@@ -120,15 +120,21 @@ firewall_ssh_ports() {
   printf '%s\n' "${ports:-22}"
 }
 
+# firewall_last_line FILE prints the last line a failed command printed.
+firewall_last_line() {
+  tail -n 1 "$1" | tr -d '\r'
+}
+
 firewall_apply_ufw() {
   local role="$1" kind="$2" proto port label spec out
+  out="$(run_tmp)"
   step "Opening ShowMesh's ports in ufw"
   while IFS='|' read -r proto port label; do
     case "$port" in *-*) spec="${port%-*}:${port#*-}" ;; *) spec="$port" ;; esac
-    if out="$(ufw allow "$spec/$proto" comment "ShowMesh: $label" 2>&1)"; then
+    if run_step "opening $proto $port in ufw" "$out" ufw allow "$spec/$proto" comment "ShowMesh: $label"; then
       ok "$proto $port ($label) is open in ufw"
     else
-      warn "ufw did not open $proto $port ($label): $out Add the rule with ufw allow $spec/$proto."
+      warn "ufw did not open $proto $port ($label): $(firewall_last_line "$out") Add the rule with ufw allow $spec/$proto."
     fi
   done < <(firewall_ports_for_role "$role" "$kind")
 }
@@ -158,32 +164,33 @@ firewall_firewalld_define_service() {
   local role="$1" kind="$2" tmp proto port label rc=0
   if firewall-cmd --permanent --get-services 2>/dev/null | tr ' ' '\n' | grep -qx showmesh; then
     while IFS='|' read -r proto port label; do
-      firewall-cmd --permanent --service=showmesh --add-port="$port/$proto" >/dev/null 2>&1 || rc=1
+      firewall-cmd --permanent --service=showmesh --add-port="$port/$proto" || rc=1
     done < <(firewall_ports_for_role "$role" "$kind")
     return "$rc"
   fi
   tmp="$RUN_TMP/showmesh-firewalld.xml"
   firewall_write_firewalld_service "$role" "$kind" > "$tmp"
-  firewall-cmd --permanent --new-service-from-file="$tmp" --name=showmesh >/dev/null 2>&1
+  firewall-cmd --permanent --new-service-from-file="$tmp" --name=showmesh
 }
 
 firewall_apply_firewalld() {
   local role="$1" kind="$2" zone proto port label out failed=0
+  out="$(run_tmp)"
   step "Opening ShowMesh's ports in firewalld"
-  if ! out="$(firewall_firewalld_define_service "$role" "$kind" 2>&1)"; then
-    warn "firewalld did not accept the ShowMesh service definition. Open the ports in your zones with firewall-cmd --add-port."
+  if ! run_step "defining the ShowMesh service in firewalld" "$out" firewall_firewalld_define_service "$role" "$kind"; then
+    warn "firewalld did not accept the ShowMesh service definition: $(firewall_last_line "$out") Open the ports in your zones with firewall-cmd --add-port."
     return
   fi
   while IFS= read -r zone; do
     [ -n "$zone" ] || continue
-    if ! out="$(firewall-cmd --permanent --zone="$zone" --add-service=showmesh 2>&1)"; then
-      warn "firewalld did not add ShowMesh to zone $zone: $out Run firewall-cmd --permanent --zone=$zone --add-service=showmesh."
+    if ! run_step "adding ShowMesh to firewalld zone $zone" "$out" firewall-cmd --permanent --zone="$zone" --add-service=showmesh; then
+      warn "firewalld did not add ShowMesh to zone $zone: $(firewall_last_line "$out") Run firewall-cmd --permanent --zone=$zone --add-service=showmesh."
       failed=1
       continue
     fi
     while IFS='|' read -r proto port label; do
-      if ! out="$(firewall-cmd --zone="$zone" --add-port="$port/$proto" 2>&1)"; then
-        warn "firewalld did not open $proto $port in zone $zone: $out Run firewall-cmd --zone=$zone --add-port=$port/$proto."
+      if ! run_step "opening $proto $port in firewalld zone $zone" "$out" firewall-cmd --zone="$zone" --add-port="$port/$proto"; then
+        warn "firewalld did not open $proto $port in zone $zone: $(firewall_last_line "$out") Run firewall-cmd --zone=$zone --add-port=$port/$proto."
         failed=1
       fi
     done < <(firewall_ports_for_role "$role" "$kind")
@@ -266,24 +273,25 @@ firewall_conf_has_unloaded_rules() {
 }
 
 firewall_install_host_table() {
-  local role="$1" kind="$2" candidate="$FIREWALL_NFT_TABLE.new" enable=yes
+  local role="$1" kind="$2" candidate="$FIREWALL_NFT_TABLE.new" enable=yes out
+  out="$(run_tmp)"
   step "Installing a ShowMesh firewall"
   apt_install nftables
   mkdir -p "$(dirname "$FIREWALL_NFT_TABLE")"
   firewall_write_host_table "$role" "$kind" "$candidate"
   # Loaded as just this table: nft -f on the full nftables.conf would run that
   # file's own "flush ruleset" and take Docker's tables down with it.
-  with_default_umask nft -c -f "$candidate" || {
+  run_step "checking the ShowMesh firewall table" "$out" with_default_umask nft -c -f "$candidate" || {
     rm -f "$candidate"
-    fail "The ShowMesh firewall table has a syntax error." "nft -c -f $FIREWALL_NFT_TABLE"
+    fail_with "$out" "The ShowMesh firewall table has a syntax error." "nft -c -f $FIREWALL_NFT_TABLE"
   }
   mv -f "$candidate" "$FIREWALL_NFT_TABLE"
   if firewall_conf_has_unloaded_rules; then
     enable=no
   fi
   firewall_ensure_nftables_conf_includes
-  with_default_umask nft -f "$FIREWALL_NFT_TABLE" ||
-    fail "The ShowMesh firewall table could not be loaded." "nft -f $FIREWALL_NFT_TABLE"
+  run_step "loading the ShowMesh firewall table" "$out" with_default_umask nft -f "$FIREWALL_NFT_TABLE" ||
+    fail_with "$out" "The ShowMesh firewall table could not be loaded." "nft -f $FIREWALL_NFT_TABLE"
   if [ "$enable" = yes ]; then
     have_systemd && { systemctl enable nftables >/dev/null 2>&1 || true; }
   else

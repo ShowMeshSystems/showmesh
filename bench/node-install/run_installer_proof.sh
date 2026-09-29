@@ -53,6 +53,8 @@ run_install 0.0.0-bench1 /tmp/wrong.log --role "$ROLE" --coordinator "$URL" --co
 check "a wrong code stops the install" "[ $? -ne 0 ]"
 check "a wrong code prints the coordinator's reason" "grep -q 'No enrollment code matches' /tmp/wrong.log"
 check "a wrong code names the fix" "grep -q 'showmeshctl node enroll' /tmp/wrong.log"
+check "a refused install names the log that holds the run" "grep -q '/var/log/showmesh-install.log' /tmp/wrong.log"
+check "the install log hides the code the run was given" "grep -q 'arguments: .*--code (hidden)' /var/log/showmesh-install.log && ! grep -q ZZZZ-9999 /var/log/showmesh-install.log"
 
 run_install 0.0.0-bench1 /tmp/expired.log --role "$ROLE" --coordinator "$URL" --code EXPD-0000 --yes "${extra[@]}"
 check "an expired code stops the install" "[ $? -ne 0 ]"

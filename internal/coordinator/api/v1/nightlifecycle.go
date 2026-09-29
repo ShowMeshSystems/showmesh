@@ -167,6 +167,41 @@ type NightBackgroundAudio struct {
 	// (owner ruling 2026-08-30). Never defaulted to a plausible-looking
 	// value.
 	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+
+	// Plan is what the session's pinned configuration revision will play,
+	// readable before anything has started.
+	Plan NightBackgroundAudioPlan `json:"plan"`
+}
+
+// NightBackgroundAudioPlan is the background audio a night session will
+// play, read from its own pinned configuration revision. State "recorded"
+// with Configured false means the revision configures no background audio;
+// Configured true with no steps yet means it is configured but has not
+// started this cycle.
+type NightBackgroundAudioPlan struct {
+	State      NightEvidenceState `json:"state"`
+	Reason     string             `json:"reason"`
+	Configured bool               `json:"configured"`
+
+	// MediaPlaylist names the media playlist the bed plays, or is empty
+	// when the pinned revision lists the items inline.
+	MediaPlaylist  string                         `json:"mediaPlaylist"`
+	Repeat         string                         `json:"repeat"`
+	Resume         string                         `json:"resume"`
+	ItemTransition string                         `json:"itemTransition"`
+	CrossfadeMs    *int                           `json:"crossfadeMs"`
+	Nodes          []string                       `json:"nodes"`
+	Items          []NightBackgroundAudioPlanItem `json:"items"`
+}
+
+// NightBackgroundAudioPlanItem is one planned bed item; Position counts
+// from 1 in playing order.
+type NightBackgroundAudioPlanItem struct {
+	Position int    `json:"position"`
+	ItemID   string `json:"itemId"`
+	Show     string `json:"show"`
+	Sequence string `json:"sequence"`
+	Target   string `json:"target"`
 }
 
 // NightSessionState is the full lifecycle resource.

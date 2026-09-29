@@ -61,7 +61,7 @@ With no options it asks what this machine is and walks you through it.
   --no-firewall             skip firewall setup entirely
   --yes                     never ask; take everything from options
   --version                 print the installer's version
-  --party                   add colour and animation to the opening and success screens
+  --party                   add animation and the hidden modes to the install
   --help                    print this help
 EOF
 }
@@ -75,6 +75,9 @@ unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
 need_value() {
   [ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'The option %s needs a value. Run showmesh-install --help for the list.\n' "$1" >&2; exit 2; }
 }
+
+# The loop below shifts them away, so the install log's header reads them from here.
+INSTALL_ARGS=("$@")
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -175,9 +178,10 @@ mint_local_code() {
   fi
   step "Creating an enrollment code for node $node_id"
   errs="$(run_tmp)"
+  # This command prints the code itself, so only what it writes to its error stream is logged.
   if ! out="$(showmeshctl node enroll "${flags[@]}" "$node_id" 2>"$errs")"; then
-    cat "$errs" >&2
-    fail "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
+    log_file "creating an enrollment code for $node_id" "$errs"
+    fail_with "$errs" "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
   fi
   OPT_CODE="$(printf '%s' "$out" | jq -r '.code // empty' 2>/dev/null)" || OPT_CODE=""
   [ -n "$OPT_CODE" ] || fail "showmeshctl did not print an enrollment code." "sudo showmeshctl node enroll $node_id"
@@ -208,17 +212,24 @@ run_coordinator_node() {
 
 main() {
   require_root "$@"
+  log_open ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
   require_platform
   if [ -n "$OPT_NDI" ] && [ -z "$OPT_ROLE" ]; then
+    log_note "      role: NDI runtime only"
     run_ndi_only
     return
   fi
   choose_role
+  log_note "      role: $ROLE"
   if [ "$OPT_PARTY" -eq 1 ]; then
     party_colors
     party_opening "$(role_label "$ROLE")"
+  else
+    ui_banner
   fi
   printf '\nInstalling ShowMesh %s as a %s on this machine.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  log_note "Installing ShowMesh $SHOWMESH_VERSION as a $(role_label "$ROLE") on this machine."
+  [ "$LOG_READY" -eq 1 ] && info "Every command this run runs is recorded in $INSTALL_LOG."
   case "$ROLE" in
     coordinator) run_coordinator_role ;;
     render|audio) run_node_role "$ROLE" ;;
@@ -226,6 +237,7 @@ main() {
   esac
   firewall_setup "$ROLE" "$(env_get "$INSTALLER_STATE" NODE_ROLE)"
   printf '\nShowMesh %s is installed as a %s.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  log_note "ShowMesh $SHOWMESH_VERSION is installed as a $(role_label "$ROLE")."
   case "$ROLE" in
     coordinator|coordinator-node) coord_success_lines ;;
   esac

@@ -8,6 +8,7 @@ IMAGE=inst-node-install:dev
 OUT=/repo/dist/inst-bench
 CACHE=(-v inst-bench-gomod:/root/go/pkg/mod -v inst-bench-gocache:/root/.cache/go-build)
 
+bash "$REPO/bench/node-install/run_step_interrupt_check.sh"
 docker build -q -t "$IMAGE" "$REPO/bench/node-install" >/dev/null
 docker run --rm --name inst-bench-build -v "$REPO":/repo "${CACHE[@]}" "$IMAGE" \
   -c "bash /repo/bench/node-install/build_installer_release.sh $OUT"

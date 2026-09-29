@@ -1,5 +1,6 @@
 # shellcheck shell=bash disable=SC2059,SC2155
-# Decorative output for --party only: the opening banner, the success screen and the hidden modes.
+# Animated output for --party only: the opening screen, the success screen and the hidden modes.
+# The static banner, step headers and check lines every install draws live in common.sh.
 # Nothing here runs before or during a refusal, an error or a prompt, and nothing here runs without --party.
 # Stock macOS bash 3.2 rejects fractional read -t and negative substring offsets; this file avoids both.
 
@@ -17,7 +18,8 @@ party_colors() {
   LIGHTS=("$R" "$Y" "$G" "$C" "$B" "$M")
   COLS=$( (tput cols 2>/dev/null) || echo 80 ); [ -z "$COLS" ] && COLS=80
   LINES=$( (tput lines 2>/dev/null) || echo 24 ); [ -z "$LINES" ] && LINES=24
-  trap party_cleanup EXIT
+  # shellcheck disable=SC2034  # installer_cleanup in common.sh reads it
+  PARTY_READY=1
 }
 
 nap()    { [ "$PARTY_FAST" -eq 1 ] && return; sleep "${1:-0.4}"; }
@@ -96,25 +98,6 @@ chase() {
 p_check() { printf "  ${G}✔${X} %s\n" "$1"; nap 0.2; }
 p_warn()  { printf "  ${Y}⚠${X} %s\n" "$1"; nap 0.2; }
 p_step()  { printf "\n${C}${BOLD}▸ %s${X}\n" "$1"; nap 0.2; }
-
-banner() {
-  local cyc="${1:-0}"
-  local -a lines=(
-"   ███████╗██╗  ██╗ ██████╗ ██╗    ██╗|███╗   ███╗███████╗███████╗██╗  ██╗"
-"   ██╔════╝██║  ██║██╔═══██╗██║    ██║|████╗ ████║██╔════╝██╔════╝██║  ██║"
-"   ███████╗███████║██║   ██║██║ █╗ ██║|██╔████╔██║█████╗  ███████╗███████║"
-"   ╚════██║██╔══██║██║   ██║██║███╗██║|██║╚██╔╝██║██╔══╝  ╚════██║██╔══██║"
-"   ███████║██║  ██║╚██████╔╝╚███╔███╔╝|██║ ╚═╝ ██║███████╗███████║██║  ██║"
-"   ╚══════╝╚═╝  ╚═╝ ╚═════╝  ╚══╝╚══╝ |╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝")
-  local idx=0 l left right
-  for l in "${lines[@]}"; do
-    left="${l%%|*}"; right="${l#*|}"
-    printf '%s%s%s%s%s%s\n' \
-      "${LIGHTS[$(((idx+cyc)%6))]}" "$BOLD" "$left" \
-      "${LIGHTS[$(((idx+cyc+3)%6))]}" "$right" "$X"
-    idx=$((idx+1))
-  done
-}
 
 fortune() {
   local -a t=(
@@ -439,8 +422,7 @@ party_mode() {
 party_opening() {
   local role_label="$1"
   set +e
-  echo
-  banner 0
+  ui_banner
   echo
   type_out "          installer  $SHOWMESH_VERSION  ·  $role_label  ·  the show goes on" "$W"
   seasonal_line

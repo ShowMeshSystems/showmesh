@@ -85,7 +85,9 @@ bench/node-install/run_installer_bench.sh     # render node and audio node
 bench/node-install/run_coordinator_bench.sh   # coordinator, after the line above
 ```
 
-`run_installer_bench.sh` builds two fake releases, `0.0.0-bench1` and
+`run_installer_bench.sh` first runs `run_step_interrupt_check.sh` on the host,
+which sends Ctrl-C to an installer step in each layout and fails if the step's
+command outlives it. It then builds two fake releases, `0.0.0-bench1` and
 `0.0.0-bench2`, into `dist/inst-bench/` with `build_installer_release.sh`
 (node agent tarball, installer bundle, `get-showmesh.sh`, one `SHA256SUMS`;
 bench1's node tarball carries a stand-in `libgstndi.so`, bench2's has none).
@@ -113,7 +115,9 @@ container running its own dockerd, and runs the coordinator role there for
 real, then upgrades it to bench2. It asserts the API answers, the built-in
 broker accepts the coordinator's login, `showmeshctl` on that host signs in
 as the new administrator, and the upgrade keeps the token and broker login.
-It removes its container and volume on exit.
+It also asserts that `/var/log/showmesh-install.log` is mode 0600, carries the
+run header and the captured output of a step, and holds no broker password or
+token. It removes its container and volume on exit.
 
 ## Firewall
 

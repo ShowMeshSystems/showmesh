@@ -152,7 +152,7 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(9)
+    expect(tabs).toHaveLength(10)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
@@ -160,6 +160,7 @@ describe('Settings tab strip', () => {
       'Appearance',
       'Audio defaults',
       'Node routing',
+      'Node enrollment',
       'Mode',
       'Resolume',
       'Access ↗',
@@ -1742,6 +1743,29 @@ describe('RevisionHistory, shared across editors', () => {
     await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
     expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('names which node substituted which audio field on Audio defaults', async () => {
+    stubs.getAudioSettingsConfig = () => Promise.resolve(audioSettingsConfig())
+    stubs.getAudioSettingsConfigRevisions = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.settings', revisions: [] })
+    const nodes = [
+      {
+        nodeId: 'media-garage',
+        label: 'Garage audio',
+        audio: [
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.state', value: 'substituted', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.substituted_fields', value: 'DuckFadeDurationMs', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.reason', value: 'DuckFadeDurationMs 0 is not positive', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+        ],
+      },
+      { nodeId: 'media-porch', label: 'Porch audio', audio: [] },
+    ] as unknown as Model['nodes']
+
+    renderAt('/settings/audio-defaults', { nodes })
+
+    expect(await screen.findByText(/Garage audio could not apply Duck fade duration/)).toBeInTheDocument()
+    expect(screen.queryByText(/Porch audio could not apply/)).not.toBeInTheDocument()
   })
 
   it('does not claim a read failure while the revisions fetch is still pending, on Content delivery', async () => {

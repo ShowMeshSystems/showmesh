@@ -639,6 +639,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/audio/routing-choices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The program and LTC choices a node's own reported outputs support
+         * @description Requires `config:write`. Resolved live from the node's current `audio.output.local` advertisement (its `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes) and never stored. `routes` is non-empty only when `discovery` is `available`: a node that is offline (`stale`), reported an unreadable list (`failed`), checked only some outputs (`partial`), predates channel reporting (`not_reported`) or reports no outputs (`absent`) offers no choices, and `reason` says why. Channels are offered only up to what the node proved: `channelBasis` `inventory` is the full count its PipeWire graph reports, `atLeast` is a floor an ALSA probe achieved. LTC choices are on the same output as the program group and exclude its channels, each exclusion listed in `conflicts`. `manualEntry` says whether hand-typed channels are still accepted by PUT /config/audio.node/{id}. `current` reports the stored placement against these choices and never changes it. `clock.verification` is `same_interface` when LTC leaves the program interface, `operator_confirmed` when a local clock override is stored, and `no_ltc` on a program-only node.
+         */
+        get: operations["getAudioRoutingChoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/audio/alignment-runs": {
         parameters: {
             query?: never;
@@ -1591,7 +1611,7 @@ export interface paths {
         get: operations["getAudioNode"];
         /**
          * Write a new audio.node revision (ADR-018)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: a field this write omits is cleared, not carried forward. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) - never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `localClockOverride` is optional and names this node's local clock explicitly; absent, the local clock is the interface `programRoute` names. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: a field this write omits is cleared, not carried forward. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) - never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally. When the node is online and reports the full channel count of `programRoute` (`channelBasis` `inventory` in its `outputs`), a channel beyond that count is refused with `400`; a floor (`atLeast`) or an older node that reports no channels never refuses, so manual entry stays available. `localClockOverride` is optional and names this node's local clock explicitly; absent, the local clock is the interface `programRoute` names. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putAudioNode"];
         post?: never;
@@ -5689,6 +5709,68 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
+        /** @description The body of GET /nodes/{nodeId}/audio/routing-choices. */
+        AudioRoutingChoicesResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            nodeId: string;
+            /** @enum {string} */
+            discovery: "available" | "partial" | "stale" | "failed" | "not_reported" | "absent";
+            /** @description Why no choices are offered. Absent when `discovery` is `available`. */
+            reason?: string;
+            /** @description The node's own reason a `partial` discovery was partial, such as an enumeration error. Diagnostic text, not operator copy. */
+            discoveryDetail?: string;
+            manualEntry: {
+                allowed: boolean;
+                reason?: string;
+            };
+            ltc: {
+                available: boolean;
+                reason?: string;
+            };
+            routes: components["schemas"]["AudioRoutingRouteChoice"][];
+            current?: components["schemas"]["AudioRoutingCurrent"];
+            clock?: components["schemas"]["AudioRoutingClock"];
+        };
+        /** @description One output the node reports and the program groups it offers. */
+        AudioRoutingRouteChoice: {
+            route: string;
+            /** @description The interface the route leaves through, which is its local clock. */
+            interface: string;
+            /** @enum {string} */
+            source: "alsa" | "pipewire";
+            channels: number;
+            /** @enum {string} */
+            channelBasis: "inventory" | "atLeast";
+            ltcCapable: boolean;
+            /** @description Why no LTC channel is offered on this route, when none is. */
+            ltcReason?: string;
+            programGroups: components["schemas"]["AudioProgramGroup"][];
+        };
+        AudioProgramGroup: {
+            channels: number[];
+            /** @description Channels on the same route free to carry LTC beside this group. */
+            ltcChannels: number[];
+            conflicts: {
+                channel: number;
+                reason: string;
+            }[];
+        };
+        /** @description The stored audio.node placement, reported against the choices and never changed by them. */
+        AudioRoutingCurrent: {
+            programRoute: string;
+            programChannels: number[];
+            ltcChannel?: number;
+            offered: boolean;
+            reason?: string;
+        };
+        AudioRoutingClock: {
+            localClock: string;
+            /** @enum {string} */
+            source: "derived" | "override";
+            /** @enum {string} */
+            verification: "same_interface" | "operator_confirmed" | "no_ltc";
+        };
         /** @description The "node.clock" configuration kind's decoded payload (Track I seam I1, RES-019, ADR-039): the body PUT /config/node.clock/{id} accepts (a full replacement), and the "payload" member of GET /config/node.clock/{id}'s response. `provider` selects which of the three concrete PTP providers this node runs: `managed` (ShowMesh writes the ptp4l config and supervises the process, refusing to start when one is already bound on `interface` and `domain`), `external` (observes an externally-owned ptp4l's read-only management socket only), or `fpp` (observes an FPP 10 host's own AES67/PTP status over HTTP). `domain` is the declared PTP domain number (0-255), used to detect a mismatch when a provider's own observed domain disagrees. `clientOnly` declares this node's role policy for `managed`: true when the operator declares an external domain, so this node never attempts to become the domain's own grandmaster. `holdoverLimitSeconds` bounds how long a lost lock is reported as `holdover` before this node gives up and reports `unsynchronized`; it defaults to 60 when omitted. `priority1` and `hardwareTimestamping` apply to `managed` only. `externalUdsAddress` applies to `external` only, defaulting to linuxptp's own `/var/run/ptp/ptp4lro`. `fppBaseUrl` is required exactly when `provider` is `fpp`. `phcDevice` applies to `external` only: it declares which PTP hardware clock (e.g. `/dev/ptp0`) the externally run ptp4l (or phc2sys) keeps on PTP time. linuxptp's read-only management socket cannot itself report which timestamping mode an observed ptp4l reached, so the agent refuses to read media time from a PHC-bearing interface unless this declaration matches the interface's own PHC; a mismatch, or a declaration against an interface with no PHC at all, is refused rather than silently ignored. A node with no node.clock object reports `unsynchronized` and behaves exactly as it did before this seam existed. */
         ConfigNodeClock: {
             /** @enum {string} */
@@ -7178,8 +7260,37 @@ export interface components {
             /** Format: date-time */
             resolvedAt: string | null;
         };
-        /** @description resting.backgroundAudio's own durable step log for the current cycle, or the stated reason it could not be read. Empty `steps` with `state` "recorded" means backgroundAudio is not configured at all, or has never been started this cycle. */
+        NightBackgroundAudioPlanItem: {
+            /** @description Playing order, counted from 1. */
+            position: number;
+            itemId: string;
+            show: string;
+            sequence: string;
+            /** @description The audio node that holds this item's file. */
+            target: string;
+        };
+        /** @description The background audio the session will play, read from its own pinned configuration revision so it never reports another revision's items. It is available before the bed starts and is not replaced by the step log. `state` "recorded" with `configured` false means the revision has no background audio; `configured` true with no steps means it is set up but has not started this cycle. `state` "unknown" carries the `reason` the plan could not be read, for example a missing media playlist. */
+        NightBackgroundAudioPlan: {
+            /** @enum {string} */
+            state: "recorded" | "unknown";
+            reason: string;
+            configured: boolean;
+            /** @description The media playlist the bed plays, or empty when the pinned revision lists the items inline. */
+            mediaPlaylist: string;
+            /** @enum {string} */
+            repeat: "" | "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "" | "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "" | "sequential" | "gapless" | "crossfade";
+            crossfadeMs: number | null;
+            /** @description The audio nodes the bed will play on. */
+            nodes: string[];
+            items: components["schemas"]["NightBackgroundAudioPlanItem"][];
+        };
+        /** @description resting.backgroundAudio's own durable step log for the current cycle, or the stated reason it could not be read. Empty `steps` with `state` "recorded" means nothing has been played this cycle; `plan.configured` says whether the session has any background audio to play. */
         NightBackgroundAudio: {
+            plan: components["schemas"]["NightBackgroundAudioPlan"];
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             /** @description Usually only meaningful when state is not "recorded". The one exception: reason may be non-empty while state is "recorded", in which case it describes pinnedMaxGainDb alone (why that one field is null) and says nothing about steps, which are unaffected and reported as read. */
@@ -9144,6 +9255,34 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAudioRoutingChoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioRoutingChoicesResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

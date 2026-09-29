@@ -1983,6 +1983,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
 	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
+	out.BackgroundAudio.Plan = mapNightBackgroundAudioPlan(ctx, deps, rec)
 	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
 	if nightStopHoldStands(rec) {
 		out.StopHold = &v1.NightStopHold{Reason: rec.StopHold.Reason, At: formatTime(rec.StopHold.At), Principal: rec.StopHold.Principal}

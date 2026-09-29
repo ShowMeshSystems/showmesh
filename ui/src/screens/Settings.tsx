@@ -9,6 +9,7 @@ const TABS: readonly { path: string; label: string }[] = [
   { path: 'appearance', label: 'Appearance' },
   { path: 'audio-defaults', label: 'Audio defaults' },
   { path: 'node-routing', label: 'Node routing' },
+  { path: 'node-enrollment', label: 'Node enrollment' },
   { path: 'mode', label: 'Mode' },
 ]
 

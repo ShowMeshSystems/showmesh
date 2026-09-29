@@ -298,6 +298,8 @@ ShowMesh determines placement from hardware, required clock relationships, media
 
 These identifiers replace the earlier audio entries in the ARCHITECTURE §6 vocabulary.
 
+`audio.output.local` carries the channel evidence routing choices are resolved from. Beside `routes` and `outputCount`, its `outputs` attribute lists each usable route with `interface`, `source` (`alsa` or `pipewire`), `channels`, `channelBasis` and `ltcCapable`. `channelBasis` is `inventory` when the count is the PipeWire graph's full channel count and `atLeast` when it is only what an ALSA probe achieved, so a floor is never read as a total. `discoveryComplete` is false, with `discoveryIncompleteReason`, whenever an enumeration failed or was truncated. The coordinator resolves program groups and LTC channels from this evidence at `GET /api/v1/nodes/{nodeId}/audio/routing-choices` and never offers choices from an offline, partial, unreadable or absent report. An agent that predates `outputs` keeps the hand-entered path, and its stored `audio.node` is reported against the choices, never changed by them.
+
 ## 14. Control surface
 
 Required semantic operations are `select_media`, `select_playlist`, `prepare`, `play`, `pause`, `resume`, `advance`, `stop`, `seek`, `set_loop`, `announce`, `set_gain`, `fade_gain`, `duck`, `mute`, and `unmute`. Implementations may combine operations when their confirmation and idempotency remain unambiguous. Every operation names the session and output set, carries the stable invocation identity and desired revision from §3, and reports an observed outcome or `unconfirmable`.
