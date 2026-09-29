@@ -262,6 +262,11 @@ type SchemaSetPrincipalPasswordRequest = components['schemas']['SetPrincipalPass
 type SchemaTokensResponse = components['schemas']['TokensResponse']
 type SchemaIssueTokenRequest = components['schemas']['IssueTokenRequest']
 type SchemaIssueTokenResponse = components['schemas']['IssueTokenResponse']
+// ADR-055: node enrollment codes.
+type SchemaCreateNodeEnrollmentRequest = components['schemas']['CreateNodeEnrollmentRequest']
+type SchemaCreateNodeEnrollmentResponse = components['schemas']['CreateNodeEnrollmentResponse']
+type SchemaNodeEnrollmentsResponse = components['schemas']['NodeEnrollmentsResponse']
+type SchemaNodeEnrollmentResponse = components['schemas']['NodeEnrollmentResponse']
 // Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
 // ADR-028) — show, show.surface, show.active, asset, and audit shapes.
 type SchemaConfigShowWrite = components['schemas']['ConfigShowWrite']
@@ -2099,6 +2104,40 @@ export class ApiStore {
     try {
       await this.client.deleteJson(
         `/principals/${encodeURIComponent(id)}/tokens/${encodeURIComponent(tokenId)}`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/node-enrollments` (ADR-055 decision 4). The response's `code` is this enrollment's only appearance on the wire, ever again. */
+  async createNodeEnrollment(payload: SchemaCreateNodeEnrollmentRequest): Promise<SchemaCreateNodeEnrollmentResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaCreateNodeEnrollmentResponse>('/node-enrollments', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/node-enrollments` (ADR-055). Never carries a code. */
+  async listNodeEnrollments(): Promise<SchemaNodeEnrollmentsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeEnrollmentsResponse>('/node-enrollments', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/node-enrollments/{id}` (ADR-055). Throws (409) when the code is not pending. */
+  async cancelNodeEnrollment(id: string): Promise<SchemaNodeEnrollmentResponse | undefined> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.deleteJson<SchemaNodeEnrollmentResponse>(
+        `/node-enrollments/${encodeURIComponent(id)}`,
         undefined,
         controller.signal,
       )

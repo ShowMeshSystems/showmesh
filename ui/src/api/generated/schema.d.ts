@@ -5718,6 +5718,8 @@ export interface components {
             discovery: "available" | "partial" | "stale" | "failed" | "not_reported" | "absent";
             /** @description Why no choices are offered. Absent when `discovery` is `available`. */
             reason?: string;
+            /** @description The node's own reason a `partial` discovery was partial, such as an enumeration error. Diagnostic text, not operator copy. */
+            discoveryDetail?: string;
             manualEntry: {
                 allowed: boolean;
                 reason?: string;

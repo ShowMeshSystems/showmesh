@@ -242,8 +242,9 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 
 	if len(usable) > 0 {
 		attrs := routeAttributes(usable)
-		attrs["outputs"] = outputEvidence(usable)
-		complete, reason := discoveryCompleteness(d)
+		outputs, missing := outputEvidence(usable)
+		attrs["outputs"] = outputs
+		complete, reason := discoveryCompleteness(d, missing)
 		attrs["discoveryComplete"] = complete
 		if !complete {
 			attrs["discoveryIncompleteReason"] = reason
@@ -373,10 +374,18 @@ const (
 )
 
 // outputEvidence is audio.output.local's "outputs" attribute: one entry
-// per usable route with only the channels a probe or the graph proved.
-func outputEvidence(routes []audio.RouteEvidence) []map[string]any {
-	out := make([]map[string]any, 0, len(routes))
-	for _, r := range routes {
+// per usable route, with channel counts only from a real probe or graph
+// read, this pass or the last good one. A held route's declared channels
+// never count, so saved settings cannot pose as hardware evidence.
+// missing names the usable routes with no such evidence.
+func outputEvidence(routes []audio.RouteEvidence) (out []map[string]any, missing []string) {
+	out = make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		r, ok := lastKnownGoodRoutes.get(route.Device)
+		if !ok {
+			missing = append(missing, route.Device)
+			continue
+		}
 		entry := map[string]any{
 			"route":      r.Device,
 			"interface":  audio.RouteInterface(r.Device),
@@ -389,22 +398,34 @@ func outputEvidence(routes []audio.RouteEvidence) []map[string]any {
 		}
 		out = append(out, entry)
 	}
-	return out
+	return out, missing
 }
 
 // discoveryCompleteness reports whether every enumeration d merges ran
-// cleanly and in full; a partial discovery must never be offered as a
-// complete list of choices.
-func discoveryCompleteness(d audio.Discovery) (bool, string) {
+// cleanly and in full, and every candidate output has real channel
+// evidence; a partial discovery is never offered as a complete list.
+func discoveryCompleteness(d audio.Discovery, missing []string) (bool, string) {
 	switch {
 	case !d.HardwareEnumerated:
 		return false, d.HardwareEnumeratedReason
 	case d.Truncated:
-		return false, fmt.Sprintf("the node has %d audio devices and only the first %d were checked", d.EnumeratedCount, audio.MaxProbedDevices)
+		return false, fmt.Sprintf("the node has %d audio outputs and checks only the first %d", d.CandidateCount, audio.MaxProbedDevices)
 	case !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != "":
 		return false, d.PipeWireEnumeratedReason
 	case d.PipeWireTruncated:
-		return false, fmt.Sprintf("the node's PipeWire graph has more than %d outputs and only the first %d were checked", audio.MaxProbedDevices, audio.MaxProbedDevices)
+		return false, fmt.Sprintf("the node's PipeWire graph has %d outputs and only the first %d are checked", d.PipeWireNodeCount, audio.MaxProbedDevices)
+	}
+	for _, r := range d.Routes {
+		if r.Available {
+			continue
+		}
+		if _, cached := lastKnownGoodRoutes.get(r.Device); r.Busy && cached {
+			continue
+		}
+		return false, fmt.Sprintf("the output %s did not open: %s", r.Device, r.Reason)
+	}
+	if len(missing) > 0 {
+		return false, fmt.Sprintf("the output %s is in use and has not been checked since the node started", missing[0])
 	}
 	return true, ""
 }

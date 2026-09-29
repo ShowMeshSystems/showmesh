@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // This file resolves one audio node's routing choices from the channel
@@ -67,13 +66,16 @@ type AudioRoutingEvidence struct {
 
 // AudioRoutingChoices is one node's resolved routing choices.
 type AudioRoutingChoices struct {
-	Discovery   string
-	Reason      string
-	ManualEntry AudioRoutingManualEntry
-	LTC         AudioRoutingLTC
-	Routes      []AudioRoutingRouteChoice
-	Current     *AudioRoutingCurrent
-	Clock       *AudioRoutingClock
+	Discovery string
+	Reason    string
+	// DiscoveryDetail is the node's own reason a partial discovery was
+	// partial: diagnostic text, never operator copy.
+	DiscoveryDetail string
+	ManualEntry     AudioRoutingManualEntry
+	LTC             AudioRoutingLTC
+	Routes          []AudioRoutingRouteChoice
+	Current         *AudioRoutingCurrent
+	Clock           *AudioRoutingClock
 }
 
 // AudioRoutingManualEntry says whether hand-typed channels are accepted.
@@ -154,7 +156,8 @@ func ResolveAudioRoutingChoices(nodeID string, ev AudioRoutingEvidence, current 
 		out.Reason = "This node's output list could not be read. Enter channels by hand, or restart ShowMesh on the node."
 	case !ev.Complete:
 		out.Discovery = AudioRoutingDiscoveryPartial
-		out.Reason = fmt.Sprintf("This node checked only some of its audio outputs: %s. Enter channels by hand, or restart ShowMesh on the node to check again.", strings.TrimSuffix(ev.IncompleteReason, "."))
+		out.Reason = "This node could not check all of its audio outputs. Enter channels by hand, or restart ShowMesh on the node to check again."
+		out.DiscoveryDetail = ev.IncompleteReason
 	}
 
 	ltcHolder := programLTCHolder(nodeID, otherRoles)

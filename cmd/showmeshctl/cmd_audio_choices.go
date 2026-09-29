@@ -11,11 +11,13 @@ import (
 )
 
 type audioRoutingChoicesResponse struct {
-	ServerTime  time.Time `json:"serverTime"`
-	NodeID      string    `json:"nodeId"`
-	Discovery   string    `json:"discovery"`
-	Reason      string    `json:"reason,omitempty"`
-	ManualEntry struct {
+	ServerTime time.Time `json:"serverTime"`
+	NodeID     string    `json:"nodeId"`
+	Discovery  string    `json:"discovery"`
+	Reason     string    `json:"reason,omitempty"`
+	// DiscoveryDetail is the node's own diagnostic text, shown only with --output json.
+	DiscoveryDetail string `json:"discoveryDetail,omitempty"`
+	ManualEntry     struct {
 		Allowed bool   `json:"allowed"`
 		Reason  string `json:"reason,omitempty"`
 	} `json:"manualEntry"`
@@ -114,7 +116,8 @@ func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse) {
 		_, _ = fmt.Fprintf(w, "                        %s\n", availability(cur.Offered, "one of the choices below", cur.Reason))
 	}
 	if resp.Clock != nil {
-		_, _ = fmt.Fprintf(w, "Local clock:            %s (%s, %s)\n", resp.Clock.LocalClock, resp.Clock.Source, resp.Clock.Verification)
+		_, _ = fmt.Fprintf(w, "Local clock:            %s, %s\n", resp.Clock.LocalClock, localClockSourceWords[resp.Clock.Source])
+		_, _ = fmt.Fprintf(w, "Timecode clock:         %s\n", clockVerificationWords[resp.Clock.Verification])
 	}
 	if len(resp.Routes) == 0 {
 		return
@@ -140,6 +143,17 @@ func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse) {
 		}
 	}
 	_ = tw.Flush()
+}
+
+var localClockSourceWords = map[string]string{
+	"derived":  "read from the program output",
+	"override": "named by an operator",
+}
+
+var clockVerificationWords = map[string]string{
+	"same_interface":     "leaves the same interface as program audio",
+	"operator_confirmed": "shared clock confirmed by an operator",
+	"no_ltc":             "none, this node sends no timecode",
 }
 
 func availability(ok bool, yes, reason string) string {

@@ -18,6 +18,7 @@ import {
   WeatherDelayQuestionBanner,
   ConfirmDialog,
   ConnectionPill,
+  CopyButton,
   DefinitionStrip,
   DeletePanel,
   Drawer,
@@ -29,6 +30,7 @@ import {
   Notice,
   NotWired,
   NotWiredBanner,
+  OneTimeSecret,
   RadioCardList,
   RailBadge,
   RuledStrip,
@@ -142,6 +144,7 @@ export function Specimen() {
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
   const [radioCardValue, setRadioCardValue] = useState('1,2')
 
@@ -619,7 +622,14 @@ export function Specimen() {
               </>
             }
             confirmLabel="Deploy anyway"
-            onConfirm={() => setConfirmOpen(false)}
+            busy={confirmBusy}
+            onConfirm={() => {
+              setConfirmBusy(true)
+              window.setTimeout(() => {
+                setConfirmBusy(false)
+                setConfirmOpen(false)
+              }, 800)
+            }}
             onCancel={() => setConfirmOpen(false)}
           />
         </SpecSection>
@@ -730,6 +740,28 @@ export function Specimen() {
           >
             <p className="sm-small sm-muted">Deleting a cue removes only this object; nothing else in the reference graph names a cue id.</p>
           </DeletePanel>
+        </SpecSection>
+
+        <SpecSection
+          number="15 · One-time secret"
+          id="specimen-secret"
+          title="A value the coordinator will never hand back again"
+          detail="Large, monospace, and copyable. Dismissing it is the only way back to the ordinary view; a later read of the same resource never carries the value again."
+        >
+          <OneTimeSecret
+            headline="This code will not be shown again. Copy it now."
+            value="Q7XR-9K2M"
+            detail={
+              <>
+                <p>Expires at 21:22:00, in 15 minutes.</p>
+                <p>
+                  Run this on the node: <span className="sm-data">sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M</span>
+                </p>
+                <CopyButton value="sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M" label="Copy command" />
+              </>
+            }
+            onDismiss={() => {}}
+          />
         </SpecSection>
       </div>
     </div>

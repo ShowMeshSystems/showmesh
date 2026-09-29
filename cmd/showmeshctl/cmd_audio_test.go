@@ -942,7 +942,7 @@ func TestCmdAudioNodeChoicesPrintsGroupsAndManualPath(t *testing.T) {
 	if gotPath != "/api/v1/nodes/audio-m4/audio/routing-choices" {
 		t.Errorf("requested %q, want the routing-choices path", gotPath)
 	}
-	for _, want := range []string{"Discovery:              available", "Manual entry:           allowed", "1,2", "3,4", "Saved:                  alsa_output.m4 program 1,2, LTC 3", "same_interface"} {
+	for _, want := range []string{"Discovery:              available", "Manual entry:           allowed", "1,2", "3,4", "Saved:                  alsa_output.m4 program 1,2, LTC 3", "Timecode clock:         leaves the same interface as program audio", "Local clock:            alsa_output.m4, read from the program output"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}

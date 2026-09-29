@@ -137,3 +137,14 @@ func TestValidateAudioNodeChannelInventory(t *testing.T) {
 		t.Errorf("old agent refused a write: %v, want accepted", verr)
 	}
 }
+
+func TestResolveAudioRoutingChoicesKeepsTheNodesRawReasonOutOfOperatorCopy(t *testing.T) {
+	raw := "PipeWire graph enumeration failed: invalid character '}' looking for beginning of value"
+	c := ResolveAudioRoutingChoices("node-a", AudioRoutingEvidence{Advertised: true, Live: true, Reported: true, IncompleteReason: raw}, nil, nil)
+	if strings.Contains(c.Reason, "PipeWire") || strings.Contains(c.LTC.Reason, "PipeWire") {
+		t.Errorf("reason = %q, want operator copy without the node's raw error", c.Reason)
+	}
+	if c.DiscoveryDetail != raw {
+		t.Errorf("DiscoveryDetail = %q, want the raw reason kept for diagnosis", c.DiscoveryDetail)
+	}
+}

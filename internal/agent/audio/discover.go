@@ -97,6 +97,10 @@ type Discovery struct {
 	// — kept so a truncated report can still state how much was omitted.
 	EnumeratedCount int
 
+	// CandidateCount is how many real candidate devices survived filtering,
+	// before the [maxProbedDevices] cap.
+	CandidateCount int
+
 	// Truncated is true when more real candidate devices were found than
 	// [maxProbedDevices] allows probing.
 	Truncated bool
@@ -120,8 +124,10 @@ type Discovery struct {
 	PipeWireEnumerated       bool
 	PipeWireEnumeratedReason string
 
-	// PipeWireTruncated mirrors Truncated for the PipeWire graph.
+	// PipeWireTruncated and PipeWireNodeCount mirror Truncated and
+	// CandidateCount for the PipeWire graph.
 	PipeWireTruncated bool
+	PipeWireNodeCount int
 }
 
 // WithPipeWireRoutes returns a copy of d with pw's routes appended and its
@@ -135,6 +141,7 @@ func (d Discovery) WithPipeWireRoutes(pw PipeWireDiscovery) Discovery {
 	out.PipeWireEnumerated = pw.Enumerated
 	out.PipeWireEnumeratedReason = pw.EnumeratedReason
 	out.PipeWireTruncated = pw.Truncated
+	out.PipeWireNodeCount = pw.NodeCount
 	out.Routes = append(append([]RouteEvidence{}, d.Routes...), pw.Routes...)
 	return out
 }
@@ -161,8 +168,9 @@ type PipeWireDiscovery struct {
 	Routes []RouteEvidence
 
 	// Truncated is true when the graph named more Audio/Sink nodes than
-	// [maxProbedDevices] allows reporting.
+	// [maxProbedDevices] allows reporting; NodeCount is how many it named.
 	Truncated bool
+	NodeCount int
 }
 
 // DiscoverPipeWire runs this node's PipeWire graph discovery: enumerate
@@ -181,7 +189,8 @@ func DiscoverPipeWire(ctx context.Context, enum PipeWireEnumerator) PipeWireDisc
 	if err != nil {
 		return PipeWireDiscovery{EnumeratedReason: fmt.Sprintf("PipeWire graph enumeration failed: %v", err)}
 	}
-	truncated := len(nodes) > maxProbedDevices
+	nodeCount := len(nodes)
+	truncated := nodeCount > maxProbedDevices
 	if truncated {
 		nodes = nodes[:maxProbedDevices]
 	}
@@ -200,7 +209,7 @@ func DiscoverPipeWire(ctx context.Context, enum PipeWireEnumerator) PipeWireDisc
 		}
 		routes = append(routes, ev)
 	}
-	return PipeWireDiscovery{Enumerated: true, Routes: routes, Truncated: truncated}
+	return PipeWireDiscovery{Enumerated: true, Routes: routes, Truncated: truncated, NodeCount: nodeCount}
 }
 
 // Discover runs this node's full discovery sequence: probe the always-
@@ -229,6 +238,7 @@ func Discover(ctx context.Context, enum Enumerator) Discovery {
 	d.HardwareEnumerated = true
 
 	candidates := CandidateDevices(devices, hasCards)
+	d.CandidateCount = len(candidates)
 	if len(candidates) > maxProbedDevices {
 		d.Truncated = true
 		candidates = candidates[:maxProbedDevices]
