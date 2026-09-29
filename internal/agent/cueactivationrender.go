@@ -130,7 +130,7 @@ func (o *renderOperations) holdBlackWhereTimingDiffers(newStepMS byte, swapped m
 		if err := o.holdSurfaceBlack(id); err != nil {
 			o.logger.Warn("cue.activate (render): failed to persist the held-black flag", "surface_id", id, "error", err)
 		}
-		errs = append(errs, fmt.Sprintf("surface %q is playing a %d ms sequence but the show now runs at %d ms per frame, so the surface is black. Render its sequences at the same frame timing in xLights and activate the Cue again.",
+		errs = append(errs, fmt.Sprintf("surface %q is black because its sequence runs at %d ms per frame and the show now runs at %d ms. Render its sequences at the same frame timing in xLights and activate the cue again.",
 			id, steps[id], newStepMS))
 	}
 	return errs

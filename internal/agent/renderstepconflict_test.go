@@ -369,7 +369,7 @@ func TestPartialCueHoldsBlackASurfaceLeftAtADifferentStepTime(t *testing.T) {
 	out := f.renderOutput("new.fseq", 25)
 	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
 	err := f.ops.activateRender(act, out, f.clock.now)
-	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || !strings.Contains(err.Error(), "so the surface is black") {
+	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || !strings.Contains(err.Error(), "is black because its sequence runs at 50 ms per frame and the show now runs at 25 ms") {
 		t.Fatalf("error = %v, want it to name surface right and say it is black", err)
 	}
 	if got := f.writerFile("left"); got != "new.fseq" {
