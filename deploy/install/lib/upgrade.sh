@@ -96,10 +96,16 @@ upgrade_node_preflight() {
   upgrade_check_node_night
 }
 
+# upgrade_copy_settings copies the env and broker files; its output is only cp's own errors.
+upgrade_copy_settings() {
+  cp -a "$COORD_ENV" "$1/coordinator.env" && cp -a "$COORDINATOR_DIR/mosquitto" "$1/mosquitto"
+}
+
 # upgrade_backup copies the database, settings and broker files; the coordinator is down only for the copy.
 upgrade_backup() {
   step "Backing up the coordinator before upgrading it"
-  local old stamp dir cid volume data_dir
+  local old stamp dir cid volume data_dir log files="-f docker-compose.yml -f docker-compose.published.yml"
+  log="$(run_tmp)"
   old="$(env_get "$COORD_ENV" SHOWMESH_RELEASE_VERSION)"
   data_dir="$(env_get "$COORD_ENV" SHOWMESH_DATA_DIR)"
   data_dir="${data_dir:-/var/lib/showmesh}"
@@ -108,17 +114,22 @@ upgrade_backup() {
   install -d -m 0700 "$BACKUP_ROOT"
   install -d -m 0700 "$dir"
   cid="$(compose ps -a -q coordinator 2>/dev/null | head -n 1)"
-  compose stop coordinator >/dev/null 2>&1 || { rm -rf "$dir"; compose start coordinator >/dev/null 2>&1 || true; fail "The coordinator could not be stopped to copy its database, so nothing was upgraded." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml stop coordinator"; }
-  if ! docker cp -a "$cid:$data_dir/." "$dir/data" >/dev/null 2>&1; then
+  if ! run_step "stopping the coordinator to copy its database" "$log" compose stop coordinator; then
     rm -rf "$dir"
-    compose start coordinator >/dev/null 2>&1 || true
-    fail "The coordinator's database could not be copied, so nothing was upgraded." "docker cp $cid:$data_dir/. <backup directory>, then run the install command again"
+    run_step "starting the coordinator again" "$(run_tmp)" compose start coordinator || true
+    fail_with "$log" "The coordinator could not be stopped to copy its database, so nothing was upgraded." "cd $COORDINATOR_DIR && docker compose $files stop coordinator"
   fi
-  compose start coordinator >/dev/null 2>&1 || warn "The coordinator did not start again after the copy. The upgrade will start it."
-  volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'"$data_dir"'"}}{{.Name}}{{end}}{{end}}' "$cid" 2>/dev/null)"
-  if ! { cp -a "$COORD_ENV" "$dir/coordinator.env" && cp -a "$COORDINATOR_DIR/mosquitto" "$dir/mosquitto"; }; then
+  if ! run_step "copying the coordinator's database" "$log" docker cp -a "$cid:$data_dir/." "$dir/data"; then
     rm -rf "$dir"
-    fail "The coordinator's settings and broker files could not be copied, so nothing was upgraded." "check free space on $BACKUP_ROOT, then run the install command again"
+    run_step "starting the coordinator again" "$(run_tmp)" compose start coordinator || true
+    fail_with "$log" "The coordinator's database could not be copied, so nothing was upgraded." "docker cp $cid:$data_dir/. <backup directory>, then run the install command again"
+  fi
+  run_step "starting the coordinator again" "$(run_tmp)" compose start coordinator ||
+    warn "The coordinator did not start again after the copy. The upgrade will start it."
+  volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'"$data_dir"'"}}{{.Name}}{{end}}{{end}}' "$cid" 2>/dev/null)"
+  if ! run_step "copying the settings and broker files" "$log" upgrade_copy_settings "$dir"; then
+    rm -rf "$dir"
+    fail_with "$log" "The coordinator's settings and broker files could not be copied, so nothing was upgraded." "check free space on $BACKUP_ROOT, then run the install command again"
   fi
   if [ -z "$(ls -A "$dir/data" 2>/dev/null)" ]; then
     rm -rf "$dir"
@@ -126,7 +137,8 @@ upgrade_backup() {
     return 0
   fi
   upgrade_write_restore "$dir" "${volume:-showmesh_showmesh-data}"
-  upgrade_prune_backups
+  run_step "removing the oldest backups" "$(run_tmp)" upgrade_prune_backups ||
+    warn "The oldest backups in $BACKUP_ROOT could not be removed. Remove all but the newest $BACKUP_KEEP by hand."
   ok "backup saved in $dir"
   info "To go back to this backup, follow the steps in $dir/RESTORE.txt:"
   sed 's/^/      /' "$dir/RESTORE.txt"

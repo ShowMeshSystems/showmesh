@@ -67,6 +67,39 @@ exist so every question has an unattended answer: `--address`,
 `--agent-package` (a node agent tarball on disk, for a build that has no
 release).
 
+## Firewall
+
+`lib/firewall.sh` runs after the role finishes and detects an active ufw, a
+running firewalld, or a raw nftables ruleset whose input chain hooks input
+with a drop policy (Debian 13 ships none of these by default).
+
+| Detected | What the installer does |
+| --- | --- |
+| ufw active | Opens exactly the ports the installed role needs with `ufw allow`, each carrying a comment naming ShowMesh. Re-running adds nothing twice; ufw already skips a rule it already has. |
+| firewalld running | Defines a permanent `showmesh` service listing those ports, adds it to every active zone that has an interface, and opens the same ports in the running zone. It never reloads firewalld, so runtime-only rules survive. |
+| Raw nftables, input chain policy drop | Prints the exact `accept` rules to add and the file nftables loads them from (`/etc/nftables.conf` on Debian). An accept rule in a separate table cannot override a drop in the owner's own chain, so nothing is changed. |
+| No firewall active | Prints one line and changes nothing. |
+
+The ports: every node role needs tcp 80 (or `SHOWMESH_FPPCONNECT_LISTEN_ADDR`'s
+port), udp 32320 (or `SHOWMESH_MULTISYNC_LISTEN_ADDR`'s port, FPP MultiSync),
+udp 319 and 320 (PTP), udp 5004 and 9875 (AES67 RTP and SAP), and udp 5353
+(mDNS). A render node also needs tcp and udp 5959-5999 (NDI). A coordinator
+needs tcp 8080 (or `SHOWMESH_HTTP_PORT`, the API), tcp 8081 (or
+`SHOWMESH_UI_PORT`, the operator UI), and, with the built-in broker, tcp 1883
+(or `MOSQUITTO_PORT`). Docker publishes the coordinator's ports itself, which
+bypasses a ufw or nftables host's input chain, but a firewalld zone can still
+block a published port, so the coordinator's ports are opened on every
+backend regardless.
+
+`--firewall` opts in to installing a ShowMesh firewall on a host with none
+active: an nftables table named `showmesh_host` in
+`/etc/nftables.d/showmesh-host.nft`, included from `/etc/nftables.conf`
+(backed up once before the first edit), with a drop policy on the input
+chain, established/related and loopback traffic, Docker's bridge interfaces,
+ICMP, IGMP, mDNS and SSH (every port `sshd -T` reports, or 22) allowed, and the role's own ports on top. It never
+runs `nft flush ruleset`, so Docker's own tables survive. The table is checked with `nft -c` before `nftables.conf` is touched, and when `nftables.conf` already declares tables that are not loaded, the installer warns and does not enable the nftables service over them. `--no-firewall`
+skips firewall setup entirely.
+
 ## NDI
 
 The installer never downloads the NDI runtime. `--ndi <file>` accepts the SDK
@@ -78,12 +111,40 @@ and requires `gst-inspect-1.0 ndisink` to resolve. When the node agent package
 carries no `gstreamer/libgstndi.so`, the plugin is built with
 `node/ndi-plugin/build-ndi-plugin.sh <output-dir>` at that point, not before.
 
+## Output and the install log
+
+`lib/common.sh` draws every install: the static banner, `▸` step headers,
+`✔` and `⚠` check lines, and a spinner beside a step that takes time
+(ADR-055 decision 9, amended 2026-09-28). Output that is not a terminal,
+`NO_COLOR` and `TERM=dumb` each get the same lines as plain text, so a captured
+install reads as it always did and the benches assert on that text. Refusals
+and errors are never coloured.
+
+`log_open` appends a header to `/var/log/showmesh-install.log` (mode 0600,
+root) with the date, version, role and arguments, hiding the values of `--code`
+and `--broker-password`. `SHOWMESH_INSTALL_LOG` moves that file, which is how a
+test reads one run's log without root's `/var/log`.
+
+`run_step LABEL FILE CMD...` is how a step runs a command: it captures the
+output to `FILE`, appends it to the log and animates the spinner. `CMD` runs in
+the installer's own shell and in the foreground with stdin from `/dev/null`, in
+both layouts, so a function can set variables and Ctrl-C stops `CMD` itself.
+`step_warnings FILE` then shows any `WARNING:` line the step printed, which a
+successful step otherwise leaves only in the log. `log_open` keeps no log when
+the log path is a symbolic link.
+`fail_with FILE FACT FIX` stops with the fact, then the last lines that command
+printed, then the fix and the log path. Three commands print a secret of their
+own and so are recorded in the log as withheld rather than captured:
+`generate-credentials.sh`, the coordinator's `bootstrap` and `create-admin`, and
+`showmeshctl node enroll`. `http_request` logs the method, URL and status of a
+request that did not succeed, never the answer, because a redeem answer carries
+the node's broker password and API token.
+
 ## Party mode
 
-`--party` adds the banner, colour and animation of `lib/party.sh` to the
-opening and success screens only. It never decorates a question, a refusal or
-an error, and without `--party` nothing in that file runs. The hidden modes
-need `--party` as well.
+`--party` adds the animated opening and success screens of `lib/party.sh`. It
+never decorates a question, a refusal or an error, and without `--party`
+nothing in that file runs. The hidden modes need `--party` as well.
 
 ## Testing
 
@@ -93,4 +154,7 @@ need `--party` as well.
 node roles unattended against a fake enrollment server, including a wrong code,
 an expired code and an in-place upgrade. `bench/node-install/run_coordinator_bench.sh`
 then runs the coordinator role for real inside a privileged Debian 13
-container with its own dockerd. See `bench/node-install/README.md`.
+container with its own dockerd. `bench/node-install/run_firewall_bench.sh` proves
+`lib/firewall.sh` against ufw, firewalld, a raw nftables ruleset with a drop
+policy, no firewall, `--firewall` and `--no-firewall`. See
+`bench/node-install/README.md`.

@@ -1384,6 +1384,7 @@ value, and it does not belong here.
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 | `localClockOverride` | shipped | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
 | `stopHold` | reserved | ADR-054: the night session record's hold set by a level 1 emergency stop (reason and time), absent when no hold stands. In scope because the API, `showmeshctl` and the UI must agree on it |
+| `nextCueId` | reserved | the optional field on the `cue.activate` activation (`pkg/cueactivation.Activation`) naming the Cue the bound playlist plays next, so a render node can open that sequence ahead and switch without drawing black. No migration: older agents ignore it. In scope because the coordinator and the agent must agree on the name across the wire |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
@@ -1437,7 +1438,7 @@ The store schema version, bumped by migrations in
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
 | v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
-| v46+ | unallocated | free |
+| v46+ | unallocated | free. v46 and v47 were reserved 2026-09-28 for audio rejoin and routing work and released unused |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1640,6 +1641,8 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Node-reported audio routing choices (2026-09-28) own `/api/v1/nodes/{nodeId}/audio/routing-choices`** and the `showmeshctl audio node choices` subcommand. The agent reports the evidence as `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes on the existing `audio.output.local` capability; no new capability id.
 
 **The long-run drift recording (2026-09-11) owns every path under
 `/api/v1/nodes/{nodeId}/audio/alignment-runs`**, and the `showmeshctl audio

@@ -11,7 +11,7 @@ export {
   type WeatherDelayGroupView,
 } from './WeatherDelayBanner'
 export { StopHoldBanner } from './StopHoldBanner'
-export { Choice, ChoiceGroup, ChoiceRow, Field, FieldGrid, Input, Select, Textarea, type ChoiceGroupOption } from './Field'
+export { Choice, ChoiceGroup, ChoiceRow, Field, FieldGrid, Input, RadioCardList, Select, Textarea, type ChoiceGroupOption, type RadioCardOption } from './Field'
 export { Freshness, SelectableRow, Table, TableWrap } from './Table'
 export { LifecycleCommands, type LifecycleCommandGroup, type LifecycleCommandSpec } from './LifecycleCommands'
 export { Segmented } from './Segmented'
@@ -22,6 +22,8 @@ export { Popover } from './Popover'
 export { Drawer } from './Drawer'
 export { ConfirmDialog } from './ConfirmDialog'
 export { DeletePanel } from './DeletePanel'
+export { CopyButton } from './CopyButton'
+export { OneTimeSecret } from './OneTimeSecret'
 export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,

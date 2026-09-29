@@ -524,9 +524,11 @@ Do not invent these; state their absence instead. Checked against the code on 20
    mismatch handling is expected to follow Show versus Program mode and that the wiring does not
    exist, so the per-playlist control is disabled and the stored policy is what takes effect today
    (D-015).
-4. **Output groups.** Settings › Node routing draws the picker as a labelled future state pending an
-   `outputGroups` attribute on the `audio.output.local` capability; the manual channel field above
-   it is the live path, and nothing sends `outputGroups`.
+4. **Output groups.** Built. Settings › Node routing offers the output, program channel pairs and
+   timecode channels the coordinator resolves from the node's own reported outputs
+   (`GET /nodes/{nodeId}/audio/routing-choices`). "Enter by hand" is the advanced path, and a saved
+   placement the node does not offer opens there unchanged. When the node is offline, partial,
+   unreadable or predates channel reporting, the screen states why and offers only manual entry.
 5. **Clock domain evidence.** Settings › Node routing takes a manual `clockDomain` declaration with
    its `clockDomainProvenance` recorded beside it. Real evidence is separate work.
 6. **Fallback program authoring.** Monitor › Fleet shows read-only fallback-program readiness

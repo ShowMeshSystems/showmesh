@@ -17,6 +17,8 @@ BUNDLE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 . "$BUNDLE_DIR/lib/coordinator.sh"
 # shellcheck source=deploy/install/lib/upgrade.sh
 . "$BUNDLE_DIR/lib/upgrade.sh"
+# shellcheck source=deploy/install/lib/firewall.sh
+. "$BUNDLE_DIR/lib/firewall.sh"
 # shellcheck source=deploy/install/lib/party.sh
 . "$BUNDLE_DIR/lib/party.sh"
 
@@ -58,9 +60,11 @@ With no options it asks what this machine is and walks you through it.
   --audio-card NAME         part of the sound card's name
   --agent-package FILE      use a node agent package on disk instead of downloading it
   --force                   upgrade even though a night is running or the coordinator cannot be asked
+  --firewall                install a ShowMesh firewall when this host has none active
+  --no-firewall             skip firewall setup entirely
   --yes                     never ask; take everything from options
   --version                 print the installer's version
-  --party                   add colour and animation to the opening and success screens
+  --party                   add animation and the hidden modes to the install
   --help                    print this help
 
 Upgrading a coordinator first copies its database, settings and broker files to
@@ -71,12 +75,15 @@ EOF
 OPT_ROLE=""; OPT_COORDINATOR=""; OPT_CODE=""; OPT_REENROLL=0; OPT_NDI=""; OPT_SKIP_NDI=0
 OPT_BROKER=""; OPT_BROKER_URL=""; OPT_BROKER_PASSWORD_FILE=""; OPT_ADDRESS=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
 OPT_NODE_ROLE=""; OPT_NODE_ID=""; OPT_PTP_INTERFACE=""; OPT_PTP_DOMAIN=""; OPT_PTP_ROLE=""
-OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_YES=0; OPT_FORCE=0; OPT_PARTY=0; PARTY_EGG=""
+OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_FIREWALL=""; OPT_YES=0; OPT_FORCE=0; OPT_PARTY=0; PARTY_EGG=""
 unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
 
 need_value() {
   [ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'The option %s needs a value. Run showmesh-install --help for the list.\n' "$1" >&2; exit 2; }
 }
+
+# The loop below shifts them away, so the install log's header reads them from here.
+INSTALL_ARGS=("$@")
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -102,6 +109,8 @@ while [ "$#" -gt 0 ]; do
     --audio-card) need_value "$@"; OPT_AUDIO_CARD="$2"; shift ;;
     --agent-package) need_value "$@"; OPT_AGENT_PACKAGE="$2"; shift ;;
     --force) OPT_FORCE=1 ;;
+    --firewall) OPT_FIREWALL="yes" ;;
+    --no-firewall) OPT_FIREWALL="no" ;;
     --yes|-y) OPT_YES=1 ;;
     --version) printf 'showmesh-install %s (%s, %s)\n' "$SHOWMESH_VERSION" "$SHOWMESH_COMMIT" "$SHOWMESH_BUILD_DATE"; exit 0 ;;
     --party) OPT_PARTY=1 ;;
@@ -176,9 +185,10 @@ mint_local_code() {
   fi
   step "Creating an enrollment code for node $node_id"
   errs="$(run_tmp)"
+  # This command prints the code itself, so only what it writes to its error stream is logged.
   if ! out="$(showmeshctl node enroll "${flags[@]}" "$node_id" 2>"$errs")"; then
-    cat "$errs" >&2
-    fail "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
+    log_file "creating an enrollment code for $node_id" "$errs"
+    fail_with "$errs" "The coordinator did not create an enrollment code for $node_id." "sudo showmeshctl node enroll $node_id"
   fi
   OPT_CODE="$(printf '%s' "$out" | jq -r '.code // empty' 2>/dev/null)" || OPT_CODE=""
   [ -n "$OPT_CODE" ] || fail "showmeshctl did not print an enrollment code." "sudo showmeshctl node enroll $node_id"
@@ -209,23 +219,32 @@ run_coordinator_node() {
 
 main() {
   require_root "$@"
+  log_open ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
   require_platform
   if [ -n "$OPT_NDI" ] && [ -z "$OPT_ROLE" ]; then
+    log_note "      role: NDI runtime only"
     run_ndi_only
     return
   fi
   choose_role
+  log_note "      role: $ROLE"
   if [ "$OPT_PARTY" -eq 1 ]; then
     party_colors
     party_opening "$(role_label "$ROLE")"
+  else
+    ui_banner
   fi
   printf '\nInstalling ShowMesh %s as a %s on this machine.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  log_note "Installing ShowMesh $SHOWMESH_VERSION as a $(role_label "$ROLE") on this machine."
+  [ "$LOG_READY" -eq 1 ] && info "Every command this run runs is recorded in $INSTALL_LOG."
   case "$ROLE" in
     coordinator) run_coordinator_role ;;
     render|audio) run_node_role "$ROLE" ;;
     coordinator-node) run_coordinator_node ;;
   esac
+  firewall_setup "$ROLE" "$(env_get "$INSTALLER_STATE" NODE_ROLE)"
   printf '\nShowMesh %s is installed as a %s.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
+  log_note "ShowMesh $SHOWMESH_VERSION is installed as a $(role_label "$ROLE")."
   case "$ROLE" in
     coordinator|coordinator-node) coord_success_lines; upgrade_print_node_commands ;;
   esac

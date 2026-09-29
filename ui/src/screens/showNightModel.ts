@@ -438,6 +438,48 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
   })
 }
 
+const REPEAT_LABEL: Record<string, string> = { none: 'Plays once', item: 'Repeats the current item', playlist: 'Repeats the whole list' }
+const RESUME_LABEL: Record<string, string> = { resume: 'Resumes where it left off', restart: 'Restarts from the first item' }
+
+export type PlannedBackgroundAudio =
+  | { kind: 'not_configured'; fact: string }
+  | { kind: 'unavailable'; fact: string }
+  | {
+      kind: 'configured'
+      source: string
+      settings: { label: string; value: string }[]
+      nodes: string
+      items: { key: string; position: number; sequence: string; target: string; itemId: string }[]
+    }
+
+/** What the session's own pinned revision will play, so it reads the same before and after the bed starts. */
+export function plannedBackgroundAudio(audio: NightBackgroundAudio): PlannedBackgroundAudio {
+  const plan = audio.plan
+  if (plan.state !== 'recorded') {
+    return { kind: 'unavailable', fact: plan.reason !== '' ? plan.reason : 'The planned background audio could not be read.' }
+  }
+  if (!plan.configured) {
+    return { kind: 'not_configured', fact: 'This night session has no background audio. Add it to the night definition if the night needs it.' }
+  }
+  const transition =
+    plan.itemTransition === 'crossfade' && plan.crossfadeMs !== null
+      ? `Crossfade over ${plan.crossfadeMs} ms`
+      : plan.itemTransition === 'gapless'
+        ? 'Gapless'
+        : 'One after another'
+  return {
+    kind: 'configured',
+    source: plan.mediaPlaylist !== '' ? `Media playlist ${plan.mediaPlaylist}` : 'Items listed on the night definition',
+    settings: [
+      { label: 'Repeat', value: REPEAT_LABEL[plan.repeat] ?? plan.repeat },
+      { label: 'Resume', value: RESUME_LABEL[plan.resume] ?? plan.resume },
+      { label: 'Transition', value: transition },
+    ],
+    nodes: plan.nodes.join(', '),
+    items: plan.items.map((item) => ({ key: `${item.position}:${item.itemId}`, position: item.position, sequence: item.sequence, target: item.target, itemId: item.itemId })),
+  }
+}
+
 export function nowPlaying(model: Model) {
   const instance = model.fpp[0]
   const run = model.currentRuns?.runs.find((entry) => entry.runner === 'fpp')

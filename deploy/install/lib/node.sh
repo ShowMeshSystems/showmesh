@@ -42,9 +42,14 @@ node_fetch_agent() {
 
 node_preflight() {
   step "Checking this machine can run the agent"
-  if ! with_default_umask "$AGENT_PKG_DIR/preflight.sh" --runtime-only; then
-    fail "This machine is missing something the agent needs, listed above." "apt-get install -y ${NODE_RUNTIME_PACKAGES[*]}"
+  local log
+  log="$(run_tmp)"
+  if ! run_step "checking the runtime the agent needs" "$log" \
+    with_default_umask "$AGENT_PKG_DIR/preflight.sh" --runtime-only; then
+    fail_with "$log" "This machine is missing something the agent needs." "apt-get install -y ${NODE_RUNTIME_PACKAGES[*]}"
   fi
+  step_warnings "$log"
+  ok "this machine has what the agent needs"
 }
 
 node_is_enrolled() {
@@ -175,8 +180,8 @@ node_enroll() {
       ask code "Enrollment code"
     fi
     if ! valid_code "$code"; then
-      info "The code $code is not in the form XXXX-XXXX."
-      can_prompt || fail "The enrollment code $code is not in the form XXXX-XXXX." "showmesh-install --code XXXX-XXXX"
+      info "That code is not in the form XXXX-XXXX."
+      can_prompt || fail "The enrollment code given is not in the form XXXX-XXXX." "showmesh-install --code XXXX-XXXX"
       code=""
       continue
     fi
@@ -192,6 +197,7 @@ node_enroll() {
         enroll_values_by_hand
         return
       fi
+      [ -z "${HTTP_ERROR:-}" ] || info "$HTTP_ERROR"
       fail "The coordinator at $COORDINATOR_URL did not answer." "curl -sS $COORDINATOR_URL/healthz"
     fi
     tries=$((tries + 1))
@@ -238,9 +244,13 @@ node_started_at() {
 
 node_install_agent() {
   step "Installing the agent service"
-  if ! with_default_umask "$AGENT_PKG_DIR/install.sh" "$AGENT_PKG_DIR/showmesh-agent-native"; then
-    fail "The agent service did not install; the reason is printed above." "sudo $AGENT_PKG_DIR/install.sh $AGENT_PKG_DIR/showmesh-agent-native"
+  local log
+  log="$(run_tmp)"
+  if ! run_step "installing and starting showmesh-agent" "$log" \
+    with_default_umask "$AGENT_PKG_DIR/install.sh" "$AGENT_PKG_DIR/showmesh-agent-native"; then
+    fail_with "$log" "The agent service did not install." "sudo $AGENT_PKG_DIR/install.sh $AGENT_PKG_DIR/showmesh-agent-native"
   fi
+  step_warnings "$log"
   if ! have_systemd; then
     warn "This machine is not running systemd, so the agent was not started. Start it with: systemctl enable --now showmesh-agent"
   fi
@@ -250,12 +260,14 @@ node_install_agent() {
 node_wait_for_report() {
   local node_id="$1" token="$2" before="$3" limit="${SHOWMESH_REPORT_TIMEOUT:-120}" waited=0 state started
   step "Waiting for node $node_id to report to the coordinator"
+  spin_start "waiting for node $node_id to report in"
   while [ "$waited" -lt "$limit" ]; do
     http_request GET "$COORDINATOR_URL/api/v1/nodes/$node_id" "" "$token"
     if [ "$HTTP_STATUS" = "200" ]; then
       state="$(printf '%s' "$HTTP_BODY" | jq -r '.node.controlPlane.state // empty' 2>/dev/null)" || state=""
       started="$(printf '%s' "$HTTP_BODY" | jq -r '.node.startedAt // empty' 2>/dev/null)" || started=""
       if [ "$state" = "online" ] && [ -n "$started" ] && [ "$started" != "$before" ]; then
+        spin_stop
         ok "node $node_id is online, agent started at $started"
         return 0
       fi
@@ -263,6 +275,7 @@ node_wait_for_report() {
     sleep 3
     waited=$((waited + 3))
   done
+  spin_stop
   if [ "${ENROLLED_BY_HAND:-0}" -eq 1 ]; then
     warn "Node $node_id has not reported to the coordinator at $COORDINATOR_URL after $limit seconds. Check the settings you typed with: journalctl -u showmesh-agent -n 50"
     return 0

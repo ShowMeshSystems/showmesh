@@ -5,9 +5,10 @@ import {
   putAudioSettingsConfig,
   type AudioSettingsConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section, Select } from '../kit'
+import { Button, ButtonRow, Field, Input, Notice, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
+import { audioSettingFieldLabel, audioSettingSubstitution, audioSettingSubstitutionSentence } from '../domain/audioSettingsSubstitution'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 
@@ -21,6 +22,10 @@ const LTC_FRAME_RATES = ['30', '29.97', '25', '24'] as const
 export function SettingsAudioDefaults() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const substitutions = model.nodes.flatMap((node) => {
+    const substitution = audioSettingSubstitution(node)
+    return substitution === null ? [] : [{ node, substitution }]
+  })
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
@@ -196,14 +201,14 @@ export function SettingsAudioDefaults() {
         <>
           <Section id="st-fades" title="Fades and gain">
             <div className="sm-grid sm-grid--auto">
-              <Field label="Default fade curve">
+              <Field label={audioSettingFieldLabel('fadeCurve')}>
                 {(props) => (
                   <p {...props} className="sm-input sm-data sm-muted">
                     linear
                   </p>
                 )}
               </Field>
-              <Field label="Default fade duration (ms)">
+              <Field label={audioSettingFieldLabel('fadeDuration')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -217,7 +222,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Max background gain (dB)">
+              <Field label={audioSettingFieldLabel('maxBackgroundGain')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -230,7 +235,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck target gain (dB)">
+              <Field label={audioSettingFieldLabel('duckTargetGain')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -243,7 +248,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck fade duration (ms)">
+              <Field label={audioSettingFieldLabel('duckFadeDuration')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -257,7 +262,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck restore fade duration (ms)">
+              <Field label={audioSettingFieldLabel('duckRestoreFadeDuration')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -335,7 +340,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="MultiSync start lead (ms)">
+              <Field label={audioSettingFieldLabel('multisyncStartLead')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -350,7 +355,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="LTC frame rate">
+              <Field label={audioSettingFieldLabel('ltcFrameRate')}>
                 {(props) => (
                   <Select
                     {...props}
@@ -368,7 +373,7 @@ export function SettingsAudioDefaults() {
                   </Select>
                 )}
               </Field>
-              <Field label="LTC default start offset">
+              <Field label={audioSettingFieldLabel('ltcDefaultStartOffset')}>
                 {(props) => (
                   <Input
                     {...props}
@@ -413,6 +418,15 @@ export function SettingsAudioDefaults() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      {substitutions.map(({ node, substitution }) => (
+        <Notice
+          key={node.nodeId}
+          tone="warn"
+          live="status"
+          headline={audioSettingSubstitutionSentence(node.label ?? node.nodeId, substitution)}
+          explanation={substitution.reason === null ? undefined : `The node reported: ${substitution.reason}`}
+        />
+      ))}
     </>
   )
 }

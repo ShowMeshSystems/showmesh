@@ -34,6 +34,7 @@ import { SettingsRecovery } from '../screens/SettingsRecovery'
 import { SettingsAppearance } from '../screens/SettingsAppearance'
 import { SettingsAudioDefaults } from '../screens/SettingsAudioDefaults'
 import { SettingsNodeRouting } from '../screens/SettingsNodeRouting'
+import { SettingsNodeEnrollment } from '../screens/SettingsNodeEnrollment'
 import { SettingsMode } from '../screens/SettingsMode'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -128,6 +129,7 @@ export default function App() {
               <Route path="appearance" element={<SettingsAppearance />} />
               <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
               <Route path="node-routing" element={<SettingsNodeRouting />} />
+              <Route path="node-enrollment" element={<SettingsNodeEnrollment />} />
               <Route path="mode" element={<SettingsMode />} />
               <Route path="resolume" element={<ResolumeSettingsIndex />} />
               <Route path="resolume/:instanceId" element={<ResolumeConfig />} />

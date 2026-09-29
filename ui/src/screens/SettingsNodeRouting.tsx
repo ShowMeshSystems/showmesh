@@ -4,6 +4,7 @@ import {
   deleteAudioNode,
   getAudioNode,
   getAudioNodeConfigRevisions,
+  getAudioRoutingChoices,
   getNodeClock,
   getNodeClockConfigRevisions,
   listConfigObjects,
@@ -11,16 +12,27 @@ import {
   putNodeClock,
   type AudioNodeConfigResponse,
   type AudioNodeSummary,
+  type AudioRoutingChoicesResponse,
   type ConfigObjectSummary,
   type NodeClockConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, DeletePanel, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, DeletePanel, Field, Input, RadioCardList, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, type Absence } from '../kit'
 import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
-import { advertisedRoutes, audioNodeVerdict, hasAudioCapability, nodeClockVerdict, type NodeClockProvider } from './settingsModel'
+import {
+  advertisedRoutes,
+  audioNodeVerdict,
+  channelCountLabel,
+  channelListLabel,
+  defaultRoutingEntryMode,
+  hasAudioCapability,
+  nodeClockVerdict,
+  type NodeClockProvider,
+  type RoutingEntryMode,
+} from './settingsModel'
 
 type AudioNodeRole = NonNullable<ConfigAudioNode['role']>
 const DEFAULT_ROLE: AudioNodeRole = 'program+ltc'
@@ -56,6 +68,31 @@ const DEFAULT_HOLDOVER_LIMIT_SECONDS = 60
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeClockObjectsState = { kind: 'loading' } | { kind: 'loaded'; objects: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+type ChoicesState = { kind: 'loading' } | { kind: 'loaded'; choices: AudioRoutingChoicesResponse } | { kind: 'failed'; reason: string; forbidden: boolean }
+
+const ENTRY_MODE_OPTIONS: readonly { value: RoutingEntryMode; label: string }[] = [
+  { value: 'choices', label: 'From the node' },
+  { value: 'manual', label: 'Enter by hand' },
+]
+
+const DISCOVERY_ABSENCE: Record<AudioRoutingChoicesResponse['discovery'], Absence> = {
+  available: 'unavailable',
+  stale: 'stale',
+  failed: 'failed',
+  partial: 'unavailable',
+  not_reported: 'unobserved',
+  absent: 'unavailable',
+}
+
+const DISCOVERY_LABEL: Record<AudioRoutingChoicesResponse['discovery'], string> = {
+  available: 'No outputs',
+  stale: 'Offline',
+  failed: 'Unreadable',
+  partial: 'Partial',
+  not_reported: 'Not listed',
+  absent: 'No outputs',
+}
+
 type NodeState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AudioNodeConfigResponse }
@@ -265,6 +302,34 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
   const [stale, setStale] = useState<Extract<SaveOutcome<AudioNodeConfigResponse>, { kind: 'stale' }> | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [choicesAttempt, setChoicesAttempt] = useState(0)
+  const [choicesState, setChoicesState] = useState<ChoicesState>({ kind: 'loading' })
+  const [modeOverride, setModeOverride] = useState<RoutingEntryMode | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setChoicesState({ kind: 'loading' })
+    getAudioRoutingChoices(nodeId)
+      .then((choices) => {
+        if (!cancelled) setChoicesState({ kind: 'loaded', choices })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setChoicesState({ kind: 'failed', reason: describeApiError(err), forbidden: err instanceof ApiError && err.status === 403 })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nodeId, attempt, choicesAttempt])
+
+  const choices = choicesState.kind === 'loaded' ? choicesState.choices : null
+  const choicesUsable = choices !== null && choices.discovery === 'available' && choices.routes.length > 0
+  const manualRefusal = choices !== null && !choices.manualEntry.allowed ? (choices.manualEntry.reason ?? 'This node does not accept channels entered by hand.') : null
+  const entryMode: RoutingEntryMode = !choicesUsable
+    ? 'manual'
+    : manualRefusal !== null
+      ? 'choices'
+      : (modeOverride ?? defaultRoutingEntryMode(choices))
+  const routeChoice = entryMode === 'choices' ? (choices?.routes.find((r) => r.route === programRoute) ?? null) : null
 
   const removeNode = () => {
     setDeleting(true)
@@ -298,6 +363,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         setOutputLatencyReference(ol?.reference ?? '')
         setOutputLatencyConfidence(ol?.confidence ?? '')
         setOutputLatencyConfiguration(ol?.configuration ?? '')
+        setModeOverride(null)
         setDirty(false)
       })
       .catch((err: unknown) => {
@@ -327,13 +393,53 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
       outputLatencyReference.trim() !== '' &&
       outputLatencyConfidence.trim() !== '' &&
       outputLatencyConfiguration.trim() !== '')
+  const chosenGroup = routeChoice?.programGroups.find((g) => g.channels.join(',') === programChannels.join(',')) ?? null
+  const noLtcChannelReason =
+    chosenGroup === null || chosenGroup.ltcChannels.length > 0
+      ? null
+      : choices?.ltc.available === false && choices.ltc.reason !== undefined
+        ? choices.ltc.reason
+        : routeChoice?.programGroups.some((g) => g.ltcChannels.length > 0)
+          ? 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
+          : 'This output has no spare channel for timecode. Turn LTC off, or choose another output.'
+  const choiceReason =
+    entryMode !== 'choices'
+      ? (manualRefusal ?? undefined)
+      : routeChoice === null
+        ? 'Choose an output this node reports.'
+        : chosenGroup === null
+          ? 'Choose the program channels.'
+          : ltcOn && noLtcChannelReason !== null
+            ? noLtcChannelReason
+            : ltcOn && !chosenGroup.ltcChannels.includes(Number(ltcChannelText))
+              ? 'Choose a timecode channel from the ones offered.'
+              : undefined
   const canSave =
+    choiceReason === undefined &&
     verdict.ok &&
     channelsValid &&
     ltcChannelValid &&
     zoneValid &&
     outputLatencyValueUsValid &&
     outputLatencyProvenanceValid
+
+  const setEntryMode = (mode: RoutingEntryMode) => {
+    setModeOverride(mode)
+    if (mode === 'choices' && choices !== null && !choices.routes.some((r) => r.route === programRoute)) {
+      setProgramRoute(choices.routes[0]?.route ?? '')
+      setProgramChannelsText('')
+      setLtcChannelText('')
+    }
+    setDirty(true)
+  }
+
+  const chooseGroup = (value: string) => {
+    const group = routeChoice?.programGroups.find((g) => g.channels.join(',') === value)
+    if (group === undefined) return
+    setProgramChannelsText(group.channels.join(', '))
+    if (!group.ltcChannels.includes(Number(ltcChannelText))) setLtcChannelText('')
+    setDirty(true)
+  }
 
   const discard = () => {
     if (state.kind !== 'loaded') return
@@ -352,6 +458,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
     setOutputLatencyReference(ol?.reference ?? '')
     setOutputLatencyConfidence(ol?.confidence ?? '')
     setOutputLatencyConfiguration(ol?.configuration ?? '')
+    setModeOverride(null)
     setDirty(false)
     setSaveError(null)
   }
@@ -459,53 +566,113 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
 
       <Section id="st-program" title="Program output">
         <div className="sm-grid sm-form-column">
-          {programRoutes !== null && programRoutes.length > 0 ? (
-            <Field label="Route">
-              {(props) => (
-                <Select
-                  {...props}
-                  value={programRoute}
-                  onChange={(e) => {
-                    setProgramRoute(e.target.value)
-                    setDirty(true)
-                  }}
-                >
-                  {programRoutes.map((route) => (
-                    <option key={route} value={route}>
-                      {route}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-          ) : (
-            <div className="sm-panel">
-              <Field label="Route">
+          <RoutingChoicesStatus
+            state={choicesState}
+            usable={choicesUsable}
+            entryMode={entryMode}
+            suggestManual={saveGate.allowed && manualRefusal === null}
+            onRefresh={() => setChoicesAttempt((n) => n + 1)}
+          />
+          {manualRefusal !== null && !choicesUsable && <p className="sm-small sm-muted">{manualRefusal}</p>}
+          {choicesUsable && manualRefusal === null && (
+            <Segmented label="Channels" value={entryMode} options={ENTRY_MODE_OPTIONS} onChange={setEntryMode} />
+          )}
+          {entryMode === 'choices' && choices !== null ? (
+            <>
+              <Field label="Output">
                 {(props) => (
-                  <Input
+                  <Select
                     {...props}
                     value={programRoute}
                     onChange={(e) => {
                       setProgramRoute(e.target.value)
+                      setProgramChannelsText('')
+                      setLtcChannelText('')
+                      setDirty(true)
+                    }}
+                  >
+                    {routeChoice === null && <option value="">Choose an output</option>}
+                    {choices.routes.map((route) => (
+                      <option key={route.route} value={route.route}>
+                        {route.route}, {channelCountLabel(route)}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              {routeChoice !== null && (
+                <RadioCardList
+                  label="Program channels"
+                  options={routeChoice.programGroups.map((g) => ({
+                    value: g.channels.join(','),
+                    title: channelListLabel(g.channels),
+                    desc:
+                      g.ltcChannels.length > 0
+                        ? `Timecode can use ${g.ltcChannels.join(', ')}.`
+                        : (routeChoice.ltcReason ?? 'No channel is left for timecode.'),
+                  }))}
+                  value={chosenGroup?.channels.join(',') ?? ''}
+                  onChange={chooseGroup}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              {programRoutes !== null && programRoutes.length > 0 ? (
+                <Field label="Route">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={programRoute}
+                      disabled={manualRefusal !== null}
+                      onChange={(e) => {
+                        setProgramRoute(e.target.value)
+                        setDirty(true)
+                      }}
+                    >
+                      {programRoute !== '' && !programRoutes.includes(programRoute) && (
+                        <option value={programRoute}>{programRoute}, no longer reported by this node</option>
+                      )}
+                      {programRoutes.map((route) => (
+                        <option key={route} value={route}>
+                          {route}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              ) : (
+                <div className="sm-panel">
+                  <Field label="Route">
+                    {(props) => (
+                      <Input
+                        {...props}
+                        value={programRoute}
+                        disabled={manualRefusal !== null}
+                        onChange={(e) => {
+                          setProgramRoute(e.target.value)
+                          setDirty(true)
+                        }}
+                      />
+                    )}
+                  </Field>
+                </div>
+              )}
+              <Field label="Program channels">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={programChannelsText}
+                    disabled={manualRefusal !== null}
+                    onChange={(e) => {
+                      setProgramChannelsText(e.target.value)
                       setDirty(true)
                     }}
                   />
                 )}
               </Field>
-            </div>
+            </>
           )}
-          <Field label="Program channels">
-            {(props) => (
-              <Input
-                {...props}
-                value={programChannelsText}
-                onChange={(e) => {
-                  setProgramChannelsText(e.target.value)
-                  setDirty(true)
-                }}
-              />
-            )}
-          </Field>
           <Segmented
             label="Backend"
             value={sinkBackend}
@@ -542,36 +709,74 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
             <button type="button" className="sm-segmented__item" aria-pressed={!ltcOn} onClick={() => { setLtcOn(false); setDirty(true) }}>
               Off
             </button>
-            <button type="button" className="sm-segmented__item" aria-pressed={ltcOn} onClick={() => { setLtcOn(true); setDirty(true) }}>
+            <button
+              type="button"
+              className="sm-segmented__item"
+              aria-pressed={ltcOn}
+              disabled={entryMode === 'choices' && !ltcOn && choices?.ltc.available === false}
+              title={entryMode === 'choices' && choices?.ltc.available === false ? choices.ltc.reason : undefined}
+              onClick={() => { setLtcOn(true); setDirty(true) }}
+            >
               On
             </button>
           </span>
         </div>
+        {entryMode === 'choices' && !ltcOn && choices?.ltc.available === false && choices.ltc.reason !== undefined && (
+          <p className="sm-small sm-muted sm-stack-4">{choices.ltc.reason}</p>
+        )}
         {ltcOn && (
           <div className="sm-grid sm-form-column sm-stack-4">
             <div className="sm-field">
               <span className="sm-field__label">Route</span>
               <p className="sm-input sm-data sm-muted">{programRoute === '' ? 'Set a program route first' : programRoute}</p>
             </div>
-            <Field label="Channel">
-              {(props) => (
-                <Select
-                  {...props}
-                  value={ltcChannelText}
-                  onChange={(e) => {
-                    setLtcChannelText(e.target.value)
-                    setDirty(true)
-                  }}
-                >
-                  {ltcChannelText === '' && <option value="">Select a channel</option>}
-                  {ltcChannelOptions(programChannels, ltcChannelText).map((ch) => (
-                    <option key={ch} value={String(ch)}>
-                      {ch}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
+            {entryMode === 'choices' ? (
+              chosenGroup === null ? (
+                <p className="sm-small sm-muted">Choose the program channels first. Timecode uses a channel they leave free.</p>
+              ) : noLtcChannelReason !== null ? (
+                <p className="sm-small sm-muted">{noLtcChannelReason}</p>
+              ) : (
+                <Field label="Channel">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={chosenGroup.ltcChannels.includes(Number(ltcChannelText)) ? ltcChannelText : ''}
+                      onChange={(e) => {
+                        setLtcChannelText(e.target.value)
+                        setDirty(true)
+                      }}
+                    >
+                      {!chosenGroup.ltcChannels.includes(Number(ltcChannelText)) && <option value="">Select a channel</option>}
+                      {chosenGroup.ltcChannels.map((ch) => (
+                        <option key={ch} value={String(ch)}>
+                          {ch}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              )
+            ) : (
+              <Field label="Channel">
+                {(props) => (
+                  <Select
+                    {...props}
+                    value={ltcChannelText}
+                    onChange={(e) => {
+                      setLtcChannelText(e.target.value)
+                      setDirty(true)
+                    }}
+                  >
+                    {ltcChannelText === '' && <option value="">Select a channel</option>}
+                    {ltcChannelOptions(programChannels, ltcChannelText).map((ch) => (
+                      <option key={ch} value={String(ch)}>
+                        {ch}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            )}
           </div>
         )}
       </Section>
@@ -674,7 +879,9 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
             !saveGate.allowed
               ? saveGate.reason
               : !canSave
-                ? (!verdict.ok
+                ? (choiceReason !== undefined
+                    ? choiceReason
+                    : !verdict.ok
                     ? verdict.reason
                     : !zoneValid
                       ? 'A zone name is required when the role is zone.'
@@ -1115,5 +1322,54 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
 
       <RevisionHistory fetch={() => getNodeClockConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" id="st-node-clock-rev" />
     </Section>
+  )
+}
+
+// Why choices are or are not offered, and the saved placement's standing against them.
+function RoutingChoicesStatus({
+  state,
+  usable,
+  entryMode,
+  suggestManual,
+  onRefresh,
+}: {
+  state: ChoicesState
+  usable: boolean
+  entryMode: RoutingEntryMode
+  suggestManual: boolean
+  onRefresh: () => void
+}) {
+  if (state.kind === 'loading') {
+    return <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator which outputs this node reports." />
+  }
+  const refresh = (
+    <Button variant="quiet" onClick={onRefresh}>
+      Check again
+    </Button>
+  )
+  if (state.kind === 'failed') {
+    return (
+      <div className="sm-grid sm-stack-4">
+        <RuledStrip absence="failed" label="Read failed" fact={suggestManual && !state.forbidden ? `${state.reason} Enter channels by hand below.` : state.reason} />
+        <ButtonRow>{refresh}</ButtonRow>
+      </div>
+    )
+  }
+  const choices = state.choices
+  const current = choices.current
+  const keptNote = entryMode === 'manual' && current !== undefined && !current.offered && current.reason !== undefined ? current.reason : null
+  if (usable) {
+    return keptNote === null ? null : <p className="sm-small sm-muted">{keptNote}</p>
+  }
+  const fact =
+    choices.discovery === 'available'
+      ? `This node reports no outputs with channels to choose from.${suggestManual ? ' Enter channels by hand below.' : ''}`
+      : (choices.reason ?? `This node reports no outputs.${suggestManual ? ' Enter channels by hand below.' : ''}`)
+  return (
+    <div className="sm-grid sm-stack-4">
+      <RuledStrip absence={DISCOVERY_ABSENCE[choices.discovery]} label={DISCOVERY_LABEL[choices.discovery]} fact={fact} />
+      {keptNote !== null && <p className="sm-small sm-muted">{keptNote}</p>}
+      <ButtonRow>{refresh}</ButtonRow>
+    </div>
   )
 }

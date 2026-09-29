@@ -826,7 +826,15 @@ const (
 	MaxMacroRunPageSize     = 500
 )
 
-func listMacroRuns(ctx context.Context, q querier, macroObjectID string, limit int) ([]MacroRunRecord, error) {
+// MacroRunListFilter narrows [Store.ListMacroRunsMatching]; an empty field
+// matches every value.
+type MacroRunListFilter struct {
+	MacroObjectID string
+	State         string
+	Show          string
+}
+
+func listMacroRuns(ctx context.Context, q querier, f MacroRunListFilter, limit int) ([]MacroRunRecord, error) {
 	switch {
 	case limit <= 0:
 		limit = DefaultMacroRunPageSize
@@ -835,14 +843,23 @@ func listMacroRuns(ctx context.Context, q querier, macroObjectID string, limit i
 	}
 
 	var (
-		rows *sql.Rows
-		err  error
+		where []string
+		args  []any
 	)
-	if macroObjectID == "" {
-		rows, err = q.QueryContext(ctx, `SELECT`+macroRunColumns+`FROM macro_runs ORDER BY created_at DESC LIMIT ?`, limit)
-	} else {
-		rows, err = q.QueryContext(ctx, `SELECT`+macroRunColumns+`FROM macro_runs WHERE macro_object_id = ? ORDER BY created_at DESC LIMIT ?`, macroObjectID, limit)
+	for _, c := range []struct{ column, value string }{
+		{"macro_object_id", f.MacroObjectID}, {"state", f.State}, {"show", f.Show},
+	} {
+		if c.value != "" {
+			where = append(where, c.column+" = ?")
+			args = append(args, c.value)
+		}
 	}
+	query := `SELECT` + macroRunColumns + `FROM macro_runs`
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	rows, err := q.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list macro runs: %w", err)
 	}
@@ -868,12 +885,19 @@ func listMacroRuns(ctx context.Context, q querier, macroObjectID string, limit i
 // macroObjectID is non-empty, only that macro's runs are returned.
 func (s *Store) ListMacroRuns(ctx context.Context, macroObjectID string, limit int) ([]MacroRunRecord, error) {
 	guardNotInTx(ctx, "Store.ListMacroRuns")
-	return listMacroRuns(ctx, s.db, macroObjectID, limit)
+	return listMacroRuns(ctx, s.db, MacroRunListFilter{MacroObjectID: macroObjectID}, limit)
+}
+
+// ListMacroRunsMatching is [Store.ListMacroRuns] with the filter applied in
+// SQL, so limit counts matching runs only.
+func (s *Store) ListMacroRunsMatching(ctx context.Context, f MacroRunListFilter, limit int) ([]MacroRunRecord, error) {
+	guardNotInTx(ctx, "Store.ListMacroRunsMatching")
+	return listMacroRuns(ctx, s.db, f, limit)
 }
 
 // ListMacroRuns is [Store.ListMacroRuns]'s [Tx] form.
 func (t *Tx) ListMacroRuns(ctx context.Context, macroObjectID string, limit int) ([]MacroRunRecord, error) {
-	return listMacroRuns(ctx, t.tx, macroObjectID, limit)
+	return listMacroRuns(ctx, t.tx, MacroRunListFilter{MacroObjectID: macroObjectID}, limit)
 }
 
 func listRunningMacroRuns(ctx context.Context, q querier) ([]MacroRunRecord, error) {

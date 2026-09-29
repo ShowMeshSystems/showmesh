@@ -232,20 +232,9 @@ func (e *Executor) GetRun(ctx context.Context, runID string) (api.MacroRunResult
 	return api.MacroRunResult{Run: run, Steps: steps}, nil
 }
 
-// ListRuns implements [api.MacroRunner.ListRuns].
-//
-// [store.Store.ListMacroRuns] takes only a macro id and a limit, with no
-// state or show filter — [store.Store.ListRunningMacroRuns] covers
-// "running" alone. This method filters "finished" (and re-filters
-// "running") and Show in memory over whichever of the two store calls
-// already narrows by macro id, rather than adding a third store method for
-// this wave: see this builder's own report for whether a store-level
-// filter is warranted once a real caller (Wave 3's clients) exercises this
-// at scale. limit is applied AFTER the in-memory filtering, and the filter
-// input itself is capped at store.MaxMacroRunPageSize rows — so a narrow
-// state or show filter over a long history can still return fewer than
-// limit, including zero, when the matching runs are older than the
-// fetched page.
+// ListRuns implements [api.MacroRunner.ListRuns]. The "running" state reads
+// the running-runs query and filters it in memory; every other request
+// filters in SQL, so limit counts matching runs only.
 func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.MacroRunRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -260,35 +249,9 @@ func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.
 		return capMacroRuns(runs, limit), nil
 	}
 
-	// "finished", or no filter at all: read a superset from ListMacroRuns
-	// (already newest-first, already narrowed by macro id) and filter
-	// in-memory. store.MaxMacroRunPageSize bounds a single read the same
-	// way it already bounds every other ListMacroRuns caller.
-	fetchLimit := limit
-	if (f.State != "" || f.Show != "") && fetchLimit < store.MaxMacroRunPageSize {
-		// Over-fetch so a state or show filter does not silently return
-		// fewer than limit rows just because some fetched rows did not
-		// match — bounded at MaxMacroRunPageSize either way.
-		fetchLimit = store.MaxMacroRunPageSize
-	}
-	runs, err := e.store.ListMacroRuns(ctx, f.MacroObjectID, fetchLimit)
-	if err != nil {
-		return nil, err
-	}
-	if f.State == "" && f.Show == "" {
-		return capMacroRuns(runs, limit), nil
-	}
-	out := make([]store.MacroRunRecord, 0, len(runs))
-	for _, r := range runs {
-		if f.State != "" && r.State != f.State {
-			continue
-		}
-		if f.Show != "" && r.Show != f.Show {
-			continue
-		}
-		out = append(out, r)
-	}
-	return capMacroRuns(out, limit), nil
+	return e.store.ListMacroRunsMatching(ctx, store.MacroRunListFilter{
+		MacroObjectID: f.MacroObjectID, State: f.State, Show: f.Show,
+	}, limit)
 }
 
 func (e *Executor) listRunningRuns(ctx context.Context, macroObjectID, show string) ([]store.MacroRunRecord, error) {

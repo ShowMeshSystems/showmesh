@@ -122,6 +122,7 @@ type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsS
 type SchemaAudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
 type SchemaConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
 type SchemaAudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
+type SchemaAudioRoutingChoicesResponse = components['schemas']['AudioRoutingChoicesResponse']
 type SchemaConfigAudioNode = components['schemas']['ConfigAudioNode']
 // Long-run program-to-LTC drift recordings: coordinator-recorded observation
 // history, not a config kind. Started/stopped behind audio:command, read
@@ -165,6 +166,7 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 // and its parsed entries.
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
+type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
 // ADR-048, Track J's J1: the fallback-program metadata list and one
 // host's full signed-program read, an operator's pre-show readiness
@@ -261,6 +263,11 @@ type SchemaSetPrincipalPasswordRequest = components['schemas']['SetPrincipalPass
 type SchemaTokensResponse = components['schemas']['TokensResponse']
 type SchemaIssueTokenRequest = components['schemas']['IssueTokenRequest']
 type SchemaIssueTokenResponse = components['schemas']['IssueTokenResponse']
+// ADR-055: node enrollment codes.
+type SchemaCreateNodeEnrollmentRequest = components['schemas']['CreateNodeEnrollmentRequest']
+type SchemaCreateNodeEnrollmentResponse = components['schemas']['CreateNodeEnrollmentResponse']
+type SchemaNodeEnrollmentsResponse = components['schemas']['NodeEnrollmentsResponse']
+type SchemaNodeEnrollmentResponse = components['schemas']['NodeEnrollmentResponse']
 // Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
 // ADR-028) — show, show.surface, show.active, asset, and audit shapes.
 type SchemaConfigShowWrite = components['schemas']['ConfigShowWrite']
@@ -852,6 +859,24 @@ export class ApiStore {
   }
 
   /**
+   * POST /fpp/{instanceId}/playlist-definitions/republish. A resolved call
+   * means the plugin agreed to resend, never that a definition arrived:
+   * read [listFPPPlaylistDefinitions] for that.
+   */
+  async republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaFPPDefinitionRepublishResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/playlist-definitions/republish`,
+        requestId === undefined ? {} : { requestId },
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries`
    * (TRACK-H-H2-SPEC.md §4 step 2): the definition's parsed entries,
    * `leadIn` then `mainPlaylist` then `leadOut`, each section positioned
@@ -1201,6 +1226,19 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaAudioNodeConfigResponse>(
         `/config/audio.node/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/nodes/{nodeId}/audio/routing-choices`: the choices the node's own reported outputs offer. */
+  async getAudioRoutingChoices(nodeId: string): Promise<SchemaAudioRoutingChoicesResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAudioRoutingChoicesResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/routing-choices`,
         controller.signal,
       )
     } finally {
@@ -2085,6 +2123,40 @@ export class ApiStore {
     try {
       await this.client.deleteJson(
         `/principals/${encodeURIComponent(id)}/tokens/${encodeURIComponent(tokenId)}`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/node-enrollments` (ADR-055 decision 4). The response's `code` is this enrollment's only appearance on the wire, ever again. */
+  async createNodeEnrollment(payload: SchemaCreateNodeEnrollmentRequest): Promise<SchemaCreateNodeEnrollmentResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaCreateNodeEnrollmentResponse>('/node-enrollments', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/node-enrollments` (ADR-055). Never carries a code. */
+  async listNodeEnrollments(): Promise<SchemaNodeEnrollmentsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeEnrollmentsResponse>('/node-enrollments', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/node-enrollments/{id}` (ADR-055). Throws (409) when the code is not pending. */
+  async cancelNodeEnrollment(id: string): Promise<SchemaNodeEnrollmentResponse | undefined> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.deleteJson<SchemaNodeEnrollmentResponse>(
+        `/node-enrollments/${encodeURIComponent(id)}`,
         undefined,
         controller.signal,
       )

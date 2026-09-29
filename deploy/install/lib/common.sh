@@ -7,15 +7,152 @@ INSTALLER_STATE="$ETC_DIR/installer.env"
 COORDINATOR_DIR=/opt/showmesh/coordinator
 NODE_DIR=/opt/showmesh/node
 
-step() { printf '\n==> %s\n' "$*"; }
-info() { printf '    %s\n' "$*"; }
-ok() { printf '    ok: %s\n' "$*"; }
-warn() { printf '    warning: %s\n' "$*" >&2; }
+INSTALL_LOG="${SHOWMESH_INSTALL_LOG:-/var/log/showmesh-install.log}"
+LOG_READY=0
+SPIN_PID=""
+FAIL_DETAIL=""
+
+# ui_init decides whether this run draws the layout or plain text. Plain text is
+# what a pipe, a file, NO_COLOR and TERM=dumb all get, so captured output stays readable.
+ui_init() {
+  UI_LAYOUT=0
+  UI_COLS=80
+  C_STEP=""; C_OK=""; C_WARN=""; C_OFF=""
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    UI_LAYOUT=1
+    C_STEP=$'\033[36m\033[1m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_OFF=$'\033[0m'
+    UI_COLS="$( (tput cols 2>/dev/null) || printf 80 )"
+    [ -n "$UI_COLS" ] || UI_COLS=80
+  fi
+}
+ui_init
+
+BANNER_COLORS=($'\033[31m' $'\033[33m' $'\033[32m' $'\033[36m' $'\033[34m' $'\033[35m')
+
+# ui_banner draws the ShowMesh name once, on a terminal wide enough to hold it.
+ui_banner() {
+  [ "$UI_LAYOUT" -eq 1 ] || return 0
+  [ "$UI_COLS" -ge 78 ] 2>/dev/null || return 0
+  local lines=(
+"   ███████╗██╗  ██╗ ██████╗ ██╗    ██╗|███╗   ███╗███████╗███████╗██╗  ██╗"
+"   ██╔════╝██║  ██║██╔═══██╗██║    ██║|████╗ ████║██╔════╝██╔════╝██║  ██║"
+"   ███████╗███████║██║   ██║██║ █╗ ██║|██╔████╔██║█████╗  ███████╗███████║"
+"   ╚════██║██╔══██║██║   ██║██║███╗██║|██║╚██╔╝██║██╔══╝  ╚════██║██╔══██║"
+"   ███████║██║  ██║╚██████╔╝╚███╔███╔╝|██║ ╚═╝ ██║███████╗███████║██║  ██║"
+"   ╚══════╝╚═╝  ╚═╝ ╚═════╝  ╚══╝╚══╝ |╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝")
+  local idx=0 l
+  printf '\n'
+  for l in "${lines[@]}"; do
+    printf '%s\033[1m%s%s%s\033[0m\n' \
+      "${BANNER_COLORS[$((idx % 6))]}" "${l%%|*}" "${BANNER_COLORS[$(((idx + 3) % 6))]}" "${l#*|}"
+    idx=$((idx + 1))
+  done
+}
+
+# redact_args prints this run's arguments with the values of secret options hidden.
+redact_args() {
+  local parts=() hide=0 a
+  for a in "$@"; do
+    if [ "$hide" -eq 1 ]; then parts+=("(hidden)"); hide=0; continue; fi
+    parts+=("$a")
+    case "$a" in --code|--broker-password) hide=1 ;; esac
+  done
+  printf '%s' "${parts[*]}"
+}
+
+# log_open starts this run's section of the install log. Enrollment codes, broker
+# passwords and tokens are never written to it.
+log_open() {
+  if [ -L "$INSTALL_LOG" ]; then
+    warn "$INSTALL_LOG is a link to another file, so this run keeps no install log. Remove the link, then run the installer again to keep one."
+    return 0
+  fi
+  mkdir -p "$(dirname "$INSTALL_LOG")" 2>/dev/null || true
+  ( umask 077 && : >> "$INSTALL_LOG" ) 2>/dev/null || return 0
+  chmod 0600 "$INSTALL_LOG" 2>/dev/null || true
+  chown root:root "$INSTALL_LOG" 2>/dev/null || true
+  LOG_READY=1
+  {
+    printf '\n===== showmesh-install %s started %s\n' "$SHOWMESH_VERSION" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '      arguments: %s\n' "$(redact_args "$@")"
+  } >> "$INSTALL_LOG"
+}
+
+# log_note appends one line to the install log.
+log_note() {
+  [ "$LOG_READY" -eq 1 ] || return 0
+  printf '%s\n' "$*" >> "$INSTALL_LOG"
+}
+
+# log_file appends a command's captured output to the install log under a label.
+log_file() {
+  [ "$LOG_READY" -eq 1 ] || return 0
+  { printf -- '--- %s\n' "$1"; cat "$2"; printf -- '--- end %s\n' "$1"; } >> "$INSTALL_LOG"
+}
+
+# spin_start draws a spinner beside LABEL until spin_stop. It draws nothing in plain text.
+# The label is cut to one line, because spin_stop clears one line.
+spin_start() {
+  [ "$UI_LAYOUT" -eq 1 ] || return 0
+  local label="${1:0:$((UI_COLS - 6))}"
+  printf '\033[?25l'
+  (
+    frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    i=0
+    while :; do
+      printf '\r  %s%s%s %s' "$C_STEP" "${frames:$((i % 10)):1}" "$C_OFF" "$label"
+      i=$((i + 1))
+      sleep 0.12
+    done
+  ) &
+  SPIN_PID=$!
+}
+
+# spin_stop clears the spinner line, whether the step passed, failed or was interrupted.
+spin_stop() {
+  [ -n "$SPIN_PID" ] || return 0
+  kill "$SPIN_PID" 2>/dev/null || true
+  wait "$SPIN_PID" 2>/dev/null || true
+  SPIN_PID=""
+  printf '\r\033[K\033[?25h'
+}
+
+step() {
+  if [ "$UI_LAYOUT" -eq 1 ]; then printf '\n%s▸ %s%s\n' "$C_STEP" "$*" "$C_OFF"
+  else printf '\n==> %s\n' "$*"; fi
+  log_note ""
+  log_note "==> $*"
+}
+
+info() {
+  printf '    %s\n' "$*"
+  log_note "    $*"
+}
+
+ok() {
+  if [ "$UI_LAYOUT" -eq 1 ]; then printf '  %s✔%s %s\n' "$C_OK" "$C_OFF" "$*"
+  else printf '    ok: %s\n' "$*"; fi
+  log_note "ok: $*"
+}
+
+warn() {
+  if [ "$UI_LAYOUT" -eq 1 ]; then printf '  %s⚠%s %s\n' "$C_WARN" "$C_OFF" "$*" >&2
+  else printf '    warning: %s\n' "$*" >&2; fi
+  log_note "warning: $*"
+}
 
 # RUN_TMP is this run's private scratch directory, removed when the installer exits or is interrupted.
 RUN_TMP="$(mktemp -d)"
 ENV_SET_PENDING=""
-trap 'rm -rf "$RUN_TMP"; [ -z "$ENV_SET_PENDING" ] || rm -f "$ENV_SET_PENDING" "$ENV_SET_PENDING.next"' EXIT
+
+installer_cleanup() {
+  spin_stop
+  rm -rf "$RUN_TMP"
+  [ -z "$ENV_SET_PENDING" ] || rm -f "$ENV_SET_PENDING" "$ENV_SET_PENDING.next"
+  [ "${PARTY_READY:-0}" -eq 1 ] && party_cleanup
+  return 0
+}
+trap installer_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -24,13 +161,50 @@ run_tmp() {
   mktemp "$RUN_TMP/XXXXXX"
 }
 
-# fail prints the fact and the command that fixes it, then exits.
+# run_step LABEL FILE CMD... runs CMD in this shell and the foreground, stdin from /dev/null,
+# output to FILE and the install log, in both layouts. Only the spinner runs in the background,
+# so Ctrl-C stops CMD itself and a function CMD can set variables.
+run_step() {
+  local label="$1" out="$2" rc=0
+  shift 2
+  spin_start "$label"
+  "$@" >"$out" 2>&1 </dev/null || rc=$?
+  spin_stop
+  log_file "$label" "$out"
+  return "$rc"
+}
+
+# step_warnings FILE shows each WARNING: line a step's own script printed, which would
+# otherwise reach only the install log when the step succeeds.
+step_warnings() {
+  local line
+  while IFS= read -r line; do
+    warn "${line#*WARNING: }"
+  done < <(grep -a 'WARNING: ' "$1" || true)
+}
+
+# fail prints the fact, anything FAIL_DETAIL holds, and the command that fixes it, then exits.
 fail() {
+  spin_stop
   printf '\nShowMesh install stopped. %s\n' "$1" >&2
+  if [ -n "${FAIL_DETAIL:-}" ] && [ -s "$FAIL_DETAIL" ]; then
+    printf 'It printed:\n' >&2
+    tail -n 15 "$FAIL_DETAIL" | sed 's/^/  /' >&2
+  fi
   if [ -n "${2:-}" ]; then
     printf 'To fix it, run: %s\n' "$2" >&2
   fi
+  log_note "STOPPED: $1"
+  if [ "$LOG_READY" -eq 1 ]; then
+    printf 'Everything this run printed is kept in %s.\n' "$INSTALL_LOG" >&2
+  fi
   exit 1
+}
+
+# fail_with FILE FACT [FIX] stops and shows the last lines the failing command printed.
+fail_with() {
+  FAIL_DETAIL="$1"
+  fail "$2" "${3:-}"
 }
 
 # can_prompt is true when an operator can answer questions on this terminal.
@@ -116,15 +290,18 @@ with_default_umask() {
   (umask 022 && "$@")
 }
 
+apt_get_install() {
+  with_default_umask env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+}
+
 apt_install() {
   local log
   log="$(run_tmp)"
   info "Installing packages: $*"
-  if ! with_default_umask env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >"$log" 2>&1; then
-    if ! { with_default_umask apt-get update >>"$log" 2>&1 &&
-      with_default_umask env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" >>"$log" 2>&1; }; then
-      tail -n 15 "$log" >&2
-      fail "Debian could not install $*." "apt-get update && apt-get install -y $*"
+  if ! run_step "installing the packages" "$log" apt_get_install "$@"; then
+    if ! run_step "updating the package lists" "$log" with_default_umask apt-get update ||
+      ! run_step "installing the packages again" "$log" apt_get_install "$@"; then
+      fail_with "$log" "Debian could not install $*." "apt-get update && apt-get install -y $*"
     fi
   fi
 }
@@ -183,17 +360,25 @@ http_request() {
   local method="$1" url="$2" body_file="${3:-}" token="${4:-}" out hdr
   out="$(run_tmp)"
   hdr="$(run_tmp)"
+  local err
+  err="$(run_tmp)"
   local args=(-sS -m 15 -X "$method" -o "$out" -D "$hdr" -w '%{http_code}')
   [ -n "$body_file" ] && args+=(-H 'Content-Type: application/json' --data-binary "@$body_file")
   if [ -n "$token" ]; then
-    HTTP_STATUS="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl "${args[@]}" -K - "$url" 2>/dev/null)" || HTTP_STATUS="000"
+    HTTP_STATUS="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl "${args[@]}" -K - "$url" 2>"$err")" || HTTP_STATUS="000"
   else
-    HTTP_STATUS="$(curl "${args[@]}" "$url" 2>/dev/null)" || HTTP_STATUS="000"
+    HTTP_STATUS="$(curl "${args[@]}" "$url" 2>"$err")" || HTTP_STATUS="000"
   fi
+  HTTP_ERROR="$(tr -d '\r' < "$err" | sed 's/^curl: ([0-9]*) //' | tail -n 1)"
   HTTP_BODY="$(cat "$out")"
   HTTP_RETRY_AFTER="$(tr -d '\r' < "$hdr" | awk -F': *' 'tolower($1) == "retry-after" {print $2}' | tail -n 1)"
   HTTP_CONTENT_TYPE="$(tr -d '\r' < "$hdr" | awk -F': *' 'tolower($1) == "content-type" {print $2}' | tail -n 1)"
-  rm -f "$out" "$hdr"
+  # The answer itself can carry a broker password or a token, so only the request and its status are logged.
+  case "$HTTP_STATUS" in
+    2*|3*) ;;
+    *) log_note "http: $method $url answered $HTTP_STATUS${HTTP_ERROR:+ ($HTTP_ERROR)}" ;;
+  esac
+  rm -f "$out" "$hdr" "$err"
 }
 
 # problem_detail prints an RFC 7807 detail from HTTP_BODY, or a plain fallback.
@@ -208,8 +393,10 @@ problem_detail() {
 
 # release_fetch NAME DEST downloads one release file.
 release_fetch() {
-  if ! curl -fsSL --retry 3 -o "$2" "$RELEASE_BASE/$1"; then
-    fail "The file $1 could not be downloaded from $RELEASE_BASE." "curl -fsSLO $RELEASE_BASE/$1"
+  local log
+  log="$(run_tmp)"
+  if ! run_step "downloading $1" "$log" curl -fsSL --retry 3 -o "$2" "$RELEASE_BASE/$1"; then
+    fail_with "$log" "The file $1 could not be downloaded from $RELEASE_BASE." "curl -fsSLO $RELEASE_BASE/$1"
   fi
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { audioNodeVerdict, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle, nodeClockVerdict } from './settingsModel'
+import { audioNodeVerdict, channelCountLabel, channelListLabel, defaultRoutingEntryMode, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle, nodeClockVerdict } from './settingsModel'
 import type { Node, NightSessionState } from '../api'
 
 describe('audioNodeVerdict', () => {
@@ -168,5 +168,25 @@ describe('hostsMapToRows / hostRowsToMap', () => {
       { id: 'barn-player', hostName: 'FPP-Barn-New' },
     ]
     expect(hostRowsToMap(rows)).toEqual({ 'barn-player': 'FPP-Barn-New' })
+  })
+})
+
+describe('routing choices', () => {
+  const base = { serverTime: '', nodeId: 'n', manualEntry: { allowed: true }, ltc: { available: true } }
+  const route = { route: 'r', interface: 'r', source: 'pipewire' as const, channels: 4, channelBasis: 'inventory' as const, ltcCapable: true, programGroups: [] }
+
+  it('opens in choices only when the node reports outputs and any saved placement is among them', () => {
+    expect(defaultRoutingEntryMode({ ...base, discovery: 'available', routes: [route] })).toBe('choices')
+    expect(defaultRoutingEntryMode({ ...base, discovery: 'available', routes: [route], current: { programRoute: 'r', programChannels: [1, 2], offered: true } })).toBe('choices')
+    expect(defaultRoutingEntryMode({ ...base, discovery: 'available', routes: [route], current: { programRoute: 'r', programChannels: [2, 3], offered: false } })).toBe('manual')
+    expect(defaultRoutingEntryMode({ ...base, discovery: 'partial', routes: [] })).toBe('manual')
+    expect(defaultRoutingEntryMode({ ...base, discovery: 'available', routes: [] })).toBe('manual')
+  })
+
+  it('labels channels and counts without calling a floor a total', () => {
+    expect(channelListLabel([1])).toBe('Channel 1')
+    expect(channelListLabel([3, 4])).toBe('Channels 3 and 4')
+    expect(channelCountLabel(route)).toBe('4 channels')
+    expect(channelCountLabel({ ...route, channels: 3, channelBasis: 'atLeast' })).toBe('at least 3 channels')
   })
 })

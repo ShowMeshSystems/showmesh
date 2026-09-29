@@ -64,6 +64,14 @@ no_readable_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showme
   [ -s /tmp/secrets ] && [ -z "$hits" ] || { echo "world-readable: $hits"; false; }'
 check "no world-readable file under /etc/showmesh or /opt/showmesh/coordinator holds a secret" "in_box '$no_readable_secret'"
 check "the installer left nothing in /tmp named for ShowMesh" "in_box '! ls /tmp/showmesh-* >/dev/null 2>&1'"
+check "the install log is root-only and holds this run's header and captured output" "in_box '[ \$(stat -c %a /var/log/showmesh-install.log) = 600 ] &&
+  grep -q \"===== showmesh-install 0.0.0-bench1 started\" /var/log/showmesh-install.log &&
+  grep -q \"      role: coordinator\" /var/log/showmesh-install.log &&
+  grep -q \"^--- pulling and starting the containers\" /var/log/showmesh-install.log'"
+# shellcheck disable=SC2016
+log_has_no_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showmeshctl.env; do sed -n "s/^SHOWMESH_\(MQTT_PASSWORD\|CTL_TOKEN\)=//p" "$f"; done | grep . > /tmp/log-secrets
+  [ -s /tmp/log-secrets ] && ! grep -qF -f /tmp/log-secrets /var/log/showmesh-install.log'
+check "the install log holds no broker password and no token" "in_box '$log_has_no_secret'"
 pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')"
 
 VOL=/var/lib/docker/volumes/showmesh_showmesh-data/_data
@@ -124,6 +132,18 @@ run_install 0.0.0-bench2 --yes --broker external --broker-url ssl://192.0.2.9:88
 check "an upgrade that fails after the backup exits with an error" "[ $? -ne 0 ]"
 check "the backup was taken before the failure" "in_box 'grep -q \"backup saved in /var/backups/showmesh/\" /tmp/install-0.0.0-bench2.log'"
 check "the coordinator is running after the failed upgrade" "in_box 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null'"
+
+echo
+echo "--- forced failure: the built-in broker login check with a wrong password ---"
+# shellcheck disable=SC2016
+wrong_login='sed "s/^SHOWMESH_MQTT_PASSWORD=.*/SHOWMESH_MQTT_PASSWORD=bench-wrong-password/" /opt/showmesh/coordinator/.env > /root/wrong.env
+  SHOWMESH_VERSION=0.0.0-bench2 bash -c ". /repo/deploy/install/lib/common.sh; . /repo/deploy/install/lib/coordinator.sh
+    COORD_ENV=/root/wrong.env; BROKER_MODE=builtin; log_open --forced-broker-failure; coord_check_broker" > /tmp/forced.log 2>&1'
+in_box "$wrong_login"
+check "a refused built-in broker login stops the check" "[ $? -eq 1 ]"
+in_box 'cat /tmp/forced.log'
+check "the refusal prints mosquitto_pub's own reason and the log path" "in_box 'grep -q \"The built-in broker refused the coordinator.s login\" /tmp/forced.log && grep -qi \"not authori\" /tmp/forced.log && grep -q /var/log/showmesh-install.log /tmp/forced.log'"
+check "the install log holds the broker's answer and not the wrong password" "in_box 'grep -q \"^--- the broker.s answer to the login check\" /var/log/showmesh-install.log && ! grep -q bench-wrong-password /var/log/showmesh-install.log'"
 
 echo
 if [ "$FAILED" -gt 0 ]; then

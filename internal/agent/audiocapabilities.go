@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -240,9 +241,17 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, heldNode, heldOK))
 
 	if len(usable) > 0 {
+		attrs := routeAttributes(usable)
+		outputs, missing := outputEvidence(usable)
+		attrs["outputs"] = outputs
+		complete, reason := discoveryCompleteness(d, missing)
+		attrs["discoveryComplete"] = complete
+		if !complete {
+			attrs["discoveryIncompleteReason"] = reason
+		}
 		set = append(set, capability.Capability{
 			ID: "audio.output.local", Version: 1,
-			Attributes: routeAttributes(usable),
+			Attributes: attrs,
 		})
 	}
 	if len(ltc) > 0 {
@@ -354,4 +363,69 @@ func ltcRouteAttributes(routes []audio.RouteEvidence) map[string]any {
 	attrs := routeAttributes(routes)
 	attrs["physicalDiscretenessVerified"] = false
 	return attrs
+}
+
+// Channel bases for an outputs entry: "inventory" is the device's full
+// channel count as its PipeWire graph reports it; "atLeast" is the most
+// channels an ALSA probe actually achieved, a floor and never a total.
+const (
+	channelBasisInventory = "inventory"
+	channelBasisAtLeast   = "atLeast"
+)
+
+// outputEvidence is audio.output.local's "outputs" attribute: one entry
+// per usable route, with channel counts only from a real probe or graph
+// read, this pass or the last good one. A held route's declared channels
+// never count, so saved settings cannot pose as hardware evidence.
+// missing names the usable routes with no such evidence.
+func outputEvidence(routes []audio.RouteEvidence) (out []map[string]any, missing []string) {
+	out = make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		r, ok := lastKnownGoodRoutes.get(route.Device)
+		if !ok {
+			missing = append(missing, route.Device)
+			continue
+		}
+		entry := map[string]any{
+			"route":      r.Device,
+			"interface":  audio.RouteInterface(r.Device),
+			"ltcCapable": r.LTCChannels >= minLTCChannels,
+		}
+		if r.FromGraph {
+			entry["source"], entry["channelBasis"], entry["channels"] = "pipewire", channelBasisInventory, r.Channels
+		} else {
+			entry["source"], entry["channelBasis"], entry["channels"] = "alsa", channelBasisAtLeast, max(r.Channels, r.LTCChannels)
+		}
+		out = append(out, entry)
+	}
+	return out, missing
+}
+
+// discoveryCompleteness reports whether every enumeration d merges ran
+// cleanly and in full, and every candidate output has real channel
+// evidence; a partial discovery is never offered as a complete list.
+func discoveryCompleteness(d audio.Discovery, missing []string) (bool, string) {
+	switch {
+	case !d.HardwareEnumerated:
+		return false, d.HardwareEnumeratedReason
+	case d.Truncated:
+		return false, fmt.Sprintf("the node has %d audio outputs and checks only the first %d", d.CandidateCount, audio.MaxProbedDevices)
+	case !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != "":
+		return false, d.PipeWireEnumeratedReason
+	case d.PipeWireTruncated:
+		return false, fmt.Sprintf("the node's PipeWire graph has %d outputs and only the first %d are checked", d.PipeWireNodeCount, audio.MaxProbedDevices)
+	}
+	for _, r := range d.Routes {
+		if r.Available {
+			continue
+		}
+		if _, cached := lastKnownGoodRoutes.get(r.Device); r.Busy && cached {
+			continue
+		}
+		return false, fmt.Sprintf("the output %s did not open: %s", r.Device, r.Reason)
+	}
+	if len(missing) > 0 {
+		return false, fmt.Sprintf("the output %s is in use and has not been checked since the node started", missing[0])
+	}
+	return true, ""
 }
