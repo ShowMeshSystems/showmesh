@@ -57,8 +57,11 @@ said redeem was the only one.
   known code the way redeem's failure limit bounds a short enrollment code.
   Someone on that network who reads the code while it is displayed could
   produce a matching secret and race the real plugin for the token, which
-  holds the `scheduler` role. The owner is ruling separately on the code
-  length. Until that ruling the exposure stands.
+  holds the `scheduler` role. The owner accepted this on 2026-09-29 and kept
+  the 8 character code: ShowMesh requires a dedicated, isolated show network,
+  and anyone who can reach that network is already trusted. Putting ShowMesh
+  or FPP on a shared or internet-facing network is outside what this design
+  protects against.
 - Because a pairing token is only ever handed out once, a plugin that loses
   it has to be paired again.
 
