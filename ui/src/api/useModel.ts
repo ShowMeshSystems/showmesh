@@ -44,6 +44,8 @@ import type {
   ConfigShowPlaylist,
   ConfigMediaPlaylist,
   ConfigShowWrite,
+  CreateNodeEnrollmentRequest,
+  CreateNodeEnrollmentResponse,
   CreatePrincipalRequest,
   CurrentRunsResponse,
   EmergencyStopArmResponse,
@@ -60,6 +62,8 @@ import type {
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
+  NodeEnrollmentResponse,
+  NodeEnrollmentsResponse,
   ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
@@ -905,6 +909,20 @@ export function issuePrincipalToken(id: string, payload: IssueTokenRequest): Pro
 
 export function revokePrincipalToken(id: string, tokenId: string): Promise<void> {
   return store.revokePrincipalToken(id, tokenId)
+}
+
+// -- ADR-055: node enrollment codes --------------------------------------
+
+export function createNodeEnrollment(payload: CreateNodeEnrollmentRequest): Promise<CreateNodeEnrollmentResponse> {
+  return store.createNodeEnrollment(payload)
+}
+
+export function listNodeEnrollments(): Promise<NodeEnrollmentsResponse> {
+  return store.listNodeEnrollments()
+}
+
+export function cancelNodeEnrollment(id: string): Promise<NodeEnrollmentResponse | undefined> {
+  return store.cancelNodeEnrollment(id)
 }
 
 // Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
