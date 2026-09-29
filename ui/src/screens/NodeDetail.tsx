@@ -96,17 +96,21 @@ function useNodeSurfaces(nodeId: string): { state: SurfacesState; reload: () => 
   return { state, reload: () => setAttempt((n) => n + 1) }
 }
 
-type ShowChoicesState = { kind: 'loading' } | { kind: 'loaded'; choices: ShowChoice[] } | { kind: 'failed'; reason: string }
+type EditorLookups =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; shows: ShowChoice[]; surfaceIds: string[] }
+  | { kind: 'failed'; reason: string }
 
-/** Reads the show list once the editor opens, since every surface belongs to a show. */
-function useShowChoices(enabled: boolean): ShowChoicesState {
-  const [state, setState] = useState<ShowChoicesState>({ kind: 'loading' })
+/** The show list and every stored surface id: ids are global, so a clash can come from any show or node. */
+function useEditorLookups(attempt: number): EditorLookups {
+  const [state, setState] = useState<EditorLookups>({ kind: 'loading' })
   useEffect(() => {
-    if (!enabled) return
     let cancelled = false
-    listConfigObjects('show')
-      .then((response) => {
-        if (!cancelled) setState({ kind: 'loaded', choices: response.objects.map((o) => ({ id: o.id, label: o.label })) })
+    setState({ kind: 'loading' })
+    Promise.all([listConfigObjects('show'), listConfigObjects('show.surface')])
+      .then(([shows, surfaces]) => {
+        if (cancelled) return
+        setState({ kind: 'loaded', shows: shows.objects.map((o) => ({ id: o.id, label: o.label })), surfaceIds: surfaces.objects.map((o) => o.id) })
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
@@ -114,7 +118,7 @@ function useShowChoices(enabled: boolean): ShowChoicesState {
     return () => {
       cancelled = true
     }
-  }, [enabled])
+  }, [attempt])
   return state
 }
 
@@ -235,43 +239,80 @@ function renderOutcome(result: RenderCommandResult): RenderOutcome {
   return { tone: 'pending', label: 'Still resolving', detail: result.outcomeReason }
 }
 
-/** A surface's four real render commands stay beside the assignment they address. */
+/** Add, edit or remove a surface of this node, in the same editor the Shows screen uses. */
 function NodeSurfaceEditor({
   nodeId,
   surface,
-  existingIds,
-  onDone,
-  onCancel,
+  onChanged,
+  onClose,
 }: {
   nodeId: string
   surface: ShowSurfaceConfigResponse | null
-  existingIds: readonly string[]
-  onDone: () => void
-  onCancel: () => void
+  onChanged: () => void
+  onClose: () => void
 }) {
   const model = useModelContext()
-  const shows = useShowChoices(true)
-  if (shows.kind === 'loading') {
-    return <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the list of shows." />
+  const [current, setCurrent] = useState(surface)
+  const [attempt, setAttempt] = useState(0)
+  const lookups = useEditorLookups(attempt)
+  const close = (
+    <div className="sm-btn-row">
+      <Button variant="quiet" onClick={onClose}>
+        Close
+      </Button>
+    </div>
+  )
+  if (lookups.kind === 'loading') {
+    return (
+      <>
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the list of shows and surfaces." />
+        {close}
+      </>
+    )
   }
-  if (shows.kind === 'failed') {
-    return <RuledStrip absence="failed" label="Read failed" fact={shows.reason} detail="Close this and try again." />
+  if (lookups.kind === 'failed') {
+    return (
+      <>
+        <RuledStrip
+          absence="failed"
+          label="Read failed"
+          fact={lookups.reason}
+          detail={
+            <button type="button" className="sm-linkbutton" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+          }
+        />
+        {close}
+      </>
+    )
   }
   return (
-    <SurfaceEditor
-      showId={surface?.payload.show ?? defaultShowId(shows.choices, activeShowId(model))}
-      showChoices={shows.choices}
-      fixedNode={nodeId}
-      surface={surface}
-      existingIds={existingIds}
-      model={model}
-      onSaved={onDone}
-      onDeleted={onDone}
-      onCancel={onCancel}
-    />
+    <>
+      {close}
+      <SurfaceEditor
+        key={`${current?.id ?? 'new'}:${current?.revision ?? 0}`}
+        showId={current?.payload.show ?? defaultShowId(lookups.shows, activeShowId(model))}
+        showChoices={lookups.shows}
+        fixedNode={nodeId}
+        surface={current}
+        existingIds={lookups.surfaceIds}
+        model={model}
+        onSaved={(response) => {
+          setCurrent(response)
+          onChanged()
+        }}
+        onDeleted={() => {
+          onChanged()
+          onClose()
+        }}
+        onCancel={onClose}
+      />
+    </>
   )
 }
 
+/** A surface's four real render commands stay beside the assignment they address. */
 function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; surfaceId: string; gate: ReturnType<typeof evaluateScope> }) {
   const [sequenceId, setSequenceId] = useState('')
   const [running, setRunning] = useState<string | null>(null)
@@ -773,6 +814,7 @@ export function NodeDetail() {
 
   const manifestData = manifestState.kind === 'loading' ? null : manifestState.manifest
   const surfaces = surfacesState.kind === 'loading' ? [] : surfacesState.surfaces
+  const editingSurface = editing === 'new' ? null : editing === null ? undefined : (surfaces.find((s) => s.id === editing) ?? undefined)
   const canRemove = confirmText === node.nodeId && gate.allowed && !removing
   const orphanText =
     surfacesState.kind !== 'loading' && surfaces.length > 0
@@ -1021,7 +1063,9 @@ export function NodeDetail() {
                               {surface.payload.channelRange.startChannel.toLocaleString()}–{end.toLocaleString()}
                             </span>
                           </td>
-                          <td className="sm-small sm-muted">{surface.payload.show}</td>
+                          <td className="sm-small sm-muted">
+                            <Link to={`/shows/${encodeURIComponent(surface.payload.show)}/presentation?surface=${encodeURIComponent(surface.id)}`}>{surface.payload.show}</Link>
+                          </td>
                           <td className="sm-table__wrap sm-node-surface-cell">
                             <StatusPair tone={status.tone} label={status.label} />
                             <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
@@ -1033,20 +1077,16 @@ export function NodeDetail() {
                 </Table>
               </TableWrap>
             )}
-            {editing !== null && (
-              <NodeSurfaceEditor
-                key={editing}
-                nodeId={node.nodeId}
-                surface={editing === 'new' ? null : (surfaces.find((s) => s.id === editing) ?? null)}
-                existingIds={surfaces.map((s) => s.id)}
-                onDone={() => {
-                  setEditing(null)
-                  reloadSurfaces()
-                }}
-                onCancel={() => setEditing(null)}
-              />
-            )}
           </>
+        )}
+        {editingSurface !== undefined && (
+          <NodeSurfaceEditor
+            key={editing}
+            nodeId={node.nodeId}
+            surface={editingSurface}
+            onChanged={reloadSurfaces}
+            onClose={() => setEditing(null)}
+          />
         )}
       </Section>
 

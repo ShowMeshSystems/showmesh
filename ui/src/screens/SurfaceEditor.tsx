@@ -85,7 +85,7 @@ export function SurfaceEditor({
   let blockReason: string | null = null
   if (name.trim() === '') blockReason = 'A surface needs a name.'
   else if (id.trim() === '') blockReason = 'A surface needs an id.'
-  else if (isNew && existingIds.includes(id)) blockReason = `The id "${id}" already names another surface in this show; edit that surface instead or choose a different id.`
+  else if (isNew && existingIds.includes(id)) blockReason = `The id "${id}" already names another surface. Choose a different id.`
   else if (targetShow === '') blockReason = 'Choose the show this surface belongs to.'
   else if (node.trim() === '') blockReason = 'A surface needs a node.'
   else if (!Number.isInteger(widthN) || widthN < 1) blockReason = 'Width must be a whole number, at least 1.'
@@ -135,7 +135,7 @@ export function SurfaceEditor({
           }
           setSaveError(
             outcome.kind === 'taken'
-              ? `${id.trim()} already names a surface in this show. Creating it here would write over that one.`
+              ? `${id.trim()} already names another surface. Creating it here would write over that one.`
               : outcome.reason,
           )
         })
