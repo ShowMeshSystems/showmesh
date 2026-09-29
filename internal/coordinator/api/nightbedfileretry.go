@@ -70,13 +70,52 @@ func nightBedNodeMissingItemFile(ctx context.Context, deps Dependencies, nodeID 
 // inventory changes, which is the issue's own explicit rule. Only apply
 // and start qualify: those are the two steps a file the node does not
 // hold can stop, and a gain or a fade failing says nothing about files.
+//
+// A start the node refused because of the PLAYBACK POINT it named is
+// explicitly not an attempt that went nowhere: it has its own retry
+// without the point still due
+// ([handlers.nightAdvanceBackgroundAudioForNode]'s start branch), and
+// answering it here instead would apply the bed again before that retry
+// was ever sent, produce another point-carrying start, and cycle. A
+// speaker left silent while this controller re-applied to it every few
+// ticks is the exact failure this file exists to end.
 func nightBedAttemptWentNowhere(latest nightBackgroundAudioHistoryRow) bool {
 	if latest.Row.State != nightCueStateResolved || latest.Row.Outcome == nightCueOutcomeConfirmed {
+		return false
+	}
+	if nightBedStartPointWasRefused(latest.Step, latest.Row) {
 		return false
 	}
 	switch latest.Step.Kind {
 	case nightBGStepApply, nightBGStepStart:
 		return true
+	}
+	return false
+}
+
+// nightBedRecoveryAppliedSinceLastConfirmedStart reports whether this
+// controller has already given nodeID the bed since the last start that
+// node confirmed.
+//
+// It is the file path's own bound, and it is per CONFIRMED START rather
+// than per attempt: a recovery that has not yet produced a playing bed is
+// the recovery still in progress, however many steps it has taken, and
+// starting another on top of it is how one silent speaker turns into a
+// re-apply every few ticks. A confirmed start is the only thing that
+// clears it, which is also what stops a failed recovery, a later
+// confirmed stop and a fresh failed apply from letting this fire once per
+// show cycle for the rest of the night.
+func nightBedRecoveryAppliedSinceLastConfirmedStart(steps []nightBackgroundAudioHistoryRow) bool {
+	from := 0
+	for i, row := range steps {
+		if row.Step.Kind == nightBGStepStart && row.Row.State == nightCueStateResolved && row.Row.Outcome == nightCueOutcomeConfirmed {
+			from = i + 1
+		}
+	}
+	for _, row := range steps[from:] {
+		if row.Step.Kind == nightBGStepApply && row.Step.Recovery {
+			return true
+		}
 	}
 	return false
 }
@@ -90,9 +129,12 @@ const nightBedFilesLandedOperatorReasonNote = "This speaker now has every file t
 // True means this tick handled the node and the caller must not also run
 // its ordinary step machine.
 //
-// The bound is the one the rejoin already uses: a node whose latest step
-// is itself a recovery apply, or whose most recent recovery ended in a
-// start it did not confirm, is left alone
+// Two bounds apply. A node this controller has already given the bed
+// since its last confirmed start is left alone
+// ([nightBedRecoveryAppliedSinceLastConfirmedStart]), so a recovery in
+// progress is never restarted on top of itself, whichever of the two
+// recoveries began it. And a node whose most recent recovery ended in a
+// start it did not confirm is left alone too
 // ([nightBedRecoveryStartFailed]). So a file that lands buys exactly one
 // fresh attempt, and a node that will not play the bed even with every
 // file present is recorded rather than re-applied on every report.
@@ -102,7 +144,7 @@ func (h *handlers) nightBedRetryOnceFilesLandedForNode(ctx context.Context, now 
 	if !ok || !nightBedAttemptWentNowhere(latest) {
 		return false
 	}
-	if latest.Step.Kind == nightBGStepApply && latest.Step.Recovery {
+	if nightBedRecoveryAppliedSinceLastConfirmedStart(steps) {
 		return false
 	}
 	if nightBedRecoveryStartFailed(steps) {

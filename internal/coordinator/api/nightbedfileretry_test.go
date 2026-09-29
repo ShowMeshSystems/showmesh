@@ -248,3 +248,96 @@ func bedLatestRevisionForTest(t *testing.T, h *handlers, rec store.NightSessionR
 	}
 	return latest.Row.ActionRevision
 }
+
+// TestNightBedFileRetry_DoesNotCutInOnARejoinsOwnPointRetry is the loop
+// review reproduced, pinned so it cannot come back.
+//
+// A rejoined node in a multi-node bed is started with a playback point;
+// refusing that point is the designed case the point-less retry exists
+// for. On a rig whose assets have synced, every node's inventory is
+// complete, so without a guard this file's own hook answered that refused
+// start first, applied the bed again, produced another point-carrying
+// start, and cycled: a silent speaker re-applied every few ticks for the
+// whole night, with the point-less retry never sent at all.
+func TestNightBedFileRetry_DoesNotCutInOnARejoinsOwnPointRetry(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec, sessionID := startMultiNodeBedForTest(t, h, st, pub)
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+
+	at := testNow.Add(30 * time.Second)
+	audio.setObservations("node-a", append(
+		[]observation.Observation{bedNodeAudioReport("node-a", at, at)},
+		bedSessionPlayingReport(sessionID, "track-2", 1, 65_000, at)...))
+	audio.setObservations("node-b", []observation.Observation{bedNodeAudioReport("node-b", at, at)})
+
+	// node-b refuses every start that names a position, which is what a
+	// playlist edited mid-night does, and nothing else.
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.start": nodeRefusedResult("start", sessionID,
+			`start point names item "track-2" at index 1, but this session's playlist has "track-9" there`),
+	}
+	for i := 0; i < 30; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), at.Add(time.Duration(i)*time.Second), rec)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	var filesApplies, recoveries, pointStarts, plainStarts int
+	for _, row := range nightBackgroundAudioStepsForNode(history, "node-b") {
+		switch {
+		case row.Step.Kind == nightBGStepApply && row.Step.Recovery:
+			recoveries++
+			if strings.HasSuffix(row.Row.CueName, "-filesapply") {
+				filesApplies++
+			}
+		case row.Step.Kind == nightBGStepStart && row.Step.WithPoint:
+			pointStarts++
+		case row.Step.Kind == nightBGStepStart:
+			plainStarts++
+		}
+	}
+	if filesApplies != 0 {
+		t.Errorf("node-b recorded %d late-file applies, want 0: a rejoin's own point retry is not a node waiting on a file", filesApplies)
+	}
+	if plainStarts < 1 {
+		t.Errorf("node-b was never sent a start without a playback point, want the designed retry to reach it")
+	}
+	if recoveries > 1 {
+		t.Errorf("node-b recorded %d recovery applies over thirty ticks, want at most 1", recoveries)
+	}
+	if pointStarts > 1 {
+		t.Errorf("node-b was sent %d starts carrying a position over thirty ticks, want at most 1", pointStarts)
+	}
+}
+
+// TestNightBedFileRetry_OneRecoveryPerConfirmedStart is the second bound:
+// once a recovery has been given, another is not started on top of it
+// until the node confirms a start, so a failed recovery followed by a
+// show cycle cannot let this fire again each time round.
+func TestNightBedFileRetry_OneRecoveryPerConfirmedStart(t *testing.T) {
+	steps := []nightBackgroundAudioHistoryRow{
+		{Step: nightBackgroundAudioStep{Kind: nightBGStepApply}, Row: store.NightCueOutboxRecord{State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed}},
+		{Step: nightBackgroundAudioStep{Kind: nightBGStepStart}, Row: store.NightCueOutboxRecord{State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed}},
+	}
+	if nightBedRecoveryAppliedSinceLastConfirmedStart(steps) {
+		t.Fatal("a node that has only ever started normally read as mid-recovery")
+	}
+
+	steps = append(steps, nightBackgroundAudioHistoryRow{
+		Step: nightBackgroundAudioStep{Kind: nightBGStepApply, Recovery: true},
+		Row:  store.NightCueOutboxRecord{State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed},
+	})
+	if !nightBedRecoveryAppliedSinceLastConfirmedStart(steps) {
+		t.Fatal("a recovery apply with no confirmed start after it read as finished")
+	}
+
+	steps = append(steps, nightBackgroundAudioHistoryRow{
+		Step: nightBackgroundAudioStep{Kind: nightBGStepStart},
+		Row:  store.NightCueOutboxRecord{State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed},
+	})
+	if nightBedRecoveryAppliedSinceLastConfirmedStart(steps) {
+		t.Fatal("a confirmed start after the recovery did not clear it, so a later loss could never be answered")
+	}
+}
