@@ -286,7 +286,7 @@ func TestNightBedRejoin_ASuccessfulRejoinDoesNotDisableLaterRecovery(t *testing.
 	if latest.Step.Kind != nightBGStepStart || latest.Row.Outcome != nightCueOutcomeConfirmed {
 		t.Fatalf("node-b latest step = %+v (%s), want the point-less retry confirmed", latest.Step, latest.Row.Outcome)
 	}
-	if nightBedRejoinStartFailed(steps) {
+	if nightBedRecoveryStartFailed(steps) {
 		t.Fatal("a rejoin whose point-less retry confirmed read as failed, want the bed playing to clear it")
 	}
 
@@ -363,7 +363,7 @@ func bedRejoinApplyCountForTest(t *testing.T, h *handlers, rec store.NightSessio
 	}
 	n := 0
 	for _, row := range nightBackgroundAudioStepsForNode(history, nodeID) {
-		if row.Step.Kind == nightBGStepApply && row.Step.Rejoin {
+		if row.Step.Kind == nightBGStepApply && row.Step.Recovery {
 			n++
 		}
 	}
@@ -390,7 +390,7 @@ func TestNightBedStepReasons_CarryNoControllerBookkeeping(t *testing.T) {
 	}
 	sawRejoin, sawJoinStart := false, false
 	for _, row := range nightBackgroundAudioSteps(history) {
-		sawRejoin = sawRejoin || row.Step.Rejoin
+		sawRejoin = sawRejoin || row.Step.Recovery
 		sawJoinStart = sawJoinStart || row.Step.WithPoint
 		for _, tag := range []string{"bedRejoin=", "bedStartPoint=", "bedBookmark="} {
 			if strings.Contains(row.Row.OutcomeReason, tag) {

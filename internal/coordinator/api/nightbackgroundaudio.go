@@ -166,13 +166,16 @@ type nightBackgroundAudioStep struct {
 	Seq  int
 	Kind string
 
-	// Rejoin marks an apply this controller committed to give a node the
-	// bed back ([handlers.nightGiveNodeTheBedNow]), and WithPoint marks a
-	// start that named a playback point. Both are carried by the row's own
-	// CUE NAME rather than by its reason: a step's reason is rendered to
-	// operators verbatim (v1.NightBackgroundAudioStep.Reason), so this
-	// controller's own bookkeeping may not live there.
-	Rejoin    bool
+	// Recovery marks an apply this controller committed to give a node the
+	// bed back ([handlers.nightGiveNodeTheBedNow]), whichever of its two
+	// triggers fired: a node that lost a bed it was holding, or a node
+	// whose files have now arrived after its first attempt was refused
+	// without them. WithPoint marks a start that named a playback point.
+	// Both are carried by the row's own CUE NAME rather than by its
+	// reason: a step's reason is rendered to operators verbatim
+	// (v1.NightBackgroundAudioStep.Reason), so this controller's own
+	// bookkeeping may not live there.
+	Recovery  bool
 	WithPoint bool
 }
 
@@ -191,6 +194,16 @@ func nightBackgroundAudioCueNameJoinStart(seq int) string {
 
 func nightBackgroundAudioCueNameRejoinApply(seq int) string {
 	return fmt.Sprintf("bg-%04d-rejoinapply", seq)
+}
+
+// nightBackgroundAudioCueNameFilesApply names the other recovery apply:
+// the one sent once a node's own asset inventory finally holds every file
+// the bed needs, after an earlier attempt went nowhere without them. It
+// parses to the same apply kind and carries the same Recovery mark; only
+// the name differs, so an operator reading the step log can tell which of
+// the two recoveries ran.
+func nightBackgroundAudioCueNameFilesApply(seq int) string {
+	return fmt.Sprintf("bg-%04d-filesapply", seq)
 }
 func nightBackgroundAudioCueNamePause(seq int) string    { return fmt.Sprintf("bg-%04d-pause", seq) }
 func nightBackgroundAudioCueNameResume(seq int) string   { return fmt.Sprintf("bg-%04d-resume", seq) }
@@ -240,8 +253,8 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (step nightBac
 		return nightBackgroundAudioStep{}, "", false
 	}
 	switch {
-	case strings.HasSuffix(row.CueName, "-rejoinapply"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply, Rejoin: true}, nodeID, true
+	case strings.HasSuffix(row.CueName, "-rejoinapply"), strings.HasSuffix(row.CueName, "-filesapply"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply, Recovery: true}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-joinstart"):
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart, WithPoint: true}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-apply"):
@@ -990,6 +1003,14 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	// either do nothing or address a session that is gone
 	// (nightbedrejoin.go).
 	if h.nightBedRecoverLostSessionForNode(ctx, now, rec, nodeID, sessionID, ba, owner, items, history) {
+		return
+	}
+
+	// A node whose first attempt went nowhere because its copy of a file
+	// had not arrived yet is given the bed once the file lands, rather
+	// than waiting for an operator to deploy the catalog again
+	// (nightbedfileretry.go).
+	if h.nightBedRetryOnceFilesLandedForNode(ctx, now, rec, show, nodeID, sessionID, ba, owner, items, history) {
 		return
 	}
 

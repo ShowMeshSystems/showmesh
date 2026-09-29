@@ -95,6 +95,13 @@ func startMultiNodeBedForTest(t *testing.T, h *handlers, st *store.Store, pub *f
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
 	putAudioNodeNoLTCForTest(t, st, "node-a")
 	putAudioNodeNoLTCForTest(t, st, "node-b")
+	// Both nodes report holding every bed file, which is the ordinary
+	// state of a rig whose assets have synced. It matters here because it
+	// arms the late-file recovery path as well as the rejoin, so these
+	// tests exercise the two together rather than one at a time.
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		putNodeInventoryForTest(t, st, nodeID, testNow, bedItemInventoryForTest(nodeID, "asset-1", "asset-2")...)
+	}
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 	sessionID := nightBackgroundAudioSessionID(rec)

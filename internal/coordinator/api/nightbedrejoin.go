@@ -185,7 +185,7 @@ func nightBedReportedStateIsLost(state string) bool {
 	return false
 }
 
-// nightBedRejoinStartFailed reports whether the rejoin this controller
+// nightBedRecoveryStartFailed reports whether the rejoin this controller
 // most recently performed for a node ended without the bed playing.
 //
 // It reads the LAST start after the latest rejoin apply, never the first,
@@ -203,10 +203,10 @@ func nightBedReportedStateIsLost(state string) bool {
 //     loss this controller may answer again.
 //   - anything else resolved: the bed was given back, the node would not
 //     play it, and repeating that changes nothing.
-func nightBedRejoinStartFailed(steps []nightBackgroundAudioHistoryRow) bool {
+func nightBedRecoveryStartFailed(steps []nightBackgroundAudioHistoryRow) bool {
 	lastRejoin := -1
 	for i, row := range steps {
-		if row.Step.Kind == nightBGStepApply && row.Step.Rejoin {
+		if row.Step.Kind == nightBGStepApply && row.Step.Recovery {
 			lastRejoin = i
 		}
 	}
@@ -281,10 +281,10 @@ func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessi
 	if latest.Row.State != nightCueStateResolved || latest.Row.DispatchedAt == nil {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
-	if latest.Step.Kind == nightBGStepApply && latest.Step.Rejoin {
+	if latest.Step.Kind == nightBGStepApply && latest.Step.Recovery {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
-	if nightBedRejoinStartFailed(steps) {
+	if nightBedRecoveryStartFailed(steps) {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
 	// A node whose latest step it REFUSED is answering, and answering no.
@@ -512,12 +512,15 @@ const nightBedRejoinOperatorReasonNote = "This speaker is no longer holding the 
 // to start on the following ticks, so nothing here duplicates the rest
 // of the sequence.
 //
-// The apply is committed under [nightBackgroundAudioCueNameRejoinApply],
-// which is what marks it a rejoin durably without putting any of this
-// controller's own bookkeeping into the operator-facing reason.
-func (h *handlers) nightGiveNodeTheBedNow(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow, note string) {
+// cueNameFor picks the apply's own cue name, which is what marks it a
+// recovery durably, and says which of the two recoveries it was, without
+// putting any of this controller's own bookkeeping into the
+// operator-facing reason: [nightBackgroundAudioCueNameRejoinApply] for a
+// node that lost the bed, [nightBackgroundAudioCueNameFilesApply] for one
+// whose files have now arrived.
+func (h *handlers) nightGiveNodeTheBedNow(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow, note string, cueNameFor func(int) string) {
 	revision := h.nightBedNodeDispatchRevision(ctx, nodeID, sessionID, history)
-	cueName := nightBackgroundAudioCueNameRejoinApply(int(revision))
+	cueName := cueNameFor(int(revision))
 	params := nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, owner, ba, items)
 	composeReason := func(reason string, _ map[string]any) string { return nightCueReasonWith(reason, note) }
 	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.apply", nodeID, sessionID, params, revision, history, composeReason); err != nil {
@@ -541,7 +544,8 @@ func (h *handlers) nightBedRecoverLostSessionForNode(ctx context.Context, now ti
 	}
 	h.logWarn("night loop: background audio: this node is no longer holding the bed session; giving it the bed again",
 		"sessionId", rec.ID, "nodeId", nodeID, "lostStep", lost.Step.Kind, "lostRevision", lost.Row.ActionRevision)
-	h.nightGiveNodeTheBedNow(ctx, now, rec, nodeID, sessionID, ba, owner, items, history, nightBedRejoinOperatorReasonNote)
+	h.nightGiveNodeTheBedNow(ctx, now, rec, nodeID, sessionID, ba, owner, items, history,
+		nightBedRejoinOperatorReasonNote, nightBackgroundAudioCueNameRejoinApply)
 	return true
 }
 
@@ -643,7 +647,7 @@ func nightBedNodesNotPlaying(ctx context.Context, deps Dependencies, rec store.N
 		if latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID); ok {
 			facts.TouchedOutsideLedger = nightBedSessionTouchedOutsideLedgerFor(ctx, deps, nodeID, sessionID, latest.Row.ActionRevision)
 		}
-		facts.RejoinAlreadyFailed = nightBedRejoinStartFailed(steps)
+		facts.RejoinAlreadyFailed = nightBedRecoveryStartFailed(steps)
 		out = append(out, v1.NightBedNodeNotPlaying{NodeID: nodeID, Reason: nightBedNotPlayingReason(deps.Audio, now, nodeID, facts)})
 	}
 	return out
