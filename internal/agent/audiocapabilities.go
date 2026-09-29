@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -240,9 +241,16 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, heldNode, heldOK))
 
 	if len(usable) > 0 {
+		attrs := routeAttributes(usable)
+		attrs["outputs"] = outputEvidence(usable)
+		complete, reason := discoveryCompleteness(d)
+		attrs["discoveryComplete"] = complete
+		if !complete {
+			attrs["discoveryIncompleteReason"] = reason
+		}
 		set = append(set, capability.Capability{
 			ID: "audio.output.local", Version: 1,
-			Attributes: routeAttributes(usable),
+			Attributes: attrs,
 		})
 	}
 	if len(ltc) > 0 {
@@ -354,4 +362,49 @@ func ltcRouteAttributes(routes []audio.RouteEvidence) map[string]any {
 	attrs := routeAttributes(routes)
 	attrs["physicalDiscretenessVerified"] = false
 	return attrs
+}
+
+// Channel bases for an outputs entry: "inventory" is the device's full
+// channel count as its PipeWire graph reports it; "atLeast" is the most
+// channels an ALSA probe actually achieved, a floor and never a total.
+const (
+	channelBasisInventory = "inventory"
+	channelBasisAtLeast   = "atLeast"
+)
+
+// outputEvidence is audio.output.local's "outputs" attribute: one entry
+// per usable route with only the channels a probe or the graph proved.
+func outputEvidence(routes []audio.RouteEvidence) []map[string]any {
+	out := make([]map[string]any, 0, len(routes))
+	for _, r := range routes {
+		entry := map[string]any{
+			"route":      r.Device,
+			"interface":  audio.RouteInterface(r.Device),
+			"ltcCapable": r.LTCChannels >= minLTCChannels,
+		}
+		if r.FromGraph {
+			entry["source"], entry["channelBasis"], entry["channels"] = "pipewire", channelBasisInventory, r.Channels
+		} else {
+			entry["source"], entry["channelBasis"], entry["channels"] = "alsa", channelBasisAtLeast, max(r.Channels, r.LTCChannels)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// discoveryCompleteness reports whether every enumeration d merges ran
+// cleanly and in full; a partial discovery must never be offered as a
+// complete list of choices.
+func discoveryCompleteness(d audio.Discovery) (bool, string) {
+	switch {
+	case !d.HardwareEnumerated:
+		return false, d.HardwareEnumeratedReason
+	case d.Truncated:
+		return false, fmt.Sprintf("the node has %d audio devices and only the first %d were checked", d.EnumeratedCount, audio.MaxProbedDevices)
+	case !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != "":
+		return false, d.PipeWireEnumeratedReason
+	case d.PipeWireTruncated:
+		return false, fmt.Sprintf("the node's PipeWire graph has more than %d outputs and only the first %d were checked", audio.MaxProbedDevices, audio.MaxProbedDevices)
+	}
+	return true, ""
 }

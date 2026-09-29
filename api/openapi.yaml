@@ -1998,6 +1998,56 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/routing-choices:
+    get:
+      operationId: getAudioRoutingChoices
+      summary: The program and LTC choices a node's own reported outputs support
+      description: >-
+        Requires `config:write`. Resolved live from the node's current
+        `audio.output.local` advertisement (its `outputs`,
+        `discoveryComplete` and `discoveryIncompleteReason` attributes)
+        and never stored. `routes` is non-empty only when `discovery` is
+        `available`: a node that is offline (`stale`), reported an
+        unreadable list (`failed`), checked only some outputs (`partial`),
+        predates channel reporting (`not_reported`) or reports no outputs
+        (`absent`) offers no choices, and `reason` says why. Channels are
+        offered only up to what the node proved: `channelBasis`
+        `inventory` is the full count its PipeWire graph reports,
+        `atLeast` is a floor an ALSA probe achieved. LTC choices are on
+        the same output as the program group and exclude its channels,
+        each exclusion listed in `conflicts`. `manualEntry` says whether
+        hand-typed channels are still accepted by PUT
+        /config/audio.node/{id}. `current` reports the stored placement
+        against these choices and never changes it. `clock.verification`
+        is `same_interface` when LTC leaves the program interface,
+        `operator_confirmed` when a local clock override is stored, and
+        `no_ltc` on a program-only node.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioRoutingChoicesResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/audio/alignment-runs:
     parameters:
       - name: nodeId
@@ -4872,8 +4922,12 @@ paths:
         `programRoute` and `ltcRoute` must also name the SAME route, refused
         at decode time before evidence is even consulted. `programChannels`
         (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based,
-        never a member of `programChannels`) are checked structurally, not
-        against evidence. `localClockOverride` is optional and names this
+        never a member of `programChannels`) are checked structurally. When
+        the node is online and reports the full channel count of
+        `programRoute` (`channelBasis` `inventory` in its `outputs`), a
+        channel beyond that count is refused with `400`; a floor
+        (`atLeast`) or an older node that reports no channels never
+        refuses, so manual entry stays available. `localClockOverride` is optional and names this
         node's local clock explicitly; absent, the local clock is the
         interface `programRoute` names. Optionally
         carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
@@ -16259,6 +16313,129 @@ components:
           type: [string, "null"]
         source:
           type: string
+    AudioRoutingChoicesResponse:
+      type: object
+      description: The body of GET /nodes/{nodeId}/audio/routing-choices.
+      required: [serverTime, nodeId, discovery, manualEntry, ltc, routes]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodeId:
+          type: string
+        discovery:
+          type: string
+          enum: [available, partial, stale, failed, not_reported, absent]
+        reason:
+          type: string
+          description: Why no choices are offered. Absent when `discovery` is `available`.
+        manualEntry:
+          type: object
+          required: [allowed]
+          properties:
+            allowed:
+              type: boolean
+            reason:
+              type: string
+        ltc:
+          type: object
+          required: [available]
+          properties:
+            available:
+              type: boolean
+            reason:
+              type: string
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioRoutingRouteChoice"
+        current:
+          $ref: "#/components/schemas/AudioRoutingCurrent"
+        clock:
+          $ref: "#/components/schemas/AudioRoutingClock"
+    AudioRoutingRouteChoice:
+      type: object
+      description: One output the node reports and the program groups it offers.
+      required: [route, interface, source, channels, channelBasis, ltcCapable, programGroups]
+      properties:
+        route:
+          type: string
+        interface:
+          type: string
+          description: The interface the route leaves through, which is its local clock.
+        source:
+          type: string
+          enum: [alsa, pipewire]
+        channels:
+          type: integer
+          minimum: 1
+        channelBasis:
+          type: string
+          enum: [inventory, atLeast]
+        ltcCapable:
+          type: boolean
+        ltcReason:
+          type: string
+          description: Why no LTC channel is offered on this route, when none is.
+        programGroups:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioProgramGroup"
+    AudioProgramGroup:
+      type: object
+      required: [channels, ltcChannels, conflicts]
+      properties:
+        channels:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+        ltcChannels:
+          type: array
+          description: Channels on the same route free to carry LTC beside this group.
+          items:
+            type: integer
+            minimum: 1
+        conflicts:
+          type: array
+          items:
+            type: object
+            required: [channel, reason]
+            properties:
+              channel:
+                type: integer
+                minimum: 1
+              reason:
+                type: string
+    AudioRoutingCurrent:
+      type: object
+      description: The stored audio.node placement, reported against the choices and never changed by them.
+      required: [programRoute, programChannels, offered]
+      properties:
+        programRoute:
+          type: string
+        programChannels:
+          type: array
+          items:
+            type: integer
+        ltcChannel:
+          type: integer
+        offered:
+          type: boolean
+        reason:
+          type: string
+    AudioRoutingClock:
+      type: object
+      required: [localClock, source, verification]
+      properties:
+        localClock:
+          type: string
+        source:
+          type: string
+          enum: [derived, override]
+        verification:
+          type: string
+          enum: [same_interface, operator_confirmed, no_ltc]
     ConfigNodeClock:
       type: object
       description: >-

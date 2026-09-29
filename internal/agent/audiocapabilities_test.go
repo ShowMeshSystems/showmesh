@@ -595,3 +595,90 @@ func TestDetectAudioCapabilitiesAlsaOnlyAdvertisementUnchangedByRealPipeWireDisc
 		t.Errorf("routes = %v, want exactly [hw:CARD=PCH,DEV=0]", routes)
 	}
 }
+
+// TestDetectAudioCapabilitiesReportsTypedOutputEvidence proves each usable
+// route carries its interface, source, and only the channels actually
+// proven: a graph count is an inventory, an ALSA probe is a floor.
+func TestDetectAudioCapabilitiesReportsTypedOutputEvidence(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=M4,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, LTCChannels: 3},
+			{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+			{Device: "hw:CARD=GONE,DEV=0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open"}},
+		},
+	})
+	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{
+		Enumerated: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "alsa_output.usb-MOTU_M4-00.pro-output-0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, FromGraph: true, LTCChannels: 4},
+		},
+	})
+
+	local, ok := detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised, want present")
+	}
+	if local.Attributes["discoveryComplete"] != true {
+		t.Errorf("discoveryComplete = %v, want true", local.Attributes["discoveryComplete"])
+	}
+	if _, present := local.Attributes["discoveryIncompleteReason"]; present {
+		t.Error("discoveryIncompleteReason present on a complete discovery, want absent")
+	}
+	outputs, _ := local.Attributes["outputs"].([]map[string]any)
+	want := []map[string]any{
+		{"route": "hw:CARD=M4,DEV=0", "interface": "hw:CARD=M4", "source": "alsa", "channelBasis": "atLeast", "channels": 3, "ltcCapable": true},
+		{"route": "hw:CARD=PCH,DEV=0", "interface": "hw:CARD=PCH", "source": "alsa", "channelBasis": "atLeast", "channels": 2, "ltcCapable": false},
+		{"route": "alsa_output.usb-MOTU_M4-00.pro-output-0", "interface": "alsa_output.usb-MOTU_M4-00.pro-output-0", "source": "pipewire", "channelBasis": "inventory", "channels": 4, "ltcCapable": true},
+	}
+	if len(outputs) != len(want) {
+		t.Fatalf("outputs = %v, want %d entries (the unavailable route never listed)", outputs, len(want))
+	}
+	for i := range want {
+		for k, v := range want[i] {
+			if outputs[i][k] != v {
+				t.Errorf("outputs[%d][%q] = %v, want %v", i, k, outputs[i][k], v)
+			}
+		}
+	}
+}
+
+// TestDetectAudioCapabilitiesMarksPartialDiscovery proves a truncated or
+// half-failed discovery says so, so the coordinator never offers it as a
+// complete set of choices.
+func TestDetectAudioCapabilitiesMarksPartialDiscovery(t *testing.T) {
+	route := audio.RouteEvidence{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}}
+	cases := []struct {
+		name string
+		d    audio.Discovery
+		pw   audio.PipeWireDiscovery
+	}{
+		{"alsa truncated", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Truncated: true, EnumeratedCount: 9, Routes: []audio.RouteEvidence{route}}, audio.PipeWireDiscovery{}},
+		{"alsa failed", audio.Discovery{EngineUsable: true, HardwareEnumeratedReason: "device enumeration failed: aplay not found"},
+			audio.PipeWireDiscovery{Enumerated: true, Routes: []audio.RouteEvidence{{Device: "alsa_output.x", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, FromGraph: true}}}},
+		{"pipewire failed", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route}}, audio.PipeWireDiscovery{EnumeratedReason: "PipeWire graph enumeration failed: bad json"}},
+		{"pipewire truncated", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route}}, audio.PipeWireDiscovery{Enumerated: true, Truncated: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lastKnownGoodRoutes.reset()
+			t.Cleanup(lastKnownGoodRoutes.reset)
+			withAudioEngineAvailable(t, true, "")
+			withAudioDiscoverer(t, tc.d)
+			withAudioPipeWireDiscoverer(t, tc.pw)
+			local, ok := detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
+			if !ok {
+				t.Fatal("audio.output.local not advertised, want present")
+			}
+			if local.Attributes["discoveryComplete"] != false {
+				t.Errorf("discoveryComplete = %v, want false", local.Attributes["discoveryComplete"])
+			}
+			if reason, _ := local.Attributes["discoveryIncompleteReason"].(string); reason == "" {
+				t.Error("discoveryIncompleteReason empty, want the reason discovery was partial")
+			}
+		})
+	}
+}

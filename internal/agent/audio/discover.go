@@ -3,6 +3,8 @@ package audio
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 )
 
 // maxProbedDevices bounds how many candidate devices [Discover] and
@@ -13,6 +15,9 @@ import (
 // node with both a large ALSA list and a large PipeWire graph can
 // advertise up to twice this many routes.
 const maxProbedDevices = 4
+
+// MaxProbedDevices exports [maxProbedDevices] for wording a truncated discovery.
+const MaxProbedDevices = maxProbedDevices
 
 // MinLTCChannels is the channel count ADR-018 requires to carry a discrete
 // LTC output alongside 1-2 program channels. [Discover] probes every
@@ -114,6 +119,9 @@ type Discovery struct {
 	// pw-dump ran but its output could not be parsed.
 	PipeWireEnumerated       bool
 	PipeWireEnumeratedReason string
+
+	// PipeWireTruncated mirrors Truncated for the PipeWire graph.
+	PipeWireTruncated bool
 }
 
 // WithPipeWireRoutes returns a copy of d with pw's routes appended and its
@@ -126,6 +134,7 @@ func (d Discovery) WithPipeWireRoutes(pw PipeWireDiscovery) Discovery {
 	out := d
 	out.PipeWireEnumerated = pw.Enumerated
 	out.PipeWireEnumeratedReason = pw.EnumeratedReason
+	out.PipeWireTruncated = pw.Truncated
 	out.Routes = append(append([]RouteEvidence{}, d.Routes...), pw.Routes...)
 	return out
 }
@@ -150,6 +159,10 @@ type PipeWireDiscovery struct {
 	// probe to run against a graph node the way [Discover] runs one
 	// against an ALSA device.
 	Routes []RouteEvidence
+
+	// Truncated is true when the graph named more Audio/Sink nodes than
+	// [maxProbedDevices] allows reporting.
+	Truncated bool
 }
 
 // DiscoverPipeWire runs this node's PipeWire graph discovery: enumerate
@@ -168,7 +181,8 @@ func DiscoverPipeWire(ctx context.Context, enum PipeWireEnumerator) PipeWireDisc
 	if err != nil {
 		return PipeWireDiscovery{EnumeratedReason: fmt.Sprintf("PipeWire graph enumeration failed: %v", err)}
 	}
-	if len(nodes) > maxProbedDevices {
+	truncated := len(nodes) > maxProbedDevices
+	if truncated {
 		nodes = nodes[:maxProbedDevices]
 	}
 	routes := make([]RouteEvidence, 0, len(nodes))
@@ -186,7 +200,7 @@ func DiscoverPipeWire(ctx context.Context, enum PipeWireEnumerator) PipeWireDisc
 		}
 		routes = append(routes, ev)
 	}
-	return PipeWireDiscovery{Enumerated: true, Routes: routes}
+	return PipeWireDiscovery{Enumerated: true, Routes: routes, Truncated: truncated}
 }
 
 // Discover runs this node's full discovery sequence: probe the always-
@@ -233,3 +247,19 @@ func Discover(ctx context.Context, enum Enumerator) Discovery {
 
 	return d
 }
+
+// RouteInterface is the interface an output route leaves through: one
+// ALSA card is one sample clock, so "hw:CARD=M4,DEV=0" and
+// "hw:CARD=M4,DEV=1" share "hw:CARD=M4". Any other form, such as a
+// PipeWire node name, is its own interface.
+func RouteInterface(route string) string {
+	if !alsaRouteInterfacePrefix.MatchString(route) {
+		return route
+	}
+	if comma := strings.Index(route, ","); comma >= 0 {
+		return route[:comma]
+	}
+	return route
+}
+
+var alsaRouteInterfacePrefix = regexp.MustCompile(`^(plug)?(hw|dmix|dsnoop):`)
