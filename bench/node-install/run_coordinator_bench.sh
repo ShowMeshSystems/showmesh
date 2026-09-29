@@ -79,7 +79,7 @@ in_box 'cp /etc/showmesh/showmeshctl.env /root/ctl.env.orig
 run_install 0.0.0-bench2 --yes
 check "an upgrade during a night is refused" "[ $? -ne 0 ]"
 check "the refusal names the night session and its state" "in_box 'grep -q \"A night session is running (state: live)\" /tmp/install-0.0.0-bench2.log'"
-check "the refusal gives the showmeshctl command that ends the night" "in_box 'grep -q \"showmeshctl night power-down-presentation\" /tmp/install-0.0.0-bench2.log'"
+check "the refusal gives the showmeshctl command that ends the night" "in_box 'grep -q \"showmeshctl night power-down, or showmeshctl night end-session\" /tmp/install-0.0.0-bench2.log && ! grep -q power-down-presentation /tmp/install-0.0.0-bench2.log'"
 check "the refusal changed nothing: no backup, still on bench1" "in_box '[ ! -d /var/backups/showmesh ] || [ -z \"\$(ls /var/backups/showmesh)\" ]; grep -qx SHOWMESH_RELEASE_VERSION=0.0.0-bench1 /opt/showmesh/coordinator/.env'"
 check "the coordinator is still running after the refusal" "in_box 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null'"
 in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env
@@ -118,6 +118,12 @@ in_box 'ls -d /var/backups/showmesh/*/ | wc -l | grep -qx 2' && echo "two backup
 in_box 'for i in 1 2 3 4 5 6 7; do mkdir /var/backups/showmesh/2000010${i}T000000Z-old; done'
 run_install 0.0.0-bench2 --yes
 check "only the newest five backups are kept" "in_box '[ \$(ls /var/backups/showmesh | wc -l) -eq 5 ]'"
+
+# A failure after the backup leaves the old coordinator running.
+run_install 0.0.0-bench2 --yes --broker external --broker-url ssl://192.0.2.9:8883
+check "an upgrade that fails after the backup exits with an error" "[ $? -ne 0 ]"
+check "the backup was taken before the failure" "in_box 'grep -q \"backup saved in /var/backups/showmesh/\" /tmp/install-0.0.0-bench2.log'"
+check "the coordinator is running after the failed upgrade" "in_box 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null'"
 
 echo
 if [ "$FAILED" -gt 0 ]; then

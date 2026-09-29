@@ -286,8 +286,8 @@ node_find_saved_coordinator() {
 
 run_node_role() {
   local kind="$1" before=""
-  node_install_packages
   upgrade_node_preflight
+  node_install_packages
   node_fetch_agent
   node_preflight
   [ "$kind" = "render" ] && render_install_ndi_plugin

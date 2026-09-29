@@ -48,7 +48,7 @@ unless `--reenroll` is given.
 
 Before an upgrade changes anything, the installer asks the coordinator whether
 a night session is running and refuses if one is (or if it cannot be asked),
-unless `--force` is given. It then stops the coordinator briefly, copies its
+unless `--force` is given. It then stops the coordinator only while it copies its
 database, `.env` and broker files to `/var/backups/showmesh/<time>-<old
 version>/` with the restore steps in `RESTORE.txt`, and keeps the newest five
 backups. If the copy fails, nothing is upgraded. A coordinator upgrade ends by

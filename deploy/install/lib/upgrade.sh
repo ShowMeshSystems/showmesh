@@ -3,11 +3,21 @@
 
 BACKUP_ROOT=/var/backups/showmesh
 BACKUP_KEEP=5
-COORD_DATA_DIR=/var/lib/showmesh
 
-# upgrade_coordinator_installed is true when this machine already runs a coordinator from this installer.
+# upgrade_coordinator_installed is true when a coordinator container from this installer already exists.
 upgrade_coordinator_installed() {
-  [ -f "$COORDINATOR_DIR/.env" ] && [ -f "$COORDINATOR_DIR/docker-compose.yml" ]
+  [ -f "$COORDINATOR_DIR/.env" ] && [ -f "$COORDINATOR_DIR/docker-compose.yml" ] || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  [ -n "$(compose ps -a -q coordinator 2>/dev/null | head -n 1)" ]
+}
+
+# night_end_advice STATE prints the command that ends a night in that state.
+night_end_advice() {
+  case "$1" in
+    fading-out) echo "wait for showmeshctl night status to report stopped, then run the install command again; to upgrade anyway, add --force" ;;
+    preparing) echo "showmeshctl night end-session, then run the install command again; to upgrade anyway, add --force" ;;
+    *) echo "showmeshctl night power-down, or showmeshctl night end-session if that is refused, then run the install command again; to upgrade anyway, add --force" ;;
+  esac
 }
 
 # night_session_state URL TOKEN sets NIGHT_STATE to the session state, or "" when the coordinator cannot say.
@@ -52,7 +62,7 @@ upgrade_check_coordinator_night() {
     return
   fi
   if night_is_running "$NIGHT_STATE"; then
-    upgrade_refuse_or_force "A night session is running (state: $NIGHT_STATE), and upgrading now would interrupt the show." "showmeshctl night power-down-presentation, then run the install command again; to upgrade anyway, add --force"
+    upgrade_refuse_or_force "A night session is running (state: $NIGHT_STATE), and upgrading now would interrupt the show." "$(night_end_advice "$NIGHT_STATE")"
     return
   fi
   ok "no night session is running"
@@ -69,7 +79,7 @@ upgrade_check_node_night() {
     return 0
   fi
   if night_is_running "$NIGHT_STATE"; then
-    upgrade_refuse_or_force "A night session is running (state: $NIGHT_STATE), and restarting this node now would interrupt the show." "showmeshctl night power-down-presentation on the coordinator, then run the install command again; to upgrade anyway, add --force"
+    upgrade_refuse_or_force "A night session is running (state: $NIGHT_STATE), and restarting this node now would interrupt the show." "on the coordinator, $(night_end_advice "$NIGHT_STATE")"
     return
   fi
   ok "no night session is running"
@@ -86,34 +96,35 @@ upgrade_node_preflight() {
   upgrade_check_node_night
 }
 
-# upgrade_backup copies the database, settings and broker files while the coordinator is stopped.
+# upgrade_backup copies the database, settings and broker files; the coordinator is down only for the copy.
 upgrade_backup() {
   step "Backing up the coordinator before upgrading it"
-  local old stamp dir cid volume
+  local old stamp dir cid volume data_dir
   old="$(env_get "$COORD_ENV" SHOWMESH_RELEASE_VERSION)"
+  data_dir="$(env_get "$COORD_ENV" SHOWMESH_DATA_DIR)"
+  data_dir="${data_dir:-/var/lib/showmesh}"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   dir="$BACKUP_ROOT/$stamp-${old:-unknown}"
   install -d -m 0700 "$BACKUP_ROOT"
   install -d -m 0700 "$dir"
   cid="$(compose ps -a -q coordinator 2>/dev/null | head -n 1)"
-  if [ -n "$cid" ]; then
-    compose stop coordinator >/dev/null 2>&1 || { rm -rf "$dir"; fail "The coordinator could not be stopped to copy its database, so nothing was upgraded." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml stop coordinator"; }
-    if ! docker cp -a "$cid:$COORD_DATA_DIR/." "$dir/data" >/dev/null 2>&1; then
-      rm -rf "$dir"
-      compose start coordinator >/dev/null 2>&1 || true
-      fail "The coordinator's database could not be copied, so nothing was upgraded." "docker cp $cid:$COORD_DATA_DIR/. <backup directory>, then run the install command again"
-    fi
-    volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'"$COORD_DATA_DIR"'"}}{{.Name}}{{end}}{{end}}' "$cid" 2>/dev/null)"
+  compose stop coordinator >/dev/null 2>&1 || { rm -rf "$dir"; compose start coordinator >/dev/null 2>&1 || true; fail "The coordinator could not be stopped to copy its database, so nothing was upgraded." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml stop coordinator"; }
+  if ! docker cp -a "$cid:$data_dir/." "$dir/data" >/dev/null 2>&1; then
+    rm -rf "$dir"
+    compose start coordinator >/dev/null 2>&1 || true
+    fail "The coordinator's database could not be copied, so nothing was upgraded." "docker cp $cid:$data_dir/. <backup directory>, then run the install command again"
   fi
+  compose start coordinator >/dev/null 2>&1 || warn "The coordinator did not start again after the copy. The upgrade will start it."
+  volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'"$data_dir"'"}}{{.Name}}{{end}}{{end}}' "$cid" 2>/dev/null)"
   if ! { cp -a "$COORD_ENV" "$dir/coordinator.env" && cp -a "$COORDINATOR_DIR/mosquitto" "$dir/mosquitto"; }; then
     rm -rf "$dir"
     fail "The coordinator's settings and broker files could not be copied, so nothing was upgraded." "check free space on $BACKUP_ROOT, then run the install command again"
   fi
-  if [ -z "$cid" ] || [ ! -d "$dir/data" ] || [ -z "$(ls -A "$dir/data" 2>/dev/null)" ]; then
+  if [ -z "$(ls -A "$dir/data" 2>/dev/null)" ]; then
     rm -rf "$dir"
-    fail "The backup holds no database, so nothing was upgraded." "start the coordinator with docker compose up -d in $COORDINATOR_DIR, then run the install command again"
+    ok "the coordinator has no database yet, so there is nothing to back up"
+    return 0
   fi
-  BACKUP_DIR="$dir"
   upgrade_write_restore "$dir" "${volume:-showmesh_showmesh-data}"
   upgrade_prune_backups
   ok "backup saved in $dir"
