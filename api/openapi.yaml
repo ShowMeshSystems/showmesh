@@ -20726,7 +20726,7 @@ components:
         with `state` "recorded" means nothing has been played this cycle;
         `plan.configured` says whether the session has any background
         audio to play.
-      required: [state, reason, steps, plan]
+      required: [state, reason, steps, plan, nodesNotPlaying]
       properties:
         plan:
           $ref: "#/components/schemas/NightBackgroundAudioPlan"
@@ -20745,6 +20745,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NightBackgroundAudioStep"
+        nodesNotPlaying:
+          type: array
+          description: >-
+            Every audio node the background bed is configured to play on
+            that is NOT playing it right now, read from each node's own
+            current audio report rather than from what the coordinator
+            last dispatched. A node reporting the bed session as playing
+            never appears, so the list clears itself once a node is back.
+            Only nodes this session has actually dispatched a bed step to
+            are considered, and a node this controller itself paused,
+            stopped or faded down never appears: it is not playing because
+            it was told not to. Always an array, and empty outside the
+            states the bed is meant to be audible in (preshow, the resting
+            gap between shows, and the resting state at the end of the
+            night) and on the historical by-id read, none of which has a
+            "right now" to answer about.
+          items:
+            $ref: "#/components/schemas/NightBedNodeNotPlaying"
         pinnedMaxGainDb:
           type: [number, "null"]
           description: >-
@@ -20769,6 +20787,22 @@ components:
             pinned ceiling, historical by construction, so it is
             populated regardless of state, including preparing and
             stopped.
+    NightBedNodeNotPlaying:
+      type: object
+      description: >-
+        One audio node the background bed is configured for and which is
+        not currently playing it, with an operator-facing reason. The
+        reason never collapses the cases it can tell apart: the node is
+        not reporting its audio at all, it was too busy to report this
+        session fresh, it is reporting and holds no bed session, it holds
+        one playback is no longer running in, or it holds one paused. The
+        reason says the coordinator will act only where it actually does.
+      required: [nodeId, reason]
+      properties:
+        nodeId:
+          type: string
+        reason:
+          type: string
     NightSessionState:
       type: object
       description: >-

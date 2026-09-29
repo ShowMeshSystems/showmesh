@@ -14,7 +14,7 @@ func TestMapNightBackgroundAudioPlan_ConfiguredInlineListsItemsBeforeAnyStep(t *
 	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential)
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreparing)
 
-	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, true)
 	if len(got.Steps) != 0 {
 		t.Fatalf("steps = %d, want none before the bed starts", len(got.Steps))
 	}

@@ -153,6 +153,13 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, "\nPinned max gain: none (%s)\n", s.BackgroundAudio.Reason)
 	}
 
+	if len(s.BackgroundAudio.NodesNotPlaying) > 0 {
+		_, _ = fmt.Fprintf(w, "\nSpeakers not playing the background music:\n")
+		for _, node := range s.BackgroundAudio.NodesNotPlaying {
+			_, _ = fmt.Fprintf(w, "  - %s: %s\n", node.NodeID, node.Reason)
+		}
+	}
+
 	// The two audio sequences print under their own headings. An
 	// announcement's clear and start arrive in the same step list as the
 	// bed's own steps, and a failure in one says something quite

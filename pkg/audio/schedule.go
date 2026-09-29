@@ -146,3 +146,25 @@ const (
 	ParamResumeIndex      = "resumeIndex"
 	ParamResumePositionMs = "resumePositionMs"
 )
+
+// ParamStartItemID, ParamStartIndex, and ParamStartPositionMs are
+// audio.session.start's optional named start target: the exact playlist
+// item and position a coordinator wants this node to begin at, rather
+// than the session's own bookmark or item zero. All three present
+// together or none; a partial set is refused. A node begins the named
+// item at the named position using ITS OWN current playlist revision,
+// never one carried on the wire, exactly as [ParamResumeItemID] and its
+// siblings already do for a resume.
+//
+// The night bed's rejoin path is what sends these (ADR-049 decision 8):
+// a node whose bed session vanished gets a fresh apply, which leaves it
+// at item zero, and a bare start would then play the wrong track while
+// every other node is minutes into another one. An agent build that
+// predates these keys ignores them and starts at item zero, which is
+// audible rather than silent, so the coordinator never has to gate them
+// on a capability.
+const (
+	ParamStartItemID     = "startItemId"
+	ParamStartIndex      = "startIndex"
+	ParamStartPositionMs = "startPositionMs"
+)

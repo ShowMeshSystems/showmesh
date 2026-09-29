@@ -310,6 +310,9 @@ export function ShowNight() {
   const bgAudioShown = bgAudioAll.slice(-bgAudioMax)
   const bgAudioSection = (
       <Section id="sn-bg-audio" title="Background Audio Record" aside={<span className="sm-small sm-muted">This cycle</span>}>
+        {session.backgroundAudio.nodesNotPlaying.map((node) => (
+          <RuledStrip key={node.nodeId} absence="stale" label={node.nodeId} fact="Not playing the background music" detail={node.reason} />
+        ))}
         <h3 id="sn-bg-plan" className="sm-subsection__title">Planned</h3>
         {bgPlan.kind === 'configured' ? (
           <>

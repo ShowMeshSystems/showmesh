@@ -297,6 +297,46 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 	}
 }
 
+// TestCmdNightStatusPrintsTheSpeakersNotPlayingTheBackgroundMusic proves
+// API-first parity for the live absent-speaker list: an operator watching
+// a night from the CLI is told which speaker dropped out and why, without
+// reading the step log and working it out.
+func TestCmdNightStatusPrintsTheSpeakersNotPlayingTheBackgroundMusic(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded","reason":"","steps":[],
+				"nodesNotPlaying":[{"nodeId":"node-b","reason":"This speaker is no longer holding the background music this night started."}]},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Speakers not playing the background music",
+		"node-b",
+		"no longer holding the background music",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not contain %q; stdout=%s", want, out)
+		}
+	}
+}
+
 // TestCmdNightStatusPrintsPinnedMaxGainConfiguredButNotStarted proves
 // finding 4's reconciliation directly: a non-nil pinnedMaxGainDb is proof
 // the pinned revision DOES configure background audio, so the "not

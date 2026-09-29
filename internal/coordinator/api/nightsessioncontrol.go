@@ -1982,7 +1982,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
-	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, now, current)
 	out.BackgroundAudio.Plan = mapNightBackgroundAudioPlan(ctx, deps, rec)
 	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
 	if nightStopHoldStands(rec) {
@@ -2038,6 +2038,25 @@ func nightSessionIsRunning(state string) bool {
 	}
 }
 
+// nightBedIsMeantToBePlaying names the states the resting bed is supposed
+// to be audible in, which is exactly the set nightTick advances it in
+// (nightloop.go): preshow, the resting gap between shows, and the resting
+// state at the end of the night. Every other running state either holds
+// the bed down for a show or is on its way into one, so a speaker that is
+// not playing there is not a speaker that dropped out.
+//
+// resting-intershow past the fade lead is the one case this cannot see
+// from the state alone; a node already faded down and suspended there is
+// excluded by [nightBedNodeDeliberatelySuspended] instead.
+func nightBedIsMeantToBePlaying(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateRestingIntershow, nightStateEndOfNightResting:
+		return true
+	default:
+		return false
+	}
+}
+
 // mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
 // Track F seam F5's background-audio/announcement steps
 // (nightbackgroundaudio.go's own durable log), on the SAME "read failure
@@ -2057,13 +2076,13 @@ func nightSessionIsRunning(state string) bool {
 // unrelated config-read hiccup). current selects which of the two
 // endpoint behaviors applies to pinnedMaxGainDb - see
 // [mapNightSessionState]'s own doc comment.
-func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, current bool) v1.NightBackgroundAudio {
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	// The announcement-session sequence is read here too, under its own
 	// phase family and tagged with its own sequence name. Its clear and
@@ -2074,7 +2093,7 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	// but a log line (ADR-039).
 	announcementRows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
@@ -2093,15 +2112,20 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
 
+	notPlaying := []v1.NightBedNodeNotPlaying{}
+	if current && nightBedIsMeantToBePlaying(rec.State) {
+		notPlaying = nightBedNodesNotPlaying(ctx, deps, rec, now, rows)
+	}
+
 	if current && !nightSessionIsRunning(rec.State) {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out, NodesNotPlaying: notPlaying}
 	}
 
 	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out, NodesNotPlaying: notPlaying}
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb, NodesNotPlaying: notPlaying}
 }
 
 // nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session

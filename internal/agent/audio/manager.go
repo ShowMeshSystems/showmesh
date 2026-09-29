@@ -457,7 +457,7 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 // Start prepares (if not already prepared) and starts the current item
 // from its bookmark position, or 0 with no bookmark, on arrival.
 func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
-	return m.start(ctx, id, invocation, revision, nil, nil)
+	return m.start(ctx, id, invocation, revision, nil, nil, nil)
 }
 
 // StartAt is [Manager.Start] against a media-clock start instant
@@ -473,7 +473,7 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 // starts on arrival exactly as [Manager.Start] does, and says so in the
 // outcome's own reason rather than silently discarding the schedule.
 func (m *Manager) StartAt(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64) pkgaudio.OutcomeResult {
-	return m.start(ctx, id, invocation, revision, &atNs, nil)
+	return m.start(ctx, id, invocation, revision, &atNs, nil, nil)
 }
 
 // StartAtPosition is [Manager.StartAt] with the play head set to position
@@ -487,10 +487,25 @@ func (m *Manager) StartAt(ctx context.Context, id pkgaudio.SessionID, invocation
 // Seek at a different wall-clock moment. position overrides whatever
 // bookmark this session holds; it is never itself persisted as one.
 func (m *Manager) StartAtPosition(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64, position time.Duration) pkgaudio.OutcomeResult {
-	return m.start(ctx, id, invocation, revision, &atNs, &position)
+	return m.start(ctx, id, invocation, revision, &atNs, &position, nil)
 }
 
-func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration) pkgaudio.OutcomeResult {
+// StartFrom is [Manager.Start] begun at a caller-named playlist item and
+// position (pkg/audio.ParamStartItemID and its siblings) rather than at
+// this session's own bookmark or item zero. atNs is optional and means
+// exactly what it means on [Manager.StartAt]. The point names the item
+// against THIS session's current playlist, and a point naming an item
+// that playlist does not have there is refused rather than approximated.
+//
+// The night bed's rejoin path is the caller: a node whose bed session
+// vanished is applied afresh, which leaves it at item zero, and must
+// then begin where the nodes still playing the bed are.
+func (m *Manager) StartFrom(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs *int64, point ResumePoint) pkgaudio.OutcomeResult {
+	position := point.Position
+	return m.start(ctx, id, invocation, revision, atNs, &position, &point)
+}
+
+func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration, startPoint *ResumePoint) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -504,6 +519,11 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	duckedBeforeStart := false
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		if startPoint != nil {
+			if err := s.applyResumePointLocked(*startPoint); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
+			}
+		}
 		item, ok := s.currentItemLocked()
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to start"}
