@@ -20656,15 +20656,80 @@ components:
         resolvedAt:
           type: [string, "null"]
           format: date-time
+    NightBackgroundAudioPlanItem:
+      type: object
+      required: [position, itemId, show, sequence, target]
+      properties:
+        position:
+          type: integer
+          description: Playing order, counted from 1.
+        itemId:
+          type: string
+        show:
+          type: string
+        sequence:
+          type: string
+        target:
+          type: string
+          description: The audio node that holds this item's file.
+    NightBackgroundAudioPlan:
+      type: object
+      description: >-
+        The background audio the session will play, read from its own
+        pinned configuration revision so it never reports another
+        revision's items. It is available before the bed starts and is not
+        replaced by the step log. `state` "recorded" with `configured`
+        false means the revision has no background audio; `configured`
+        true with no steps means it is set up but has not started this
+        cycle. `state` "unknown" carries the `reason` the plan could not
+        be read, for example a missing media playlist.
+      required: [state, reason, configured, mediaPlaylist, repeat, resume,
+                 itemTransition, crossfadeMs, nodes, items]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown]
+        reason:
+          type: string
+        configured:
+          type: boolean
+        mediaPlaylist:
+          type: string
+          description: >-
+            The media playlist the bed plays, or empty when the pinned
+            revision lists the items inline.
+        repeat:
+          type: string
+          enum: ["", none, item, playlist]
+        resume:
+          type: string
+          enum: ["", resume, restart]
+        itemTransition:
+          type: string
+          enum: ["", sequential, gapless, crossfade]
+        crossfadeMs:
+          type: [integer, "null"]
+        nodes:
+          type: array
+          description: The audio nodes the bed will play on.
+          items:
+            type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NightBackgroundAudioPlanItem"
     NightBackgroundAudio:
       type: object
       description: >-
         resting.backgroundAudio's own durable step log for the current
         cycle, or the stated reason it could not be read. Empty `steps`
-        with `state` "recorded" means backgroundAudio is not configured
-        at all, or has never been started this cycle.
-      required: [state, reason, steps]
+        with `state` "recorded" means nothing has been played this cycle;
+        `plan.configured` says whether the session has any background
+        audio to play.
+      required: [state, reason, steps, plan]
       properties:
+        plan:
+          $ref: "#/components/schemas/NightBackgroundAudioPlan"
         state:
           type: string
           enum: [recorded, unknown, not_configured, not_available]

@@ -528,6 +528,21 @@ describe('Node detail', () => {
     expect(status.closest('.sm-status')).toHaveClass('sm-status--good')
   })
 
+  it('renders a substituted audio setting as a warning sentence in operator words', () => {
+    renderScreen([
+      node({
+        audio: [
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.state', value: 'substituted', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.substituted_fields', value: 'DuckFadeDurationMs', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+          { resource: { kind: 'node', id: 'media-garage' }, signal: 'node.audio.settings.reason', value: 'DuckFadeDurationMs 0 is not positive', unit: null, state: 'current', reason: null, observedAt: '2026-08-30T20:41:00Z', collectedAt: '2026-08-30T20:41:00Z', source: 'node-audio:media-garage', quality: 'reported' },
+        ] as unknown as Node['audio'],
+      }),
+    ])
+    expect(screen.getByText(/could not apply Duck fade duration/)).toBeInTheDocument()
+    expect(screen.getByText('substituted').closest('.sm-status')).toHaveClass('sm-status--warn')
+    expect(screen.queryByText('node.audio.settings.substituted_fields')).not.toBeInTheDocument()
+  })
+
   it('shows the not-found treatment naming the id when the node is not in the model', () => {
     renderScreen([])
     expect(screen.getAllByText(/media-garage/).length).toBeGreaterThan(0)

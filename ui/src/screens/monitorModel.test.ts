@@ -57,3 +57,30 @@ describe('nodeSignalGroups · Audio', () => {
     expect(row?.value).toBe('None')
   })
 })
+
+describe('nodeSignalGroups · audio setting substitution', () => {
+  const entry = (signal: string, value: string): Node['audio'][number] => ({ ...alignmentStateEvidence(value), signal })
+  const audioRows = (state: string, fields: string, reason: string) =>
+    nodeSignalGroups(
+      nodeWithAudio([
+        entry('node.audio.settings.state', state),
+        entry('node.audio.settings.substituted_fields', fields),
+        entry('node.audio.settings.reason', reason),
+      ]),
+    ).find((g) => g.name === 'Audio')!.rows
+
+  it('renders a substituted state as one warning row naming the field in operator words', () => {
+    const rows = audioRows('substituted', 'DuckFadeDurationMs; LTCFrameRate', 'DuckFadeDurationMs 0 is not positive')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.tone).toBe('warn')
+    expect(rows[0]!.value).toContain('Duck fade duration and LTC frame rate')
+    expect(rows[0]!.value).not.toContain('DuckFadeDurationMs')
+    expect(rows[0]!.detail).toContain('DuckFadeDurationMs 0 is not positive')
+  })
+
+  it('leaves an accepted state as the quiet good row', () => {
+    const rows = audioRows('accepted', '', '')
+    expect(rows.find((r) => r.label === 'node.audio.settings.state')?.tone).toBe('good')
+    expect(rows.find((r) => r.label === 'node.audio.settings.state')?.state).toBeNull()
+  })
+})

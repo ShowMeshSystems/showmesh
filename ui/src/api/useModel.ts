@@ -121,6 +121,7 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 // ADR-048, Track J's J1: the fallback-program metadata list and one
 // host's full signed-program read.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
@@ -245,6 +246,10 @@ export function getFPPPlaylistDefinition(
   playlistHash: string,
 ): Promise<SchemaFPPPlaylistDefinitionResponse> {
   return store.getFPPPlaylistDefinition(instanceUuid, playlistHash)
+}
+
+export function republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+  return store.republishFPPPlaylistDefinitions(instanceId, requestId)
 }
 
 export function getFPPPlaylistDefinitionEntries(

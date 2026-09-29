@@ -71,11 +71,33 @@ type nightBackgroundAudioStepWire struct {
 	ResolvedAt     *string `json:"resolvedAt"`
 }
 
+type nightBackgroundAudioPlanItemWire struct {
+	Position int    `json:"position"`
+	ItemID   string `json:"itemId"`
+	Show     string `json:"show"`
+	Sequence string `json:"sequence"`
+	Target   string `json:"target"`
+}
+
+type nightBackgroundAudioPlanWire struct {
+	State          string                             `json:"state"`
+	Reason         string                             `json:"reason"`
+	Configured     bool                               `json:"configured"`
+	MediaPlaylist  string                             `json:"mediaPlaylist"`
+	Repeat         string                             `json:"repeat"`
+	Resume         string                             `json:"resume"`
+	ItemTransition string                             `json:"itemTransition"`
+	CrossfadeMs    *int                               `json:"crossfadeMs"`
+	Nodes          []string                           `json:"nodes"`
+	Items          []nightBackgroundAudioPlanItemWire `json:"items"`
+}
+
 type nightBackgroundAudioWire struct {
 	State           string                         `json:"state"`
 	Reason          string                         `json:"reason"`
 	Steps           []nightBackgroundAudioStepWire `json:"steps"`
 	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
+	Plan            nightBackgroundAudioPlanWire   `json:"plan"`
 }
 
 // nightCycleOutcomeWire is one already-finished cycle: NightCycleOutcome

@@ -340,6 +340,15 @@ export function newerDefinition(
   return candidates.reduce((latest, entry) => (entry.capturedAt > latest.capturedAt ? entry : latest))
 }
 
+/** The newest time the coordinator received any definition of this FPP playlist, or null when it holds none. */
+export function latestDefinitionReceivedMs(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string, playlistName: string): number | null {
+  const times = definitions
+    .filter((d) => d.instanceUuid === instanceUuid && d.playlistName === playlistName)
+    .map((d) => Date.parse(d.receivedAt))
+    .filter((ms) => !Number.isNaN(ms))
+  return times.length === 0 ? null : Math.max(...times)
+}
+
 // ---------------------------------------------------------------------
 // Presentation (show.surface)
 // ---------------------------------------------------------------------

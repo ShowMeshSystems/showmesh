@@ -166,6 +166,7 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 // and its parsed entries.
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
+type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
 // ADR-048, Track J's J1: the fallback-program metadata list and one
 // host's full signed-program read, an operator's pre-show readiness
@@ -850,6 +851,24 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaFPPPlaylistDefinitionResponse>(
         `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * POST /fpp/{instanceId}/playlist-definitions/republish. A resolved call
+   * means the plugin agreed to resend, never that a definition arrived:
+   * read [listFPPPlaylistDefinitions] for that.
+   */
+  async republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaFPPDefinitionRepublishResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/playlist-definitions/republish`,
+        requestId === undefined ? {} : { requestId },
         controller.signal,
       )
     } finally {
