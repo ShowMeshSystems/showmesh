@@ -177,15 +177,17 @@ type AudioNodeConfigResponse struct {
 // /nodes/{nodeId}/audio/routing-choices: the program and LTC choices the
 // node's own reported outputs support, resolved by the coordinator.
 type AudioRoutingChoicesResponse struct {
-	ServerTime  string                    `json:"serverTime"`
-	NodeID      string                    `json:"nodeId"`
-	Discovery   string                    `json:"discovery"`
-	Reason      string                    `json:"reason,omitempty"`
-	ManualEntry AudioRoutingManualEntry   `json:"manualEntry"`
-	LTC         AudioRoutingLTC           `json:"ltc"`
-	Routes      []AudioRoutingRouteChoice `json:"routes"`
-	Current     *AudioRoutingCurrent      `json:"current,omitempty"`
-	Clock       *AudioRoutingClock        `json:"clock,omitempty"`
+	ServerTime string `json:"serverTime"`
+	NodeID     string `json:"nodeId"`
+	Discovery  string `json:"discovery"`
+	Reason     string `json:"reason,omitempty"`
+	// DiscoveryDetail is the node's own diagnostic text, never operator copy.
+	DiscoveryDetail string                    `json:"discoveryDetail,omitempty"`
+	ManualEntry     AudioRoutingManualEntry   `json:"manualEntry"`
+	LTC             AudioRoutingLTC           `json:"ltc"`
+	Routes          []AudioRoutingRouteChoice `json:"routes"`
+	Current         *AudioRoutingCurrent      `json:"current,omitempty"`
+	Clock           *AudioRoutingClock        `json:"clock,omitempty"`
 }
 
 // AudioRoutingManualEntry says whether hand-typed channels are accepted.

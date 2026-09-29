@@ -113,7 +113,7 @@ func (h *handlers) storedAudioNodePayload(ctx context.Context, id string) (*conf
 
 func mapAudioRoutingChoices(now time.Time, id string, c config.AudioRoutingChoices) v1.AudioRoutingChoicesResponse {
 	resp := v1.AudioRoutingChoicesResponse{
-		ServerTime: formatTime(now), NodeID: id, Discovery: c.Discovery, Reason: c.Reason,
+		ServerTime: formatTime(now), NodeID: id, Discovery: c.Discovery, Reason: c.Reason, DiscoveryDetail: c.DiscoveryDetail,
 		ManualEntry: v1.AudioRoutingManualEntry{Allowed: c.ManualEntry.Allowed, Reason: c.ManualEntry.Reason},
 		LTC:         v1.AudioRoutingLTC{Available: c.LTC.Available, Reason: c.LTC.Reason},
 		Routes:      make([]v1.AudioRoutingRouteChoice, 0, len(c.Routes)),

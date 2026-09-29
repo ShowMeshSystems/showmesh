@@ -608,7 +608,6 @@ func TestDetectAudioCapabilitiesReportsTypedOutputEvidence(t *testing.T) {
 		Routes: []audio.RouteEvidence{
 			{Device: "hw:CARD=M4,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, LTCChannels: 3},
 			{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
-			{Device: "hw:CARD=GONE,DEV=0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open"}},
 		},
 	})
 	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{
@@ -635,7 +634,7 @@ func TestDetectAudioCapabilitiesReportsTypedOutputEvidence(t *testing.T) {
 		{"route": "alsa_output.usb-MOTU_M4-00.pro-output-0", "interface": "alsa_output.usb-MOTU_M4-00.pro-output-0", "source": "pipewire", "channelBasis": "inventory", "channels": 4, "ltcCapable": true},
 	}
 	if len(outputs) != len(want) {
-		t.Fatalf("outputs = %v, want %d entries (the unavailable route never listed)", outputs, len(want))
+		t.Fatalf("outputs = %v, want %d entries", outputs, len(want))
 	}
 	for i := range want {
 		for k, v := range want[i] {
@@ -661,6 +660,10 @@ func TestDetectAudioCapabilitiesMarksPartialDiscovery(t *testing.T) {
 			audio.PipeWireDiscovery{Enumerated: true, Routes: []audio.RouteEvidence{{Device: "alsa_output.x", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, FromGraph: true}}}},
 		{"pipewire failed", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route}}, audio.PipeWireDiscovery{EnumeratedReason: "PipeWire graph enumeration failed: bad json"}},
 		{"pipewire truncated", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route}}, audio.PipeWireDiscovery{Enumerated: true, Truncated: true}},
+		{"one output failed", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route,
+			{Device: "hw:CARD=GONE,DEV=0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open audio device"}}}}, audio.PipeWireDiscovery{}},
+		{"one output busy and never checked", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{route,
+			{Device: "hw:CARD=BUSY,DEV=0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "Device or resource busy"}}}}, audio.PipeWireDiscovery{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -680,5 +683,40 @@ func TestDetectAudioCapabilitiesMarksPartialDiscovery(t *testing.T) {
 				t.Error("discoveryIncompleteReason empty, want the reason discovery was partial")
 			}
 		})
+	}
+}
+
+// TestDetectAudioCapabilitiesHeldRouteReportsProbedChannelsNotSavedOnes
+// proves a playing node never reports its saved channels as hardware:
+// program 3,4 saved on a card that probed 2 still reports at least 2.
+func TestDetectAudioCapabilitiesHeldRouteReportsProbedChannelsNotSavedOnes(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	withAudioEngineAvailable(t, true, "")
+	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{})
+	const card = "hw:CARD=PCH,DEV=0"
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{{Device: card, ProbeResult: audio.ProbeResult{Available: true, Channels: 2}}}})
+	detectAudioCapabilities(context.Background())
+
+	withAudioEngineHeldNode(t, audioNodeConfig{ProgramRoute: card, ProgramChannels: []int{3, 4}}, true)
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{{Device: card, ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "Device or resource busy"}}}})
+	local, ok := detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised for the held route, want present")
+	}
+	outputs, _ := local.Attributes["outputs"].([]map[string]any)
+	if len(outputs) != 1 || outputs[0]["channels"] != 2 {
+		t.Errorf("outputs = %v, want the probed 2 channels, never the saved 4", outputs)
+	}
+	if local.Attributes["discoveryComplete"] != true {
+		t.Errorf("discoveryComplete = %v (%v), want true: a busy route with earlier evidence is still known", local.Attributes["discoveryComplete"], local.Attributes["discoveryIncompleteReason"])
+	}
+
+	lastKnownGoodRoutes.reset()
+	local, _ = detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
+	if outputs, _ := local.Attributes["outputs"].([]map[string]any); len(outputs) != 0 || local.Attributes["discoveryComplete"] != false {
+		t.Errorf("held route with no earlier evidence: outputs %v complete %v, want none and partial", outputs, local.Attributes["discoveryComplete"])
 	}
 }
