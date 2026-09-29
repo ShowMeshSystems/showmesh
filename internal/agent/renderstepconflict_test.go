@@ -309,7 +309,13 @@ func TestResumeRefusalKeepsSavedAssignmentAndFirstStepTime(t *testing.T) {
 	}
 }
 
-func TestCueActivationRefusalLeavesOldWriterAssignmentAndClosesFile(t *testing.T) {
+func (f *stepFixture) reservations() int {
+	f.ops.mu.Lock()
+	defer f.ops.mu.Unlock()
+	return len(f.ops.stepReserved)
+}
+
+func TestCueActivationConflictingWithASurfaceOutsideTheSetRefusesEverything(t *testing.T) {
 	f := newStepFixture(t)
 	if err := f.apply("left", "a.fseq", 25); err != nil {
 		t.Fatalf("left apply: %v", err)
@@ -317,21 +323,15 @@ func TestCueActivationRefusalLeavesOldWriterAssignmentAndClosesFile(t *testing.T
 	if err := f.apply("right", "b.fseq", 25); err != nil {
 		t.Fatalf("right apply: %v", err)
 	}
+	// right keeps playing but is no longer assigned, so the Cue's set is left alone.
+	if err := f.store.Remove("right"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
 	out := f.renderOutput("new.fseq", 50)
 	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
-	all, err := f.store.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	var left pipeline.Assignment
-	for _, a := range all {
-		if a.SurfaceID == "left" {
-			left = a
-		}
-	}
 	before := f.savedFilename("left")
 	fds := openFDCount(t)
-	err = f.ops.activateSurfaceRender(left, act, out, map[string]bool{"left": true}, f.clock.now)
+	err := f.ops.activateRender(act, out, f.clock.now)
 	if err == nil || !strings.Contains(err.Error(), `surface "left": This sequence runs at 50 ms per frame but the surface right`) {
 		t.Fatalf("error = %v, want a refusal that names surface left", err)
 	}
@@ -344,7 +344,94 @@ func TestCueActivationRefusalLeavesOldWriterAssignmentAndClosesFile(t *testing.T
 	if got := openFDCount(t); got != fds {
 		t.Fatalf("open files went from %d to %d, want the refused file closed", fds, got)
 	}
+	if n := f.reservations(); n != 0 {
+		t.Fatalf("%d step time reservations left after a refused Cue", n)
+	}
 	f.requireTimelineStep(25)
+}
+
+func (f *stepFixture) breakSavedAssignment(surfaceID string) {
+	f.t.Helper()
+	if err := f.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: []byte(`[]`), AppliedAt: f.clock.now()}); err != nil {
+		f.t.Fatalf("Upsert: %v", err)
+	}
+}
+
+func TestPartialCueHoldsBlackASurfaceLeftAtADifferentStepTime(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 50); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 50); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	f.breakSavedAssignment("right")
+	out := f.renderOutput("new.fseq", 25)
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	err := f.ops.activateRender(act, out, f.clock.now)
+	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || !strings.Contains(err.Error(), "so the surface is black") {
+		t.Fatalf("error = %v, want it to name surface right and say it is black", err)
+	}
+	if got := f.writerFile("left"); got != "new.fseq" {
+		t.Fatalf("left writer file = %q, want new.fseq", got)
+	}
+	if !f.ops.isHeldBlack("right") {
+		t.Fatalf("right is not held black while it plays 50 ms under a 25 ms timeline")
+	}
+	if f.ops.isHeldBlack("left") {
+		t.Fatalf("left is held black, want it playing")
+	}
+	f.requireTimelineStep(25)
+}
+
+func TestPartialCueLeavesASurfaceAtTheSameStepTimePlaying(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	f.breakSavedAssignment("right")
+	out := f.renderOutput("new.fseq", 25)
+	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
+	err := f.ops.activateRender(act, out, f.clock.now)
+	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || strings.Contains(err.Error(), "black") {
+		t.Fatalf("error = %v, want it to name surface right without holding it black", err)
+	}
+	if got := f.writerFile("right"); got != "b.fseq" {
+		t.Fatalf("right writer file = %q, want b.fseq", got)
+	}
+	if f.ops.isHeldBlack("right") {
+		t.Fatalf("right is held black although its step time matches")
+	}
+}
+
+func TestPeerAboutToSwitchIsCheckedAgainstItsQueuedStepTime(t *testing.T) {
+	f := newStepFixture(t)
+	if err := f.apply("left", "a.fseq", 25); err != nil {
+		t.Fatalf("left apply: %v", err)
+	}
+	if err := f.apply("right", "b.fseq", 25); err != nil {
+		t.Fatalf("right apply: %v", err)
+	}
+	both := []string{"left", "right"}
+	f.queueOn("left", both, f.renderOutput("next.fseq", 50))
+	if err := f.ops.reserveStepTime("right", 25, nil); err != nil {
+		t.Fatalf("reserve before the switch is allowed: %v", err)
+	}
+	f.ops.releaseStepReservation("right")
+	f.ops.mu.Lock()
+	h := f.ops.writers["left"]
+	q := h.queued.seq
+	f.ops.mu.Unlock()
+	f.queueOn("right", both, f.renderOutput("next.fseq", 50))
+	if !f.ops.allowQueuedSwitch("left", h, q) {
+		t.Fatalf("switch refused with both surfaces queued")
+	}
+	if err := f.ops.reserveStepTime("right", 25, nil); err == nil {
+		t.Fatalf("reserve at 25 ms passed while left is about to play 50 ms")
+	}
 }
 
 func TestCueActivationMovesAllSurfacesToANewStepTimeTogether(t *testing.T) {

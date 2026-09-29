@@ -631,7 +631,7 @@ func (o *renderOperations) stepTimeConflictLocked(surfaceID string, stepTimeMS b
 			continue
 		}
 		steps[id] = h.fseq.StepTimeMS()
-		if useQueued && h.queued != nil {
+		if h.queued != nil && (useQueued || h.queued.switching) {
 			steps[id] = h.queued.file.StepTimeMS()
 		}
 	}

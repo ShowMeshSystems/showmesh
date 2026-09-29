@@ -21,6 +21,11 @@ type queuedRender struct {
 	show            string
 	generation      int64
 	catalogRevision string
+
+	// switching is set once the writer's switch guard has allowed the move
+	// to this sequence, so a peer is checked against what it is about to
+	// play. Guarded by renderOperations.mu.
+	switching bool
 }
 
 // matches reports whether q is exactly what act activates with out. Any
@@ -240,6 +245,9 @@ func (o *renderOperations) allowQueuedSwitch(surfaceID string, h *frameWriterHan
 		return true
 	}
 	err := o.stepTimeConflictLocked(surfaceID, h.queued.file.StepTimeMS(), nil, true)
+	if err == nil {
+		h.queued.switching = true
+	}
 	o.mu.Unlock()
 	if err != nil {
 		o.logger.Warn("render: the next sequence was not started because it runs at a different frame timing than another surface",
