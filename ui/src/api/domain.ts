@@ -86,6 +86,15 @@ export type TokensResponse = components['schemas']['TokensResponse']
 export type IssueTokenRequest = components['schemas']['IssueTokenRequest']
 export type IssueTokenResponse = components['schemas']['IssueTokenResponse']
 
+// ADR-055: node enrollment codes. CreateNodeEnrollmentResponse carries the
+// code itself, the only place it ever appears; NodeEnrollment (as listed)
+// never does.
+export type NodeEnrollment = components['schemas']['NodeEnrollment']
+export type NodeEnrollmentsResponse = components['schemas']['NodeEnrollmentsResponse']
+export type NodeEnrollmentResponse = components['schemas']['NodeEnrollmentResponse']
+export type CreateNodeEnrollmentRequest = components['schemas']['CreateNodeEnrollmentRequest']
+export type CreateNodeEnrollmentResponse = components['schemas']['CreateNodeEnrollmentResponse']
+
 // Step 7 seam A (RES-008 D1): the configuration write surface's shapes,
 // aliased for the identical reason as every type above. Not part of
 // `Model` — see store.ts's "Step 7 seam A" section header comment for why
@@ -499,6 +508,7 @@ export type FPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlayl
 export type FPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 export type FPPPlaylistDefinitionEntry = components['schemas']['FPPPlaylistDefinitionEntry']
 export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+export type FPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 
 // TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
 // stored playlist-entry observation an operator reviews before clearing

@@ -68,12 +68,40 @@ and requires `gst-inspect-1.0 ndisink` to resolve. When the node agent package
 carries no `gstreamer/libgstndi.so`, the plugin is built with
 `node/ndi-plugin/build-ndi-plugin.sh <output-dir>` at that point, not before.
 
+## Output and the install log
+
+`lib/common.sh` draws every install: the static banner, `▸` step headers,
+`✔` and `⚠` check lines, and a spinner beside a step that takes time
+(ADR-055 decision 9, amended 2026-09-28). Output that is not a terminal,
+`NO_COLOR` and `TERM=dumb` each get the same lines as plain text, so a captured
+install reads as it always did and the benches assert on that text. Refusals
+and errors are never coloured.
+
+`log_open` appends a header to `/var/log/showmesh-install.log` (mode 0600,
+root) with the date, version, role and arguments, hiding the values of `--code`
+and `--broker-password`. `SHOWMESH_INSTALL_LOG` moves that file, which is how a
+test reads one run's log without root's `/var/log`.
+
+`run_step LABEL FILE CMD...` is how a step runs a command: it captures the
+output to `FILE`, appends it to the log and animates the spinner. `CMD` runs in
+the installer's own shell and in the foreground with stdin from `/dev/null`, in
+both layouts, so a function can set variables and Ctrl-C stops `CMD` itself.
+`step_warnings FILE` then shows any `WARNING:` line the step printed, which a
+successful step otherwise leaves only in the log. `log_open` keeps no log when
+the log path is a symbolic link.
+`fail_with FILE FACT FIX` stops with the fact, then the last lines that command
+printed, then the fix and the log path. Three commands print a secret of their
+own and so are recorded in the log as withheld rather than captured:
+`generate-credentials.sh`, the coordinator's `bootstrap` and `create-admin`, and
+`showmeshctl node enroll`. `http_request` logs the method, URL and status of a
+request that did not succeed, never the answer, because a redeem answer carries
+the node's broker password and API token.
+
 ## Party mode
 
-`--party` adds the banner, colour and animation of `lib/party.sh` to the
-opening and success screens only. It never decorates a question, a refusal or
-an error, and without `--party` nothing in that file runs. The hidden modes
-need `--party` as well.
+`--party` adds the animated opening and success screens of `lib/party.sh`. It
+never decorates a question, a refusal or an error, and without `--party`
+nothing in that file runs. The hidden modes need `--party` as well.
 
 ## Testing
 

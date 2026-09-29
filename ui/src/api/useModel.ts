@@ -44,6 +44,8 @@ import type {
   ConfigShowPlaylist,
   ConfigMediaPlaylist,
   ConfigShowWrite,
+  CreateNodeEnrollmentRequest,
+  CreateNodeEnrollmentResponse,
   CreatePrincipalRequest,
   CurrentRunsResponse,
   EmergencyStopArmResponse,
@@ -60,6 +62,8 @@ import type {
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
+  NodeEnrollmentResponse,
+  NodeEnrollmentsResponse,
   ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
@@ -116,6 +120,7 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 // ADR-048, Track J's J1: the fallback-program metadata list and one
 // host's full signed-program read.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
@@ -240,6 +245,10 @@ export function getFPPPlaylistDefinition(
   playlistHash: string,
 ): Promise<SchemaFPPPlaylistDefinitionResponse> {
   return store.getFPPPlaylistDefinition(instanceUuid, playlistHash)
+}
+
+export function republishFPPPlaylistDefinitions(instanceId: string, requestId?: string): Promise<SchemaFPPDefinitionRepublishResponse> {
+  return store.republishFPPPlaylistDefinitions(instanceId, requestId)
 }
 
 export function getFPPPlaylistDefinitionEntries(
@@ -905,6 +914,20 @@ export function issuePrincipalToken(id: string, payload: IssueTokenRequest): Pro
 
 export function revokePrincipalToken(id: string, tokenId: string): Promise<void> {
   return store.revokePrincipalToken(id, tokenId)
+}
+
+// -- ADR-055: node enrollment codes --------------------------------------
+
+export function createNodeEnrollment(payload: CreateNodeEnrollmentRequest): Promise<CreateNodeEnrollmentResponse> {
+  return store.createNodeEnrollment(payload)
+}
+
+export function listNodeEnrollments(): Promise<NodeEnrollmentsResponse> {
+  return store.listNodeEnrollments()
+}
+
+export function cancelNodeEnrollment(id: string): Promise<NodeEnrollmentResponse | undefined> {
+  return store.cancelNodeEnrollment(id)
 }
 
 // Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,

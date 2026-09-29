@@ -72,6 +72,7 @@ import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
+  plannedBackgroundAudio,
   cycleRail,
   evidenceReadouts,
   nextTransition,
@@ -304,6 +305,7 @@ export function ShowNight() {
       </Section>
   )
   const bgAudioAll = backgroundAudioSteps(session.backgroundAudio)
+  const bgPlan = plannedBackgroundAudio(session.backgroundAudio)
   const bgAudioMax = 25
   const bgAudioShown = bgAudioAll.slice(-bgAudioMax)
   const bgAudioSection = (
@@ -311,6 +313,39 @@ export function ShowNight() {
         {session.backgroundAudio.nodesNotPlaying.map((node) => (
           <RuledStrip key={node.nodeId} absence="stale" label={node.nodeId} fact="Not playing the background music" detail={node.reason} />
         ))}
+        <h3 id="sn-bg-plan" className="sm-subsection__title">Planned</h3>
+        {bgPlan.kind === 'configured' ? (
+          <>
+            <p className="sm-small sm-muted">
+              {bgPlan.source}. {bgPlan.settings.map((setting) => `${setting.label}: ${setting.value}`).join(' · ')}. Plays on <span className="sm-data">{bgPlan.nodes === '' ? 'no node' : bgPlan.nodes}</span>.
+            </p>
+            <TableWrap label="Planned background audio items, scrollable">
+              <Table minWidth={500}>
+                <thead>
+                  <tr>
+                    <th scope="col">Order</th>
+                    <th scope="col">Sequence</th>
+                    <th scope="col">File on</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bgPlan.items.map((item) => (
+                    <tr key={item.key}>
+                      <td className="sm-data">{item.position}</td>
+                      <td>{item.sequence}</td>
+                      <td className="sm-data">{item.target}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          </>
+        ) : bgPlan.kind === 'not_configured' ? (
+          <RuledStrip absence="empty" label="Not configured" fact={bgPlan.fact} />
+        ) : (
+          <RuledStrip absence="unavailable" label="Unavailable" fact={bgPlan.fact} />
+        )}
+        <h3 id="sn-bg-steps" className="sm-subsection__title">Recorded</h3>
         {bgAudioAll.length > 0 ? (
           <>
           <TableWrap label="Background audio steps this cycle, scrollable">
@@ -356,7 +391,11 @@ export function ShowNight() {
           )}
           </>
         ) : (
-          <RuledStrip absence="empty" label="None recorded" fact="No background audio steps are recorded for this cycle." />
+          <RuledStrip
+            absence="empty"
+            label={bgPlan.kind === 'configured' ? 'Not started' : 'None recorded'}
+            fact={bgPlan.kind === 'configured' ? 'Background audio has not started this cycle. Its steps appear here once it does.' : 'No background audio steps are recorded for this cycle.'}
+          />
         )}
       </Section>
   )

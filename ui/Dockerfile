@@ -14,7 +14,10 @@
 
 # node:22-alpine pins an LTS major without a floating "lts" tag drifting
 # under CI; bump deliberately alongside the toolchain in package.json.
-FROM node:22-alpine AS build
+# --platform=$BUILDPLATFORM keeps this stage on the builder's own
+# architecture: `npm run build` emits static assets that carry no machine
+# code, so the same dist/ serves every target and no QEMU is needed.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 
 WORKDIR /app
 

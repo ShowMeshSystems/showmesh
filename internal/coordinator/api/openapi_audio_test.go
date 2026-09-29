@@ -335,3 +335,30 @@ func assertEnumMatchesCanonical(t *testing.T, got []string, path string) {
 		}
 	}
 }
+
+func TestOpenAPIAudioRoutingChoicesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, token := newRoutingChoicesAPI(t,
+		nodeViewReportingOutputs(t, "audio-m4", true, m4OutputsAttrs, "alsa_output.m4"),
+		nodeViewReportingOutputs(t, "audio-off", false, pchOutputsAttrs),
+	)
+	if status, body := mustPutAudioNode(t, api, token, "audio-m4",
+		`{"programRoute":"alsa_output.m4","ltcRoute":"alsa_output.m4","programChannels":[1,2],"ltcChannel":3}`); status != http.StatusOK {
+		t.Fatalf("PUT: %d %s", status, body)
+	}
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	for _, id := range []string{"audio-m4", "audio-off", "audio-none"} {
+		resp, body := doRequest(t, api.Handler, "GET", "/api/v1/nodes/"+id+"/audio/routing-choices", auth)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status %d body %s", id, resp.StatusCode, body)
+		}
+		assertMatchesSchema(t, c, "AudioRoutingChoicesResponse", body)
+	}
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.node/audio-m4",
+		`{"programRoute":"alsa_output.m4","programChannels":[5,6]}`, auth)
+	resp, body := doRawRequest(t, api.Handler, putReq)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT beyond inventory: %d %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "Problem", body)
+}

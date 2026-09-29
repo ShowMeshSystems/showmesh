@@ -283,6 +283,15 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 		return
 	}
+	routingEvidence, err := audioRoutingEvidence(r.Context(), h.deps.Nodes, now, id)
+	if err != nil {
+		h.writeInternalError(w, now, "get audio routing evidence", err)
+		return
+	}
+	if verr := config.ValidateAudioNodeChannelInventory(payload, routingEvidence); verr != nil {
+		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
 
 	// ADR-045: at most one audio.node across the installation may carry
 	// role "program+ltc" (ADR-018's one clock domain, one LTC emitter).
