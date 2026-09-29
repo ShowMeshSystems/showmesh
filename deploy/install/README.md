@@ -57,6 +57,39 @@ exist so every question has an unattended answer: `--address`,
 `--agent-package` (a node agent tarball on disk, for a build that has no
 release).
 
+## Firewall
+
+`lib/firewall.sh` runs after the role finishes and detects an active ufw, a
+running firewalld, or a raw nftables ruleset whose input chain hooks input
+with a drop policy (Debian 13 ships none of these by default).
+
+| Detected | What the installer does |
+| --- | --- |
+| ufw active | Opens exactly the ports the installed role needs with `ufw allow`, each carrying a comment naming ShowMesh. Re-running adds nothing twice; ufw already skips a rule it already has. |
+| firewalld running | Writes a custom `showmesh` service listing those ports to `/etc/firewalld/services/showmesh.xml` and adds it to the default zone. |
+| Raw nftables, input chain policy drop | Prints the exact `accept` rules to add and the file nftables loads them from (`/etc/nftables.conf` on Debian). An accept rule in a separate table cannot override a drop in the owner's own chain, so nothing is changed. |
+| No firewall active | Prints one line and changes nothing. |
+
+The ports: every node role needs tcp 80 (or `SHOWMESH_FPPCONNECT_LISTEN_ADDR`'s
+port), udp 32320 (or `SHOWMESH_MULTISYNC_LISTEN_ADDR`'s port, FPP MultiSync),
+udp 319 and 320 (PTP), udp 5004 and 9875 (AES67 RTP and SAP), and udp 5353
+(mDNS). A render node also needs tcp and udp 5959-5999 (NDI). A coordinator
+needs tcp 8080 (or `SHOWMESH_HTTP_PORT`, the API), tcp 8081 (or
+`SHOWMESH_UI_PORT`, the operator UI), and, with the built-in broker, tcp 1883
+(or `MOSQUITTO_PORT`). Docker publishes the coordinator's ports itself, which
+bypasses a ufw or nftables host's input chain, but a firewalld zone can still
+block a published port, so the coordinator's ports are opened on every
+backend regardless.
+
+`--firewall` opts in to installing a ShowMesh firewall on a host with none
+active: an nftables table named `showmesh_host` in
+`/etc/nftables.d/showmesh-host.nft`, included from `/etc/nftables.conf`
+(backed up once before the first edit), with a drop policy on the input
+chain, established/related and loopback traffic, Docker's bridge interfaces,
+ICMP, IGMP, mDNS and SSH allowed, and the role's own ports on top. It never
+runs `nft flush ruleset`, so Docker's own tables survive. `--no-firewall`
+skips firewall setup entirely.
+
 ## NDI
 
 The installer never downloads the NDI runtime. `--ndi <file>` accepts the SDK
@@ -83,4 +116,7 @@ need `--party` as well.
 node roles unattended against a fake enrollment server, including a wrong code,
 an expired code and an in-place upgrade. `bench/node-install/run_coordinator_bench.sh`
 then runs the coordinator role for real inside a privileged Debian 13
-container with its own dockerd. See `bench/node-install/README.md`.
+container with its own dockerd. `bench/node-install/run_firewall_bench.sh` proves
+`lib/firewall.sh` against ufw, firewalld, a raw nftables ruleset with a drop
+policy, no firewall, `--firewall` and `--no-firewall`. See
+`bench/node-install/README.md`.

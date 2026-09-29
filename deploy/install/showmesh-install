@@ -15,6 +15,8 @@ BUNDLE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 . "$BUNDLE_DIR/lib/audio.sh"
 # shellcheck source=deploy/install/lib/coordinator.sh
 . "$BUNDLE_DIR/lib/coordinator.sh"
+# shellcheck source=deploy/install/lib/firewall.sh
+. "$BUNDLE_DIR/lib/firewall.sh"
 # shellcheck source=deploy/install/lib/party.sh
 . "$BUNDLE_DIR/lib/party.sh"
 
@@ -55,6 +57,8 @@ With no options it asks what this machine is and walks you through it.
   --ptp-role ROLE           follower, grandmaster or auto (default follower)
   --audio-card NAME         part of the sound card's name
   --agent-package FILE      use a node agent package on disk instead of downloading it
+  --firewall                install a ShowMesh firewall when this host has none active
+  --no-firewall             skip firewall setup entirely
   --yes                     never ask; take everything from options
   --version                 print the installer's version
   --party                   add colour and animation to the opening and success screens
@@ -65,7 +69,7 @@ EOF
 OPT_ROLE=""; OPT_COORDINATOR=""; OPT_CODE=""; OPT_REENROLL=0; OPT_NDI=""; OPT_SKIP_NDI=0
 OPT_BROKER=""; OPT_BROKER_URL=""; OPT_BROKER_PASSWORD_FILE=""; OPT_ADDRESS=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
 OPT_NODE_ROLE=""; OPT_NODE_ID=""; OPT_PTP_INTERFACE=""; OPT_PTP_DOMAIN=""; OPT_PTP_ROLE=""
-OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_YES=0; OPT_PARTY=0; PARTY_EGG=""
+OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_FIREWALL=""; OPT_YES=0; OPT_PARTY=0; PARTY_EGG=""
 unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
 
 need_value() {
@@ -95,6 +99,8 @@ while [ "$#" -gt 0 ]; do
     --ptp-role) need_value "$@"; OPT_PTP_ROLE="$2"; shift ;;
     --audio-card) need_value "$@"; OPT_AUDIO_CARD="$2"; shift ;;
     --agent-package) need_value "$@"; OPT_AGENT_PACKAGE="$2"; shift ;;
+    --firewall) OPT_FIREWALL="yes" ;;
+    --no-firewall) OPT_FIREWALL="no" ;;
     --yes|-y) OPT_YES=1 ;;
     --version) printf 'showmesh-install %s (%s, %s)\n' "$SHOWMESH_VERSION" "$SHOWMESH_COMMIT" "$SHOWMESH_BUILD_DATE"; exit 0 ;;
     --party) OPT_PARTY=1 ;;
@@ -218,6 +224,7 @@ main() {
     render|audio) run_node_role "$ROLE" ;;
     coordinator-node) run_coordinator_node ;;
   esac
+  firewall_setup "$ROLE" "$(env_get "$INSTALLER_STATE" NODE_ROLE)"
   printf '\nShowMesh %s is installed as a %s.\n' "$SHOWMESH_VERSION" "$(role_label "$ROLE")"
   case "$ROLE" in
     coordinator|coordinator-node) coord_success_lines ;;
