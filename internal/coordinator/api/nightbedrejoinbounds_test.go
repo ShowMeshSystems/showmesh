@@ -79,7 +79,10 @@ func TestNightBedRejoin_LeavesABedAnOperatorStoppedAlone(t *testing.T) {
 		t.Fatalf("nodesNotPlaying = %+v, want node-b named", got)
 	}
 	if !strings.Contains(got[0].Reason, "outside this night's own controls") {
-		t.Fatalf("node-b reason = %q, want it to say the music was stopped from outside this night's controls", got[0].Reason)
+		t.Fatalf("node-b reason = %q, want it to say the music was changed from outside this night's controls", got[0].Reason)
+	}
+	if strings.Contains(got[0].Reason, "was stopped") {
+		t.Fatalf("node-b reason = %q, want it not to claim the outside command was a stop: any outside command counts", got[0].Reason)
 	}
 	if strings.Contains(got[0].Reason, "on its next check") {
 		t.Fatalf("node-b reason = %q, want no promise of a recovery that will not happen", got[0].Reason)
@@ -163,13 +166,11 @@ func TestNightBedRejoin_StopsAfterOneRejoinWhoseStartFailed(t *testing.T) {
 		}},
 	}
 
-	applies := countDispatchedActionForSession(pub, "audio.session.apply", sessionID)
 	for i := 0; i < 20; i++ {
 		h.nightAdvanceBackgroundAudio(context.Background(), at.Add(time.Duration(i)*time.Second), rec)
 	}
-	extra := countDispatchedActionForSession(pub, "audio.session.apply", sessionID) - applies
-	if extra != 1 {
-		t.Fatalf("bed applies over twenty ticks = %d, want exactly 1: one rejoin whose start failed is the end of it", extra)
+	if got := bedRejoinApplyCountForTest(t, h, rec, "node-b"); got != 1 {
+		t.Fatalf("node-b rejoin applies over twenty ticks = %d, want exactly 1: one rejoin whose start failed is the end of it", got)
 	}
 
 	got := nightBedNodesNotPlaying(context.Background(), h.deps, rec, at, bedOutboxRowsForTest(t, h, rec))
@@ -201,13 +202,11 @@ func TestNightBedRejoin_StopsAfterOneRejoinWhoseStartTimedOut(t *testing.T) {
 		"node-b:audio.session.start": {Outcome: mqttproto.OutcomeConfirmed, Reason: "the node sent no session evidence"},
 	}
 
-	applies := countDispatchedActionForSession(pub, "audio.session.apply", sessionID)
 	for i := 0; i < 20; i++ {
 		h.nightAdvanceBackgroundAudio(context.Background(), at.Add(time.Duration(i)*time.Second), rec)
 	}
-	extra := countDispatchedActionForSession(pub, "audio.session.apply", sessionID) - applies
-	if extra != 1 {
-		t.Fatalf("bed applies over twenty ticks = %d, want exactly 1: a start the node never confirmed is not another loss to recover", extra)
+	if got := bedRejoinApplyCountForTest(t, h, rec, "node-b"); got != 1 {
+		t.Fatalf("node-b rejoin applies over twenty ticks = %d, want exactly 1: a start the node never confirmed is not another loss to recover", got)
 	}
 }
 
@@ -236,6 +235,139 @@ func TestNightBedRejoin_AFailedStartIsNotItselfALoss(t *testing.T) {
 	if _, lost := nightBedNodeLostSession(audio, at, "node-b", sessionID, steps); lost {
 		t.Fatal("a node whose own latest step failed read as having lost a playing bed, want left to the ordinary rules")
 	}
+}
+
+// TestNightBedRejoin_ASuccessfulRejoinDoesNotDisableLaterRecovery is the
+// third review's own case. A multi-node rejoin starts with a point, the
+// node can legitimately refuse that point, and the designed retry without
+// it confirms: that rejoin ENDED WITH THE BED PLAYING, so a later loss on
+// the same node must be recovered like any other.
+func TestNightBedRejoin_ASuccessfulRejoinDoesNotDisableLaterRecovery(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec, sessionID := startMultiNodeBedForTest(t, h, st, pub)
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+
+	first := testNow.Add(30 * time.Second)
+	audio.setObservations("node-a", append(
+		[]observation.Observation{bedNodeAudioReport("node-a", first, first)},
+		bedSessionPlayingReport(sessionID, "track-2", 1, 65_000, first)...))
+	audio.setObservations("node-b", []observation.Observation{bedNodeAudioReport("node-b", first, first)})
+
+	// node-b refuses the point it is given, which is the case the
+	// point-less retry exists for; every other command confirms.
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.start": nodeRefusedResult("start", sessionID,
+			`start point names item "track-2" at index 1, but this session's playlist has "track-9" there`),
+	}
+	h.nightAdvanceBackgroundAudio(context.Background(), first, rec)
+	for i := 1; i < 6; i++ {
+		at := first.Add(time.Duration(i) * time.Second)
+		if bedPointCarryingStartDispatched(pub, "node-b") {
+			// The point-carrying start has now been refused, which is the
+			// case the retry without a point exists for: let that retry
+			// succeed.
+			pub.resultsByNode = nil
+		}
+		h.nightAdvanceBackgroundAudio(context.Background(), at, rec)
+	}
+	if !bedPointCarryingStartDispatched(pub, "node-b") {
+		t.Fatal("no start carrying a playback point was ever dispatched to node-b; this test would prove nothing")
+	}
+	assertBedStepOutcome(t, h, rec, "node-b", func(row nightBackgroundAudioHistoryRow) bool {
+		return row.Step.Kind == nightBGStepStart && row.Step.WithPoint && row.Row.Outcome == nightCueOutcomeRefused
+	}, "a refused start carrying a playback point")
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	steps := nightBackgroundAudioStepsForNode(history, "node-b")
+	latest := steps[len(steps)-1]
+	if latest.Step.Kind != nightBGStepStart || latest.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b latest step = %+v (%s), want the point-less retry confirmed", latest.Step, latest.Row.Outcome)
+	}
+	if nightBedRejoinStartFailed(steps) {
+		t.Fatal("a rejoin whose point-less retry confirmed read as failed, want the bed playing to clear it")
+	}
+
+	// The bed is genuinely playing on node-b again, so nothing further is
+	// dispatched at it: the rejoin is over and it worked.
+	healthy := first.Add(time.Minute)
+	audio.setObservations("node-a", append(
+		[]observation.Observation{bedNodeAudioReport("node-a", healthy, healthy)},
+		bedSessionPlayingReport(sessionID, "track-2", 1, 95_000, healthy)...))
+	audio.setObservations("node-b", append(
+		[]observation.Observation{bedNodeAudioReport("node-b", healthy, healthy)},
+		bedSessionPlayingReport(sessionID, "track-2", 1, 95_000, healthy)...))
+	settled := len(pub.dispatchedSnapshot())
+	h.nightAdvanceBackgroundAudio(context.Background(), healthy, rec)
+	if got := len(pub.dispatchedSnapshot()); got != settled {
+		t.Fatalf("tick dispatched %d command(s) at a bed playing on both nodes, want 0", got-settled)
+	}
+
+	// A second, genuine loss on the same node must still be recovered.
+	second := healthy.Add(5 * time.Minute)
+	audio.setObservations("node-a", append(
+		[]observation.Observation{bedNodeAudioReport("node-a", second, second)},
+		bedSessionPlayingReport(sessionID, "track-2", 1, 400_000, second)...))
+	audio.setObservations("node-b", []observation.Observation{bedNodeAudioReport("node-b", second, second)})
+
+	rejoins := bedRejoinApplyCountForTest(t, h, rec, "node-b")
+	h.nightAdvanceBackgroundAudio(context.Background(), second, rec)
+	if got := bedRejoinApplyCountForTest(t, h, rec, "node-b"); got != rejoins+1 {
+		t.Fatalf("node-b rejoin applies = %d, want one more than %d: a second loss after a successful rejoin is still recovered", got, rejoins)
+	}
+}
+
+// bedPointCarryingStartDispatched reports whether a start naming a
+// playback point has reached nodeID, which is the only start the
+// point-less retry can follow.
+func bedPointCarryingStartDispatched(pub *fakeAudioPublisher, nodeID string) bool {
+	for _, d := range pub.dispatchedSnapshot() {
+		if d.NodeID != nodeID || d.Action != "audio.session.start" {
+			continue
+		}
+		if _, has := d.Params[pkgaudio.ParamStartItemID]; has {
+			return true
+		}
+	}
+	return false
+}
+
+// assertBedStepOutcome fails unless nodeID's own step log contains a row
+// match accepts, so a test cannot pass on a sequence that never reached
+// the state it claims to be about.
+func assertBedStepOutcome(t *testing.T, h *handlers, rec store.NightSessionRecord, nodeID string, match func(nightBackgroundAudioHistoryRow) bool, want string) {
+	t.Helper()
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	for _, row := range nightBackgroundAudioStepsForNode(history, nodeID) {
+		if match(row) {
+			return
+		}
+	}
+	t.Fatalf("node %q's step log contains no %s", nodeID, want)
+}
+
+// bedRejoinApplyCountForTest counts nodeID's own rejoin applies, read from
+// the step log rather than from dispatch counts: an expiry refresh is also
+// dispatched as audio.session.apply, so counting the wire action would
+// conflate the two.
+func bedRejoinApplyCountForTest(t *testing.T, h *handlers, rec store.NightSessionRecord, nodeID string) int {
+	t.Helper()
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	n := 0
+	for _, row := range nightBackgroundAudioStepsForNode(history, nodeID) {
+		if row.Step.Kind == nightBGStepApply && row.Step.Rejoin {
+			n++
+		}
+	}
+	return n
 }
 
 // TestNightBedStepReasons_CarryNoControllerBookkeeping keeps every

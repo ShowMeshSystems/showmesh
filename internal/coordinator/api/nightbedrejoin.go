@@ -185,24 +185,51 @@ func nightBedReportedStateIsLost(state string) bool {
 	return false
 }
 
-// nightBedRejoinStartFailed reports whether a rejoin this controller
-// already performed for nodeID went on to a start the node did not
-// confirm. One such attempt is the end of it: the bed was given back, the
-// node would not play it, and repeating that costs a dispatch every time
-// the node reports without ever changing the answer. The row and its
-// reason stay recorded, and [nightBedNotPlayingReason] names the state.
+// nightBedRejoinStartFailed reports whether the rejoin this controller
+// most recently performed for a node ended without the bed playing.
+//
+// It reads the LAST start after the latest rejoin apply, never the first,
+// because a rejoin legitimately takes two starts: one carrying a playback
+// point, and, when the node refuses that point, the designed retry
+// without it ([nightBedStartPointWasRefused]). Judging the first would
+// call a rejoin that ENDED WITH THE BED PLAYING a failure and disable
+// recovery on that node for the rest of the night.
+//
+//   - no start yet, or one still in flight: the rejoin is not finished,
+//     so it has not failed.
+//   - a refused point-carrying start: its retry without the point is
+//     still due, so it has not failed either.
+//   - a confirmed start: the rejoin worked, and a later loss is a new
+//     loss this controller may answer again.
+//   - anything else resolved: the bed was given back, the node would not
+//     play it, and repeating that changes nothing.
 func nightBedRejoinStartFailed(steps []nightBackgroundAudioHistoryRow) bool {
-	rejoined := false
-	for _, row := range steps {
-		switch {
-		case row.Step.Kind == nightBGStepApply && row.Step.Rejoin:
-			rejoined = true
-		case rejoined && row.Step.Kind == nightBGStepStart &&
-			row.Row.State == nightCueStateResolved && row.Row.Outcome != nightCueOutcomeConfirmed:
-			return true
+	lastRejoin := -1
+	for i, row := range steps {
+		if row.Step.Kind == nightBGStepApply && row.Step.Rejoin {
+			lastRejoin = i
 		}
 	}
-	return false
+	if lastRejoin < 0 {
+		return false
+	}
+	lastStart, found := nightBackgroundAudioHistoryRow{}, false
+	for _, row := range steps[lastRejoin+1:] {
+		if row.Step.Kind == nightBGStepStart {
+			lastStart, found = row, true
+		}
+	}
+	switch {
+	case !found:
+		return false
+	case lastStart.Row.State != nightCueStateResolved:
+		return false
+	case lastStart.Row.Outcome == nightCueOutcomeConfirmed:
+		return false
+	case nightBedStartPointWasRefused(lastStart.Step, lastStart.Row):
+		return false
+	}
+	return true
 }
 
 // nightBedNodeEverHeldTheBed reports whether nodeID ever confirmed an
@@ -660,7 +687,7 @@ func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID strin
 	case reading.Stale:
 		return "This speaker was too busy to report the background music this time, so what it is doing now is unknown. It reports again on its next cycle."
 	case facts.TouchedOutsideLedger:
-		return "The background music on this speaker was stopped from outside this night's own controls. The coordinator is leaving it that way; start it again from the speaker's own controls if it should be playing."
+		return "The background music on this speaker was changed from outside this night's own controls. The coordinator is leaving it that way; set it from the speaker's own controls if it should be playing."
 	case facts.RejoinAlreadyFailed:
 		return "The coordinator already gave this speaker the background music again and it did not start. It is not trying again on its own; check the speaker."
 	case !reading.Present:
