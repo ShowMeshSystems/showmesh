@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type ConfigObjectSummary, type ConfigShowPlaylist, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
+import { makeFPPInstance } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
 
 const stubs = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const stubs = vi.hoisted(() => ({
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getMediaPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  republishFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -34,6 +36,7 @@ vi.mock('../api', async () => {
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
     getMediaPlaylist: (...args: never[]) => stubs.getMediaPlaylist(...args),
+    republishFPPPlaylistDefinitions: (...args: never[]) => stubs.republishFPPPlaylistDefinitions(...args),
   }
 })
 
@@ -479,7 +482,114 @@ describe('Shows · Playlists tab editing', () => {
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('combobox', { name: 'Instance' })).toBeDisabled()
       expect(screen.getByRole('combobox', { name: 'FPP playlist' })).toBeDisabled()
+    })
+  })
+
+  describe('FPP playlist re-import', () => {
+    const host = makeFPPInstance('fpp-main', { instanceUuid: 'uuid-1' })
+
+    function definition(receivedAt: string) {
+      return {
+        instanceUuid: 'uuid-1',
+        playlistName: 'WinterRidge_Main',
+        playlistHash: 'a'.repeat(64),
+        capturedAt: receivedAt,
+        receivedAt,
+        entryCount: 1,
+        referenced: true,
+        referencedByPlaylists: [],
+      }
+    }
+
+    async function openReady({ scopes = ['config:write', 'fpp:command'], fpp = [host] }: { scopes?: string[]; fpp?: typeof host[] } = {}) {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => withPlaylistList(kind, [cueSummary()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowPlaylist = (id: string) => Promise.resolve(playlistResponse(fppPlaylist(), id))
+      stubs.getFPPPlaylistDefinitionEntries = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          instanceUuid: 'uuid-1',
+          playlistHash: 'a'.repeat(64),
+          entries: [{ section: 'mainPlaylist', position: 0, type: 'sequence', sequenceName: 'wizards-in-winter.fseq', mediaName: '' }],
+        })
+      renderWorkspace({ session: signedIn(scopes), fpp })
+      await openPlaylistRow('Main Show')
+      await screen.findByText('wizards-in-winter.fseq')
+    }
+
+    function definitionsOverTime(reads: string[][]) {
+      let call = 0
+      stubs.listFPPPlaylistDefinitions = () => {
+        const times = reads[Math.min(call++, reads.length - 1)] as string[]
+        return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: times.map(definition) })
+      }
+    }
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('asks the coordinator for the host the playlist is bound to, then shows sent and, when a newer copy is stored, landed', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z', '2026-08-30T21:05:00Z']])
+      const republish = vi.fn(() => Promise.resolve({}))
+      stubs.republishFPPPlaylistDefinitions = republish
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+
+      await waitFor(() => expect(republish).toHaveBeenCalledWith('fpp-main'))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await screen.findByText('Landed')).toBeInTheDocument()
+      expect(screen.queryByText('Sent')).not.toBeInTheDocument()
+    })
+
+    it('reads unconfirmed, saying the host did not answer, when the request is refused because the plugin gave no usable result', async () => {
+      await openReady()
+      definitionsOverTime([[]])
+      stubs.republishFPPPlaylistDefinitions = () => Promise.reject(new ApiError('the host timed out', 502))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+
+      expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
+      expect(screen.getByText(/The FPP host did not answer the request/)).toBeInTheDocument()
+      expect(screen.queryByText('Sent')).not.toBeInTheDocument()
+      expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Re-import' })).not.toBeDisabled()
+    })
+
+    it('reads unconfirmed after 30 seconds when no newer copy is stored', async () => {
+      await openReady()
+      definitionsOverTime([['2026-08-30T20:00:00Z']])
+      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve({})
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(screen.getByText('Sent')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(4_000)
+
+      expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
+      expect(screen.getByText(/within 30 seconds/)).toBeInTheDocument()
+      expect(screen.queryByText('Landed')).not.toBeInTheDocument()
+    })
+
+    it('is disabled without fpp:command and names the missing scope', async () => {
+      await openReady({ scopes: ['config:write'] })
+      const button = screen.getByRole('button', { name: 'Re-import' })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', expect.stringContaining('fpp:command'))
+    })
+
+    it('is disabled, saying why, when the bound host is not connected', async () => {
+      await openReady({ fpp: [] })
       expect(screen.getByRole('button', { name: 'Re-import' })).toBeDisabled()
+      expect(screen.getByText(/not connected to the coordinator/)).toBeInTheDocument()
     })
   })
 

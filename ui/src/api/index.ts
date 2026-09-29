@@ -305,6 +305,7 @@ export type {
   FPPPlaylistDefinitionResponse,
   FPPPlaylistDefinitionEntry,
   FPPPlaylistDefinitionEntriesResponse,
+  FPPDefinitionRepublishResponse,
   // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation an
   // operator reviews before clearing it.
   FPPPlaylistEntryObservation,
@@ -333,6 +334,7 @@ export {
   listFPPPlaylistDefinitions,
   getFPPPlaylistDefinition,
   getFPPPlaylistDefinitionEntries,
+  republishFPPPlaylistDefinitions,
   listFallbackPrograms,
   getFallbackProgram,
   getResolumeInstancesConfig,

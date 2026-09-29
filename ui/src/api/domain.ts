@@ -508,6 +508,7 @@ export type FPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlayl
 export type FPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 export type FPPPlaylistDefinitionEntry = components['schemas']['FPPPlaylistDefinitionEntry']
 export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+export type FPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 
 // TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
 // stored playlist-entry observation an operator reviews before clearing
