@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -13,19 +14,20 @@ func unknownNightAudioPlan(reason string) v1.NightBackgroundAudioPlan {
 }
 
 // mapNightBackgroundAudioPlan reads the bed from rec's own pinned
-// night.session revision, so it never reports another revision's items.
+// configuration revision, so it never reports another revision's items.
 func mapNightBackgroundAudioPlan(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudioPlan {
 	if rec.ID == "" || rec.ConfigObjectID == "" {
-		return unknownNightAudioPlan("no session")
+		return unknownNightAudioPlan("There is no night session yet. Prepare the night to see its background audio.")
 	}
 	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
 	if err != nil {
-		return unknownNightAudioPlan("failed to read the pinned night.session revision: " + err.Error())
+		slog.Default().Warn("night background audio plan: reading the night session configuration failed", "session", rec.ID, "error", err)
+		return unknownNightAudioPlan("The night's background audio settings could not be read. Check the coordinator log and reload.")
 	}
 	ba := payload.Resting.BackgroundAudio
 	plan := v1.NightBackgroundAudioPlan{
 		State: v1.NightEvidenceRecorded, Nodes: []string{}, Items: []v1.NightBackgroundAudioPlanItem{},
-		Reason: "background audio is not configured on this night session",
+		Reason: "This night has no background audio. Add it in the night definition if the night should play a bed.",
 	}
 	if ba == nil {
 		return plan

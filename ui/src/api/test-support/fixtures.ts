@@ -37,7 +37,7 @@ const NOW = '2026-08-11T12:00:00.000Z'
 
 export const NO_AUDIO_PLAN = {
   state: 'recorded' as const,
-  reason: 'background audio is not configured on this night session',
+  reason: 'This night has no background audio. Add it in the night definition if the night should play a bed.',
   configured: false,
   mediaPlaylist: '',
   repeat: '' as const,

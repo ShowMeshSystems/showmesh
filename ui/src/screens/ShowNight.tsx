@@ -322,7 +322,7 @@ export function ShowNight() {
                   <tr>
                     <th scope="col">Order</th>
                     <th scope="col">Sequence</th>
-                    <th scope="col">Node</th>
+                    <th scope="col">File on</th>
                   </tr>
                 </thead>
                 <tbody>
