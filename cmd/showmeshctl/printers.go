@@ -277,6 +277,9 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 			_, _ = fmt.Fprintf(w, "DUPLICATE: %s reports the same instance uuid (%s) as: %s\n",
 				f.InstanceID, stringOrDash(f.InstanceUUID), strings.Join(f.DuplicateInstanceUUIDEndpointIDs, ", "))
 		}
+		if f.PlaylistObservationRefused != nil {
+			_, _ = fmt.Fprintf(w, "REFUSED: %s: %s\n", f.InstanceID, f.PlaylistObservationRefused.Reason)
+		}
 	}
 
 	for _, f := range resp.Instances {

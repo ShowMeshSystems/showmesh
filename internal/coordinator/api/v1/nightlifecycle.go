@@ -167,6 +167,59 @@ type NightBackgroundAudio struct {
 	// (owner ruling 2026-08-30). Never defaulted to a plausible-looking
 	// value.
 	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+
+	// NodesNotPlaying names every speaker the background music is
+	// configured to play on that is not playing it right now, read from
+	// each node's own current report rather than from what this
+	// coordinator last asked for. It is empty outside the states the bed
+	// is meant to be audible in, and on the historical read of any
+	// session, because neither has a "right now" to answer about. An
+	// operator watching a night sees a speaker appear here when it drops
+	// out and leave again when it is back.
+	NodesNotPlaying []NightBedNodeNotPlaying `json:"nodesNotPlaying"`
+
+	// Plan is what the session's pinned configuration revision will play,
+	// readable before anything has started.
+	Plan NightBackgroundAudioPlan `json:"plan"`
+}
+
+// NightBedNodeNotPlaying is one speaker the background music is
+// configured for and which is not playing it, with the reason in
+// operator-facing words.
+type NightBedNodeNotPlaying struct {
+	NodeID string `json:"nodeId"`
+	Reason string `json:"reason"`
+}
+
+// NightBackgroundAudioPlan is the background audio a night session will
+// play, read from its own pinned configuration revision. State "recorded"
+// with Configured false means the revision configures no background audio;
+// Configured true with no steps yet means it is configured but has not
+// started this cycle.
+type NightBackgroundAudioPlan struct {
+	State      NightEvidenceState `json:"state"`
+	Reason     string             `json:"reason"`
+	Configured bool               `json:"configured"`
+
+	// MediaPlaylist names the media playlist the bed plays, or is empty
+	// when the pinned revision lists the items inline.
+	MediaPlaylist  string                         `json:"mediaPlaylist"`
+	Repeat         string                         `json:"repeat"`
+	Resume         string                         `json:"resume"`
+	ItemTransition string                         `json:"itemTransition"`
+	CrossfadeMs    *int                           `json:"crossfadeMs"`
+	Nodes          []string                       `json:"nodes"`
+	Items          []NightBackgroundAudioPlanItem `json:"items"`
+}
+
+// NightBackgroundAudioPlanItem is one planned bed item; Position counts
+// from 1 in playing order.
+type NightBackgroundAudioPlanItem struct {
+	Position int    `json:"position"`
+	ItemID   string `json:"itemId"`
+	Show     string `json:"show"`
+	Sequence string `json:"sequence"`
+	Target   string `json:"target"`
 }
 
 // NightSessionState is the full lifecycle resource.
@@ -205,6 +258,10 @@ type NightSessionState struct {
 	// synthesized "not recorded" entry.
 	FinishedCycles []NightCycleOutcome `json:"finishedCycles"`
 
+	// StopHold is present while a level 1 emergency stop holds the night
+	// (ADR-054): the night loop starts nothing until resume-show.
+	StopHold *NightStopHold `json:"stopHold,omitempty"`
+
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`
 
@@ -221,6 +278,13 @@ type NightSessionState struct {
 	Authorization NightAuthorization `json:"authorization"`
 
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// NightStopHold is who stopped the show, when, and why.
+type NightStopHold struct {
+	Reason    string `json:"reason"`
+	At        string `json:"at"`
+	Principal string `json:"principal,omitempty"`
 }
 
 // NightCycleOutcome is one already-finished cycle of a night session: when

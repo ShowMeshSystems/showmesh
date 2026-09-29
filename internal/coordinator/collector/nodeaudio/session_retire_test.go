@@ -131,6 +131,56 @@ func TestOrphanSweepRemovesPreExistingStrandedRows(t *testing.T) {
 	}
 }
 
+// TestPollPurgesRetiredSignalsOnce proves the purge runs on first Poll and never again.
+func TestPollPurgesRetiredSignalsOnce(t *testing.T) {
+	st := openRealStore(t)
+	ctx := context.Background()
+
+	stale, err := observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceNode, ID: "node-a"},
+		"node.audio.sync.rate_ppm", "x", time.Now(),
+		observation.WithSource("nodeaudio:node-a"),
+	)
+	if err != nil {
+		t.Fatalf("build stale observation: %v", err)
+	}
+	if err := st.UpsertObservation(ctx, stale); err != nil {
+		t.Fatalf("seed stale observation: %v", err)
+	}
+
+	countRetired := func() int {
+		got, err := st.ListObservations(ctx, store.ObservationFilter{Signal: "node.audio.sync.rate_ppm"})
+		if err != nil {
+			t.Fatalf("list observations: %v", err)
+		}
+		return len(got)
+	}
+	if got := countRetired(); got != 1 {
+		t.Fatalf("seeded retired-signal rows = %d, want 1", got)
+	}
+
+	audioStore := NewStore()
+	c := New(audioStore, WithSessionDeleter(st))
+	if _, complete := c.Poll(ctx); !complete {
+		t.Fatalf("Poll must always report complete=true")
+	}
+	if got := countRetired(); got != 0 {
+		t.Errorf("retired-signal rows after first Poll = %d, want 0", got)
+	}
+
+	// A row written for a retired signal after startup is not re-purged by
+	// a later Poll: the sync.Once fires exactly once per Collector.
+	if err := st.UpsertObservation(ctx, stale); err != nil {
+		t.Fatalf("re-seed stale observation: %v", err)
+	}
+	if _, complete := c.Poll(ctx); !complete {
+		t.Fatalf("Poll must always report complete=true")
+	}
+	if got := countRetired(); got != 1 {
+		t.Errorf("retired-signal rows after second Poll = %d, want 1 (purge runs once)", got)
+	}
+}
+
 // TestRepeatedSessionCyclesKeepRowCountBounded proves the audio_session row
 // count does not grow per ended session across many create/end cycles: this
 // is the defect the coordinator's real rig hit (693 rows from 23 dead

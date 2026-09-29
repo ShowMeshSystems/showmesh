@@ -6,6 +6,7 @@ import {
   ChromeProgress,
   ClockSkewStrip,
   ConnectionPill,
+  FPPPluginReportsRefusedBanner,
   Notice,
   Popover,
   Rail,
@@ -47,6 +48,7 @@ import { fppElapsedFraction } from '../screens/liveControlModel'
 import { nowPlaying as fppNowPlaying } from '../screens/showNightModel'
 import { useModelContext } from './ModelContext'
 import { useWeatherDelay, WeatherDelayProvider } from './WeatherDelayContext'
+import { StopHoldShellBanner } from './StopHoldShellBanner'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
 const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
@@ -903,7 +905,13 @@ export function Layout() {
           explanation={model.auditStore.reason ?? 'Commands continue, but this coordinator cannot durably write their audit entries.'}
         />
       )}
+      <FPPPluginReportsRefusedBanner
+        instances={model.fpp
+          .filter((instance) => instance.playlistObservationRefused !== null)
+          .map((instance) => ({ instanceId: instance.instanceId }))}
+      />
       <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      <StopHoldShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>
         <Rail>
           <RailGroup>Operate</RailGroup>

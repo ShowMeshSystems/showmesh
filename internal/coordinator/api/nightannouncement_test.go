@@ -722,7 +722,7 @@ func TestNightAnnouncement_TwoNodesBothPlayAndARefusedStartIsIsolatedToItsNode(t
 	// from the generic engine's own row (mapNightAnnouncementPrimaryApplySteps)
 	// and every step - including that mirrored one - carries its own
 	// nodeId, uniformly (owner ruling: no first-node exception).
-	wire := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	wire := mapNightBackgroundAudio(ctx, h.deps, rec, testNow, true)
 	byNodeAndKind := map[string]v1.NightBackgroundAudioStep{}
 	for _, step := range wire.Steps {
 		if step.Sequence != v1.NightAudioSequenceAnnouncement {
@@ -895,7 +895,7 @@ func TestNightAnnouncement_StepsAreOnTheOperatorSurface(t *testing.T) {
 
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
-	surface := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	surface := mapNightBackgroundAudio(ctx, h.deps, rec, testNow, true)
 	if surface.State != v1.NightEvidenceRecorded {
 		t.Fatalf("background-audio surface state = %q, want recorded", surface.State)
 	}
@@ -1962,7 +1962,7 @@ func TestNightAnnouncement_ExtraNodeApplyRefusalIsReportedAndTheAnnouncementStil
 
 	// The wire surface: an operator reading GET /night/session sees the
 	// refusal on node-b's own apply step, not a gap.
-	wire := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	wire := mapNightBackgroundAudio(ctx, h.deps, rec, testNow, true)
 	var sawRefusedApply bool
 	for _, step := range wire.Steps {
 		if step.Sequence == v1.NightAudioSequenceAnnouncement && step.NodeID == "node-b" && step.Kind == nightAnnouncementStepApply {

@@ -13,6 +13,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -672,6 +673,9 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 	} else {
 		dispatchedAt = &dispatchAttemptedAt
 		dispatchOutcome, dispatchErr = primitive.Dispatch(bgCtx, client, in.Params, ifNotRunning)
+		if dispatchErr == nil {
+			sendsignal.Sent(bgCtx)
+		}
 	}
 
 	dispatchState := "dispatched"

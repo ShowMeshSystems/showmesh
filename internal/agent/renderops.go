@@ -217,6 +217,14 @@ type frameWriterHandle struct {
 	fw     *pipeline.FrameWriter
 	fseq   *fseq.File
 	cancel context.CancelFunc
+
+	// filename is the sequence fw draws. queued is the next sequence handed
+	// to fw and not yet drawn; ahead is a queued sequence fw switched to
+	// before its own activation arrived. All three are guarded by
+	// renderOperations.mu.
+	filename string
+	queued   *queuedRender
+	ahead    *queuedRender
 }
 
 // renderOperations holds the four render.* allowlisted operations' shared
@@ -283,12 +291,10 @@ type renderOperations struct {
 	// entry for — see holdBlackDefaultAll's own "never reset as a whole".
 	holdBlackDefaultMaterialized bool
 
-	// timelineStepOwner and timelineStepMS record which surface last set
-	// o.timeline's shared step time, and to what value — see
-	// applyTimelineStepTime's own doc comment for why a shared Timeline
-	// needs this at all. "" means no surface has ever set one.
-	timelineStepOwner string
-	timelineStepMS    byte
+	// stepReserved holds the FSEQ step time of a surface whose apply, swap
+	// or resume passed the conflict check but has not yet installed its
+	// frame writer. Guarded by mu.
+	stepReserved map[string]byte
 
 	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
 	// to [pipeline.ProbeNDISend]. nil (the production default, set by
@@ -302,6 +308,20 @@ type renderOperations struct {
 	// weatherDelay, when set, holds every frame writer's timeline at
 	// stopped during a delay, so MultiSync cannot drive content.
 	weatherDelay *WeatherDelayHolder
+
+	// hashCache is shared with asset.fetch and cue.activate's asset check.
+	hashCache *verifiedHashCache
+
+	// queueGen invalidates a next-sequence preparation still in flight when
+	// a later activation settles or replaces that surface's queue, or its
+	// writer stops. Guarded
+	// by mu. queueing lets a test wait for preparations to finish.
+	queueGen map[string]uint64
+	queueing sync.WaitGroup
+
+	// heldCatalog is the catalog last deployed while this process ran, nil
+	// until then. A preparation authorized under another one never queues.
+	heldCatalog *catalogIdentity
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, holdBlackStore *pipeline.HoldBlackStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
@@ -329,6 +349,7 @@ func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentSto
 		writers:             make(map[string]*frameWriterHandle),
 		holdBlack:           holdBlack,
 		holdBlackDefaultAll: holdBlackDefaultAll,
+		hashCache:           newVerifiedHashCache(),
 	}
 }
 
@@ -529,6 +550,7 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	h, ok := o.writers[surfaceID]
 	if ok {
 		delete(o.writers, surfaceID)
+		o.bumpQueueGenLocked(surfaceID)
 	}
 	o.mu.Unlock()
 	if !ok {
@@ -541,6 +563,7 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	if h.fseq != nil {
 		_ = h.fseq.Close()
 	}
+	o.closeTakenQueue(h, h.fw.TakeQueued())
 }
 
 // hasRunningFrameWriter reports whether surfaceID currently has a live
@@ -560,65 +583,80 @@ func (o *renderOperations) hasRunningFrameWriter(surfaceID string) bool {
 	return ok
 }
 
-// applyTimelineStepTime is finding 6's fix: [multisync.Timeline.
-// SetStepTime] was never called in production, so the timeline ran
-// permanently at [multisync.DefaultStepTime] regardless of what any real
-// FSEQ actually specified — wrong for the first second of every show (see
-// pkg/multisync/timeline.go's positionFromPacketLocked, which falls back to
-// FrameNumber*stepTime whenever SecondsElapsed is unusable) and for any FPP
-// 8.x master.
-//
-// SHARED-TIMELINE DECISION (build contract seam B3, "decide what happens
-// when two surfaces have different step times... do not silently let the
-// last apply win"): this node's Timeline is one shared instance across
-// every surface (ADR-026 N=1 is a renderer scope limit, not a reason to
-// build N timelines), but step time is read from each surface's own FSEQ,
-// so two surfaces with differently-authored FSEQs could disagree. The rule
-// here is FIRST SURFACE WINS: whichever surface's apply set the step time
-// first keeps it for as long as it remains applied (see
-// releaseTimelineStepTimeIfOwner); a later surface reporting a DIFFERENT
-// step time never silently overrides it — it is logged loudly instead, so
-// the conflict is visible rather than swallowed as "whoever applied most
-// recently." A same-surface re-apply with a changed FSEQ still updates its
-// own value. This is deliberately not "last apply wins": that would make
-// the position every OTHER surface renders from silently drift depending on
-// dispatch order, which is worse than picking one surface and saying so.
-// Today's coordinator-side validation only ever assigns one surface per
-// node (N=1), so this conflict path is not currently reachable in
-// production; it exists so a future N>1 node degrades loudly instead of
-// silently the day that changes.
-func (o *renderOperations) applyTimelineStepTime(surfaceID string, stepTimeMS byte) {
-	o.mu.Lock()
-	owner := o.timelineStepOwner
-	current := o.timelineStepMS
-	sameOwnerOrUnowned := owner == "" || owner == surfaceID
-	conflict := !sameOwnerOrUnowned && current != stepTimeMS
-	if sameOwnerOrUnowned {
-		o.timelineStepOwner = surfaceID
-		o.timelineStepMS = stepTimeMS
-	}
-	o.mu.Unlock()
-
-	if conflict {
-		o.logger.Warn("render: surface's FSEQ step time conflicts with the shared timeline's current owner; keeping the owner's step time rather than silently overriding it",
-			"surface_id", surfaceID, "requested_step_ms", stepTimeMS, "owner_surface_id", owner, "owner_step_ms", current)
-		return
-	}
-	o.timeline.SetStepTime(time.Duration(stepTimeMS) * time.Millisecond)
+// stepTimeConflictError is shown to the operator verbatim, so it reads as a
+// sentence.
+type stepTimeConflictError struct {
+	stepTimeMS      byte
+	otherSurfaceID  string
+	otherStepTimeMS byte
 }
 
-// releaseTimelineStepTimeIfOwner clears the shared timeline's step-time
-// ownership when the OWNING surface is the one being cleared, so a
-// subsequently-applied surface (with a different FSEQ) can claim it rather
-// than being permanently blocked by a surface that no longer exists. A
-// no-op for any other surface: clearing a non-owning surface must never
-// affect the timeline another surface is actively depending on.
-func (o *renderOperations) releaseTimelineStepTimeIfOwner(surfaceID string) {
+func (e stepTimeConflictError) Error() string {
+	return fmt.Sprintf("This sequence runs at %d ms per frame but the surface %s on this node is playing a %d ms sequence. Render both sequences at the same frame timing in xLights.",
+		e.stepTimeMS, e.otherSurfaceID, e.otherStepTimeMS)
+}
+
+// reserveStepTime refuses a step time that differs from the one any other
+// surface holding FSEQ content plays, or has reserved, because every surface
+// shares one timeline. Surfaces in skip are being moved to the same sequence
+// together and are not compared. An idle surface never conflicts. On success
+// the step time stays reserved until the surface's frame writer is installed
+// or releaseStepReservation runs.
+func (o *renderOperations) reserveStepTime(surfaceID string, stepTimeMS byte, skip map[string]bool) error {
 	o.mu.Lock()
-	if o.timelineStepOwner == surfaceID {
-		o.timelineStepOwner = ""
+	defer o.mu.Unlock()
+	if err := o.stepTimeConflictLocked(surfaceID, stepTimeMS, skip, false); err != nil {
+		return err
 	}
+	if o.stepReserved == nil {
+		o.stepReserved = make(map[string]byte)
+	}
+	o.stepReserved[surfaceID] = stepTimeMS
+	return nil
+}
+
+func (o *renderOperations) releaseStepReservation(surfaceID string) {
+	o.mu.Lock()
+	delete(o.stepReserved, surfaceID)
 	o.mu.Unlock()
+}
+
+// stepTimeConflictLocked compares stepTimeMS with every other surface's
+// step time: a reservation first, else the queued sequence when
+// useQueued is set and one is queued, else the sequence it plays.
+func (o *renderOperations) stepTimeConflictLocked(surfaceID string, stepTimeMS byte, skip map[string]bool, useQueued bool) error {
+	steps := make(map[string]byte, len(o.writers)+len(o.stepReserved))
+	for id, h := range o.writers {
+		if h.fseq == nil {
+			continue
+		}
+		steps[id] = h.fseq.StepTimeMS()
+		if h.queued != nil && (useQueued || h.queued.switching) {
+			steps[id] = h.queued.file.StepTimeMS()
+		}
+	}
+	for id, step := range o.stepReserved {
+		steps[id] = step
+	}
+	ids := make([]string, 0, len(steps))
+	for id := range steps {
+		if id != surfaceID && !skip[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if steps[id] != stepTimeMS {
+			return stepTimeConflictError{stepTimeMS: stepTimeMS, otherSurfaceID: id, otherStepTimeMS: steps[id]}
+		}
+	}
+	return nil
+}
+
+// applyTimelineStepTime sets the shared timeline's step time from an FSEQ
+// that checkStepTimeAgainstOthers already accepted.
+func (o *renderOperations) applyTimelineStepTime(stepTimeMS byte) {
+	o.timeline.SetStepTime(time.Duration(stepTimeMS) * time.Millisecond)
 }
 
 // buildFSEQAssignment parses a render.surface.apply params map. channelRange,
@@ -800,7 +838,7 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 // content or not: this must draw and report its own configured idle
 // output honestly, never a content-free pipeline with no frame writer and
 // no output.mode/output.failure evidence at all.
-func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
+func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, hashCache *verifiedHashCache, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
 	a, ok, err := buildFSEQAssignment(action, surfaceID, params, logger)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, err
@@ -818,7 +856,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 	}
 
 	path := filepath.Join(assetDir, a.fseqFilename)
-	gotHash, err := hashFile(path)
+	gotHash, err := cachedHashFile(hashCache, path)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
 	}
@@ -861,21 +899,29 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
 	const action = "render.surface.apply"
 
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.hashCache, o.logger)
 	if err != nil {
 		return err
 	}
+	if f != nil {
+		if err := o.reserveStepTime(surfaceID, f.StepTimeMS(), nil); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
 	if err := o.sup.Apply(spec); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return fmt.Errorf("%s: %w", action, err)
 	}
 	o.recordDegradedTransportEvidence(surfaceID, sinkOutcome, time.Now().UTC())
 	if f != nil {
-		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
+		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		o.releaseStepReservation(surfaceID)
 		if f != nil {
 			_ = f.Close()
 		}
@@ -938,13 +984,20 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	// was told the apply failed, so nothing looked wrong, but the next boot
 	// would resume the broken one (or fail per finding 9) with the good one
 	// permanently gone. Validate, then persist only what actually passed.
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.hashCache, o.logger)
 	if err != nil {
 		return OperationResult{}, err
+	}
+	if f != nil {
+		if err := o.reserveStepTime(surfaceID, f.StepTimeMS(), nil); err != nil {
+			_ = f.Close()
+			return OperationResult{}, err
+		}
 	}
 
 	if err := o.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: rawParams, AppliedAt: executedAt, Auth: auth}); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return OperationResult{}, fmt.Errorf("%s: persisting assignment: %w", action, err)
@@ -959,6 +1012,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 
 	if err := o.sup.Apply(spec); err != nil {
 		if f != nil {
+			o.releaseStepReservation(surfaceID)
 			_ = f.Close()
 		}
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
@@ -971,13 +1025,10 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	// stdin.
 	o.stopFrameWriter(surfaceID)
 	if f != nil {
-		// Finding 6: the shared Timeline's step time comes from whichever
-		// surface owns it — see applyTimelineStepTime's own doc comment for
-		// the shared-timeline decision. An idle writer (f == nil) owns no
-		// content and therefore no step time to contribute.
-		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
+		o.applyTimelineStepTime(f.StepTimeMS())
 	}
 	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		o.releaseStepReservation(surfaceID)
 		if f != nil {
 			_ = f.Close()
 		}
@@ -1022,10 +1073,17 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	h := &frameWriterHandle{fw: fw, fseq: f, cancel: cancel, filename: a.fseqFilename}
+	fw.SetQueueHandlers(
+		func(q *pipeline.QueuedSequence) { o.queuedSequenceStarted(surfaceID, h, q) },
+		func(q *pipeline.QueuedSequence) { o.queuedSequenceDropped(h, q) },
+	)
+	fw.SetSwitchGuard(func(q *pipeline.QueuedSequence) bool { return o.allowQueuedSwitch(surfaceID, h, q) })
 	go fw.Run(ctx)
 
 	o.mu.Lock()
-	o.writers[surfaceID] = &frameWriterHandle{fw: fw, fseq: f, cancel: cancel}
+	o.writers[surfaceID] = h
+	delete(o.stepReserved, surfaceID)
 	o.mu.Unlock()
 	return nil
 }
@@ -1047,7 +1105,6 @@ func (o *renderOperations) clearSurface(ctx context.Context, params map[string]a
 	executedAt := now()
 
 	o.stopFrameWriter(surfaceID)
-	o.releaseTimelineStepTimeIfOwner(surfaceID)
 
 	if err := o.sup.Clear(surfaceID); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)

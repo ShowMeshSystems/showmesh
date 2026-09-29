@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,10 +176,24 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	// and concurrent per-node dispatch the Playlist path's own
 	// dispatchCueActivations wraps, per that ADR's own "not two
 	// implementations" rule.
+	// The cue's show actions are sent before the node dispatch starts, up to
+	// cueActionsSendBudget; the response carries their outcomes as known then.
+	actionsCtx := context.WithoutCancel(ctx)
+	actionsRun := h.startCueActions(actionsCtx, nil, activations, nonce, issuer)
+	if actionsRun != nil {
+		_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueFireHTTPWriteDeadline() + cueActionsSendBudget))
+	}
+	actionsRun.waitSent()
+	ctx = withCueActionsRun(ctx, actionsRun)
+
 	h.scheduleCueActivations(ctx, now, activations, issuer, nil)
 	outcomes := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		return h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
 	})
+	actions := actionsRun.snapshot()
+	if actionsRun != nil {
+		go h.finishCueActions(actionsCtx, actionsRun, activations, nonce, issuer)
+	}
 	nodes := make([]v1.CueActivationNodeOutcome, len(outcomes))
 	for i, outcome := range outcomes {
 		nodes[i] = cueActivateWireOutcome(outcome)
@@ -207,7 +222,7 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(v1.CueActivateResponse{
-		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes,
+		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes, Actions: actions,
 		Aligned: aligned, UnalignedReason: unalignedReason, ScheduledAtNs: scheduledAtNs,
 	})
 }

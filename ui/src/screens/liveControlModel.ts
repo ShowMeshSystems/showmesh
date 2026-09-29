@@ -13,7 +13,7 @@ import type {
   ObservationEntry,
 } from '../api'
 import type { LifecycleCommandGroup, LifecycleCommandSpec, Tone } from '../kit'
-import { EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /** Gate shape shared by every night-lifecycle command surface. */
@@ -565,7 +565,7 @@ export function audioTimelineRows(observations: ObservationEntry[], nodeId: stri
     return {
       signal,
       label,
-      value: entry.value === null ? null : String(entry.value),
+      value: entry.value === null ? null : displayValue(entry.value),
       reason: entry.reason,
       state: entry.state,
     }

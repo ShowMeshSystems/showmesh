@@ -2063,8 +2063,8 @@ type ClockPayload struct {
 	OffsetKnown bool  `json:"offsetKnown"`
 
 	// FrequencyPPM is how far this node's steered clock is being
-	// adjusted, in parts per million -- never node.audio.sync.rate_ppm's
-	// audio-interface rate. Absent on an agent predating this field.
+	// adjusted, in parts per million. Absent on an agent predating this
+	// field.
 	FrequencyPPM       float64 `json:"frequencyPpm"`
 	FrequencyPPMKnown  bool    `json:"frequencyPpmKnown"`
 	FrequencyPPMReason string  `json:"frequencyPpmReason,omitempty"`

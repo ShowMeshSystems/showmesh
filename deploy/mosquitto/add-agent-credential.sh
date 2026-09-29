@@ -55,6 +55,10 @@ case "$NODE_ID" in
     echo "add-agent-credential: '$NODE_ID' is reserved for a fixed broker role and cannot be used as an agent node id." >&2
     exit 1
     ;;
+  enroll|enrollments)
+    echo "add-agent-credential: '$NODE_ID' is reserved because showmeshctl node uses it as a command name. Choose a different node id." >&2
+    exit 1
+    ;;
 esac
 
 if [ ! -f "$PASSWD_FILE" ]; then

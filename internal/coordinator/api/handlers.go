@@ -64,6 +64,10 @@ type handlers struct {
 	trustClientAddr bool
 	loginLimiter    *loginLimiter
 
+	// redeemLimiter bounds failed POST /api/v1/node-enrollments/redeem
+	// calls (nodeenrollments.go).
+	redeemLimiter *redeemLimiter
+
 	// fppCommandConfirmDeadline and fppCommandPollInterval back Step 7
 	// seam C's fppcommand_handler.go — see
 	// [Options.FPPCommandConfirmDeadline]/[Options.FPPCommandPollInterval]'s
@@ -176,6 +180,10 @@ type handlers struct {
 	// (e.g. a dispatched command appearing in a fake publisher) that can
 	// still be running well after that side effect is observed.
 	cueActivationFailToBlackWG sync.WaitGroup
+
+	// emergencyStops counts emergency stops fired since start, so a cue's
+	// show actions still queued can tell a stop happened and hold.
+	emergencyStops atomic.Int64
 
 	// cueActivationRefusalLog dedupes cueActivationTickOne's own "node did
 	// not confirm this activation" log line (cueactivationloop.go): keyed

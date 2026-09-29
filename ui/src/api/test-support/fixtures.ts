@@ -35,6 +35,19 @@ type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObserv
 
 const NOW = '2026-08-11T12:00:00.000Z'
 
+export const NO_AUDIO_PLAN = {
+  state: 'recorded' as const,
+  reason: 'This night has no background audio. Add it in the night definition if the night should play a bed.',
+  configured: false,
+  mediaPlaylist: '',
+  repeat: '' as const,
+  resume: '' as const,
+  itemTransition: '' as const,
+  crossfadeMs: null,
+  nodes: [],
+  items: [],
+}
+
 export function makeEvidence(overrides: Partial<Evidence> = {}): Evidence {
   return {
     signal: 'node.heartbeat',
@@ -110,6 +123,7 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    playlistObservationRefused: null,
     showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
@@ -294,7 +308,7 @@ export function makeNightSessionState(overrides: Partial<NightSessionState> = {}
     transition: { state: 'unknown', reason: 'not observed yet' },
     boundary: { state: 'unknown', expectedAt: null, reason: 'not observed yet' },
     cues: { state: 'unknown', reason: 'no cycle started yet', cues: [] },
-    backgroundAudio: { state: 'unknown', reason: 'no cycle started yet', steps: [] },
+    backgroundAudio: { state: 'unknown', reason: 'no cycle started yet', steps: [], nodesNotPlaying: [], plan: NO_AUDIO_PLAN },
     degraded: false,
     attributionDegraded: false,
     authorization: { state: 'unknown', recordedAt: null },

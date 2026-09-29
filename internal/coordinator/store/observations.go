@@ -347,6 +347,22 @@ func (s *Store) DeleteOrphanedObservations(ctx context.Context, kind observation
 	return n, nil
 }
 
+// DeleteObservationsBySignal removes every stored row for signal across all
+// resources and sources and returns the count. Use it for a signal no
+// collector writes any more.
+func (s *Store) DeleteObservationsBySignal(ctx context.Context, signal observation.SignalID) (int64, error) {
+	guardNotInTx(ctx, "Store.DeleteObservationsBySignal")
+	res, err := s.db.ExecContext(ctx, `DELETE FROM observations WHERE signal = ?`, string(signal))
+	if err != nil {
+		return 0, fmt.Errorf("store: delete observations for signal %q: %w", signal, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: delete observations for signal %q: %w", signal, err)
+	}
+	return n, nil
+}
+
 // ObservationFilter narrows [Store.ListObservations]. Every field is
 // optional (empty means "match any"); a zero-value ObservationFilter
 // matches every stored observation.

@@ -255,13 +255,28 @@ func addMediaClockReadiness(ctx context.Context, mgr *audio.Manager, extra map[s
 }
 
 // startSession honours pkg/audio's ParamScheduledAtNs when the command
-// carries it: T0 on THIS node's media clock, in nanoseconds. The param is
-// optional, and a command without it starts on arrival exactly as before
-// this seam existed.
+// carries it: T0 on THIS node's media clock, in nanoseconds. It also
+// honours the optional ParamStartItemID/ParamStartIndex/
+// ParamStartPositionMs trio, a caller-named item and position to begin
+// at instead of this session's own bookmark or item zero (see
+// [parsePlaybackPoint]). Both are optional, and a command carrying
+// neither starts on arrival from the bookmark exactly as before either
+// seam existed.
 func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	atNs, present, err := parseScheduledAtNs("audio.session.start", params)
 	if err != nil {
 		return pkgaudio.OutcomeResult{}, "", nil, err
+	}
+	point, err := parsePlaybackPoint("audio.session.start", params, pkgaudio.ParamStartItemID, pkgaudio.ParamStartIndex, pkgaudio.ParamStartPositionMs)
+	if err != nil {
+		return pkgaudio.OutcomeResult{}, "", nil, err
+	}
+	if point != nil {
+		var at *int64
+		if present {
+			at = &atNs
+		}
+		return mgr.StartFrom(ctx, id, inv, rev, at, *point), "node.audio_session.start", nil, nil
 	}
 	if !present {
 		return mgr.Start(ctx, id, inv, rev), "node.audio_session.start", nil, nil
@@ -315,25 +330,34 @@ func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionI
 // must all be present or all be absent. Absent returns (nil, nil) --
 // "no override", resuming from this node's own bookmark as before.
 func parseResumePoint(action string, params map[string]any) (*audio.ResumePoint, error) {
-	rawID, hasID := params[pkgaudio.ParamResumeItemID]
-	rawIndex, hasIndex := params[pkgaudio.ParamResumeIndex]
-	rawPos, hasPos := params[pkgaudio.ParamResumePositionMs]
+	return parsePlaybackPoint(action, params, pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs)
+}
+
+// parsePlaybackPoint reads one all-or-nothing (item id, index, position)
+// trio: resume's own ParamResume* keys, or start's ParamStart* ones. A
+// partial set is refused rather than half-honoured, since a point naming
+// a position without its item would play the wrong track at the right
+// offset.
+func parsePlaybackPoint(action string, params map[string]any, idKey, indexKey, positionKey string) (*audio.ResumePoint, error) {
+	rawID, hasID := params[idKey]
+	rawIndex, hasIndex := params[indexKey]
+	rawPos, hasPos := params[positionKey]
 	if !hasID && !hasIndex && !hasPos {
 		return nil, nil
 	}
 	if !hasID || !hasIndex || !hasPos {
 		return nil, fmt.Errorf("%s: params.%s, params.%s, and params.%s must all be present together or all absent",
-			action, pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs)
+			action, idKey, indexKey, positionKey)
 	}
 	itemID, ok := rawID.(string)
 	if !ok || itemID == "" {
-		return nil, fmt.Errorf("%s: params.%s must be a non-empty string, got %T", action, pkgaudio.ParamResumeItemID, rawID)
+		return nil, fmt.Errorf("%s: params.%s must be a non-empty string, got %T", action, idKey, rawID)
 	}
-	index, err := parseResumeWholeNumber(action, pkgaudio.ParamResumeIndex, rawIndex)
+	index, err := parseResumeWholeNumber(action, indexKey, rawIndex)
 	if err != nil {
 		return nil, err
 	}
-	positionMs, err := parseResumeWholeNumber(action, pkgaudio.ParamResumePositionMs, rawPos)
+	positionMs, err := parseResumeWholeNumber(action, positionKey, rawPos)
 	if err != nil {
 		return nil, err
 	}

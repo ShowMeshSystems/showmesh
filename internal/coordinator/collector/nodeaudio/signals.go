@@ -88,8 +88,9 @@ const (
 // for a node as a whole (mqttproto.AudioPayload.EngineRestoreState/
 // EngineRestoreAttempts/EngineRestoreNextAttemptMs/EngineRestoreLastReason)
 // -- the node-level counterpart to SignalSessionRestoreAttempts/
-// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below,
-// which only ever cover a session with a queued restore. State is one of
+// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below.
+// Attempts and LastReason are always current; NextAttemptMs reports
+// only while a restore is scheduled. State is one of
 // "idle", "scheduled", or "exhausted" -- see that field's own doc comment
 // for why a countdown or a boolean alone cannot make this distinction.
 // Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
@@ -153,7 +154,8 @@ const (
 // its own wire-boundary validation and was replaced by its package
 // default). SubstitutedFields names every refused field, joined with
 // "; " (matching fpp.warnings.summary's identical list-as-string
-// convention); Reason is present only while State is "substituted".
+// convention). SubstitutedFields and Reason are always current: empty
+// when State is "accepted", naming/explaining the substitution otherwise.
 // Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
 const (
 	SignalSettingsState             observation.SignalID = "node.audio.settings.state"
@@ -171,17 +173,15 @@ const (
 	SignalOutputsPipeWireEnumeratedReason observation.SignalID = "node.audio.outputs.pipewire_enumerated_reason"
 )
 
-// The four node.audio.sync.* signals are ADR-052 decision 6's sync
+// The three node.audio.sync.* signals are ADR-052 decision 6's sync
 // status: whether this node's local clock is locked to the global clock,
-// what it follows, the offset, and the rate adjustment. Built from the
-// node's own PTP report and the clock its pipeline was built on, so a
-// locked provider on a system-clock pipeline is not a locked output.
-// See [syncObservations].
+// what it follows, and the offset. Built from the node's own PTP report
+// and the clock its pipeline was built on, so a locked provider on a
+// system-clock pipeline is not a locked output. See [syncObservations].
 const (
 	SignalSyncState    observation.SignalID = "node.audio.sync.state"
 	SignalSyncFollows  observation.SignalID = "node.audio.sync.follows"
 	SignalSyncOffsetNs observation.SignalID = "node.audio.sync.offset_ns"
-	SignalSyncRatePPM  observation.SignalID = "node.audio.sync.rate_ppm"
 )
 
 // AllSignalIDs is every signal this package ever emits, in the order
@@ -203,7 +203,6 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSyncState,
 	SignalSyncFollows,
 	SignalSyncOffsetNs,
-	SignalSyncRatePPM,
 	SignalClockAlignment,
 	SignalClockAlignmentState,
 	SignalLTCFrameRate,
@@ -246,15 +245,6 @@ const (
 	SignalSessionItemIndex        observation.SignalID = "audio_session.playlist.item_index"
 	SignalSessionPositionMs       observation.SignalID = "audio_session.position_ms"
 
-	// SignalSessionReferencePositionMs and SignalSessionDriftMs are
-	// AUDIO-ENGINE section 15's reference-position and drift telemetry.
-	// No source for either is wired into this seam (ADR-017: drift is
-	// measured discretely at track boundaries, not continuously, and
-	// that measurement does not exist yet), so both always report
-	// [observation.StateNotCollected] with a reason.
-	SignalSessionReferencePositionMs observation.SignalID = "audio_session.reference_position_ms"
-	SignalSessionDriftMs             observation.SignalID = "audio_session.drift_ms"
-
 	SignalSessionState observation.SignalID = "audio_session.state"
 
 	// SignalSessionStateReason carries AUDIO-ENGINE section 15's distinction whenever
@@ -288,8 +278,8 @@ const (
 	// session's own standing relationship to its node's one LTC run —
 	// "held", "refused", or "none" — the surface that makes a refused
 	// claim legible on its own session, not only as a warn-level line in
-	// the node's log. Reason is present only when State is "refused",
-	// matching SignalSessionFaultReason's identical shape one signal up.
+	// the node's log. Reason is always current: empty except while State
+	// is "refused".
 	SignalSessionLTCClaimState  observation.SignalID = "audio_session.ltc.claim.state"
 	SignalSessionLTCClaimReason observation.SignalID = "audio_session.ltc.claim.reason"
 
@@ -299,11 +289,9 @@ const (
 	// deferred or re-queued restore (see the sibling change that
 	// introduces the pkg/audio.State value "restore_pending" for what
 	// State itself reports while this is happening).
-	// Attempts and NextAttemptMs report [observation.StateNotCollected]
-	// with a stated reason whenever the node reports no restore
-	// currently queued for this session; LastReason is present whenever
-	// Attempts is nonzero, matching SignalSessionFaultReason's identical
-	// shape.
+	// Attempts and LastReason are always current, 0/empty when nothing
+	// is queued; NextAttemptMs reports [observation.StateNotCollected]
+	// with a stated reason whenever no restore is currently queued.
 	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
 	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
 	SignalSessionRestoreLastReason    observation.SignalID = "audio_session.restore.last_reason"
@@ -354,8 +342,6 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionItemID,
 	SignalSessionItemIndex,
 	SignalSessionPositionMs,
-	SignalSessionReferencePositionMs,
-	SignalSessionDriftMs,
 	SignalSessionState,
 	SignalSessionStateReason,
 	SignalSessionDesiredRevision,

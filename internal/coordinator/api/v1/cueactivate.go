@@ -13,6 +13,9 @@ type CueActivateResponse struct {
 	// single collapsed verdict: a Cue's outputs may resolve on several
 	// nodes, and one node's refusal is never evidence about another's.
 	Nodes []CueActivationNodeOutcome `json:"nodes"`
+	// Actions is one outcome per show action the Cue fires, in the Cue's
+	// order. Empty when the Cue declares no actions.
+	Actions []CueActionOutcome `json:"actions"`
 
 	// Aligned is ADR-049 decision 3's own verdict: true when this Cue
 	// reached at most one audio-bearing node (nothing to align, per that
@@ -73,4 +76,14 @@ type CueActivationNodeOutcome struct {
 	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
 	StartLeadMs             int    `json:"startLeadMs,omitempty"`
 	PreparedLate            bool   `json:"preparedLate,omitempty"`
+}
+
+// CueActionOutcome is one show action a Cue activation fired, in the same
+// outcome vocabulary POST /actions/{id}/invoke reports.
+type CueActionOutcome struct {
+	ActionID      string `json:"actionId"`
+	Label         string `json:"label,omitempty"`
+	Outcome       string `json:"outcome"`
+	OutcomeState  string `json:"outcomeState,omitempty"`
+	OutcomeReason string `json:"outcomeReason,omitempty"`
 }

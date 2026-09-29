@@ -90,6 +90,8 @@ The check this record asked for below was run and **the answer is no**. The GStr
 
 **Owner's decision, 2026-08-16: compile from source, script it, and ship it for day-0.** The downsides are understood and accepted: the node carries a cargo toolchain, the resulting `.so` has no distribution provenance, and a node rebuilt between seasons has to reproduce the build. The mitigation is a scripted build rather than a packaged dependency. Node build mechanics are owner work outside the build sessions.
 
+**Amended 2026-09-23 by [ADR-055](../decisions/ADR-055-one-command-install-and-node-enrollment.md) decision 3 (owner).** The plugin is now built by the release workflow from a pinned `gst-plugins-rs` revision, for amd64 and arm64, and shipped in the node agent package. Nodes no longer carry a cargo toolchain. Compiling on the node remains only as the installer's fallback for an architecture with no prebuilt plugin. The paragraph below describes the state before that change.
+
 The reproducibility risk is real and is on the punch list rather than closed: the plugin version, the `gst-plugins-rs` revision built from, and the exact build commands are not yet recorded anywhere, and the bench node is currently the only artifact of them.
 
 ### Open items for bench (L2) verification

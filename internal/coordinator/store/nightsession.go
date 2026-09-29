@@ -39,6 +39,7 @@ type NightSessionRecord struct {
 	PrepareSiteIdempotencyKey string
 	AttributionDegraded       bool
 	Issuer                    NightSessionIssuer
+	StopHold                  *NightSessionStopHold
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 }
@@ -57,6 +58,14 @@ type NightSessionIssuer struct {
 	RecordedAt    *time.Time
 }
 
+// NightSessionStopHold is the hold a level 1 emergency stop places on the
+// session (ADR-054). While it stands the night loop starts no output.
+type NightSessionStopHold struct {
+	Reason    string
+	At        time.Time
+	Principal string
+}
+
 // IsZero reports whether any principal has been attributed at all.
 func (i NightSessionIssuer) IsZero() bool { return i.PrincipalID == "" }
 
@@ -69,7 +78,8 @@ const nightSessionColumns = `
 	shutdown_intent, cycle, content_anchor_json, boundary_json, armed_show_id,
 	show_committed, power_phase, degraded, degraded_reason, prepare_site_idempotency_key,
 	attribution_degraded, issuer_principal_id, issuer_principal_name, issuer_form,
-	issuer_credential_id, issuer_command, issuer_recorded_at, created_at, updated_at
+	issuer_credential_id, issuer_command, issuer_recorded_at, created_at, updated_at,
+	stop_hold_reason, stop_hold_at, stop_hold_principal
 `
 
 func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRecord, error) {
@@ -77,7 +87,8 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 		rec                                           NightSessionRecord
 		stateEnteredAt, createdAt, updatedAt          string
 		finalShowRequestedAt, admissionClosedAt       sql.NullString
-		issuerRecordedAt                              sql.NullString
+		issuerRecordedAt, stopHoldAt                  sql.NullString
+		stopHoldReason, stopHoldPrincipal             string
 		finalShowRequested, admissionClosed, degraded int64
 		showCommitted, attributionDegraded            int64
 	)
@@ -88,6 +99,7 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 		&showCommitted, &rec.PowerPhase, &degraded, &rec.DegradedReason, &rec.PrepareSiteIdempotencyKey,
 		&attributionDegraded, &rec.Issuer.PrincipalID, &rec.Issuer.PrincipalName, &rec.Issuer.Form,
 		&rec.Issuer.CredentialID, &rec.Issuer.Command, &issuerRecordedAt, &createdAt, &updatedAt,
+		&stopHoldReason, &stopHoldAt, &stopHoldPrincipal,
 	); err != nil {
 		return NightSessionRecord{}, err
 	}
@@ -110,6 +122,13 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 	if rec.Issuer.RecordedAt, err = dbToTimePtr(issuerRecordedAt); err != nil {
 		return NightSessionRecord{}, fmt.Errorf("store: parse night session issuer_recorded_at: %w", err)
 	}
+	holdAt, err := dbToTimePtr(stopHoldAt)
+	if err != nil {
+		return NightSessionRecord{}, fmt.Errorf("store: parse night session stop_hold_at: %w", err)
+	}
+	if holdAt != nil {
+		rec.StopHold = &NightSessionStopHold{Reason: stopHoldReason, At: *holdAt, Principal: stopHoldPrincipal}
+	}
 	if rec.CreatedAt, err = dbToTime(createdAt); err != nil {
 		return NightSessionRecord{}, fmt.Errorf("store: parse night session created_at: %w", err)
 	}
@@ -120,9 +139,10 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 }
 
 func insertNightSession(ctx context.Context, q querier, rec NightSessionRecord, now time.Time) error {
+	holdReason, holdAt, holdPrincipal := stopHoldToDB(rec.StopHold)
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO night_sessions (`+nightSessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		rec.ID, rec.ConfigObjectID, rec.ConfigRevision, rec.State, timeToDB(rec.StateEnteredAt), rec.ReadinessID,
 		boolToDB(rec.FinalShowRequested), timePtrToDB(rec.FinalShowRequestedAt), boolToDB(rec.AdmissionClosed), timePtrToDB(rec.AdmissionClosedAt),
@@ -130,6 +150,7 @@ func insertNightSession(ctx context.Context, q querier, rec NightSessionRecord, 
 		boolToDB(rec.ShowCommitted), rec.PowerPhase, boolToDB(rec.Degraded), rec.DegradedReason, rec.PrepareSiteIdempotencyKey,
 		boolToDB(rec.AttributionDegraded), rec.Issuer.PrincipalID, rec.Issuer.PrincipalName, rec.Issuer.Form,
 		rec.Issuer.CredentialID, rec.Issuer.Command, timePtrToDB(rec.Issuer.RecordedAt), timeToDB(now), timeToDB(now),
+		holdReason, holdAt, holdPrincipal,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert night session %q: %w", rec.ID, err)
@@ -221,7 +242,15 @@ func (s *Store) GetNightSession(ctx context.Context, id string) (NightSessionRec
 	return getNightSession(ctx, s.db, id)
 }
 
+func stopHoldToDB(h *NightSessionStopHold) (reason string, at any, principal string) {
+	if h == nil {
+		return "", nil, ""
+	}
+	return h.Reason, timeToDB(h.At), h.Principal
+}
+
 func updateNightSession(ctx context.Context, q querier, rec NightSessionRecord, now time.Time) error {
+	holdReason, holdAt, holdPrincipal := stopHoldToDB(rec.StopHold)
 	res, err := q.ExecContext(ctx, `
 		UPDATE night_sessions SET
 			config_object_id = ?, config_revision = ?, state = ?, state_entered_at = ?, readiness_id = ?,
@@ -230,7 +259,8 @@ func updateNightSession(ctx context.Context, q querier, rec NightSessionRecord, 
 			show_committed = ?, power_phase = ?, degraded = ?, degraded_reason = ?,
 			prepare_site_idempotency_key = ?, attribution_degraded = ?,
 			issuer_principal_id = ?, issuer_principal_name = ?, issuer_form = ?,
-			issuer_credential_id = ?, issuer_command = ?, issuer_recorded_at = ?, updated_at = ?
+			issuer_credential_id = ?, issuer_command = ?, issuer_recorded_at = ?, updated_at = ?,
+			stop_hold_reason = ?, stop_hold_at = ?, stop_hold_principal = ?
 		WHERE id = ?
 	`,
 		rec.ConfigObjectID, rec.ConfigRevision, rec.State, timeToDB(rec.StateEnteredAt), rec.ReadinessID,
@@ -240,6 +270,7 @@ func updateNightSession(ctx context.Context, q querier, rec NightSessionRecord, 
 		rec.PrepareSiteIdempotencyKey, boolToDB(rec.AttributionDegraded),
 		rec.Issuer.PrincipalID, rec.Issuer.PrincipalName, rec.Issuer.Form,
 		rec.Issuer.CredentialID, rec.Issuer.Command, timePtrToDB(rec.Issuer.RecordedAt), timeToDB(now),
+		holdReason, holdAt, holdPrincipal,
 		rec.ID,
 	)
 	if err != nil {

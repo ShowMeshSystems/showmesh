@@ -94,7 +94,7 @@ func TestSyncReportsAcquiring(t *testing.T) {
 }
 
 // TestSyncIsNotCollectedWithoutEvidence proves every input this coordinator
-// does not have leaves all four signals not collected, never a
+// does not have leaves all three signals not collected, never a
 // free-running claim nobody checked.
 func TestSyncIsNotCollectedWithoutEvidence(t *testing.T) {
 	cases := []struct {
@@ -108,28 +108,12 @@ func TestSyncIsNotCollectedWithoutEvidence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := syncObs(t, tc.engineClockSource, tc.clock)
-			for _, sig := range []observation.SignalID{SignalSyncState, SignalSyncFollows, SignalSyncOffsetNs, SignalSyncRatePPM} {
+			for _, sig := range []observation.SignalID{SignalSyncState, SignalSyncFollows, SignalSyncOffsetNs} {
 				if got := findObs(t, obs, sig); got.Absence != observation.StateNotCollected {
 					t.Errorf("%s absence = %q, want %q", sig, got.Absence, observation.StateNotCollected)
 				}
 			}
 		})
-	}
-}
-
-// TestSyncRatePPMIsNeverInvented pins ADR-052 decision 6's rule for the
-// rate adjustment: nothing in this build measures it, so it reports not
-// collected rather than a zero that would read as "no correction is being
-// applied".
-func TestSyncRatePPMIsNeverInvented(t *testing.T) {
-	obs := syncObs(t, "phc", fakeClockStatusSource{payload: lockedClockPayload(), have: true})
-
-	got := findObs(t, obs, SignalSyncRatePPM)
-	if got.Absence != observation.StateNotCollected {
-		t.Errorf("sync rate absence = %q, want %q", got.Absence, observation.StateNotCollected)
-	}
-	if got.Value != nil {
-		t.Errorf("sync rate value = %v, want no value at all", got.Value)
 	}
 }
 

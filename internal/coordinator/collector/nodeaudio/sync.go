@@ -9,8 +9,8 @@ import (
 )
 
 // This file is ADR-052 decision 6's sync status for one node:
-// node.audio.sync.state/.follows/.offset_ns/.rate_ppm. Nothing here
-// measures anything itself.
+// node.audio.sync.state/.follows/.offset_ns. Nothing here measures
+// anything itself.
 
 // The three values node.audio.sync.state carries (ADR-052 decision 6).
 // SyncStateLocked requires both a locked clock provider and a pipeline
@@ -64,11 +64,6 @@ func syncObservations(nodeID string, p mqttproto.AudioPayload, rep report, clock
 		obs = append(obs, notCollected(res, SignalSyncOffsetNs, source, syncOffsetAbsentReason(state), rep.receivedAt))
 	}
 
-	// Nothing in this codebase measures the rate adjustment PipeWire
-	// applies to the output interface, and a zero would read as "no
-	// correction is being applied" (RES-019 section 10).
-	obs = append(obs, notCollected(res, SignalSyncRatePPM, source,
-		"this node does not measure the rate adjustment applied to its output interface", rep.receivedAt))
 	return obs
 }
 
@@ -114,7 +109,7 @@ func syncOffsetAbsentReason(state string) string {
 	return "this node's clock provider did not report an offset for this reading"
 }
 
-// notCollectedSync reports all four sync signals as not collected for one
+// notCollectedSync reports all three sync signals as not collected for one
 // shared reason, so a missing input never leaves one reading as a
 // measurement.
 func notCollectedSync(res observation.ResourceRef, source, reason string, at time.Time) []observation.Observation {
@@ -122,6 +117,5 @@ func notCollectedSync(res observation.ResourceRef, source, reason string, at tim
 		notCollected(res, SignalSyncState, source, reason, at),
 		notCollected(res, SignalSyncFollows, source, reason, at),
 		notCollected(res, SignalSyncOffsetNs, source, reason, at),
-		notCollected(res, SignalSyncRatePPM, source, reason, at),
 	}
 }

@@ -11,11 +11,14 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  FPPPluginReportsRefusedBanner,
+  StopHoldBanner,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
   ConfirmDialog,
   ConnectionPill,
+  CopyButton,
   DefinitionStrip,
   DeletePanel,
   Drawer,
@@ -27,6 +30,8 @@ import {
   Notice,
   NotWired,
   NotWiredBanner,
+  OneTimeSecret,
+  RadioCardList,
   RailBadge,
   RuledStrip,
   Section,
@@ -140,8 +145,10 @@ export function Specimen() {
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
   const [sliderValue, setSliderValue] = useState(72)
+  const [radioCardValue, setRadioCardValue] = useState('1,2')
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -306,6 +313,16 @@ export function Specimen() {
             <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
             inline row, such as a pairing code. Never for a field that can hold an operator-length string.
           </p>
+          <RadioCardList
+            label="Program channels"
+            help="Channel pairs this output reports."
+            options={[
+              { value: '1,2', title: 'Channels 1 and 2', desc: 'Timecode can use 3 or 4.' },
+              { value: '3,4', title: 'Channels 3 and 4', desc: 'Timecode can use 1 or 2.' },
+            ]}
+            value={radioCardValue}
+            onChange={setRadioCardValue}
+          />
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">
@@ -457,6 +474,10 @@ export function Specimen() {
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
               cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
             />
+            <StopHoldBanner
+              message="The show is stopped. Press Resume on Live Control to start the show playlist from its first song."
+              detail="Stopped at 20:41 by operator"
+            />
             <WeatherDelayHeldBanner
               messages={['FPP fpp-01 is held dark from an earlier weather delay. Resume to open its gate.']}
               resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
@@ -486,6 +507,7 @@ export function Specimen() {
               dismiss={{ label: 'Dismiss', onClick: () => {}, disabled: false, busy: false }}
               error="This question already expired. Nothing was changed."
             />
+            <FPPPluginReportsRefusedBanner instances={[{ instanceId: 'bench-fpp' }]} />
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>
@@ -618,7 +640,14 @@ export function Specimen() {
               </>
             }
             confirmLabel="Deploy anyway"
-            onConfirm={() => setConfirmOpen(false)}
+            busy={confirmBusy}
+            onConfirm={() => {
+              setConfirmBusy(true)
+              window.setTimeout(() => {
+                setConfirmBusy(false)
+                setConfirmOpen(false)
+              }, 800)
+            }}
             onCancel={() => setConfirmOpen(false)}
           />
         </SpecSection>
@@ -729,6 +758,28 @@ export function Specimen() {
           >
             <p className="sm-small sm-muted">Deleting a cue removes only this object; nothing else in the reference graph names a cue id.</p>
           </DeletePanel>
+        </SpecSection>
+
+        <SpecSection
+          number="15 · One-time secret"
+          id="specimen-secret"
+          title="A value the coordinator will never hand back again"
+          detail="Large, monospace, and copyable. Dismissing it is the only way back to the ordinary view; a later read of the same resource never carries the value again."
+        >
+          <OneTimeSecret
+            headline="This code will not be shown again. Copy it now."
+            value="Q7XR-9K2M"
+            detail={
+              <>
+                <p>Expires at 21:22:00, in 15 minutes.</p>
+                <p>
+                  Run this on the node: <span className="sm-data">sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M</span>
+                </p>
+                <CopyButton value="sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M" label="Copy command" />
+              </>
+            }
+            onDismiss={() => {}}
+          />
         </SpecSection>
       </div>
     </div>

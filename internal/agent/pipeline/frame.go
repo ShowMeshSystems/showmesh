@@ -279,6 +279,14 @@ type FrameWriter struct {
 	idleModeNow        string
 	failureOutputNow   string
 
+	// queued is handed over by [FrameWriter.Queue] from any goroutine and
+	// taken by exactly one side through Swap or CompareAndSwap, which is
+	// what decides who owns (and closes) its source.
+	queued      atomic.Pointer[QueuedSequence]
+	onSwitch    func(*QueuedSequence)
+	allowSwitch func(*QueuedSequence) bool
+	onDrop      func(*QueuedSequence)
+
 	stop chan struct{}
 	done chan struct{}
 }
@@ -527,7 +535,8 @@ func resolveGeometry(width, height, channelCount int) (w, h, bytesPerPixel int) 
 func (fw *FrameWriter) Run(ctx context.Context) {
 	defer close(fw.done)
 
-	ticker := time.NewTicker(fw.stepTime)
+	period := fw.stepTime
+	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
 	for {
@@ -538,6 +547,10 @@ func (fw *FrameWriter) Run(ctx context.Context) {
 			return
 		case tick := <-ticker.C:
 			fw.writeOneFrame(tick)
+			if fw.stepTime != period {
+				period = fw.stepTime
+				ticker.Reset(period)
+			}
 		}
 	}
 }
@@ -584,17 +597,18 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 		// staleness, so none of that logic can override it.
 		drawing = DrawingBlackout
 		outBuf = fw.idleBuf
+		fw.dropQueued()
 	} else if idleContentStates[snap.State] {
 		drawing = DrawingIdle
 		idleMode = fw.idleOutput
 		outBuf = fw.idleOutputFor(tickTime)
-	} else if snap.Filename != "" && snap.Filename != fw.sequenceFilename {
+	} else if !fw.holdsSequence(snap.Filename) {
 		// The timeline says something is playing, but not the sequence
-		// this writer holds: FPP has moved on to a sequence this surface
-		// was never assigned, and sync is still arriving. Before this
-		// check, Playing plus "whatever FSEQ this surface holds" was
-		// drawn unconditionally, with nothing ever re-checking that the
-		// held file was still the right one.
+		// this writer holds nor the one queued as next: FPP has moved on
+		// to a sequence this surface was never assigned, and sync is
+		// still arriving. Before this check, Playing plus "whatever FSEQ
+		// this surface holds" was drawn unconditionally, with nothing ever
+		// re-checking that the held file was still the right one.
 		//
 		// An empty snap.Filename is deliberately NOT a mismatch: it means
 		// MultiSync has not reported a filename yet, the same "nothing to

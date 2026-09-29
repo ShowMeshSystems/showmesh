@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1357,5 +1358,58 @@ func TestListUnresolvedMacroRunStepsScopedToOneRun(t *testing.T) {
 		if step.RunID != "run-unresolved-a" {
 			t.Errorf("step.RunID = %q, want run-unresolved-a", step.RunID)
 		}
+	}
+}
+
+// seedOlderMatchingRuns creates one run of show "target" (finished when
+// finish is true), then MaxMacroRunPageSize+1 newer runs of show "other"
+// that stay running, so no matching run is within the newest page.
+func seedOlderMatchingRuns(t *testing.T, st *Store, clock *fakeClock, finishTarget bool) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < MaxMacroRunPageSize+2; i++ {
+		id := fmt.Sprintf("run-%03d", i)
+		run, steps := testMacroRun(id, "idem-"+id, "macro-"+id)
+		run.Show = "other"
+		if i == 0 {
+			run.Show = "target"
+		}
+		if _, _, err := st.CreateMacroRun(ctx, run, steps); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if i == 0 && finishTarget {
+			if err := st.FinishMacroRun(ctx, id, MacroRunFinishUpdate{FinishedAt: clock.now()}); err != nil {
+				t.Fatalf("finish %s: %v", id, err)
+			}
+		}
+		clock.advance(time.Second)
+	}
+}
+
+func TestListMacroRunsMatchingShowFindsRunsOlderThanTheNewestPage(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	seedOlderMatchingRuns(t, st, clock, false)
+
+	got, err := st.ListMacroRunsMatching(context.Background(), MacroRunListFilter{Show: "target"}, 5)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "run-000" {
+		t.Fatalf("got %+v, want exactly run-000", got)
+	}
+}
+
+func TestListMacroRunsMatchingStateFindsRunsOlderThanTheNewestPage(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	seedOlderMatchingRuns(t, st, clock, true)
+
+	got, err := st.ListMacroRunsMatching(context.Background(), MacroRunListFilter{State: "finished"}, 5)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "run-000" {
+		t.Fatalf("got %+v, want exactly run-000", got)
 	}
 }

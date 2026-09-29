@@ -48,7 +48,9 @@ const { connect, subscribe, getSnapshot, submitTokenMock, clearTokenMock, loginM
       logout: logoutMock,
       claimBootstrap: claimBootstrapMock,
     }
-    const ApiStoreCtor = vi.fn().mockReturnValue(instance)
+    const ApiStoreCtor = vi.fn<(options: unknown) => typeof instance>(function () {
+      return instance
+    })
     return {
       connect,
       subscribe,

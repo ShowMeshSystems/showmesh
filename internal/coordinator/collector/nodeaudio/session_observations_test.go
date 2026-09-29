@@ -96,11 +96,11 @@ func TestSessionFaultSignalsDistinguishAllSeven(t *testing.T) {
 	}
 }
 
-// TestSessionFaultNoneReportsReasonNotCollected proves the converse: no
+// TestSessionFaultNoneReportsReasonCurrentEmpty proves the converse: no
 // standing fault means FaultKind is the literal "none" and FaultReason is
-// not_collected with a reason — never omitted, never an empty string
-// masquerading as "nothing to report".
-func TestSessionFaultNoneReportsReasonNotCollected(t *testing.T) {
+// a current empty value, never not_collected, since a session with no
+// fault has a known, empty reason.
+func TestSessionFaultNoneReportsReasonCurrentEmpty(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
 		SessionID: "sess-1", State: "playing", Fault: "none",
@@ -113,11 +113,11 @@ func TestSessionFaultNoneReportsReasonNotCollected(t *testing.T) {
 		t.Errorf("fault kind = %v, want %q", kind.Value, "none")
 	}
 	reason := findSessionObs(t, obs, SignalSessionFaultReason)
-	if reason.Absence != observation.StateNotCollected {
-		t.Errorf("fault reason absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	if reason.Absence != "" {
+		t.Errorf("fault reason absence = %q, want a current value", reason.Absence)
 	}
-	if reason.Reason == "" {
-		t.Error("fault reason's own Reason is empty, want a stated explanation")
+	if reason.Value != "" {
+		t.Errorf("fault reason value = %v, want empty string", reason.Value)
 	}
 }
 
@@ -148,11 +148,11 @@ func TestSessionLTCClaimRefusedCarriesItsReason(t *testing.T) {
 	}
 }
 
-// TestSessionLTCClaimHeldReasonNotCollected proves the converse: a
-// session that holds the run reports state "held" and its reason as
-// not_collected, never an empty string masquerading as "no reason to
-// give."
-func TestSessionLTCClaimHeldReasonNotCollected(t *testing.T) {
+// TestSessionLTCClaimHeldReasonCurrentEmpty proves the converse: a
+// session that holds the run reports state "held" and its reason as a
+// current empty value, never not_collected: the claim was not refused,
+// so an empty reason is the known, honest fact.
+func TestSessionLTCClaimHeldReasonCurrentEmpty(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
 		SessionID: "show-a", State: "playing", Fault: "none",
@@ -166,8 +166,11 @@ func TestSessionLTCClaimHeldReasonNotCollected(t *testing.T) {
 		t.Errorf("ltc claim state = %v, want %q", state.Value, "held")
 	}
 	reason := findSessionObs(t, obs, SignalSessionLTCClaimReason)
-	if reason.Absence != observation.StateNotCollected {
-		t.Errorf("ltc claim reason absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	if reason.Absence != "" {
+		t.Errorf("ltc claim reason absence = %q, want a current value", reason.Absence)
+	}
+	if reason.Value != "" {
+		t.Errorf("ltc claim reason value = %v, want empty string", reason.Value)
 	}
 }
 
@@ -186,6 +189,47 @@ func TestSessionLTCClaimStateDefaultsToNone(t *testing.T) {
 	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
 	if state.Value != "none" {
 		t.Errorf("ltc claim state = %v, want %q", state.Value, "none")
+	}
+}
+
+// TestSessionMixDuckedByReportsDucker proves a ducked session reports
+// which other session is ducking it as a real, current value.
+func TestSessionMixDuckedByReportsDucker(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		Ducked: true, DuckedBy: "sess-2",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	duckedBy := findSessionObs(t, obs, SignalSessionMixDuckedBy)
+	if duckedBy.Absence != "" {
+		t.Errorf("mix ducked_by absence = %q, want a real value while ducked", duckedBy.Absence)
+	}
+	if duckedBy.Value != "sess-2" {
+		t.Errorf("mix ducked_by value = %v, want %q", duckedBy.Value, "sess-2")
+	}
+}
+
+// TestSessionMixDuckedByReportsCurrentEmptyWhenNotDucked proves the
+// converse: a session not currently ducked reports an empty ducked_by as
+// a current value, never not_collected -- an empty value is the known,
+// honest fact.
+func TestSessionMixDuckedByReportsCurrentEmptyWhenNotDucked(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none", Ducked: false,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	duckedBy := findSessionObs(t, obs, SignalSessionMixDuckedBy)
+	if duckedBy.Absence != "" {
+		t.Errorf("mix ducked_by absence = %q, want a current value when not ducked", duckedBy.Absence)
+	}
+	if duckedBy.Value != "" {
+		t.Errorf("mix ducked_by value = %v, want empty string when not ducked", duckedBy.Value)
 	}
 }
 
@@ -332,6 +376,36 @@ func TestSessionGainSignalsReportDecibelsNotLinearMultiplier(t *testing.T) {
 	}
 	if math.Abs(ceilingDb-3) > 0.01 {
 		t.Errorf("gain.ceiling value = %v, want 3 (dB, what the operator entered) -- not the linear multiplier %v", ceilingDb, linearCeiling)
+	}
+}
+
+// TestSessionGainReportsCurrentUnityWithNoExplicitSet proves the
+// collector correctly surfaces the agent's own always-current gain
+// (internal/agent/audio's Session.snapshotLocked now reports HasGain on
+// every report): a session that never received an explicit
+// audio.gain.set, with no ceiling either, reports gain.effective as
+// current at 0 dB (unity) rather than not_collected.
+func TestSessionGainReportsCurrentUnityWithNoExplicitSet(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		HasGain: true, Gain: float64(pkgaudio.Gain(1)),
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	gain := findSessionObs(t, obs, SignalSessionGain)
+	if gain.Absence != "" {
+		t.Errorf("gain.effective absence = %q, want a current value", gain.Absence)
+	}
+	gainDb, ok := gain.Value.(float64)
+	if !ok || math.Abs(gainDb) > 0.01 {
+		t.Errorf("gain.effective value = %v (%T), want 0 dB (unity)", gain.Value, gain.Value)
+	}
+
+	ceiling := findSessionObs(t, obs, SignalSessionGainCeiling)
+	if ceiling.Absence != observation.StateNotCollected {
+		t.Errorf("gain.ceiling absence = %q, want %q when no ceiling applies", ceiling.Absence, observation.StateNotCollected)
 	}
 }
 
@@ -738,16 +812,21 @@ func TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt(t *testing.T) 
 	}
 
 	reason := findSessionObs(t, obs, SignalSessionRestoreLastReason)
-	if reason.Absence != observation.StateNotCollected {
-		t.Errorf("restore.last_reason absence = %q, want %q: no attempt has run yet, so there is no reason to report", reason.Absence, observation.StateNotCollected)
+	if reason.Absence != "" {
+		t.Errorf("restore.last_reason absence = %q, want a current value: no attempt has run yet, so an empty reason is the known fact", reason.Absence)
+	}
+	if reason.Value != "" {
+		t.Errorf("restore.last_reason value = %v, want empty string", reason.Value)
 	}
 }
 
-// TestRestoreSignalsAllNotCollectedWhenNothingIsQueued is the negative
-// case TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt
-// exists to distinguish: an ordinary session with no restore queued at
-// all reports all three restore.* signals as not collected.
-func TestRestoreSignalsAllNotCollectedWhenNothingIsQueued(t *testing.T) {
+// TestRestoreSignalsWhenNothingIsQueued is the negative case
+// TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt exists to
+// distinguish: an ordinary session with no restore queued at all reports
+// a current 0 attempts and a current empty last_reason (both known,
+// honest facts), and next_attempt_ms not_collected since nothing is
+// scheduled.
+func TestRestoreSignalsWhenNothingIsQueued(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
 		SessionID: "sess-1", State: "playing", Fault: "none", RestorePending: false,
@@ -755,10 +834,24 @@ func TestRestoreSignalsAllNotCollectedWhenNothingIsQueued(t *testing.T) {
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
-	for _, sig := range []observation.SignalID{SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs, SignalSessionRestoreLastReason} {
-		o := findSessionObs(t, obs, sig)
-		if o.Absence != observation.StateNotCollected {
-			t.Errorf("%s absence = %q, want %q when no restore is queued", sig, o.Absence, observation.StateNotCollected)
-		}
+	attempts := findSessionObs(t, obs, SignalSessionRestoreAttempts)
+	if attempts.Absence != "" {
+		t.Errorf("restore.attempts absence = %q, want a current value when no restore is queued", attempts.Absence)
+	}
+	if attempts.Value != int64(0) {
+		t.Errorf("restore.attempts value = %v, want 0", attempts.Value)
+	}
+
+	lastReason := findSessionObs(t, obs, SignalSessionRestoreLastReason)
+	if lastReason.Absence != "" {
+		t.Errorf("restore.last_reason absence = %q, want a current value when no restore is queued", lastReason.Absence)
+	}
+	if lastReason.Value != "" {
+		t.Errorf("restore.last_reason value = %v, want empty string", lastReason.Value)
+	}
+
+	next := findSessionObs(t, obs, SignalSessionRestoreNextAttemptMs)
+	if next.Absence != observation.StateNotCollected {
+		t.Errorf("restore.next_attempt_ms absence = %q, want %q when no restore is queued", next.Absence, observation.StateNotCollected)
 	}
 }

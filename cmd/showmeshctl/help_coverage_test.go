@@ -61,6 +61,10 @@ var helpAliases = map[string]bool{
 // "cuecatalog deploy" went missing in the first place, just one level up
 // (a hand-written help list rather than a hand-written coverage list).
 var helpCoverageDispatchExtras = map[string][]string{
+	// cmdNode (cmd_nodes.go) routes "enroll" and "enrollments" ahead of its
+	// own <node-id> argument; cmdNodeEnrollments routes "cancel" the same way.
+	"cmdNode":            {"enroll", "enrollments"},
+	"cmdNodeEnrollments": {"cancel"},
 	// cmdFPP (cmd_fpp.go) dispatches its 8 write verbs through the
 	// fppWriteSubcommands map and its 3 read-only families through
 	// "if args[0] == ..." checks — no switch statement at all.

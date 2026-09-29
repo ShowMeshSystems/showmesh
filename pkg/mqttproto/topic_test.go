@@ -92,6 +92,8 @@ func TestValidateNodeIDRejections(t *testing.T) {
 		{name: "leading hyphen", id: "-media03"},
 		{name: "trailing hyphen", id: "media03-"},
 		{name: "too long, 65 chars", id: string(tooLong)},
+		{name: "showmeshctl node enroll command", id: "enroll"},
+		{name: "showmeshctl node enrollments command", id: "enrollments"},
 	}
 
 	for _, tt := range tests {
@@ -114,6 +116,8 @@ func TestValidateNodeIDAccepts(t *testing.T) {
 		"media-03",
 		"a-b-c",
 		"09media",
+		"enroller",
+		"enroll-01",
 	}
 	for _, id := range tests {
 		t.Run(id, func(t *testing.T) {

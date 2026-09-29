@@ -41,7 +41,7 @@ function formatSignedPpm(ppm: number): string {
 }
 
 /** A state value this build does not know must never borrow a known state's name or presentation. */
-function syncLineText(state: string, follows: SignalFact<string>, offsetNs: SignalFact<number>, ratePpm: SignalFact<number>): SignalFact<string> {
+function syncLineText(state: string, follows: SignalFact<string>, offsetNs: SignalFact<number>): SignalFact<string> {
   if (state === 'free_running') return { kind: 'value', value: 'Sync: Free-running on the local clock' }
   if (state !== 'locked' && state !== 'acquiring') {
     return {
@@ -56,7 +56,6 @@ function syncLineText(state: string, follows: SignalFact<string>, offsetNs: Sign
   const clauses: string[] = []
   if (follows.kind === 'value' && follows.value !== '') clauses.push(`Follows ${follows.value}`)
   if (offsetNs.kind === 'value') clauses.push(`δ ${formatOffsetNs(offsetNs.value)}`)
-  if (ratePpm.kind === 'value') clauses.push(`rate ${formatSignedPpm(ratePpm.value)} ppm`)
 
   return { kind: 'value', value: clauses.length === 0 ? `Sync: ${stateWord}.` : `Sync: ${stateWord}. ${clauses.join(', ')}` }
 }
@@ -78,11 +77,10 @@ export function nodeSyncStatus(node: Node): NodeSyncStatus {
   const stateEntry = findSignal(node.audio, 'node.audio.sync.state')
   const followsFact = fact(findSignal(node.audio, 'node.audio.sync.follows'), (value) => String(value))
   const offsetFact = fact(findSignal(node.audio, 'node.audio.sync.offset_ns'), (value) => Number(value))
-  const rateFact = fact(findSignal(node.audio, 'node.audio.sync.rate_ppm'), (value) => Number(value))
 
   const syncLine: SignalFact<string> =
     stateEntry !== undefined && stateEntry.state === 'current' && stateEntry.value !== null
-      ? syncLineText(String(stateEntry.value), followsFact, offsetFact, rateFact)
+      ? syncLineText(String(stateEntry.value), followsFact, offsetFact)
       : fact(stateEntry, () => '')
 
   const steer = fact(findSignal(node.clock, 'node.clock.ptp.frequency_ppm'), (value) => `Clock steered ${formatSignedPpm(Number(value))} ppm`)

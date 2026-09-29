@@ -80,6 +80,18 @@ type FPPInstanceView struct {
 	// silently overwritten row" rule. Empty, never nil, when there is no
 	// duplicate.
 	DuplicateInstanceUUIDEndpointIDs []string
+
+	// PlaylistObservationRefused is non-nil exactly when this endpoint's
+	// current instance uuid carries a persisted sequence-regression marker.
+	PlaylistObservationRefused *FPPPlaylistObservationRefusal
+}
+
+// FPPPlaylistObservationRefusal is [FPPInstanceView.PlaylistObservationRefused]'s
+// shape: an operator-facing reason for the current sequence-regression
+// refusal, and when it was recorded.
+type FPPPlaylistObservationRefusal struct {
+	Reason    string
+	RefusedAt time.Time
 }
 
 // FPPLister lists the coordinator's configured FPP instances and their

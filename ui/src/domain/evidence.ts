@@ -32,6 +32,11 @@ export const EVIDENCE_LABEL: Record<EvidenceState, string> = {
   unsupported: 'Unavailable',
 }
 
+/** An empty string is a known empty value and renders as None. */
+export function displayValue(value: string | number | boolean): string {
+  return value === '' ? 'None' : String(value)
+}
+
 export type SignalCounts = {
   total: number
   current: number

@@ -614,7 +614,7 @@ func TestNightAdvanceBackgroundAudio_TwoNodesIndependentProgress(t *testing.T) {
 	// GET /night/session's own wire mapping: every node reports through
 	// backgroundAudio.steps[] with its own nodeId (owner ruling: uniform
 	// reporting, no first-node exception).
-	wire := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	wire := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, true)
 	nodeIDs := map[string]int{}
 	for _, step := range wire.Steps {
 		if step.Sequence != v1.NightAudioSequenceBackground {
@@ -2617,7 +2617,7 @@ func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
 	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 
-	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, true)
 	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
 		t.Fatalf("PinnedMaxGainDb = %v, want -10", got.PinnedMaxGainDb)
 	}
@@ -2653,13 +2653,13 @@ func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
 		t.Fatalf("activate night.session revision 2: %v", err)
 	}
 
-	got = mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	got = mapNightBackgroundAudio(ctx, h.deps, rec, testNow, true)
 	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
 		t.Fatalf("PinnedMaxGainDb after reconfiguration = %v, want still -10 (the pinned revision), not the newly configured -3", got.PinnedMaxGainDb)
 	}
 
 	// No session running: the field is absent, never a fallback value.
-	if none := mapNightBackgroundAudio(ctx, h.deps, store.NightSessionRecord{}, true); none.PinnedMaxGainDb != nil {
+	if none := mapNightBackgroundAudio(ctx, h.deps, store.NightSessionRecord{}, testNow, true); none.PinnedMaxGainDb != nil {
 		t.Fatalf("PinnedMaxGainDb with no session = %v, want nil", none.PinnedMaxGainDb)
 	}
 }
@@ -2675,7 +2675,7 @@ func TestMapNightBackgroundAudio_NoBackgroundAudioConfigured(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStateRestingIntershow)
 
-	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, true)
 	if got.State != v1.NightEvidenceRecorded {
 		t.Fatalf("state with no backgroundAudio configured = %q, want recorded", got.State)
 	}
@@ -2701,7 +2701,7 @@ func TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates(t *testing.T) 
 		t.Run(state, func(t *testing.T) {
 			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
-			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, true)
 			if got.State != v1.NightEvidenceRecorded {
 				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
 			}
@@ -2726,7 +2726,7 @@ func TestMapNightBackgroundAudio_ByIDIgnoresRunningState(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
-			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, false)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, testNow, false)
 			if got.State != v1.NightEvidenceRecorded {
 				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
 			}
@@ -2767,7 +2767,7 @@ func TestMapNightBackgroundAudio_PinnedGainReadFailureKeepsStepsRecorded(t *test
 	// still reported" case, not a simulated error.
 	rec.ConfigRevision = 99
 
-	got := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	got := mapNightBackgroundAudio(ctx, h.deps, rec, testNow, true)
 	if got.State != v1.NightEvidenceRecorded {
 		t.Fatalf("state = %q, want recorded (a pinnedMaxGainDb read failure must not hide the step log)", got.State)
 	}

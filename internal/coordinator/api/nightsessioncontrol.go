@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +57,7 @@ const (
 	nightCommandFadeOutNight          = "fade-out-night"
 	nightCommandPowerDownPresentation = "power-down-presentation"
 	nightCommandEndSession            = "end-session"
+	nightCommandResumeShow            = "resume-show"
 )
 
 var validNightCommands = map[string]bool{
@@ -67,6 +69,7 @@ var validNightCommands = map[string]bool{
 	nightCommandFadeOutNight:          true,
 	nightCommandPowerDownPresentation: true,
 	nightCommandEndSession:            true,
+	nightCommandResumeShow:            true,
 }
 
 // nightExemptFromDegradedGate: these three, plus end-session (handled on
@@ -261,6 +264,7 @@ func nightCommandHTTPWriteDeadline() time.Duration {
 var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandRequestFinalShow: true,
 	nightCommandEndSession:       true,
+	nightCommandResumeShow:       true,
 }
 
 func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead bool, problem *v1.Problem) {
@@ -304,7 +308,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
-		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session", cmd)))
+		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session, resume-show", cmd)))
 		return
 	}
 	idempotencyKey, interlockOverrides, skipEnterShowLead, problem := decodeNightCommandBody(r, cmd)
@@ -318,7 +322,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	// command (fade-out, power-down, end-session) stays available, per
 	// decision 13. A cancelled night gets its own sentence: it stays
 	// refused until an operator clears it, not merely resumes it.
-	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight {
+	if cmd == nightCommandStartPreshow || cmd == nightCommandStartNight || cmd == nightCommandResumeShow {
 		wdRec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 		if err != nil {
 			h.writeInternalError(w, now, "check weather delay state", err)
@@ -381,6 +385,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// [handlers.nightStartNightCommand]'s own doc comment for when and
 		// why.
 		out, problem, opErr = h.nightStartNightCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
+	case cmd == nightCommandResumeShow:
+		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+			return h.nightResumeShowTx(ctx, tx, now, current)
+		})
 	case cmd == nightCommandPowerDownPresentation:
 		// Its own phase="power-down-presentation" interlock evidence is
 		// dispatched live, outside any transaction; see
@@ -618,7 +626,7 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			}
 		}
 		issuer.Timestamp = now
-		issuer.Action = "night." + cmd
+		issuer.Action = nightCommandAuditAction(cmd)
 		issuer.Target = out.result.ID
 		issuer.Kind = identity.AuditOutcome
 		issuer.OutcomeState = string(observation.StateCurrent)
@@ -1080,6 +1088,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		}
 
 		next := *current
+		next.StopHold = nil
 		next.State = nightStateTransitionToShow
 		next.StateEnteredAt = now
 		next.ArmedShowID = uuid.NewString()
@@ -1240,6 +1249,13 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // TYPE, never a named bool type (none exists anywhere in this repo), but
 // always a named value at the call site, so a reader never has to look up
 // what a literal true or false means here.
+// nightShowStartUnconfirmed is true when the show playlist was started but
+// FPP never reported it playing, so there is no show for a shutdown to wait on.
+func nightShowStartUnconfirmed(rec store.NightSessionRecord, now time.Time) bool {
+	a, ok := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	return ok && a.Purpose == nightAnchorPurposeShow && nightStartUnconfirmed(a, now)
+}
+
 func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string, force bool) (store.NightSessionRecord, bool) {
 	changed := false
 	if !rec.AdmissionClosed {
@@ -1253,7 +1269,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 		changed = true
 	}
 
-	deferring := !force && (rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted))
+	deferring := !force && (rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted && !nightShowStartUnconfirmed(rec, now)))
 	switch {
 	case rec.State == nightStateFadingOut || rec.State == nightStateStopped:
 		// Nothing left to fade.
@@ -1267,6 +1283,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 	default: // preparing, preshow, uncommitted transition-to-show, transition-to-resting, resting-intershow, end-of-night-resting
 		rec.ArmedShowID = ""
 		rec.ShowCommitted = false
+		rec.StopHold = nil
 		rec.State = nightStateFadingOut
 		rec.StateEnteredAt = now
 		rec.ContentAnchorJSON = ""
@@ -1501,6 +1518,7 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 	next.StateEnteredAt = now
 	next.ArmedShowID = ""
 	next.ShowCommitted = false
+	next.StopHold = nil
 	if !next.AdmissionClosed {
 		next.AdmissionClosed = true
 		t := now
@@ -1680,6 +1698,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		}
 		checks = append(checks, h.nightCheckFPPReachable(ctx, now, id))
 	}
+	checks = append(checks, h.nightCheckFPPPluginReportsRefused(ctx, instanceIDs))
 
 	cueOffsets := append(nightParseCueOffsets(payload.EnterShow.Cues), nightParseCueOffsets(payload.EnterResting.Cues)...)
 	checks = append(checks, nightCheckRestingAssetDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset, cueOffsets))
@@ -1834,6 +1853,28 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
 }
 
+// nightCheckFPPPluginReportsRefused is fpp-plugin-reports-refused: one
+// fleet-wide check, failing when any bound instance carries a refused
+// playlist-entry observation, naming every refused instance in reason.
+func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instanceIDs map[string]bool) nightReadinessCheck {
+	const name = "fpp-plugin-reports-refused"
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "The coordinator could not read FPP instance state. Run readiness again."}
+	}
+	var reasons []string
+	for _, v := range views {
+		if !instanceIDs[v.InstanceID] || v.PlaylistObservationRefused == nil {
+			continue
+		}
+		reasons = append(reasons, v.PlaylistObservationRefused.Reason)
+	}
+	if len(reasons) == 0 {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: strings.Join(reasons, " ")}
+}
+
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]
 // (nightloop.go) read through tx instead of h.deps.Config, necessary so a
 // gated decide function (which already holds the store's one connection
@@ -1941,8 +1982,12 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
-	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, now, current)
+	out.BackgroundAudio.Plan = mapNightBackgroundAudioPlan(ctx, deps, rec)
 	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
+	if nightStopHoldStands(rec) {
+		out.StopHold = &v1.NightStopHold{Reason: rec.StopHold.Reason, At: formatTime(rec.StopHold.At), Principal: rec.StopHold.Principal}
+	}
 	return out
 }
 
@@ -1993,6 +2038,25 @@ func nightSessionIsRunning(state string) bool {
 	}
 }
 
+// nightBedIsMeantToBePlaying names the states the resting bed is supposed
+// to be audible in, which is exactly the set nightTick advances it in
+// (nightloop.go): preshow, the resting gap between shows, and the resting
+// state at the end of the night. Every other running state either holds
+// the bed down for a show or is on its way into one, so a speaker that is
+// not playing there is not a speaker that dropped out.
+//
+// resting-intershow past the fade lead is the one case this cannot see
+// from the state alone; a node already faded down and suspended there is
+// excluded by [nightBedNodeDeliberatelySuspended] instead.
+func nightBedIsMeantToBePlaying(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateRestingIntershow, nightStateEndOfNightResting:
+		return true
+	default:
+		return false
+	}
+}
+
 // mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
 // Track F seam F5's background-audio/announcement steps
 // (nightbackgroundaudio.go's own durable log), on the SAME "read failure
@@ -2012,13 +2076,13 @@ func nightSessionIsRunning(state string) bool {
 // unrelated config-read hiccup). current selects which of the two
 // endpoint behaviors applies to pinnedMaxGainDb - see
 // [mapNightSessionState]'s own doc comment.
-func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, current bool) v1.NightBackgroundAudio {
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	// The announcement-session sequence is read here too, under its own
 	// phase family and tagged with its own sequence name. Its clear and
@@ -2029,7 +2093,7 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	// but a log line (ADR-039).
 	announcementRows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
@@ -2048,15 +2112,20 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
 
+	notPlaying := []v1.NightBedNodeNotPlaying{}
+	if current && nightBedIsMeantToBePlaying(rec.State) {
+		notPlaying = nightBedNodesNotPlaying(ctx, deps, rec, now, rows)
+	}
+
 	if current && !nightSessionIsRunning(rec.State) {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out, NodesNotPlaying: notPlaying}
 	}
 
 	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out, NodesNotPlaying: notPlaying}
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb, NodesNotPlaying: notPlaying}
 }
 
 // nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session

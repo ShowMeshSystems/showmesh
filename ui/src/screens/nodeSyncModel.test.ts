@@ -20,7 +20,6 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'locked' }),
         ev('node.audio.sync.follows', { value: FOLLOWS }),
         ev('node.audio.sync.offset_ns', { value: 200 }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({ kind: 'value', value: `Sync: Locked. Follows ${FOLLOWS}, δ 0.2 µs` })
@@ -32,7 +31,6 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'locked' }),
         ev('node.audio.sync.follows', { value: FOLLOWS }),
         ev('node.audio.sync.offset_ns', { state: 'not_collected', value: null, reason: 'no offset reported' }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({ kind: 'value', value: `Sync: Locked. Follows ${FOLLOWS}` })
@@ -44,7 +42,6 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'acquiring' }),
         ev('node.audio.sync.follows', { value: FOLLOWS }),
         ev('node.audio.sync.offset_ns', { state: 'not_collected', value: null, reason: 'no offset reported' }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({ kind: 'value', value: `Sync: Acquiring. Follows ${FOLLOWS}` })
@@ -56,7 +53,6 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'free_running' }),
         ev('node.audio.sync.follows', { value: '' }),
         ev('node.audio.sync.offset_ns', { state: 'not_collected', value: null, reason: 'this node is not following a global clock' }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({ kind: 'value', value: 'Sync: Free-running on the local clock' })
@@ -75,7 +71,6 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'holdover' }),
         ev('node.audio.sync.follows', { value: FOLLOWS }),
         ev('node.audio.sync.offset_ns', { value: 200 }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({
@@ -97,22 +92,9 @@ describe('nodeSyncStatus', () => {
         ev('node.audio.sync.state', { value: 'locked' }),
         ev('node.audio.sync.follows', { value: FOLLOWS }),
         ev('node.audio.sync.offset_ns', { value: -1_234_000 }),
-        ev('node.audio.sync.rate_ppm', { state: 'not_collected', value: null, reason: 'not measured' }),
       ]),
     )
     expect(status.syncLine).toEqual({ kind: 'value', value: `Sync: Locked. Follows ${FOLLOWS}, δ -1.23 ms` })
-  })
-
-  it('a measured rate is appended signed, with the sign kept for zero', () => {
-    const status = nodeSyncStatus(
-      nodeWith([
-        ev('node.audio.sync.state', { value: 'locked' }),
-        ev('node.audio.sync.follows', { value: FOLLOWS }),
-        ev('node.audio.sync.offset_ns', { value: 200 }),
-        ev('node.audio.sync.rate_ppm', { value: 0 }),
-      ]),
-    )
-    expect(status.syncLine).toEqual({ kind: 'value', value: `Sync: Locked. Follows ${FOLLOWS}, δ 0.2 µs, rate +0.00 ppm` })
   })
 
   it('a measured clock steer renders signed and two decimals', () => {

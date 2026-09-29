@@ -10,6 +10,8 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 )
 
 // fakeMQTTClient is an in-process double for [mqttClient], so Publish and
@@ -1028,5 +1030,25 @@ func TestDispatchToWaitersDropsOldestOnFullBufferRatherThanNewest(t *testing.T) 
 	}
 	if got := w.drops.Load(); got != 1 {
 		t.Errorf("w.drops = %d, want 1", got)
+	}
+}
+
+func TestPublishSignalsSentOnlyAfterASuccessfulPublish(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{{"success", nil, 1}, {"error", errors.New("boom"), 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cm := &fakeMQTTClient{publishFunc: func(context.Context, *paho.Publish) (*paho.PublishResponse, error) {
+				return &paho.PublishResponse{}, tc.err
+			}}
+			sent := 0
+			ctx := sendsignal.WithHook(context.Background(), func() { sent++ })
+			_ = newResponseTestBrokerManager(cm).Publish(ctx, "showmesh/test", 1, false, []byte("x"))
+			if sent != tc.want {
+				t.Fatalf("send hook fired %d times, want %d", sent, tc.want)
+			}
+		})
 	}
 }

@@ -115,3 +115,38 @@ func TestAssetPresentMissingOrAlteredFileStillFailsWithCache(t *testing.T) {
 		t.Fatal("assetPresent = true for a file that was never written, want false")
 	}
 }
+
+func TestAssetPresentRehashesAFileReplacedByRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cue-song.wav")
+	if err := os.WriteFile(path, []byte("original sixteen"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	wantHash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hash fixture: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat fixture: %v", err)
+	}
+	op := &cueActivationOperation{assetDir: dir, hashCache: newVerifiedHashCache()}
+	if !op.assetPresent("cue-song.wav", []string{wantHash}) {
+		t.Fatal("first assetPresent call = false, want true (priming the cache)")
+	}
+
+	replacement := filepath.Join(dir, ".replacement")
+	if err := os.WriteFile(replacement, []byte("corruptedbytes16"), 0o644); err != nil {
+		t.Fatalf("write replacement: %v", err)
+	}
+	if err := os.Chtimes(replacement, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("restore modtime: %v", err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatalf("rename replacement: %v", err)
+	}
+
+	if op.assetPresent("cue-song.wav", []string{wantHash}) {
+		t.Fatal("assetPresent trusted the cache for a same-size, same-mtime file replaced by rename, want a re-hash that fails")
+	}
+}

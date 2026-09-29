@@ -173,6 +173,8 @@ export type CueRow = {
   announcementPolicy: string | null
   /** This cue's audio asset (audio or announcement output) is not among the show's current assets. */
   assetMissing: boolean
+  /** Show action ids this cue fires on activation, in firing order. */
+  actions: string[]
 }
 
 /** True when a cue's audio output names a sequence not among this show's current assets. Announcement cues always carry an audio output (ADR-043), so this covers both. */
@@ -215,6 +217,7 @@ export function cueRows(
       usedByPlaylists: names,
       announcementPolicy: cue.payload.outputs.announcement !== undefined ? describeAnnouncementPolicy(cue.payload.outputs.announcement) : null,
       assetMissing: cueAssetMissing(cue.payload.outputs, assets),
+      actions: cue.payload.outputs.actions ?? [],
     }
   })
 }
@@ -228,6 +231,8 @@ export type CueActivationDraft = {
   audio: { asset: string; startOffsetMillis: number; targets: string[] } | null
   ltc: { startOffsetMillis: number; target: string } | null
   announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; targets: string[] } | null
+  /** Labels of the show actions the cue fires, in firing order. */
+  actions?: readonly string[]
   /** The installation's LTC frame rate, for formatting audio/ltc start offsets as timecode. Null when it has not been read. */
   ltcFps: number | null
 }
@@ -245,11 +250,13 @@ export function joinFacts(parts: readonly string[]): string {
  * literally rather than being silently skipped.
  */
 export function cueActivationSummary(draft: CueActivationDraft): string {
-  if (draft.render === null && draft.audio === null && draft.ltc === null && draft.announcement === null) {
+  const actions = draft.actions ?? []
+  if (draft.render === null && draft.audio === null && draft.ltc === null && draft.announcement === null && actions.length === 0) {
     return 'Pick at least one output to see what this cue will do.'
   }
 
   const parts: string[] = []
+  if (actions.length > 0) parts.push(`fire ${actions.join(', then ')}`)
 
   if (draft.render !== null) {
     parts.push(draft.render.sequence.trim() === '' ? 'render an unnamed sequence' : `render sequence ${draft.render.sequence.trim()}`)
@@ -333,6 +340,15 @@ export function newerDefinition(
   return candidates.reduce((latest, entry) => (entry.capturedAt > latest.capturedAt ? entry : latest))
 }
 
+/** The newest time the coordinator received any definition of this FPP playlist, or null when it holds none. */
+export function latestDefinitionReceivedMs(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string, playlistName: string): number | null {
+  const times = definitions
+    .filter((d) => d.instanceUuid === instanceUuid && d.playlistName === playlistName)
+    .map((d) => Date.parse(d.receivedAt))
+    .filter((ms) => !Number.isNaN(ms))
+  return times.length === 0 ? null : Math.max(...times)
+}
+
 // ---------------------------------------------------------------------
 // Presentation (show.surface)
 // ---------------------------------------------------------------------
@@ -405,21 +421,33 @@ export function surfaceRenderStatus(nodes: readonly Node[], nodeId: string, surf
 
 export type ChannelSpan = { id: string; label: string; start: number; end: number }
 
-/** Sorted spans plus the id set of every span overlapping another - the coordinator refuses this at write time; this only flags it for display. */
-export function channelSpans(surfaces: readonly { id: string; label: string; startChannel: number; channelCount: number }[]): {
+/**
+ * Spans sorted by start, plus the id of every span that overlaps another span on the same node.
+ * The coordinator refuses such an overlap on the same node and show at save time; this only flags it for display.
+ */
+export function channelSpans(surfaces: readonly { id: string; label: string; node: string; startChannel: number; channelCount: number }[]): {
   spans: ChannelSpan[]
   overlapping: Set<string>
 } {
   const spans = surfaces
     .map((s) => ({ id: s.id, label: s.label, start: s.startChannel, end: s.startChannel + s.channelCount - 1 }))
     .sort((a, b) => a.start - b.start)
+  const byNode = new Map<string, ChannelSpan[]>()
+  surfaces.forEach((s) => {
+    const span = { id: s.id, label: s.label, start: s.startChannel, end: s.startChannel + s.channelCount - 1 }
+    byNode.set(s.node, [...(byNode.get(s.node) ?? []), span])
+  })
   const overlapping = new Set<string>()
-  for (let i = 1; i < spans.length; i += 1) {
-    const prev = spans[i - 1]
-    const cur = spans[i]
-    if (prev !== undefined && cur !== undefined && cur.start <= prev.end) {
-      overlapping.add(prev.id)
-      overlapping.add(cur.id)
+  for (const group of byNode.values()) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i]
+        const b = group[j]
+        if (a !== undefined && b !== undefined && a.start <= b.end && b.start <= a.end) {
+          overlapping.add(a.id)
+          overlapping.add(b.id)
+        }
+      }
     }
   }
   return { spans, overlapping }

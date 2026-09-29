@@ -661,6 +661,10 @@ type Dependencies struct {
 	// failing" posture, and covered by
 	// TestEveryRefusingDependencyIsWired (apidependencywiring_test.go).
 	FPPReconciliation FPPReconciliationStore
+
+	// NodeEnrollment is ADR-055's enrollment code service. Nil answers
+	// every /api/v1/node-enrollments route with 503.
+	NodeEnrollment NodeEnrollmentService
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -1877,6 +1881,7 @@ func New(deps Dependencies, opts Options) *API {
 		emergencyStopArms:         newEmergencyStopArmStore(),
 		fppPairings:               newFPPPairingStore(),
 		fppPairingClaims:          newFPPPairingClaimLimiter(),
+		redeemLimiter:             newRedeemLimiter(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
 	// A write whose result is visible in a streamed resource has to say so
@@ -2041,6 +2046,13 @@ func New(deps Dependencies, opts Options) *API {
 	// directly, no [handlers.writeGuard], since there is no pre-existing
 	// credential to check a scope or CSRF header against. See bootstrap.go.
 	mux.HandleFunc("POST /api/v1/bootstrap", h.loginCSRFGuard(h.handleClaimBootstrap))
+
+	// ADR-055 node enrollment. The redeem route is the one write that takes
+	// no principal and no same-origin check: the code is the credential.
+	mux.HandleFunc("POST /api/v1/node-enrollments", h.writeGuard(&scopeNodeEnroll, h.handleCreateNodeEnrollment))
+	mux.HandleFunc("GET /api/v1/node-enrollments", h.requireScope(identity.ScopeNodeEnroll, h.handleListNodeEnrollments))
+	mux.HandleFunc("DELETE /api/v1/node-enrollments/{id}", h.writeGuard(&scopeNodeEnroll, h.handleCancelNodeEnrollment))
+	mux.HandleFunc("POST /api/v1/node-enrollments/redeem", h.handleRedeemNodeEnrollment)
 
 	// GET /api/v1/audit is always gated by audit:read (requireScope, not
 	// readGuard): it is not one of the four pre-existing v1 read
@@ -2542,6 +2554,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
 	mux.HandleFunc("DELETE /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteAudioNode))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/audio/routing-choices", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioRoutingChoices))
 
 	// GET/PUT /api/v1/config/fppconnect.settings (Track E phase 2 seam
 	// FC1a, ADR-044 decision 5): the enable flag and the two byte caps

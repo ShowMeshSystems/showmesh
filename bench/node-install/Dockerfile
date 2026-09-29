@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils gstreamer1.0-tools \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-base-apps gstreamer1.0-alsa libltc11 \
+    # python3 runs the installer bench's fake enrollment server.
+    python3 \
     # systemd-analyze is the only piece of systemd this image needs: it
     # validates a unit file's syntax and directive names without systemd
     # running as PID 1. This container never runs systemd itself (a plain
