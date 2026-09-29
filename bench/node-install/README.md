@@ -113,4 +113,6 @@ container running its own dockerd, and runs the coordinator role there for
 real, then upgrades it to bench2. It asserts the API answers, the built-in
 broker accepts the coordinator's login, `showmeshctl` on that host signs in
 as the new administrator, and the upgrade keeps the token and broker login.
-It removes its container and volume on exit.
+It also asserts that `/var/log/showmesh-install.log` is mode 0600, carries the
+run header and the captured output of a step, and holds no broker password or
+token. It removes its container and volume on exit.

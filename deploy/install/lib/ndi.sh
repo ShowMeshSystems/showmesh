@@ -29,12 +29,13 @@ render_install_ndi_plugin() {
 
 # render_build_ndi_plugin compiles the plugin on this machine.
 render_build_ndi_plugin() {
-  local script="$BUNDLE_DIR/node/ndi-plugin/build-ndi-plugin.sh" out
+  local script="$BUNDLE_DIR/node/ndi-plugin/build-ndi-plugin.sh" out log
   [ -x "$script" ] || fail "This installer has no NDI plugin build script." "download a complete installer for version $SHOWMESH_VERSION"
   info "Building the NDI plugin on this machine. This installs a compiler and takes 10 to 30 minutes."
   out="$(mktemp -d)"
-  if ! with_default_umask "$script" "$out"; then
-    fail "The NDI plugin did not build; the reason is printed above." "sudo $script $out"
+  log="$(run_tmp)"
+  if ! run_step "building the NDI plugin" "$log" with_default_umask "$script" "$out"; then
+    fail_with "$log" "The NDI plugin did not build." "sudo $script $out"
   fi
   install -D -m 0644 -o root -g root "$out/libgstndi.so" "$(gst_plugin_dir)/libgstndi.so"
   rm -rf "$out"
@@ -109,10 +110,12 @@ ndi_install_runtime() {
   ldconfig
   rm -rf "$work"
   ok "installed $NDI_RUNTIME_DIR/$base"
-  if gst-inspect-1.0 ndisink >/dev/null 2>&1; then
+  local check
+  check="$(run_tmp)"
+  if run_step "checking GStreamer finds ndisink" "$check" gst-inspect-1.0 ndisink; then
     ok "GStreamer finds the ndisink element"
   else
-    fail "GStreamer does not find the ndisink element after the NDI install." "gst-inspect-1.0 ndisink"
+    fail_with "$check" "GStreamer does not find the ndisink element after the NDI install." "gst-inspect-1.0 ndisink"
   fi
   if have_systemd && systemctl is-active --quiet showmesh-agent; then
     systemctl restart showmesh-agent

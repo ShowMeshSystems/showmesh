@@ -64,6 +64,14 @@ no_readable_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showme
   [ -s /tmp/secrets ] && [ -z "$hits" ] || { echo "world-readable: $hits"; false; }'
 check "no world-readable file under /etc/showmesh or /opt/showmesh/coordinator holds a secret" "in_box '$no_readable_secret'"
 check "the installer left nothing in /tmp named for ShowMesh" "in_box '! ls /tmp/showmesh-* >/dev/null 2>&1'"
+check "the install log is root-only and holds this run's header and captured output" "in_box '[ \$(stat -c %a /var/log/showmesh-install.log) = 600 ] &&
+  grep -q \"===== showmesh-install 0.0.0-bench1 started\" /var/log/showmesh-install.log &&
+  grep -q \"      role: coordinator\" /var/log/showmesh-install.log &&
+  grep -q \"^--- pulling and starting the containers\" /var/log/showmesh-install.log'"
+# shellcheck disable=SC2016
+log_has_no_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showmeshctl.env; do sed -n "s/^SHOWMESH_\(MQTT_PASSWORD\|CTL_TOKEN\)=//p" "$f"; done | grep . > /tmp/log-secrets
+  [ -s /tmp/log-secrets ] && ! grep -qF -f /tmp/log-secrets /var/log/showmesh-install.log'
+check "the install log holds no broker password and no token" "in_box '$log_has_no_secret'"
 pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')"
 
 run_install 0.0.0-bench2 --yes

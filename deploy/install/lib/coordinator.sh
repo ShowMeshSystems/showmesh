@@ -17,6 +17,14 @@ compose() {
   (cd "$COORDINATOR_DIR" && docker compose "${files[@]}" "$@")
 }
 
+# mq_check_external HOST PORT USER PASS publishes one test message from a throwaway container.
+# The login reaches the container through its environment, never a command line.
+mq_check_external() {
+  MQ_HOST="$1" MQ_PORT="$2" MQ_USER="$3" MQ_PASS="$4" \
+    docker run --rm --network host -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS \
+    eclipse-mosquitto:2.0.22 sh -c "$MQ_CHECK"
+}
+
 version_at_least() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
 }
@@ -24,15 +32,18 @@ version_at_least() {
 coord_install_docker() {
   step "Installing Docker from Debian's own packages"
   apt_install ca-certificates curl jq iproute2 docker.io docker-cli docker-compose avahi-daemon
-  if ! docker info >/dev/null 2>&1; then
+  local log
+  log="$(run_tmp)"
+  if ! run_step "checking Docker is running" "$log" docker info; then
     if have_systemd; then
-      systemctl enable --now docker >/dev/null 2>&1 || true
+      run_step "starting Docker" "$log" systemctl enable --now docker || true
     fi
+    run_step "checking Docker is running" "$log" docker info ||
+      fail_with "$log" "Docker is installed but not running." "systemctl enable --now docker"
   fi
-  docker info >/dev/null 2>&1 || fail "Docker is installed but not running." "systemctl enable --now docker"
   local v
-  v="$(docker compose version --short 2>/dev/null | sed 's/^v//')" || v=""
-  [ -n "$v" ] || fail "The docker compose command is missing." "apt-get install -y docker-compose"
+  v="$(docker compose version --short 2>"$log" | sed 's/^v//')" || v=""
+  [ -n "$v" ] || fail_with "$log" "The docker compose command is missing." "apt-get install -y docker-compose"
   version_at_least "$v" "$MIN_COMPOSE" ||
     fail "Docker Compose $v is older than $MIN_COMPOSE, which the ShowMesh bundle needs." "apt-get install -y -t trixie docker-compose"
   ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null) with Compose $v"
@@ -176,9 +187,10 @@ coord_builtin_credentials() {
   step "Creating the built-in broker's logins"
   local log
   log="$(run_tmp)"
+  # This command prints the logins themselves, so its output is shown here and never written to the install log.
+  log_note "--- creating the broker logins: kept out of this log because it prints them"
   if ! "$COORDINATOR_DIR/mosquitto/generate-credentials.sh" >"$log" 2>&1; then
-    cat "$log" >&2
-    fail "The broker logins could not be created; the reason is printed above." "sudo $COORDINATOR_DIR/mosquitto/generate-credentials.sh"
+    fail_with "$log" "The broker logins could not be created." "sudo $COORDINATOR_DIR/mosquitto/generate-credentials.sh"
   fi
   if grep -q '^  password: ' "$log"; then
     info "FPP's broker login, shown once. Enter it in each FPP player under System Configuration, MQTT:"
@@ -193,19 +205,24 @@ coord_start() {
   local log
   log="$(run_tmp)"
   if [ "$BROKER_MODE" = "builtin" ]; then
-    compose up -d --remove-orphans >"$log" 2>&1 || { tail -n 20 "$log" >&2; fail "The coordinator did not start." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml up -d"; }
+    run_step "pulling and starting the containers" "$log" compose up -d --remove-orphans ||
+      fail_with "$log" "The coordinator did not start." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml up -d"
   else
-    compose rm -sf mosquitto >/dev/null 2>&1 || true
-    compose up -d --no-deps coordinator ui >"$log" 2>&1 || { tail -n 20 "$log" >&2; fail "The coordinator did not start." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml up -d --no-deps coordinator ui"; }
+    run_step "removing the built-in broker" "$log" compose rm -sf mosquitto || true
+    run_step "pulling and starting the containers" "$log" compose up -d --no-deps coordinator ui ||
+      fail_with "$log" "The coordinator did not start." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml up -d --no-deps coordinator ui"
   fi
   local waited=0
+  spin_start "waiting for the coordinator to answer"
   while [ "$waited" -lt 120 ]; do
     http_request GET "http://127.0.0.1:$HTTP_PORT/healthz"
-    [ "$HTTP_STATUS" = "200" ] && { ok "the coordinator answers on port $HTTP_PORT"; return; }
+    [ "$HTTP_STATUS" = "200" ] && { spin_stop; ok "the coordinator answers on port $HTTP_PORT"; return; }
     sleep 2
     waited=$((waited + 2))
   done
-  fail "The coordinator did not answer within 120 seconds." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml logs coordinator"
+  spin_stop
+  run_step "the coordinator's own output" "$log" compose logs --tail 40 coordinator || true
+  fail_with "$log" "The coordinator did not answer within 120 seconds." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml logs coordinator"
 }
 
 coord_ctl_token_works() {
@@ -259,17 +276,21 @@ coord_admin() {
       fi
     done
   fi
-  local out
+  local out errs
+  errs="$(run_tmp)"
+  # These commands are given the password and print a token, so their output is shown here and never written to the install log.
+  log_note "--- creating the first administrator: kept out of this log because it carries the password and the token"
   if ! out="$(printf '%s\n' "$password" | coord_exec bootstrap -name "$name" -device-label installer 2>&1)"; then
     if ! out="$(printf '%s\n' "$password" | coord_exec create-admin -name "$name" 2>&1)"; then
-      printf '%s\n' "$out" >&2
-      fail "The administrator $name could not be created." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml exec coordinator /usr/local/bin/showmesh-coordinator create-admin -name $name"
+      printf '%s\n' "$out" > "$errs"
+      fail_with "$errs" "The administrator $name could not be created." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml exec coordinator /usr/local/bin/showmesh-coordinator create-admin -name $name"
     fi
   fi
   ok "created administrator $name"
   local token
   out="$(coord_exec issue-token -principal "$name" -label "showmeshctl on $(hostname)" 2>&1)" ||
-    { printf '%s\n' "$out" >&2; fail "A token for showmeshctl could not be issued." "showmeshctl token issue <principal-id>"; }
+    { printf '%s\n' "$out" > "$errs"
+      fail_with "$errs" "A token for showmeshctl could not be issued." "showmeshctl token issue <principal-id>"; }
   token="$(printf '%s\n' "$out" | awk 'NF {last = $0} END {print last}')"
   mkdir -p "$ETC_DIR"
   env_set "$CTL_ENV" 0600 "SHOWMESH_SERVER=http://127.0.0.1:$HTTP_PORT" "SHOWMESH_CTL_TOKEN=$token"
@@ -280,17 +301,25 @@ coord_admin() {
 
 coord_check_broker() {
   step "Checking the broker accepts the coordinator's login"
-  local user pass
+  local user pass log
+  log="$(run_tmp)"
   if [ "$BROKER_MODE" = "builtin" ]; then
     user="$(env_get "$COORD_ENV" SHOWMESH_MQTT_USERNAME)"
     pass="$(env_get "$COORD_ENV" SHOWMESH_MQTT_PASSWORD)"
     local waited=0
+    spin_start "asking the built-in broker to accept the login"
     while ! MQ_HOST=localhost MQ_PORT=1883 MQ_USER="$user" MQ_PASS="$pass" \
-      compose exec -T -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS mosquitto sh -c "$MQ_CHECK" >/dev/null 2>&1; do
+      compose exec -T -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS mosquitto sh -c "$MQ_CHECK" >"$log" 2>&1; do
       waited=$((waited + 2))
-      [ "$waited" -ge 60 ] && fail "The built-in broker refused the coordinator's login." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml logs mosquitto"
+      if [ "$waited" -ge 60 ]; then
+        spin_stop
+        log_file "the broker's answer to the login check" "$log"
+        run_step "the broker's own output" "$(run_tmp)" compose logs --tail 40 mosquitto || true
+        fail_with "$log" "The built-in broker refused the coordinator's login." "cd $COORDINATOR_DIR && docker compose -f docker-compose.yml -f docker-compose.published.yml logs mosquitto"
+      fi
       sleep 2
     done
+    spin_stop
   else
     local hostport host port
     hostport="${EXT_BROKER_URL#*://}"
@@ -301,10 +330,9 @@ coord_check_broker() {
       host="${hostport%:*}"
       port="${hostport##*:}"
     fi
-    if ! MQ_HOST="$host" MQ_PORT="$port" MQ_USER="$EXT_BROKER_USER" MQ_PASS="$EXT_BROKER_PASS" \
-      docker run --rm --network host -e MQ_HOST -e MQ_PORT -e MQ_USER -e MQ_PASS \
-      eclipse-mosquitto:2.0.22 sh -c "$MQ_CHECK" >/dev/null 2>&1; then
-      fail "The external broker at $EXT_BROKER_URL refused the login or did not answer." "showmesh-install --broker external --broker-url <address>"
+    if ! run_step "asking the external broker to accept the login" "$log" \
+      mq_check_external "$host" "$port" "$EXT_BROKER_USER" "$EXT_BROKER_PASS"; then
+      fail_with "$log" "The external broker at $EXT_BROKER_URL refused the login or did not answer." "showmesh-install --broker external --broker-url <address>"
     fi
   fi
   ok "the broker accepts the coordinator's login"
@@ -316,7 +344,10 @@ coord_advertise() {
   sed "s/@API_PORT@/$HTTP_PORT/" "$BUNDLE_DIR/showmesh.service" > /etc/avahi/services/showmesh.service
   chmod 0644 /etc/avahi/services/showmesh.service
   if have_systemd; then
-    systemctl enable --now avahi-daemon >/dev/null 2>&1 || warn "avahi-daemon did not start, so nodes must be given this coordinator's address by hand."
+    local log
+    log="$(run_tmp)"
+    run_step "starting avahi-daemon" "$log" systemctl enable --now avahi-daemon ||
+      warn "avahi-daemon did not start, so nodes must be given this coordinator's address by hand."
   fi
   ok "announced as _showmesh._tcp on port $HTTP_PORT"
 }
