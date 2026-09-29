@@ -1384,6 +1384,7 @@ value, and it does not belong here.
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 | `localClockOverride` | shipped | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
 | `stopHold` | reserved | ADR-054: the night session record's hold set by a level 1 emergency stop (reason and time), absent when no hold stands. In scope because the API, `showmeshctl` and the UI must agree on it |
+| `nextCueId` | reserved | the optional field on the `cue.activate` activation (`pkg/cueactivation.Activation`) naming the Cue the bound playlist plays next, so a render node can open that sequence ahead and switch without drawing black. No migration: older agents ignore it. In scope because the coordinator and the agent must agree on the name across the wire |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
