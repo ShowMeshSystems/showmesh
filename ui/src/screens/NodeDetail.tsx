@@ -11,6 +11,7 @@ import {
   getNodeAssetManifest,
   getNodeCueCatalog,
   listAudioAlignmentRuns,
+  listConfigObjects,
   listShowSurfacesForNode,
   probeRenderTransport,
   restartRenderPipeline,
@@ -52,7 +53,8 @@ import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDura
 import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
 import { nodePlaybackStatus, type FreshReading } from './nodePlaybackModel'
 import { nodeSyncStatus, type SignalFact } from './nodeSyncModel'
-import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
+import { SurfaceEditor, type ShowChoice } from './SurfaceEditor'
+import { activeShowId, formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
 
 /** Stable heading id for the drawer's `aria-labelledby`, present in both the found and not-found branches. */
@@ -92,6 +94,34 @@ function useNodeSurfaces(nodeId: string): { state: SurfacesState; reload: () => 
   }, [nodeId, attempt])
 
   return { state, reload: () => setAttempt((n) => n + 1) }
+}
+
+type ShowChoicesState = { kind: 'loading' } | { kind: 'loaded'; choices: ShowChoice[] } | { kind: 'failed'; reason: string }
+
+/** Reads the show list once the editor opens, since every surface belongs to a show. */
+function useShowChoices(enabled: boolean): ShowChoicesState {
+  const [state, setState] = useState<ShowChoicesState>({ kind: 'loading' })
+  useEffect(() => {
+    if (!enabled) return
+    let cancelled = false
+    listConfigObjects('show')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', choices: response.objects.map((o) => ({ id: o.id, label: o.label })) })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [enabled])
+  return state
+}
+
+/** The active show when it exists, else the only show, else none. */
+function defaultShowId(choices: readonly ShowChoice[], active: string | null): string {
+  if (active !== null && choices.some((c) => c.id === active)) return active
+  return choices.length === 1 && choices[0] !== undefined ? choices[0].id : ''
 }
 
 type ManifestState =
@@ -206,6 +236,42 @@ function renderOutcome(result: RenderCommandResult): RenderOutcome {
 }
 
 /** A surface's four real render commands stay beside the assignment they address. */
+function NodeSurfaceEditor({
+  nodeId,
+  surface,
+  existingIds,
+  onDone,
+  onCancel,
+}: {
+  nodeId: string
+  surface: ShowSurfaceConfigResponse | null
+  existingIds: readonly string[]
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const model = useModelContext()
+  const shows = useShowChoices(true)
+  if (shows.kind === 'loading') {
+    return <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the list of shows." />
+  }
+  if (shows.kind === 'failed') {
+    return <RuledStrip absence="failed" label="Read failed" fact={shows.reason} detail="Close this and try again." />
+  }
+  return (
+    <SurfaceEditor
+      showId={surface?.payload.show ?? defaultShowId(shows.choices, activeShowId(model))}
+      showChoices={shows.choices}
+      fixedNode={nodeId}
+      surface={surface}
+      existingIds={existingIds}
+      model={model}
+      onSaved={onDone}
+      onDeleted={onDone}
+      onCancel={onCancel}
+    />
+  )
+}
+
 function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; surfaceId: string; gate: ReturnType<typeof evaluateScope> }) {
   const [sequenceId, setSequenceId] = useState('')
   const [running, setRunning] = useState<string | null>(null)
@@ -579,6 +645,7 @@ export function NodeDetail() {
   const node = model.nodes.find((candidate) => candidate.nodeId === nodeId)
 
   const { state: surfacesState, reload: reloadSurfaces } = useNodeSurfaces(nodeId)
+  const [editing, setEditing] = useState<string | null>(null)
   const { state: manifestState, reload: reloadManifest } = useNodeAssetManifest(nodeId)
 
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -896,8 +963,17 @@ export function NodeDetail() {
       <Section
         id="nd-surf"
         title="Surfaces on this node"
-        aside={<span className="sm-small sm-muted">Authored per show, not per node</span>}
-        detail="A surface belongs to a show, so this list is a view across shows rather than something you configure here. Editing one opens it in that show."
+        aside={
+          <Button
+            variant="primary"
+            onClick={() => setEditing('new')}
+            disabled={!gate.allowed}
+            title={gate.allowed ? undefined : gate.reason}
+          >
+            Add surface
+          </Button>
+        }
+        detail="Add, edit or remove the surfaces this node renders. Each one belongs to a show."
       >
         {surfacesState.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for this node's assigned surfaces." />
@@ -935,7 +1011,7 @@ export function NodeDetail() {
                       const display = surfaceDisplay(surface)
                       const end = surface.payload.channelRange.startChannel + surface.payload.channelRange.channelCount - 1
                       return (
-                        <SelectableRow key={surface.id} onActivate={() => navigate(`/shows/${encodeURIComponent(surface.payload.show)}/presentation?surface=${encodeURIComponent(surface.id)}`)} ariaLabel={`Edit ${surface.payload.name}`}>
+                        <SelectableRow key={surface.id} selected={editing === surface.id} onActivate={() => setEditing(surface.id)} ariaLabel={`Edit ${surface.payload.name}`}>
                           <td>
                             <strong>{surface.payload.name}</strong>
                             <br />
@@ -956,6 +1032,19 @@ export function NodeDetail() {
                   </tbody>
                 </Table>
               </TableWrap>
+            )}
+            {editing !== null && (
+              <NodeSurfaceEditor
+                key={editing}
+                nodeId={node.nodeId}
+                surface={editing === 'new' ? null : (surfaces.find((s) => s.id === editing) ?? null)}
+                existingIds={surfaces.map((s) => s.id)}
+                onDone={() => {
+                  setEditing(null)
+                  reloadSurfaces()
+                }}
+                onCancel={() => setEditing(null)}
+              />
             )}
           </>
         )}

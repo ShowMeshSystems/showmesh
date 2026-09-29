@@ -8,6 +8,9 @@ import { ModelContext } from '../app/ModelContext'
 import { formatDateClock } from '../domain/time'
 
 const stubs = vi.hoisted(() => ({
+  listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowSurfaceRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listShowSurfacesForNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getNodeAssetManifest: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -31,6 +34,9 @@ vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
   return {
     ...actual,
+    listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
+    putShowSurface: (...args: never[]) => stubs.putShowSurface(...args),
+    getShowSurfaceRevisions: (...args: never[]) => stubs.getShowSurfaceRevisions(...args),
     listShowSurfacesForNode: (...args: never[]) => stubs.listShowSurfacesForNode(...args),
     getShowSurface: (...args: never[]) => stubs.getShowSurface(...args),
     getNodeAssetManifest: (...args: never[]) => stubs.getNodeAssetManifest(...args),
@@ -170,6 +176,9 @@ describe('Node detail', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    stubs.listConfigObjects = () => new Promise(() => {})
+    stubs.putShowSurface = () => new Promise(() => {})
+    stubs.getShowSurfaceRevisions = () => new Promise(() => {})
     stubs.listShowSurfacesForNode = () => new Promise(() => {})
     stubs.getShowSurface = () => new Promise(() => {})
     stubs.getNodeAssetManifest = () => new Promise(() => {})
@@ -457,6 +466,72 @@ describe('Node detail', () => {
     await waitFor(() => expect(screen.getByText('Garage door')).toBeInTheDocument())
     expect(screen.getByText(/32×32 rgbw/)).toBeInTheDocument()
     expect(screen.getByText('winter-ridge-2026')).toBeInTheDocument()
+  })
+
+  describe('surface editor', () => {
+    const showList = (ids: string[]) => ({
+      serverTime: '2026-08-30T21:07:00Z',
+      kind: 'show',
+      objects: ids.map((id) => ({ id, label: `Show ${id}`, show: id, currentRevision: 1, updatedAt: '2026-08-30T20:41:00Z' })),
+    })
+    const emptySurfaces = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+
+    it('opens the editor from Add surface with this node fixed and no show chosen when several shows exist', async () => {
+      stubs.listShowSurfacesForNode = emptySurfaces
+      stubs.listConfigObjects = () => Promise.resolve(showList(['a', 'b']))
+      renderScreen([node()])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add surface' })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: 'Add surface' }))
+      const nodeField = await screen.findByLabelText('Node')
+      expect(nodeField).toHaveValue('media-garage')
+      expect(nodeField).toBeDisabled()
+      expect(screen.getByLabelText('Show')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Create surface' })).toBeDisabled()
+    })
+
+    it('defaults the show to the active show, else to the only show', async () => {
+      stubs.listShowSurfacesForNode = emptySurfaces
+      stubs.listConfigObjects = () => Promise.resolve(showList(['a', 'b']))
+      renderScreen([node()], { currentRuns: { activeShow: { configured: true, show: 'b' } } } as unknown as Partial<Model>)
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add surface' })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: 'Add surface' }))
+      await waitFor(() => expect(screen.getByLabelText('Show')).toHaveValue('b'))
+      cleanup()
+
+      stubs.listConfigObjects = () => Promise.resolve(showList(['only']))
+      renderScreen([node()])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add surface' })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: 'Add surface' }))
+      await waitFor(() => expect(screen.getByLabelText('Show')).toHaveValue('only'))
+    })
+
+    it('shows the coordinator message verbatim when a save is refused', async () => {
+      const refusal = 'Another surface on this node already uses channels 1 to 100 in this show.'
+      stubs.listShowSurfacesForNode = emptySurfaces
+      stubs.listConfigObjects = () => Promise.resolve(showList(['only']))
+      stubs.getShowSurface = () => Promise.reject(new ApiError('No such surface.', 404))
+      stubs.putShowSurface = () =>
+        Promise.reject(new ApiError(refusal, 409))
+      renderScreen([node()])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add surface' })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: 'Add surface' }))
+      await waitFor(() => expect(screen.getByLabelText('Show')).toHaveValue('only'))
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front' } })
+      fireEvent.change(screen.getByLabelText('NDI source name'), { target: { value: 'front-ndi' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Create surface' }))
+      await waitFor(() => expect(screen.getByText(refusal)).toBeInTheDocument())
+    })
+
+    it('opens an existing surface in the editor when its row is activated', async () => {
+      stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+      stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+      stubs.listConfigObjects = () => Promise.resolve(showList(['winter-ridge-2026']))
+      renderScreen([node()])
+      await waitFor(() => expect(screen.getByText('Garage door')).toBeInTheDocument())
+      fireEvent.click(screen.getByText('Garage door'))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save surface' })).toBeInTheDocument())
+      expect(screen.getByRole('button', { name: 'Delete surface' })).toBeInTheDocument()
+    })
   })
 
   it('dispatches the four render controls against the surface assigned to this node', async () => {

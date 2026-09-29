@@ -421,21 +421,33 @@ export function surfaceRenderStatus(nodes: readonly Node[], nodeId: string, surf
 
 export type ChannelSpan = { id: string; label: string; start: number; end: number }
 
-/** Sorted spans plus the id set of every span overlapping another - the coordinator refuses this at write time; this only flags it for display. */
-export function channelSpans(surfaces: readonly { id: string; label: string; startChannel: number; channelCount: number }[]): {
+/**
+ * Spans sorted by start, plus the id of every span that overlaps another span on the same node.
+ * The coordinator refuses such an overlap on the same node and show at save time; this only flags it for display.
+ */
+export function channelSpans(surfaces: readonly { id: string; label: string; node: string; startChannel: number; channelCount: number }[]): {
   spans: ChannelSpan[]
   overlapping: Set<string>
 } {
   const spans = surfaces
     .map((s) => ({ id: s.id, label: s.label, start: s.startChannel, end: s.startChannel + s.channelCount - 1 }))
     .sort((a, b) => a.start - b.start)
+  const byNode = new Map<string, ChannelSpan[]>()
+  surfaces.forEach((s) => {
+    const span = { id: s.id, label: s.label, start: s.startChannel, end: s.startChannel + s.channelCount - 1 }
+    byNode.set(s.node, [...(byNode.get(s.node) ?? []), span])
+  })
   const overlapping = new Set<string>()
-  for (let i = 1; i < spans.length; i += 1) {
-    const prev = spans[i - 1]
-    const cur = spans[i]
-    if (prev !== undefined && cur !== undefined && cur.start <= prev.end) {
-      overlapping.add(prev.id)
-      overlapping.add(cur.id)
+  for (const group of byNode.values()) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i]
+        const b = group[j]
+        if (a !== undefined && b !== undefined && a.start <= b.end && b.start <= a.end) {
+          overlapping.add(a.id)
+          overlapping.add(b.id)
+        }
+      }
     }
   }
   return { spans, overlapping }
