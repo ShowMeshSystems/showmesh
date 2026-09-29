@@ -3,12 +3,14 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
+	"github.com/showmeshsystems/showmesh/pkg/fseq"
 )
 
 // activateRender is TRACK-H-cues-and-playlists.md section H4's renderer
@@ -54,14 +56,121 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 		return fmt.Errorf("no surface is assigned on this node, so Cue %q's projection could not be activated", act.CueID)
 	}
 
-	var errs []string
+	// Phase 1 validates every surface's new file and reserves all their step
+	// times at once; a surface that cannot take the new sequence for any
+	// other reason is dropped and the rest swap. Phase 2 swaps.
+	set := make(map[string]bool, len(assignments))
 	for _, a := range assignments {
-		if err := o.activateSurfaceRender(a, act, out, now); err != nil {
+		set[a.SurfaceID] = true
+	}
+	var errs []string
+	var pending []pendingSwap
+	for _, a := range assignments {
+		p, err := o.prepareSurfaceRender(a, act, out, now)
+		if err != nil {
 			errs = append(errs, err.Error())
+			continue
+		}
+		if p != nil {
+			pending = append(pending, *p)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	if len(pending) == 0 {
+		return joinCueErrors(errs)
+	}
+	if err := o.reserveStepTimes(pending, set); err != nil {
+		for _, p := range pending {
+			_ = p.file.Close()
+		}
+		return err
+	}
+
+	newStepMS := pending[0].file.StepTimeMS()
+	swapped := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		if err := o.swapSurfaceRender(p, act, now); err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		swapped[p.assignment.SurfaceID] = true
+	}
+	if len(swapped) > 0 {
+		errs = append(errs, o.holdBlackWhereTimingDiffers(newStepMS, swapped)...)
+	}
+	return joinCueErrors(errs)
+}
+
+func joinCueErrors(errs []string) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.Join(errs, "; "))
+}
+
+// holdBlackWhereTimingDiffers holds black every surface that still plays
+// content at a step time other than newStepMS after a partial swap, so no
+// surface draws at a rate the shared timeline no longer steps at. A surface
+// with the same step time keeps playing. Surfaces that swapped, or that
+// already play the new sequence, are never held.
+func (o *renderOperations) holdBlackWhereTimingDiffers(newStepMS byte, swapped map[string]bool) []string {
+	o.mu.Lock()
+	var ids []string
+	steps := make(map[string]byte)
+	for id, h := range o.writers {
+		if h.fseq == nil || swapped[id] || h.fseq.StepTimeMS() == newStepMS {
+			continue
+		}
+		ids = append(ids, id)
+		steps[id] = h.fseq.StepTimeMS()
+	}
+	o.mu.Unlock()
+	sort.Strings(ids)
+	var errs []string
+	for _, id := range ids {
+		if err := o.holdSurfaceBlack(id); err != nil {
+			o.logger.Warn("cue.activate (render): failed to persist the held-black flag", "surface_id", id, "error", err)
+		}
+		errs = append(errs, fmt.Sprintf("surface %q is black because its sequence runs at %d ms per frame and the show now runs at %d ms. Render its sequences at the same frame timing in xLights and activate the cue again.",
+			id, steps[id], newStepMS))
+	}
+	return errs
+}
+
+// holdSurfaceBlack sets and persists surfaceID's held-black flag, in memory
+// first so the surface is black on its next tick even if the write fails.
+func (o *renderOperations) holdSurfaceBlack(surfaceID string) error {
+	o.setHeldBlack(surfaceID, true)
+	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
+		return err
+	}
+	return o.holdBlackStore.Set(surfaceID, true)
+}
+
+// pendingSwap is one surface whose new file is open and validated.
+type pendingSwap struct {
+	assignment pipeline.Assignment
+	params     map[string]any
+	file       *fseq.File
+	parsed     fseqAssignment
+}
+
+// reserveStepTimes checks every pending surface's step time against the
+// surfaces outside set (every surface the Cue addresses, including any
+// dropped one), all under one lock, and reserves them together only when
+// none conflicts. The error names the surface that was refused.
+func (o *renderOperations) reserveStepTimes(pending []pendingSwap, set map[string]bool) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, p := range pending {
+		if err := o.stepTimeConflictLocked(p.assignment.SurfaceID, p.file.StepTimeMS(), set, false); err != nil {
+			return fmt.Errorf("surface %q: %w", p.assignment.SurfaceID, err)
+		}
+	}
+	if o.stepReserved == nil {
+		o.stepReserved = make(map[string]byte)
+	}
+	for _, p := range pending {
+		o.stepReserved[p.assignment.SurfaceID] = p.file.StepTimeMS()
 	}
 	return nil
 }
@@ -78,13 +187,14 @@ func firstAssetHash(hashes []string) string {
 	return hashes[0]
 }
 
-// activateSurfaceRender swaps one surface's rendered FSEQ to out's
-// resolved sequence, under act's authorization tuple.
-func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
+// prepareSurfaceRender is phase 1 for one surface: it settles a surface that
+// already plays the Cue's sequence (nil result) or opens and validates the
+// new file. It changes nothing about the surface's running content.
+func (o *renderOperations) prepareSurfaceRender(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) (*pendingSwap, error) {
 	const action = "cue.activate (render)"
 
 	if out.Filename == "" {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"surface %q's Cue %q (revision %d) uses render sequence %q, which has not been uploaded to this node, upload it and redeploy",
 			a.SurfaceID, act.CueID, act.CueRevision, out.Sequence)
 	}
@@ -100,7 +210,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// never switched on a filename's say-so, never silently continued as
 	// if healthy.
 	if snap := o.timeline.Snapshot(); snap.Filename != "" && snap.Filename != out.Filename {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"surface %q is currently playing %q, which does not match Cue %q (revision %d)'s expected file %q, content was not switched",
 			a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
 	}
@@ -116,7 +226,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// whose store already names the right file must still be repaired.
 	ahead, staleAhead := o.settleQueuedRender(a.SurfaceID, act, out)
 	if ahead {
-		return o.confirmAheadSwitch(a, act, out, now)
+		return nil, o.confirmAheadSwitch(a, act, out, now)
 	}
 
 	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID) && !staleAhead) {
@@ -151,14 +261,14 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 		// about what actually authorized the content on the wall right
 		// now, without disturbing the wall itself.
 		if a.Auth.CatalogRevision != act.CatalogRevision {
-			return o.refreshAssignmentAuth(a, act, now)
+			return nil, o.refreshAssignmentAuth(a, act, now)
 		}
-		return nil
+		return nil, nil
 	}
 
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
-		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
+		return nil, fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
 	}
 	params["fseqFilename"] = out.Filename
 	params["fseqContentHash"] = firstAssetHash(out.AssetHashes)
@@ -167,14 +277,22 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	params["catalogRevision"] = act.CatalogRevision
 
 	// Validate the NEW file before anything about the OLD one is touched.
-	spec, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params, o.hashCache, o.logger)
+	_, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params, o.hashCache, o.logger)
 	if err != nil {
-		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
+		return nil, fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
-	_ = spec // This swap deliberately never re-applies the pipeline spec — see startFrameWriter call below.
+	return &pendingSwap{assignment: a, params: params, file: f, parsed: parsedA}, nil
+}
+
+// swapSurfaceRender is phase 2 for one surface: it persists the new
+// assignment and replaces the frame writer. The surface's step time is
+// already reserved; a failure releases it and closes the file.
+func (o *renderOperations) swapSurfaceRender(p pendingSwap, act cueactivation.Activation, now func() time.Time) error {
+	a, params, f, parsedA := p.assignment, p.params, p.file, p.parsed
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
@@ -182,6 +300,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
@@ -196,16 +315,11 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// pipeline restart.
 	o.stopFrameWriter(a.SurfaceID)
 	if err := o.startFrameWriter(a.SurfaceID, f, parsedA); err != nil {
+		o.releaseStepReservation(a.SurfaceID)
 		_ = f.Close()
 		return fmt.Errorf("surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
 	}
-	// The SHARED timeline step time moves only after the new writer is
-	// actually running — never before, or a startFrameWriter failure above
-	// would already have left every OTHER surface on this node stepping to
-	// a file that is not running (o.timeline is one shared instance across
-	// every surface on this node, applyTimelineStepTime's own "SHARED-
-	// TIMELINE DECISION" doc comment, renderops.go).
-	o.applyTimelineStepTime(a.SurfaceID, f.StepTimeMS())
+	o.applyTimelineStepTime(f.StepTimeMS())
 
 	// Build item 2: the new writer is confirmed running now, so this swap
 	// resumes content and render.surface.blackout's held-black flag clears

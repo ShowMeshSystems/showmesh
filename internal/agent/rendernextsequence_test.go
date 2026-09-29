@@ -250,7 +250,7 @@ func TestPreparationStillRunningAtASurfaceApplyQueuesNothing(t *testing.T) {
 
 	setupActivatedSurface(t, r.renderOps, r.dir, "wake.fseq", r.clock)
 	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
-	r.renderOps.prepareQueuedRender("surface-1", gen, act, "cue-2", r.kpop)
+	r.renderOps.prepareQueuedRender("surface-1", gen, map[string]uint64{"surface-1": gen}, act, "cue-2", r.kpop)
 	if h := r.handle(); h.queued != nil {
 		t.Fatalf("a preparation started before the apply queued %+v on the new writer", h.queued)
 	}

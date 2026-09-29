@@ -188,9 +188,8 @@ func Run() int {
 	// scope limit, not a reason to build N timelines; a future N>1 node
 	// still tracks one master's position). SetStepTime is called from a
 	// surface's own FSEQ file on every apply/resume — see renderops.go's
-	// applyTimelineStepTime, which renderOps.applySurface and
-	// ResumeAssignment both call; multisync.go's listener never calls
-	// SetStepTime itself (it has no file to read one from).
+	// applyTimelineStepTime; multisync.go's listener never calls SetStepTime
+	// itself (it has no file to read one from).
 	timeline := multisync.NewTimeline(time.Now, multisync.Config{})
 
 	// multiSyncStatus carries a bind failure (or a mid-session socket

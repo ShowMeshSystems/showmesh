@@ -204,3 +204,20 @@ func TestFrameWriterQueueHandsBackTheSequenceItDisplaces(t *testing.T) {
 		t.Fatalf("the displaced sequence wrote %v drawing %q, want black", got, drawing)
 	}
 }
+
+func TestFrameWriterDropsAQueuedSequenceTheSwitchGuardRefuses(t *testing.T) {
+	h := newQueueHarness(t)
+	q := h.queueKpop()
+	h.fw.SetSwitchGuard(func(*QueuedSequence) bool { return false })
+
+	got, drawing := h.frame(multisync.StatePlaying, "kpop.fseq")
+	if !bytes.Equal(got, filled(0)) || drawing != DrawingStale {
+		t.Fatalf("a refused switch wrote %v drawing %q, want black", got, drawing)
+	}
+	if len(h.swapped) != 0 || len(h.dropped) != 1 || h.dropped[0] != q {
+		t.Fatalf("switched %d, dropped %d, want the queued sequence dropped and never switched to", len(h.swapped), len(h.dropped))
+	}
+	if h.fw.stepTime != 25*time.Millisecond {
+		t.Fatalf("step time = %v, want the held sequence's 25ms", h.fw.stepTime)
+	}
+}
