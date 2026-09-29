@@ -244,11 +244,13 @@ function NodeSurfaceEditor({
   nodeId,
   surface,
   onChanged,
+  onSaved,
   onClose,
 }: {
   nodeId: string
   surface: ShowSurfaceConfigResponse | null
   onChanged: () => void
+  onSaved: (surfaceId: string) => void
   onClose: () => void
 }) {
   const model = useModelContext()
@@ -300,6 +302,7 @@ function NodeSurfaceEditor({
         model={model}
         onSaved={(response) => {
           setCurrent(response)
+          onSaved(response.id)
           onChanged()
         }}
         onDeleted={() => {
@@ -687,6 +690,11 @@ export function NodeDetail() {
 
   const { state: surfacesState, reload: reloadSurfaces } = useNodeSurfaces(nodeId)
   const [editing, setEditing] = useState<string | null>(null)
+  const [editorKey, setEditorKey] = useState(0)
+  const openEditor = (id: string) => {
+    setEditing(id)
+    setEditorKey((n) => n + 1)
+  }
   const { state: manifestState, reload: reloadManifest } = useNodeAssetManifest(nodeId)
 
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -814,7 +822,7 @@ export function NodeDetail() {
 
   const manifestData = manifestState.kind === 'loading' ? null : manifestState.manifest
   const surfaces = surfacesState.kind === 'loading' ? [] : surfacesState.surfaces
-  const editingSurface = editing === 'new' ? null : editing === null ? undefined : (surfaces.find((s) => s.id === editing) ?? undefined)
+  const editingSurface = editing === null || editing === 'new' ? null : (surfaces.find((s) => s.id === editing) ?? null)
   const canRemove = confirmText === node.nodeId && gate.allowed && !removing
   const orphanText =
     surfacesState.kind !== 'loading' && surfaces.length > 0
@@ -1008,7 +1016,7 @@ export function NodeDetail() {
         aside={
           <Button
             variant="primary"
-            onClick={() => setEditing('new')}
+            onClick={() => openEditor('new')}
             disabled={!gate.allowed}
             title={gate.allowed ? undefined : gate.reason}
           >
@@ -1053,7 +1061,7 @@ export function NodeDetail() {
                       const display = surfaceDisplay(surface)
                       const end = surface.payload.channelRange.startChannel + surface.payload.channelRange.channelCount - 1
                       return (
-                        <SelectableRow key={surface.id} selected={editing === surface.id} onActivate={() => setEditing(surface.id)} ariaLabel={`Edit ${surface.payload.name}`}>
+                        <SelectableRow key={surface.id} selected={editing === surface.id} onActivate={() => openEditor(surface.id)} ariaLabel={`Edit ${surface.payload.name}`}>
                           <td>
                             <strong>{surface.payload.name}</strong>
                             <br />
@@ -1079,12 +1087,13 @@ export function NodeDetail() {
             )}
           </>
         )}
-        {editingSurface !== undefined && (
+        {editing !== null && (
           <NodeSurfaceEditor
-            key={editing}
+            key={editorKey}
             nodeId={node.nodeId}
             surface={editingSurface}
             onChanged={reloadSurfaces}
+            onSaved={setEditing}
             onClose={() => setEditing(null)}
           />
         )}

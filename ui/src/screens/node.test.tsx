@@ -576,6 +576,33 @@ describe('Node detail', () => {
       expect(screen.getByRole('button', { name: 'Save surface' })).toBeInTheDocument()
     })
 
+    it('after a create, tracks the new surface: its row is selected and Add surface opens a fresh editor', async () => {
+      const created = surfaceResponse({ name: 'Front', output: { transport: 'ndi', ndi: { sourceName: 'front-ndi' } } } as never)
+      created.id = 'front'
+      let stored = false
+      stubs.listShowSurfacesForNode = () =>
+        Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: stored ? [surfaceSummary({ id: 'front', label: 'Front' })] : [] })
+      stubs.listConfigObjects = lookups(['winter-ridge-2026'])
+      stubs.getShowSurface = (id: never) => (stored && (id as string) === 'front' ? Promise.resolve(created) : notFound())
+      stubs.putShowSurface = () => {
+        stored = true
+        return Promise.resolve(created)
+      }
+      stubs.getShowSurfaceRevisions = () => new Promise(() => {})
+      renderScreen([node()])
+      await openAdd()
+      await fillNewSurface()
+      fireEvent.click(screen.getByRole('button', { name: 'Create surface' }))
+      const row = await screen.findByRole('row', { name: 'Edit Front' })
+      await waitFor(() => expect(row).toHaveAttribute('aria-current', 'true'))
+      expect(screen.getByRole('button', { name: 'Save surface' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add surface' }))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Create surface' })).toBeInTheDocument())
+      expect(screen.getByLabelText('Name')).toHaveValue('')
+      expect(screen.getByRole('row', { name: 'Edit Front' })).not.toHaveAttribute('aria-current')
+    })
+
     it('shows the coordinator message verbatim when a save is refused', async () => {
       const refusal = 'Another surface on this node already uses channels 1 to 100 in this show.'
       stubs.listShowSurfacesForNode = emptySurfaces
