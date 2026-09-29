@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 )
 
 // unsubscribeTimeout bounds the best-effort MQTT UNSUBSCRIBE
@@ -153,6 +155,7 @@ func (b *BrokerManager) Publish(ctx context.Context, topic string, qos byte, ret
 		}
 		return fmt.Errorf("publishing to %q: %w", topic, err)
 	}
+	sendsignal.Sent(ctx)
 	return nil
 }
 

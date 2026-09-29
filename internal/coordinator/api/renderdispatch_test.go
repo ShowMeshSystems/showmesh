@@ -294,6 +294,29 @@ func surfaceDroppedAbsenceObs(nodeID, surfaceID string, collectedAt time.Time) o
 	))
 }
 
+// surfacePipelineChangedAtObs builds the surface.pipeline.changed_at
+// evidence noderender.Collector.Poll emits alongside surface.pipeline.state:
+// its VALUE is the node's real transition time (RFC3339Nano UTC).
+func surfacePipelineChangedAtObs(nodeID, surfaceID string, changedAt, observedAt, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		observation.SignalID(renderSignalPipelineChangedAt), changedAt.UTC().Format(time.RFC3339Nano), observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
+	))
+}
+
+// surfacePipelineChangedAtNotCollectedObs builds the not-collected row a
+// node that predates this signal never reports and a genuinely stalled
+// collector might: an explicit absence, never a fabricated transition time.
+func surfacePipelineChangedAtNotCollectedObs(nodeID, surfaceID string, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.NotCollected(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		observation.SignalID(renderSignalPipelineChangedAt),
+		"this surface has not yet reported a pipeline-state transition",
+		observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
+	))
+}
+
 // surfaceTransportAvailableObs mirrors surfacePipelineStateObs for
 // surface.transport.available, this seam's own confirmation signal — stamped
 // as coming from nodeID for the identical reason surfacePipelineStateObs is.
@@ -908,6 +931,199 @@ func TestRenderApplyIgnoresEvidenceSnapshottedBeforeDispatchEvenIfReceivedAfter(
 	}
 	if result.Command.Outcome != "unconfirmed" {
 		t.Fatalf("outcome = %q, want unconfirmed — the evidence was snapshotted by the node BEFORE dispatch, only received after; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm proves a report
+// repeating the ALREADY-RUNNING state, with no real transition, must not
+// confirm a fresh dispatch when changed_at predates it.
+func TestRenderApplyLiveReportRepeatingSameStateDoesNotConfirm(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	lastRealTransition := testNow.Add(-time.Hour)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		// state's ObservedAt is after dispatch (a live report arrived), but
+		// changed_at proves the transition happened an hour earlier.
+		setup.obs.setObs([]observation.Observation{
+			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
+			surfacePipelineChangedAtObs("media-01", "wall-1", lastRealTransition, testNow.Add(time.Millisecond), testNow.Add(time.Millisecond)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed: the report repeats an already-running state from before dispatch; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderApplyConfirmsOnRealTransitionAfterDispatch proves the command
+// confirms once changed_at itself post-dates dispatch, even though
+// state's own ObservedAt is receipt time, not the transition time.
+func TestRenderApplyConfirmsOnRealTransitionAfterDispatch(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{
+			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second)),
+			surfacePipelineChangedAtObs("media-01", "wall-1", testNow.Add(time.Second), testNow.Add(time.Second), testNow.Add(time.Second)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed: changed_at post-dates dispatch, a real transition happened; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestClassifyChangedAt proves each classifyChangedAt outcome, table-driven:
+// a real value is found; no row falls back (absent); an explicit absence
+// refuses (not-collected); and a value that cannot be read as evidence,
+// whether not a string or not RFC3339Nano, refuses as unparsable.
+func TestClassifyChangedAt(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: "wall-1"}
+	sig := observation.SignalID(renderSignalPipelineChangedAt)
+	transitionAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name    string
+		o       observation.Observation
+		found   bool
+		want    changedAtOutcome
+		wantVal time.Time
+	}{
+		{
+			name:    "found",
+			o:       mustObs(observation.Measured(res, sig, transitionAt.Format(time.RFC3339Nano), transitionAt)),
+			found:   true,
+			want:    changedAtFound,
+			wantVal: transitionAt,
+		},
+		{
+			name:  "absent",
+			found: false,
+			want:  changedAtAbsent,
+		},
+		{
+			name:  "not collected",
+			o:     mustObs(observation.NotCollected(res, sig, "no transition reported yet")),
+			found: true,
+			want:  changedAtNotCollected,
+		},
+		{
+			name:  "unparsable: not a string",
+			o:     mustObs(observation.Measured(res, sig, int64(12345), transitionAt)),
+			found: true,
+			want:  changedAtUnparsable,
+		},
+		{
+			name:  "unparsable: not RFC3339Nano",
+			o:     mustObs(observation.Measured(res, sig, "not-a-timestamp", transitionAt)),
+			found: true,
+			want:  changedAtUnparsable,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, outcome, _ := classifyChangedAt(c.o, c.found)
+			if outcome != c.want {
+				t.Errorf("outcome = %v, want %v", outcome, c.want)
+			}
+			if outcome == changedAtFound && !got.Equal(c.wantVal) {
+				t.Errorf("transition time = %s, want %s", got, c.wantVal)
+			}
+		})
+	}
+}
+
+// TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm proves
+// a not-collected changed_at never falls back to state's own ObservedAt,
+// even though that ObservedAt post-dates dispatch.
+func TestEvaluateRenderSurfaceStateChangedAtNotCollectedDoesNotConfirm(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second)),
+		surfacePipelineChangedAtNotCollectedObs("media-01", "wall-1", testNow.Add(time.Second)),
+	})
+
+	confirmed, outcomeState, _, _ := api.h.evaluateRenderSurfaceState(context.Background(), "media-01", "wall-1", "running", testNow)
+	if confirmed {
+		t.Fatalf("confirmed = true, want false: changed_at is not collected, so no transition is proven")
+	}
+	if outcomeState != string(observation.StateUnknownAge) {
+		t.Errorf("outcomeState = %q, want %q", outcomeState, observation.StateUnknownAge)
+	}
+}
+
+// TestEvaluateRenderSurfaceStateObservationsReadErrorDoesNotConfirm proves
+// a store read error refuses confirmation outright, never falling back to
+// any other signal.
+func TestEvaluateRenderSurfaceStateObservationsReadErrorDoesNotConfirm(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	setup.obs.err = errors.New("store unavailable")
+
+	confirmed, outcomeState, _, _ := api.h.evaluateRenderSurfaceState(context.Background(), "media-01", "wall-1", "running", testNow)
+	if confirmed {
+		t.Fatalf("confirmed = true, want false: the observations store read failed")
+	}
+	if outcomeState != string(observation.StateCollectionFailed) {
+		t.Errorf("outcomeState = %q, want %q", outcomeState, observation.StateCollectionFailed)
 	}
 }
 
@@ -1949,6 +2165,87 @@ func TestRenderTransportProbeReportsUnconfirmedWithoutFreshEvidence(t *testing.T
 	}
 	if result.Command.Outcome != "unconfirmed" {
 		t.Fatalf("outcome = %q, want unconfirmed (only a pre-dispatch reading exists); body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch
+// proves a pre-dispatch transport reading, merely RECEIVED after dispatch,
+// must not confirm the probe.
+func TestRenderTransportProbeIgnoresUnchangedReadingReceivedAfterDispatch(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		// The same pre-dispatch reading, as an ordinary report would
+		// re-deliver it: ObservedAt (the last real probe) is BEFORE
+		// dispatch; CollectedAt (this report's own receipt) is AFTER it.
+		setup.obs.setObs([]observation.Observation{
+			surfaceTransportAvailableObs("media-01", "wall-1", true, testNow.Add(-time.Millisecond), testNow.Add(time.Millisecond)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe",
+		`{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed: the reading's ObservedAt predates dispatch, only its receipt is after it; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports
+// proves the witness stays IDENTICAL across two live reports of the SAME
+// failed state, naming the changed_at event, not a report timestamp.
+func TestRenderSurfaceAssignmentEvidenceFailedWitnessIsStableAcrossReports(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	failedAt := testNow.Add(-time.Hour)
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", mqttproto.RenderPipelineStateFailed, testNow, testNow),
+		surfacePipelineChangedAtObs("media-01", "wall-1", failedAt, testNow, testNow),
+	})
+	_, witnessFirst, err := api.h.renderSurfaceAssignmentEvidence(context.Background(), "media-01", "wall-1")
+	if err != nil {
+		t.Fatalf("renderSurfaceAssignmentEvidence (first report): %v", err)
+	}
+
+	// A SECOND live report, an ordinary tick later: same failed value, same
+	// real changed_at, but a LATER pipeline.state ObservedAt/CollectedAt,
+	// exactly what a live, continuously-reporting node now produces.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", mqttproto.RenderPipelineStateFailed, testNow.Add(time.Minute), testNow.Add(time.Minute)),
+		surfacePipelineChangedAtObs("media-01", "wall-1", failedAt, testNow.Add(time.Minute), testNow.Add(time.Minute)),
+	})
+	_, witnessSecond, err := api.h.renderSurfaceAssignmentEvidence(context.Background(), "media-01", "wall-1")
+	if err != nil {
+		t.Fatalf("renderSurfaceAssignmentEvidence (second report): %v", err)
+	}
+
+	if witnessFirst != witnessSecond {
+		t.Errorf("witness changed across two reports of the SAME failure: %q vs %q, want identical", witnessFirst, witnessSecond)
+	}
+	wantSuffix := "failed@" + failedAt.UTC().Format(time.RFC3339Nano)
+	if witnessFirst != wantSuffix {
+		t.Errorf("witness = %q, want %q (the changed_at value, not a report timestamp)", witnessFirst, wantSuffix)
 	}
 }
 

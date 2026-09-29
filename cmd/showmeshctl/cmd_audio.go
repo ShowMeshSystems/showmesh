@@ -496,6 +496,8 @@ func cmdAudioNode(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		return cmdAudioNodeRevisions(rest, stdout, stderr, clock)
 	case "delete":
 		return cmdAudioNodeDelete(rest, stdout, stderr, clock)
+	case "choices":
+		return cmdAudioNodeChoices(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio node: unknown subcommand %q\n\n", sub)
 		printAudioNodeUsage(stderr)
@@ -523,6 +525,9 @@ positive, 1-based indices (1,2 for reference stereo, 1 for mono);
 --ltc-channel is a positive 1-based index that must not appear in
 --program-channels. Advertise the node first (the agent must be running
 and have probed its audio hardware) before configuring it here.
+When the node reports the full channel count of --program-route, a
+channel beyond that count is refused; "choices" lists what the node's own
+outputs offer.
 
 --role is one of "program", "program+ltc", or "zone"; omitted,
 the coordinator defaults it to "program+ltc" (the role every node had
@@ -545,6 +550,9 @@ this invocation.
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
   get <node-id>    show one node's full audio placement
+  choices <node-id>
+                   show the program and LTC channels the node's own
+                   outputs offer, and whether manual entry is accepted
   set <node-id>    write a new audio.node revision (write, full
                    replacement)
   revisions <node-id>

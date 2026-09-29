@@ -1093,3 +1093,52 @@ func TestNightAdvanceRestingIntershow_BackwardClockStepInvalidates(t *testing.T)
 		t.Fatalf("boundary = %+v, want invalid", boundary)
 	}
 }
+
+// An operator stop that ends the session while a tick is in flight must
+// not be followed by that tick starting the resting playlist.
+func TestNightEnsureAnchor_SessionEndedUnderTheTick_DoesNotStartPlaylist(t *testing.T) {
+	var dispatched bool
+	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dispatched = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Playlist Starting"))
+	}))
+	defer cmdSrv.Close()
+
+	now := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	svc, st, _ := newTestIdentityServiceWithStore(t, func() time.Time { return now })
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValueIdle, now),
+	}}
+	deps := Dependencies{
+		NightSessions: st, Observations: obs, Identity: svc,
+		FPP: &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: cmdSrv.URL}}},
+	}.withDefaults()
+	opts := Options{}.withDefaults()
+	h := &handlers{
+		deps: deps, clock: func() time.Time { return now }, logger: testLogger(),
+		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline, fppCommandPollInterval: opts.FPPCommandPollInterval,
+	}
+	rec := store.NightSessionRecord{
+		ID: "raced-sess", ConfigObjectID: "halloween-main", ConfigRevision: 1,
+		State: nightStateTransitionToResting, StateEnteredAt: now,
+	}
+	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
+		t.Fatalf("create night session: %v", err)
+	}
+	// The tick holds rec in transition-to-resting; a hard stop ends the
+	// stored session before the tick reaches its dispatch.
+	ended := rec
+	ended.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), ended, now); err != nil {
+		t.Fatalf("end night session: %v", err)
+	}
+
+	_, ready, changed := h.nightEnsureAnchor(context.Background(), now, rec, nightAnchorPurposeRestingOneShot, "player-01", "halloween-resting", false, 0, fppIfBusyRefuse)
+	if dispatched {
+		t.Fatal("startPlaylist was dispatched for a session that had already been ended")
+	}
+	if ready || changed {
+		t.Fatalf("ready, changed = %v, %v; want nothing recorded for an ended session", ready, changed)
+	}
+}

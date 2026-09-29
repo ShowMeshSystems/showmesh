@@ -2,8 +2,11 @@ package resolume
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 )
 
 // This file tests action.go's own declarative and mechanical pieces —
@@ -453,5 +456,24 @@ func TestDeckSelectionRefusalRestsOnTheFreshReadNotTheSnapshot(t *testing.T) {
 	valueless := Deck{ID: testDeckOne, Selected: ParamBooleanField{Presence: PresencePresent, Param: &ParamBoolean{ID: 1}}}
 	if _, refuse := deckSelectionRefusal(tc, testDeckOne, valueless, now, staleSnap); !refuse {
 		t.Error("refuse = false, want true when the deck did not report whether it is selected")
+	}
+}
+
+func TestWritePhaseSignalsSentOnlyAfterASuccessfulWrite(t *testing.T) {
+	now := time.Now()
+	d := newTestActionDispatcher(t, newFakeArena(&now), &now, identifiedSnapshot(now))
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{{"success", nil, 1}, {"error", errors.New("connection refused"), 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			sent := 0
+			ctx := sendsignal.WithHook(context.Background(), func() { sent++ })
+			d.writePhase(ctx, d.openWindow(), ActionLaunchColumn, "the column launch", func(context.Context) error { return tc.err })
+			if sent != tc.want {
+				t.Fatalf("send hook fired %d times, want %d", sent, tc.want)
+			}
+		})
 	}
 }

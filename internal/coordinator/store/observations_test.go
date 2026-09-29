@@ -502,3 +502,51 @@ func TestDeleteOrphanedObservationsRemovesRowsNotInLiveSet(t *testing.T) {
 		t.Fatalf("got %+v, want none left after sweeping with an empty live set", got)
 	}
 }
+
+// TestDeleteObservationsBySignalRemovesEveryRowAcrossResourcesAndSources
+// proves the removal is scoped only by signal: it reaches a retired
+// signal's rows under every resource and every source, and leaves every
+// other signal's rows, including a different resource's, untouched.
+func TestDeleteObservationsBySignalRemovesEveryRowAcrossResourcesAndSources(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	at := mustTime(t, "2026-08-10T12:00:00Z")
+
+	mustUpsert := func(kind observation.ResourceKind, id string, signal observation.SignalID, source string) {
+		obs, err := observation.Measured(observation.ResourceRef{Kind: kind, ID: id}, signal, "x", at, observation.WithSource(source))
+		if err != nil {
+			t.Fatalf("build observation: %v", err)
+		}
+		if err := st.UpsertObservation(ctx, obs); err != nil {
+			t.Fatalf("upsert observation: %v", err)
+		}
+	}
+	const retired observation.SignalID = "node.audio.sync.rate_ppm"
+	mustUpsert(observation.ResourceNode, "node-a", retired, "nodeaudio:node-a")
+	mustUpsert(observation.ResourceNode, "node-b", retired, "nodeaudio:node-b")
+	mustUpsert(observation.ResourceNode, "node-a", "node.audio.sync.state", "nodeaudio:node-a")
+
+	n, err := st.DeleteObservationsBySignal(ctx, retired)
+	if err != nil {
+		t.Fatalf("delete observations by signal: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("rows removed = %d, want 2", n)
+	}
+
+	got, err := st.ListObservations(ctx, ObservationFilter{ResourceKind: observation.ResourceNode})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(got) != 1 || got[0].Signal != "node.audio.sync.state" {
+		t.Fatalf("got %+v, want only node.audio.sync.state surviving", got)
+	}
+
+	n, err = st.DeleteObservationsBySignal(ctx, retired)
+	if err != nil {
+		t.Fatalf("delete observations by signal on an already-clean signal: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("rows removed on a re-run = %d, want 0", n)
+	}
+}

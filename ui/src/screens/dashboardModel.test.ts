@@ -74,6 +74,7 @@ function fpp(
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    playlistObservationRefused: null,
   }
   if (showParticipation === undefined) {
     delete (instance as Partial<typeof instance>).showParticipation

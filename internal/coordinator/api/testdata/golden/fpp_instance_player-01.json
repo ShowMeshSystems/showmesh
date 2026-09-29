@@ -52,7 +52,8 @@
       "show": "",
       "reason": "no asset manifest store is configured on this coordinator"
     },
-    "duplicateInstanceUuidEndpointIds": []
+    "duplicateInstanceUuidEndpointIds": [],
+    "playlistObservationRefused": null
   }
 }
 

@@ -148,6 +148,12 @@ Usage:
 Commands:
   nodes                    list the node inventory
   node <id>                show one node in detail
+  node enroll [--reenroll] [--expires 15m] <id>
+                           mint a one-time enrollment code for a node and print the
+                           command to run on it (write, requires node:enroll)
+  node enrollments         list enrollment codes, never the code itself (requires node:enroll)
+  node enrollments cancel <id>
+                           cancel a pending enrollment code (write, requires node:enroll)
   fpp [id]                 list configured FPP instances (or show one, if id given)
   fpp stop-playlist <id>              dispatch FPP's Stop Now and confirm by evidence (write)
   fpp start-playlist <id> <name>      dispatch FPP's Start Playlist and confirm by evidence (write)
@@ -290,6 +296,8 @@ Commands:
                                        without clearing its degraded record (write, requires
                                        night:command; the only lifecycle command accepted while
                                        degraded besides the three above)
+  night resume-show                   after Stop holds the night, start the show playlist from its
+                                       first song (write, requires night:command)
   emergency-stop stop                 stop playout immediately on every configured FPP instance
                                        (write, requires show:emergencystop:invoke)
   emergency-stop stop-power-down      stop playout immediately, then force the active night
@@ -406,6 +414,8 @@ Commands:
   audio settings revisions             list audio.settings revision history, newest first
   audio node list                      enumerate audio.node objects (id is the node id)
   audio node get <nodeId>              show one node's audio placement
+  audio node choices <nodeId>          show the program and LTC channels the node's own
+                                        outputs offer
   audio node set <nodeId>              write a new audio.node revision (write, full
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)

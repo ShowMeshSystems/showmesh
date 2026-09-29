@@ -53,7 +53,11 @@ const PluginPath = "/api/plugin-apis/showmesh/brightness"
 
 // absentOn404Reason is what an operator reads when the host answers but
 // the plugin is not there to answer for it.
-const absentOn404Reason = "the ShowMesh plugin on this FPP does not serve brightness state"
+const absentOn404Reason = "This player does not report brightness. Install or update the ShowMesh plugin to 0.2 or later."
+
+// absentOnUnreadReason is what an operator reads when the plugin answered
+// with the all-zero document it sends when it could not render its state.
+const absentOnUnreadReason = "This player's ShowMesh plugin could not read its brightness. Check the plugin on that player."
 
 const (
 	// DefaultPollInterval is the recommended collector.Runner.Add cadence.
@@ -181,6 +185,7 @@ type brightnessDocument struct {
 	TransitionGain  *int64 `json:"transitionGain"`
 	EffectiveOutput *int64 `json:"effectiveOutput"`
 	FadeActive      *bool  `json:"fadeActive"`
+	UpdatedAtMillis *int64 `json:"updatedAtMillis"`
 }
 
 // Poll performs one collection cycle. complete is always true: every
@@ -201,6 +206,10 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	var doc brightnessDocument
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return c.absentAll(observation.StateCollectionFailed, "decode error: "+err.Error(), now), true
+	}
+
+	if doc.UpdatedAtMillis != nil && *doc.UpdatedAtMillis == 0 {
+		return c.absentAll(observation.StateCollectionFailed, absentOnUnreadReason, now), true
 	}
 
 	obs := make([]observation.Observation, 0, len(AllSignals))

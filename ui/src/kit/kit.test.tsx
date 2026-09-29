@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ChoiceGroup, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { AbsenceLabel, BlankingPlate, Slider, Button, ChoiceGroup, RadioCardList, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
@@ -45,6 +45,22 @@ describe('RuledStrip', () => {
     const fact = screen.getByText('Pipeline state is old')
     const detail = screen.getByText('Stale is unknown, never healthy.')
     expect(fact.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('Slider', () => {
+  it('shows no number and disables the control while the value is unknown', () => {
+    render(<Slider label="Ceiling" value={0} min={0} max={100} valueLabel="0%" unknown />)
+    expect(screen.getByLabelText('Ceiling')).toBeDisabled()
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+})
+
+describe('AbsenceLabel', () => {
+  it('renders the state word alone', () => {
+    render(<AbsenceLabel absence="unavailable" label="Unavailable" />)
+    expect(screen.getByText('Unavailable')).toBeInTheDocument()
   })
 })
 
@@ -645,5 +661,42 @@ describe('LifecycleCommands', () => {
     expect(detail.compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // It never lands in the neighbouring command's cell.
     expect(cell?.querySelector('[data-testid="skip-option"]')?.closest('.sm-lifecycle-command--prepare-site')).toBeFalsy()
+  })
+})
+
+describe('RadioCardList', () => {
+  function Harness({ disabled = false }: { disabled?: boolean }) {
+    const [value, setValue] = useState('')
+    return (
+      <RadioCardList
+        label="Program channels"
+        options={[
+          { value: '1,2', title: 'Channels 1 and 2' },
+          { value: '3,4', title: 'Channels 3 and 4', desc: 'Timecode can use 1 or 2.' },
+        ]}
+        value={value}
+        onChange={setValue}
+        disabled={disabled}
+      />
+    )
+  }
+
+  it('checks exactly one option under one labelled group', async () => {
+    render(<Harness />)
+    const group = screen.getByRole('group', { name: 'Program channels' })
+    const first = screen.getByRole('radio', { name: 'Channels 1 and 2' })
+    const second = screen.getByRole('radio', { name: /Channels 3 and 4/ })
+    expect(group).toContainElement(first)
+    expect(first).not.toBeChecked()
+    await userEvent.click(second)
+    expect(second).toBeChecked()
+    await userEvent.click(first)
+    expect(first).toBeChecked()
+    expect(second).not.toBeChecked()
+  })
+
+  it('disables every option when the group is disabled', () => {
+    render(<Harness disabled />)
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
   })
 })

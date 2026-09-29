@@ -52,6 +52,18 @@ var deploymentPostureEnvVars = map[string]string{
 	"SHOWMESH_API_LOGIN_MAX_DELAY":        "ADR-024 decision 8's login cost bound; the same startup-constructed rate limiter",
 	"SHOWMESH_API_TRUST_CLIENT_ADDR": "whether RemoteAddr is trusted for audit attribution is a proxy-trust " +
 		"boundary installed into request-parsing middleware at startup, defaults false per ADR-022 rule 2",
+	"SHOWMESH_BROKER_MODE": "ADR-055 decisions 7 and 8: whether the coordinator manages the built-in " +
+		"broker's logins or leaves an external broker alone, fixed by how the coordinator was installed",
+	"SHOWMESH_BROKER_CONFIG_DIR": "ADR-055 decision 7: where the built-in broker's files are mounted into " +
+		"this container, a host path the store cannot know",
+	"SHOWMESH_NODE_BROKER_URL": "ADR-055 decision 5: the broker address as a node reaches it, a property of " +
+		"the host's network rather than show state",
+	"SHOWMESH_PUBLIC_URL": "ADR-055 decision 5: the coordinator's API address as a node reaches it, a " +
+		"property of the host's network rather than show state",
+	"SHOWMESH_NODE_MQTT_USERNAME": "ADR-055 decision 8: the shared login an external broker hands every " +
+		"enrolled node, set by the installer beside that broker's address",
+	"SHOWMESH_NODE_MQTT_PASSWORD": "ADR-055 decision 8: the shared login an external broker hands every " +
+		"enrolled node, set by the installer beside that broker's address",
 }
 
 // tuningKnobEnvVars is a third group: values explicitly documented in

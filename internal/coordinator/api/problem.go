@@ -808,6 +808,17 @@ func fppPairingNotWaitingProblem() v1.Problem {
 	}
 }
 
+// fppPairingCodeTakenProblem refuses a code that is already waiting on a
+// different player.
+func fppPairingCodeTakenProblem(otherInstanceID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Pairing code already in use",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf("That code is already waiting on player %s. Enter it on that player, or wait ten minutes for it to expire and try again here.", otherInstanceID),
+	}
+}
+
 // fppPairingClaimTooLargeProblem reuses the generic payload-too-large
 // type every other 413 in this API already uses.
 func fppPairingClaimTooLargeProblem() v1.Problem {

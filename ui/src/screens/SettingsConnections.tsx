@@ -22,7 +22,7 @@ import {
   type FPPBrightnessCeilingResponse,
   type FPPPairingStateResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, DefinitionStrip, Drawer, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
+import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -681,11 +681,18 @@ function PairingSection({ instanceId }: { instanceId: string }) {
 }
 
 function FactCell<T>({ fact, render }: { fact: SignalFact<T>; render: (value: T) => string }) {
-  if (fact.kind === 'absent') return <RuledStrip absence={fact.absence} label={fact.label} fact={fact.fact} />
+  if (fact.kind === 'absent') return <AbsenceLabel absence={fact.absence} label={fact.label} />
   return <span className="sm-data">{render(fact.value)}</span>
 }
 
 const BRIGHTNESS_DEBOUNCE_MS = 250
+
+/** One entry per distinct reason among the absent facts, so a shared reason is stated once. */
+function absentFacts(facts: readonly SignalFact<unknown>[]) {
+  const seen = new Map<string, Extract<SignalFact<unknown>, { kind: 'absent' }>>()
+  for (const f of facts) if (f.kind === 'absent' && !seen.has(f.fact)) seen.set(f.fact, f)
+  return [...seen.values()]
+}
 
 type CeilingOutcome = { kind: 'ok'; sentence: string } | { kind: 'failed'; reason: string }
 
@@ -707,10 +714,11 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
   const inFlightRef = useRef(false)
   const pendingRef = useRef<number | null>(null)
 
+  const reading = readout.ceiling.kind === 'value' ? readout.ceiling.value : null
   useEffect(() => {
-    if (sliderValue === null && readout.ceiling.kind === 'value') setSliderValue(readout.ceiling.value)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readout.ceiling.kind])
+    const writing = debounceRef.current !== null || inFlightRef.current || pendingRef.current !== null
+    if (!writing) setSliderValue(reading)
+  }, [reading])
 
   const sendCeiling = (value: number) => {
     if (inFlightRef.current) {
@@ -734,7 +742,10 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
   const onChange = (value: number) => {
     setSliderValue(value)
     if (debounceRef.current !== null) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => sendCeiling(value), BRIGHTNESS_DEBOUNCE_MS)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      sendCeiling(value)
+    }, BRIGHTNESS_DEBOUNCE_MS)
   }
 
   useEffect(() => {
@@ -743,7 +754,10 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
     }
   }, [])
 
-  const displayed = sliderValue ?? (readout.ceiling.kind === 'value' ? readout.ceiling.value : 0)
+  const ceilingUnknown = sliderValue === null
+  const displayed = sliderValue ?? 0
+  const absentReasons = absentFacts([readout.ceiling, readout.transitionGain, readout.effectiveOutput, readout.fadeActive])
+  const sliderTitle = !gate.allowed ? gate.reason : ceilingUnknown ? 'The ceiling is unknown until the plugin reports it.' : undefined
 
   return (
     <section aria-labelledby="fpp-instance-brightness-title" className="sm-stack-3">
@@ -755,8 +769,9 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
         max={100}
         valueLabel={`${displayed}%`}
         onChange={(e) => onChange(Number(e.target.value))}
+        unknown={ceilingUnknown}
         disabled={!gate.allowed}
-        title={gate.allowed ? undefined : gate.reason}
+        title={sliderTitle}
       />
       {outcome !== null && (outcome.kind === 'ok' ? (
         <p className="sm-small sm-muted">{outcome.sentence}</p>
@@ -771,6 +786,9 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
           { term: 'Fade', value: <FactCell fact={readout.fadeActive} render={(v) => (v ? 'Fading' : 'Not fading')} /> },
         ]}
       />
+      {absentReasons.map((reason) => (
+        <RuledStrip key={reason.fact} absence={reason.absence} label={reason.label} fact={reason.fact} />
+      ))}
     </section>
   )
 }

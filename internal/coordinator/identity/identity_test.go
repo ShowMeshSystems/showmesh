@@ -78,8 +78,9 @@ func TestRoleScopes(t *testing.T) {
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
 		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll}},
 		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}},
+		{RoleNode, []Scope{ScopeNodeRead, ScopeAssetWrite}},
 	}
 	for _, tc := range cases {
 		got := tc.role.Scopes()

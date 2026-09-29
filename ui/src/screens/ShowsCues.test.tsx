@@ -953,4 +953,105 @@ describe('Shows · Cues tab', () => {
       expect(payload.outputs.announcement).not.toHaveProperty('target')
     })
   })
+
+  describe('show actions', () => {
+    const showActions: ConfigObjectSummary[] = [
+      { id: 'song-one-column', label: 'Song one column', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+      { id: 'blackout-now', label: 'Blackout', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+      { id: 'clear-layer', label: 'Clear layer', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' },
+    ]
+
+    function setupWithActions(actions: string[]) {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) =>
+        kind === 'show.action'
+          ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: showActions })
+          : withContents(kind, [cueSummary()], [playlistSummary()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = (id: string) =>
+        Promise.resolve(cueResponse(cuePayload({ outputs: { render: { sequence: 'house-preshow-loop' }, actions } } as Partial<ConfigShowCue>), id))
+      stubs.getShowPlaylist = () => Promise.resolve(playlistResponse())
+      return renderWorkspace({ session: signedIn(['config:write']) })
+    }
+
+    it('the outputs column names the actions in firing order', async () => {
+      setupWithActions(['song-one-column', 'blackout-now'])
+      const region = await screen.findByRole('region', { name: 'In a playlist, scrollable' })
+      expect(await within(region).findByText('Fires Song one column, then Blackout')).toBeInTheDocument()
+      expect(within(region).getByText('ACT')).toBeInTheDocument()
+    })
+
+    it('a cue without actions shows no actions line', async () => {
+      setupWithActions([])
+      const region = await screen.findByRole('region', { name: 'In a playlist, scrollable' })
+      await waitFor(() => expect(within(region).getByText('House Preshow Loop')).toBeInTheDocument())
+      expect(within(region).queryByText('ACT')).not.toBeInTheDocument()
+    })
+
+    it('reorders, removes and adds actions, and saves them in the new order', async () => {
+      setupWithActions(['song-one-column', 'blackout-now'])
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      const list = await screen.findByRole('list', { name: 'Show actions in firing order' })
+      expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+        expect.stringContaining('1. Song one column'),
+        expect.stringContaining('2. Blackout'),
+      ])
+      expect(screen.getByRole('button', { name: 'Move Song one column up' })).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Move Blackout up' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Song one column' }))
+
+      const picker = screen.getByRole('combobox', { name: 'Add a show action' })
+      expect(within(picker).queryByRole('option', { name: /Blackout/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Add action' })).toBeDisabled()
+      fireEvent.change(picker, { target: { value: 'clear-layer' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Add action' }))
+      expect(screen.getByText(/fire Blackout, then Clear layer/)).toBeInTheDocument()
+
+      let sent: ConfigShowCue | null = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload as ConfigShowCue
+        return Promise.resolve(cueResponse(sent, 'cue-1', 2))
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowCue).outputs.actions).toEqual(['blackout-now', 'clear-layer'])
+    })
+
+    it('a cue whose only output is show actions is refused before save, with the coordinator’s wording', async () => {
+      stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) =>
+        kind === 'show.action' ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: showActions }) : withContents(kind, [], [])
+      stubs.listAssets = assetsEmpty
+      renderWorkspace({ session: signedIn(['config:write']) })
+      fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+      fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Song One' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Add a show action' }), { target: { value: 'song-one-column' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Add action' }))
+      const create = screen.getByRole('button', { name: 'Create cue' })
+      expect(create).toBeDisabled()
+      expect(create).toHaveAttribute('title', 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.')
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Song One' } })
+      fireEvent.click(screen.getByRole('checkbox', { name: /Render/ }))
+      fireEvent.change(screen.getByLabelText('Sequence'), { target: { value: 'song-one' } })
+      let sent: ConfigShowCue | null = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload as ConfigShowCue
+        return Promise.resolve(cueResponse(sent, 'song-one'))
+      }
+      fireEvent.click(create)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowCue).outputs).toEqual({ render: { sequence: 'song-one' }, actions: ['song-one-column'] })
+    })
+
+    it('a stored action that is not in this show is flagged and blocks save until removed', async () => {
+      setupWithActions(['ghost-action'])
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      expect(await screen.findByText('Not in this show')).toBeInTheDocument()
+      const save = screen.getByRole('button', { name: 'Save cue' })
+      expect(save).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Remove ghost-action' }))
+      expect(save).not.toBeDisabled()
+    })
+  })
 })

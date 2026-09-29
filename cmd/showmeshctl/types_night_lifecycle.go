@@ -71,11 +71,42 @@ type nightBackgroundAudioStepWire struct {
 	ResolvedAt     *string `json:"resolvedAt"`
 }
 
+type nightBackgroundAudioPlanItemWire struct {
+	Position int    `json:"position"`
+	ItemID   string `json:"itemId"`
+	Show     string `json:"show"`
+	Sequence string `json:"sequence"`
+	Target   string `json:"target"`
+}
+
+type nightBackgroundAudioPlanWire struct {
+	State          string                             `json:"state"`
+	Reason         string                             `json:"reason"`
+	Configured     bool                               `json:"configured"`
+	MediaPlaylist  string                             `json:"mediaPlaylist"`
+	Repeat         string                             `json:"repeat"`
+	Resume         string                             `json:"resume"`
+	ItemTransition string                             `json:"itemTransition"`
+	CrossfadeMs    *int                               `json:"crossfadeMs"`
+	Nodes          []string                           `json:"nodes"`
+	Items          []nightBackgroundAudioPlanItemWire `json:"items"`
+}
+
 type nightBackgroundAudioWire struct {
 	State           string                         `json:"state"`
 	Reason          string                         `json:"reason"`
 	Steps           []nightBackgroundAudioStepWire `json:"steps"`
 	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
+	NodesNotPlaying []nightBedNodeNotPlayingWire   `json:"nodesNotPlaying"`
+	Plan            nightBackgroundAudioPlanWire   `json:"plan"`
+}
+
+// nightBedNodeNotPlayingWire is one node the bed is configured for and
+// which is not playing it right now: NightBedNodeNotPlaying in
+// api/openapi.yaml.
+type nightBedNodeNotPlayingWire struct {
+	NodeID string `json:"nodeId"`
+	Reason string `json:"reason"`
 }
 
 // nightCycleOutcomeWire is one already-finished cycle: NightCycleOutcome
@@ -131,9 +162,10 @@ type nightSessionStateWire struct {
 
 	FinishedCycles []nightCycleOutcomeWire `json:"finishedCycles"`
 
-	Degraded            bool   `json:"degraded"`
-	DegradedReason      string `json:"degradedReason,omitempty"`
-	AttributionDegraded bool   `json:"attributionDegraded"`
+	StopHold            *nightStopHoldWire `json:"stopHold,omitempty"`
+	Degraded            bool               `json:"degraded"`
+	DegradedReason      string             `json:"degradedReason,omitempty"`
+	AttributionDegraded bool               `json:"attributionDegraded"`
 
 	Authorization nightAuthorizationWire `json:"authorization"`
 
@@ -164,4 +196,11 @@ type nightCommandResponseWire struct {
 	ServerTime time.Time              `json:"serverTime"`
 	Command    nightCommandResultWire `json:"command"`
 	Session    nightSessionStateWire  `json:"session"`
+}
+
+// nightStopHoldWire mirrors v1.NightStopHold.
+type nightStopHoldWire struct {
+	Reason    string `json:"reason"`
+	At        string `json:"at"`
+	Principal string `json:"principal,omitempty"`
 }

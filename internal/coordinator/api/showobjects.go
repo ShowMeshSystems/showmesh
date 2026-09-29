@@ -82,20 +82,26 @@ func (h *handlers) audioNodeExists(ctx context.Context) func(id string) bool {
 // entry refused: there is nothing to exclude from.
 func (h *handlers) showAudioNodes(ctx context.Context) func(show string) []string {
 	return func(show string) []string {
-		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowConfigKind, show)
-		if err != nil || obj.CurrentRevision == 0 {
-			return nil
-		}
-		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowConfigKind, show, obj.CurrentRevision)
-		if err != nil {
-			return nil
-		}
-		payload, verr := config.DecodeShowPayload(rev.PayloadJSON, func(string) bool { return true })
-		if verr != nil {
-			return nil
-		}
-		return payload.AudioNodes
+		return showAudioNodesFor(ctx, h.deps, show)
 	}
+}
+
+// showAudioNodesFor is [handlers.showAudioNodes]' own body, reachable
+// from a read path that holds only [Dependencies].
+func showAudioNodesFor(ctx context.Context, deps Dependencies, show string) []string {
+	obj, err := deps.Config.GetConfigObject(ctx, config.ShowConfigKind, show)
+	if err != nil || obj.CurrentRevision == 0 {
+		return nil
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.ShowConfigKind, show, obj.CurrentRevision)
+	if err != nil {
+		return nil
+	}
+	payload, verr := config.DecodeShowPayload(rev.PayloadJSON, func(string) bool { return true })
+	if verr != nil {
+		return nil
+	}
+	return payload.AudioNodes
 }
 
 // resolveAudioActionTargetNodes is ADR-049 decision 10's own resolution,
@@ -444,6 +450,42 @@ func (h *handlers) previousShowSurfaceNode(ctx context.Context, id string) (node
 	return head.Node, true
 }
 
+// surfaceConflictError carries a surface conflict out of the write
+// transaction so the handler can answer it as a validation refusal.
+type surfaceConflictError struct{ verr *config.ValidationError }
+
+func (e *surfaceConflictError) Error() string { return e.verr.Detail }
+
+// refuseSurfaceConflict compares payload with every other stored surface
+// inside the write transaction, so two concurrent saves cannot both pass.
+func refuseSurfaceConflict(id string, payload config.ShowSurfacePayload) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		objs, err := tx.ListConfigObjects(ctx, config.ShowSurfaceConfigKind)
+		if err != nil {
+			return fmt.Errorf("list show.surface config objects: %w", err)
+		}
+		others := make([]config.OtherShowSurface, 0, len(objs))
+		for _, obj := range objs {
+			if obj.ID == id || obj.CurrentRevision == 0 {
+				continue
+			}
+			rev, err := tx.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, obj.ID, obj.CurrentRevision)
+			if err != nil {
+				return fmt.Errorf("get active show.surface config revision for %q: %w", obj.ID, err)
+			}
+			var other config.ShowSurfacePayload
+			if err := jsonUnmarshalStrict(rev.PayloadJSON, &other); err != nil {
+				return fmt.Errorf("decode show.surface config payload for %q: %w", obj.ID, err)
+			}
+			others = append(others, config.OtherShowSurface{ID: obj.ID, Payload: other})
+		}
+		if verr := config.CheckShowSurfaceConflict(id, payload, others); verr != nil {
+			return &surfaceConflictError{verr: verr}
+		}
+		return nil
+	}
+}
+
 func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ac := authFromContext(r.Context())
@@ -490,9 +532,14 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON, precondition,
-		map[string]any{"show": payload.Show, "node": payload.Node})
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevisionChecked(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON, precondition,
+		map[string]any{"show": payload.Show, "node": payload.Node}, refuseSurfaceConflict(id, payload))
 	if writeErr != nil {
+		var conflictErr *surfaceConflictError
+		if errors.As(writeErr, &conflictErr) {
+			writeProblem(w, h.logger, now, mapValidationError(conflictErr.verr))
+			return
+		}
 		var conflict *errConfigRevisionPreconditionFailed
 		if errors.As(writeErr, &conflict) {
 			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))

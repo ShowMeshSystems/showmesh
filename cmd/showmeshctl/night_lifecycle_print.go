@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // This file renders types_night_lifecycle.go's wire types as text,
@@ -44,6 +45,13 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		}
 	}
 
+	if h := s.StopHold; h != nil {
+		by := ""
+		if h.Principal != "" {
+			by = " by " + h.Principal
+		}
+		_, _ = fmt.Fprintf(w, "\nSTOPPED:     %s Held since %s%s. Run \"showmeshctl night resume-show\" to start the show playlist from its first song.\n", h.Reason, h.At, by)
+	}
 	if s.Degraded {
 		_, _ = fmt.Fprintf(w, "\nDEGRADED:    %s\n", s.DegradedReason)
 	}
@@ -145,6 +153,13 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, "\nPinned max gain: none (%s)\n", s.BackgroundAudio.Reason)
 	}
 
+	if len(s.BackgroundAudio.NodesNotPlaying) > 0 {
+		_, _ = fmt.Fprintf(w, "\nSpeakers not playing the background music:\n")
+		for _, node := range s.BackgroundAudio.NodesNotPlaying {
+			_, _ = fmt.Fprintf(w, "  - %s: %s\n", node.NodeID, node.Reason)
+		}
+	}
+
 	// The two audio sequences print under their own headings. An
 	// announcement's clear and start arrive in the same step list as the
 	// bed's own steps, and a failure in one says something quite
@@ -154,24 +169,48 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	background := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "background")
 	announcement := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "announcement")
 
+	plan := s.BackgroundAudio.Plan
 	if len(background) == 0 {
-		// A non-nil PinnedMaxGainDb is proof the pinned revision DOES
-		// configure background audio (found by review: printing "not
-		// configured, or never started" right under a real pinned ceiling
-		// offered a false reading), so narrow the header to the one
-		// reading that is still possible.
-		if s.BackgroundAudio.PinnedMaxGainDb != nil {
+		switch {
+		case plan.Configured || s.BackgroundAudio.PinnedMaxGainDb != nil:
 			_, _ = fmt.Fprintf(w, "\nBackground audio: never started this cycle\n")
-		} else {
+		case plan.State == "recorded":
+			_, _ = fmt.Fprintf(w, "\nBackground audio: not configured\n")
+		default:
 			_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
 		}
 	} else {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)
 	}
+	printNightAudioPlan(w, plan)
 	if len(announcement) > 0 {
 		_, _ = fmt.Fprintf(w, "\nAnnouncement sessions:\n")
 		printNightAudioSteps(w, announcement)
+	}
+}
+
+// printNightAudioPlan lists the bed the session will play, from its own
+// pinned configuration, so it shows before any step exists.
+func printNightAudioPlan(w io.Writer, plan nightBackgroundAudioPlanWire) {
+	if plan.State == "unknown" {
+		_, _ = fmt.Fprintf(w, "Planned background audio: unavailable (%s)\n", plan.Reason)
+		return
+	}
+	if !plan.Configured {
+		return
+	}
+	source := "items listed on the night session"
+	if plan.MediaPlaylist != "" {
+		source = "media playlist " + plan.MediaPlaylist
+	}
+	_, _ = fmt.Fprintf(w, "Planned background audio (%s): repeat=%s resume=%s transition=%s", source, plan.Repeat, plan.Resume, plan.ItemTransition)
+	if plan.CrossfadeMs != nil {
+		_, _ = fmt.Fprintf(w, " crossfade=%dms", *plan.CrossfadeMs)
+	}
+	_, _ = fmt.Fprintf(w, " nodes=%s\n", strings.Join(plan.Nodes, ","))
+	for _, item := range plan.Items {
+		_, _ = fmt.Fprintf(w, "  %d. %s (show=%s sequence=%s node=%s)\n", item.Position, item.ItemID, item.Show, item.Sequence, item.Target)
 	}
 }
 

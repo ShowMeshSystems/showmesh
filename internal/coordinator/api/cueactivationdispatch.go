@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -528,6 +529,9 @@ type cueActivationResultPayload struct {
 	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
 	StartLeadMs             int    `json:"startLeadMs,omitempty"`
 	PreparedLate            bool   `json:"preparedLate,omitempty"`
+
+	// Actions is the cue's show action outcomes, written once they resolve.
+	Actions []v1.CueActionOutcome `json:"actions,omitempty"`
 }
 
 // cueActivationResultCorrelates mirrors cueCatalogDeployResultCorrelates
@@ -664,6 +668,9 @@ func (h *handlers) writeCueActivationOutcomeAudit(ctx context.Context, now time.
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
 		Kind: identity.AuditOutcome, Outcome: outcome, OutcomeReason: reason,
 	}
+	if run := cueActionsRunFrom(ctx); run != nil {
+		entry.Params["actions"] = run.snapshot()
+	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation outcome audit write failed", "nodeId", nodeID, "error", err)
 	}
@@ -696,6 +703,9 @@ func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.
 		Action: "cue.activate", Target: "node:" + nodeID,
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
 		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: outcomeReason,
+	}
+	if run := cueActionsRunFrom(ctx); run != nil {
+		entry.Params["actions"] = run.snapshot()
 	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation refusal audit write failed", "nodeId", nodeID, "error", err)

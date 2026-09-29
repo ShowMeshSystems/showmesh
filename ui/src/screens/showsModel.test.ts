@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Node } from '../api'
 import {
   audioDerivedSafetyClass,
+  channelSpans,
   cueActivationSummary,
   cueAssetMissing,
   cueRows,
@@ -316,5 +317,25 @@ describe('surfaceRenderStatus', () => {
     const status = surfaceRenderStatus([node], 'render-01', 'surface-1', '2026-09-21T00:00:01Z')
     expect(status.label).toBe('running')
     expect(status.unclaimed).toBe(false)
+  })
+})
+
+describe('channelSpans', () => {
+  const surf = (id: string, node: string, startChannel: number, channelCount: number) => ({ id, label: id, node, startChannel, channelCount })
+
+  it('flags a nested range even when another range sorts between the two', () => {
+    const { overlapping } = channelSpans([surf('wide', 'a', 1, 1000), surf('gap', 'a', 20, 5), surf('inner', 'a', 30, 11)])
+    expect([...overlapping].sort()).toEqual(['gap', 'inner', 'wide'])
+  })
+
+  it('does not flag the same range on two different nodes', () => {
+    const { overlapping, spans } = channelSpans([surf('one', 'a', 1, 100), surf('two', 'b', 1, 100)])
+    expect(overlapping.size).toBe(0)
+    expect(spans).toHaveLength(2)
+  })
+
+  it('does not flag ranges that touch without sharing a channel', () => {
+    const { overlapping } = channelSpans([surf('one', 'a', 1, 100), surf('two', 'a', 101, 100)])
+    expect(overlapping.size).toBe(0)
   })
 })

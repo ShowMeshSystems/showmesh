@@ -917,3 +917,53 @@ func TestCmdAudioNodeGetReadsAnObjectCarryingRetiredClockFields(t *testing.T) {
 		t.Errorf("printed detail does not report a derived local clock:\n%s", stdout.String())
 	}
 }
+
+func TestCmdAudioNodeChoicesPrintsGroupsAndManualPath(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-28T00:00:00Z","nodeId":"audio-m4","discovery":"available",
+			"manualEntry":{"allowed":true},"ltc":{"available":true},
+			"routes":[{"route":"alsa_output.m4","interface":"alsa_output.m4","source":"pipewire","channels":4,"channelBasis":"inventory","ltcCapable":true,
+			  "programGroups":[{"channels":[1,2],"ltcChannels":[3,4],"conflicts":[{"channel":1,"reason":"Channel 1 carries program audio. Timecode needs a channel of its own."}]},
+			                   {"channels":[3,4],"ltcChannels":[1,2],"conflicts":[]}]}],
+			"current":{"programRoute":"alsa_output.m4","programChannels":[1,2],"ltcChannel":3,"offered":true},
+			"clock":{"localClock":"alsa_output.m4","source":"derived","verification":"same_interface"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{"node", "choices", "--server", ts.URL, "--token", "t", "audio-m4"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/nodes/audio-m4/audio/routing-choices" {
+		t.Errorf("requested %q, want the routing-choices path", gotPath)
+	}
+	for _, want := range []string{"Discovery:              available", "Manual entry:           allowed", "1,2", "3,4", "Saved:                  alsa_output.m4 program 1,2, LTC 3", "Timecode clock:         leaves the same interface as program audio", "Local clock:            alsa_output.m4, read from the program output"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestCmdAudioNodeChoicesStatesWhyNothingIsOffered(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-28T00:00:00Z","nodeId":"audio-old","discovery":"not_reported",
+			"reason":"This node's ShowMesh version does not list its channels. Enter channels by hand, or update ShowMesh on the node.",
+			"manualEntry":{"allowed":true},"ltc":{"available":false,"reason":"This node's ShowMesh version does not list its channels. Enter channels by hand, or update ShowMesh on the node."},"routes":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdAudio([]string{"node", "choices", "--server", ts.URL, "--token", "t", "audio-old"}, &stdout, &stderr, time.Now); code != exitOK {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "does not list its channels") || strings.Contains(stdout.String(), "ROUTE") {
+		t.Errorf("output = %s, want the reason and no choices table", stdout.String())
+	}
+}

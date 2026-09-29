@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   deleteShowPlaylist,
@@ -29,6 +29,7 @@ import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
 import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify, type AudioAssetOption } from './showsModel'
 import { MediaPlaylistDraft, MediaPlaylistEditor } from './ShowsMediaPlaylists'
+import { ReimportControl } from './ShowsReimport'
 
 type Playlist = ShowPlaylistConfigResponse
 type MediaPlaylist = MediaPlaylistConfigResponse
@@ -86,32 +87,35 @@ type FPPEvidence = {
   entries: FPPPlaylistDefinitionEntry[]
   definitions: FPPPlaylistDefinitionMetadata[]
   reason: string | null
+  reload: () => void
 }
 
 function useFPPEvidence(playlist: Playlist | null): FPPEvidence {
-  const [state, setState] = useState<FPPEvidence>({ state: 'loading', entries: [], definitions: [], reason: null })
+  const [attempt, setAttempt] = useState(0)
+  const [read, setRead] = useState<Omit<FPPEvidence, 'reload'>>({ state: 'loading', entries: [], definitions: [], reason: null })
+  const reload = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     if (playlist === null || playlist.payload.runner !== 'fpp' || playlist.payload.fpp === undefined) {
-      setState({ state: 'loaded', entries: [], definitions: [], reason: null })
+      setRead({ state: 'loaded', entries: [], definitions: [], reason: null })
       return
     }
     let cancelled = false
     const binding = playlist.payload.fpp
-    setState({ state: 'loading', entries: [], definitions: [], reason: null })
+    setRead({ state: 'loading', entries: [], definitions: [], reason: null })
     Promise.all([getFPPPlaylistDefinitionEntries(binding.instanceUuid, binding.playlistHash), listFPPPlaylistDefinitions()])
       .then(([entries, definitions]) => {
-        if (!cancelled) setState({ state: 'loaded', entries: entries.entries, definitions: definitions.definitions, reason: null })
+        if (!cancelled) setRead({ state: 'loaded', entries: entries.entries, definitions: definitions.definitions, reason: null })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setState({ state: 'failed', entries: [], definitions: [], reason: describeApiError(err) })
+        if (!cancelled) setRead({ state: 'failed', entries: [], definitions: [], reason: describeApiError(err) })
       })
     return () => {
       cancelled = true
     }
-  }, [playlist])
+  }, [playlist, attempt])
 
-  return state
+  return { ...read, reload }
 }
 
 type ReadinessState = { state: 'idle' | 'loading' | 'loaded' | 'failed'; response: FPPPlaylistReadinessResponse | null; reason: string | null }
@@ -425,6 +429,7 @@ function FPPPlaylistEditor({
   }, [playlist])
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const reimportGate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
 
   if (binding === undefined) {
     return <RuledStrip absence="unavailable" label="No binding" fact="This FPP-runner playlist has no stored FPP binding." />
@@ -432,6 +437,7 @@ function FPPPlaylistEditor({
 
   const instanceLabel = fppInstanceLabel(model.fpp, binding.instanceUuid)
   const instanceRoute = fppInstanceRoute(model.fpp, binding.instanceUuid)
+  const reimportInstanceId = model.fpp.find((i) => i.instanceUuid === binding.instanceUuid)?.instanceId ?? null
   const superseding = newerDefinition(evidence.definitions, binding.instanceUuid, binding.playlistName, binding.playlistHash)
 
   const discard = () => {
@@ -555,12 +561,13 @@ function FPPPlaylistEditor({
             },
           ]}
         />
-        <Button
-          title="Reconciling a re-imported definition against existing cue bindings needs a flow the mock does not fully specify."
-          disabled
-        >
-          Re-import
-        </Button>
+        <ReimportControl
+          instanceId={reimportInstanceId}
+          instanceUuid={binding.instanceUuid}
+          playlistName={binding.playlistName}
+          blockedReason={reimportGate.allowed ? null : reimportGate.reason}
+          onLanded={evidence.reload}
+        />
         {superseding !== null && (
           <p className="sm-small sm-muted sm-stack-3">
             FPP&rsquo;s definition changed at {formatClock(superseding.capturedAt) ?? 'an unrecorded time'}, so the

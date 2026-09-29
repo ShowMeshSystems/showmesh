@@ -79,11 +79,7 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 		buildValue(nodeID, SignalState, p.State, observedAt, rep),
 	}
 
-	if p.State == "locked" {
-		obs = append(obs, notCollected(res, SignalReason, source, "state is locked; no reason is in effect", rep.receivedAt))
-	} else {
-		obs = append(obs, buildValue(nodeID, SignalReason, p.Reason, observedAt, rep))
-	}
+	obs = append(obs, buildValue(nodeID, SignalReason, p.Reason, observedAt, rep))
 
 	obs = append(obs, buildValue(nodeID, SignalProvider, p.Provider, observedAt, rep))
 

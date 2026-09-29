@@ -353,6 +353,29 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 			return nil, fmt.Errorf("coordinator: get fpp instance uuid for %q: %w", ep.ID, err)
 		}
 
+		// The refusal marker is keyed by FPP's own SystemUUID, not the
+		// endpoint id, so it can only be looked up once instanceUUID is known.
+		var playlistObservationRefused *api.FPPPlaylistObservationRefusal
+		if instanceUUID != nil {
+			obsRec, err := l.st.GetFPPPlaylistEntryObservation(ctx, instanceUUID.UUID)
+			switch {
+			case err == nil:
+				if obsRec.EvidenceBrokenAt != nil {
+					playlistObservationRefused = &api.FPPPlaylistObservationRefusal{
+						Reason: fmt.Sprintf(
+							"FPP %s reported a playlist sequence lower than the last one this coordinator accepted (sequence %d), so it is refusing further reports. Clear the playlist observation on the Monitor screen, or run showmeshctl fpp reset-observation-sequence --confirm %s.",
+							ep.ID, obsRec.Sequence, instanceUUID.UUID,
+						),
+						RefusedAt: *obsRec.EvidenceBrokenAt,
+					}
+				}
+			case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
+				// No observation ever recorded for this uuid: nothing to refuse.
+			default:
+				return nil, fmt.Errorf("coordinator: get fpp playlist entry observation for %q: %w", ep.ID, err)
+			}
+		}
+
 		views = append(views, api.FPPInstanceView{
 			InstanceID:                       ep.ID,
 			Endpoint:                         ep.URL,
@@ -361,6 +384,7 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 			LastPollError:                    lastPollError,
 			InstanceUUID:                     instanceUUID,
 			DuplicateInstanceUUIDEndpointIDs: duplicatesByEndpoint[ep.ID],
+			PlaylistObservationRefused:       playlistObservationRefused,
 		})
 	}
 	return views, nil

@@ -848,19 +848,28 @@ func TestWatcherClockPollDoesNotDelayAConcurrentPromote(t *testing.T) {
 		t.Fatal("watcher tick never reached the clock source's Poll")
 	}
 
-	const lockBudget = 50 * time.Millisecond
-	promoteBegin := time.Now()
-	out := f.m.Promote(ctx, stagingID, f.id, "inv-promote", 5)
-	elapsed := time.Since(promoteBegin)
+	// Poll stays blocked until release closes, so a Promote that returns
+	// first cannot have waited on the watcher's lock.
+	promoted := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		promoted <- f.m.Promote(ctx, stagingID, f.id, "inv-promote", 5)
+	}()
+
+	var out pkgaudio.OutcomeResult
+	select {
+	case out = <-promoted:
+	case <-time.After(5 * time.Second):
+		close(release)
+		<-tickDone
+		<-promoted
+		t.Fatal("Promote waited for the watcher's own clock poll to finish")
+	}
 
 	close(release)
 	<-tickDone
 
 	if out.Outcome != pkgaudio.OutcomeStarted {
 		t.Fatalf("Promote = %q (%s), want started", out.Outcome, out.Reason)
-	}
-	if elapsed > lockBudget {
-		t.Fatalf("Promote took %v while the watcher's own clock poll was in flight, want at most %v", elapsed, lockBudget)
 	}
 }
 

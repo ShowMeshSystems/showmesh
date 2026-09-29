@@ -28,7 +28,7 @@ import (
 // until the plugin itself sends it.
 
 // scopeFPPPairing guards the operator half of pairing: opening one
-// creates a principal and mints a token, which is principal:write's own
+// creates or reuses a machine principal, which is principal:write's own
 // blast radius and admin-only.
 var scopeFPPPairing = identity.ScopePrincipalWrite
 
@@ -38,13 +38,6 @@ const auditActionFPPPair = "fpp.pair"
 // fppPairingTTL is how long a pairing stays open after an operator starts
 // it, matching the plugin worker's own expiry.
 const fppPairingTTL = 10 * time.Minute
-
-// fppPairingTokenMargin is how long past the pairing's own expiry the
-// minted token stays valid. It bounds the leak if a revoke fails: an
-// unclaimed token dies on its own rather than living forever. The margin
-// exists only so a plugin that claims in the last second of the window
-// does not receive a credential that is already dead.
-const fppPairingTokenMargin = 2 * time.Minute
 
 // maxFPPPairingRequestBodyBytes bounds both pairing bodies: a code and a
 // hex secret have no legitimate reason to be large.
@@ -114,15 +107,12 @@ func normalizeFPPPairingCode(code string) (string, bool) {
 	return out[:4] + "-" + out[4:], true
 }
 
-// fppPendingPairing is one open pairing, held in memory only. Token is
-// the minted secret and never leaves this process except in the claim
-// response to the plugin that proved it holds the matching secret.
+// fppPendingPairing is one open pairing, held in memory only. It holds no
+// credential: the token is minted when the plugin proves it holds the secret.
 type fppPendingPairing struct {
 	code        string
 	instanceID  string
 	principalID string
-	token       string
-	tokenID     string
 	expiresAt   time.Time
 }
 
@@ -150,72 +140,81 @@ func newFPPPairingStore() *fppPairingStore {
 	}
 }
 
-// open records a pending pairing and returns the earlier one for the same
-// instance, if any, for its caller to revoke: a replaced pairing's token
-// was minted and never handed out, so nothing should still accept it.
-func (s *fppPairingStore) open(p fppPendingPairing) (replaced []fppPendingPairing) {
+// pendingElsewhere reports the other instance that already has this code
+// waiting, so one code never matches two rows.
+func (s *fppPairingStore) pendingElsewhere(code, instanceID string, now time.Time) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if old, ok := s.pending[p.instanceID]; ok {
-		replaced = append(replaced, old)
+	return s.pendingElsewhereLocked(code, instanceID, now)
+}
+
+func (s *fppPairingStore) pendingElsewhereLocked(code, instanceID string, now time.Time) (string, bool) {
+	for id, p := range s.pending {
+		if id != instanceID && p.code == code && now.Before(p.expiresAt) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// open records a pending pairing, replacing any earlier one for the same
+// instance. When another instance already has the same code waiting it
+// records nothing and returns that instance's ID.
+func (s *fppPairingStore) open(p fppPendingPairing, now time.Time) (otherInstance string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if other, ok := s.pendingElsewhereLocked(p.code, p.instanceID, now); ok {
+		return other
 	}
 	s.pending[p.instanceID] = p
-	return replaced
+	return ""
 }
 
-// sweepExpired drops every pending pairing that has expired and returns
-// them, so their unclaimed tokens can be revoked. Called from every
-// pairing route, so an abandoned pairing is cleaned up by the next one
-// rather than waiting for its own instance to be asked about.
-func (s *fppPairingStore) sweepExpired(now time.Time) []fppPendingPairing {
+// markPaired records the instance as paired once its token has been minted.
+func (s *fppPairingStore) markPaired(p fppPendingPairing, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.dropExpiredLocked(now)
+	s.paired[p.instanceID] = fppPairedRecord{principalID: p.principalID, pairedAt: now}
 }
 
-// drain removes every pending pairing and returns them. Used at
-// coordinator shutdown: a token nothing will ever claim must not outlive
-// the process that minted it.
-func (s *fppPairingStore) drain() []fppPendingPairing {
+// restore puts a consumed pairing back after a failed token mint, unless the
+// operator has opened a newer one for the same instance in the meantime.
+func (s *fppPairingStore) restore(p fppPendingPairing) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]fppPendingPairing, 0, len(s.pending))
-	for id, p := range s.pending {
-		out = append(out, p)
-		delete(s.pending, id)
+	if _, taken := s.pending[p.instanceID]; !taken {
+		s.pending[p.instanceID] = p
 	}
-	return out
 }
 
-func (s *fppPairingStore) dropExpiredLocked(now time.Time) []fppPendingPairing {
-	var dropped []fppPendingPairing
+// sweepExpired drops every pending pairing that has expired. Called from
+// every pairing route, so an abandoned pairing is cleaned up by the next
+// one rather than waiting for its own instance to be asked about.
+func (s *fppPairingStore) sweepExpired(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for id, p := range s.pending {
 		if !now.Before(p.expiresAt) {
-			dropped = append(dropped, p)
 			delete(s.pending, id)
 		}
 	}
-	return dropped
 }
 
-// claim consumes the unexpired pending pairing whose code matches, and
-// records the instance as paired. A code that matches nothing, or matches
+// claim consumes the unexpired pending pairing whose code matches. A code that matches nothing, or matches
 // an expired entry, reports ok false and changes nothing an attacker can
 // observe.
-func (s *fppPairingStore) claim(code string, now time.Time) (claimed fppPendingPairing, ok bool, expired []fppPendingPairing) {
+func (s *fppPairingStore) claim(code string, now time.Time) (claimed fppPendingPairing, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	expired = s.dropExpiredLocked(now)
 	for instanceID, p := range s.pending {
-		if subtle.ConstantTimeCompare([]byte(p.code), []byte(code)) != 1 {
+		if !now.Before(p.expiresAt) || subtle.ConstantTimeCompare([]byte(p.code), []byte(code)) != 1 {
 			continue
 		}
 		delete(s.pending, instanceID)
-		s.paired[instanceID] = fppPairedRecord{principalID: p.principalID, pairedAt: now}
-		return p, true, expired
+		return p, true
 	}
-	return fppPendingPairing{}, false, expired
+	return fppPendingPairing{}, false
 }
 
 // state reports one instance's pairing state, dropping an expired pending
@@ -289,9 +288,9 @@ func keepAfter(times []time.Time, cutoff time.Time) []time.Time {
 }
 
 // handleStartFPPPairing serves POST /api/v1/fpp/{instanceId}/pairing.
-// Creates or reuses the instance's machine principal, mints it a fresh
-// token, and holds that token in memory for ten minutes against the code
-// the operator supplied. The token is never in the response.
+// Creates or reuses the instance's machine principal and holds the code the
+// operator supplied in memory for ten minutes. No token exists until the
+// plugin claims.
 func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -315,7 +314,12 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	h.revokePendingFPPPairings(ctx, h.fppPairings.sweepExpired(now))
+	h.fppPairings.sweepExpired(now)
+
+	if other, taken := h.fppPairings.pendingElsewhere(code, instanceID, now); taken {
+		writeProblem(w, h.logger, now, fppPairingCodeTakenProblem(other))
+		return
+	}
 
 	ac := authFromContext(ctx)
 	if !h.writeAuditOrFail(ctx, w, now, identity.AuditEntry{
@@ -338,22 +342,12 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// The token expires on its own shortly after the pairing does, so a
-	// pairing nobody claims cannot leave a credential alive even if the
-	// revoke below never runs.
 	expiresAt := now.Add(fppPairingTTL)
-	tokenExpiry := expiresAt.Add(fppPairingTokenMargin)
-	token, err := h.deps.Identity.IssueToken(ctx, principal.ID, "pairing "+formatTime(now), &tokenExpiry)
-	if err != nil {
-		h.writeInternalError(w, now, "issue the fpp plugin token for a pairing", err)
+	pending := fppPendingPairing{code: code, instanceID: instanceID, principalID: principal.ID, expiresAt: expiresAt}
+	if other := h.fppPairings.open(pending, now); other != "" {
+		writeProblem(w, h.logger, now, fppPairingCodeTakenProblem(other))
 		return
 	}
-
-	replaced := h.fppPairings.open(fppPendingPairing{
-		code: code, instanceID: instanceID, principalID: principal.ID,
-		token: token.Value, tokenID: token.ID, expiresAt: expiresAt,
-	})
-	h.revokePendingFPPPairings(ctx, replaced)
 
 	jsonWrite(w, v1.FPPPairingResponse{
 		ServerTime:  formatTime(now),
@@ -408,27 +402,27 @@ func (h *handlers) ensureFPPPluginPrincipal(ctx context.Context, instanceID stri
 // function's return value.
 func problemPtr(p v1.Problem) *v1.Problem { return &p }
 
-// revokePendingFPPPairings revokes the tokens of pairings that were
-// dropped without ever being claimed. Best effort and never fatal: the
-// token carries its own expiry, so a failure here shortens nothing an
-// operator relies on and bounds the leak anyway.
-func (h *handlers) revokePendingFPPPairings(ctx context.Context, dropped []fppPendingPairing) {
-	for _, p := range dropped {
-		if p.tokenID == "" {
+// revokeEarlierFPPPluginTokens revokes every token the plugin's principal
+// held before the one just minted, so a re-pair leaves exactly one live
+// token. It returns the IDs it revoked.
+func (h *handlers) revokeEarlierFPPPluginTokens(ctx context.Context, principalID, keepTokenID, instanceID string) []string {
+	tokens, err := h.deps.Identity.ListTokens(ctx, principalID)
+	if err != nil {
+		h.logWarn("failed to list the earlier tokens of a re-paired fpp plugin", "instanceId", instanceID, "error", err)
+		return nil
+	}
+	var revoked []string
+	for _, t := range tokens {
+		if t.ID == keepTokenID {
 			continue
 		}
-		if err := h.deps.Identity.RevokeToken(ctx, p.tokenID); err != nil {
-			h.logWarn("failed to revoke the token of an unclaimed fpp pairing",
-				"instanceId", p.instanceID, "error", err)
+		if err := h.deps.Identity.RevokeToken(ctx, t.ID); err != nil {
+			h.logWarn("failed to revoke an earlier token of a re-paired fpp plugin", "instanceId", instanceID, "error", err)
+			continue
 		}
+		revoked = append(revoked, t.ID)
 	}
-}
-
-// RevokeUnclaimedFPPPairings revokes every open pairing's unclaimed
-// token. The coordinator calls it while shutting down: a credential
-// nothing will ever claim must not outlive the process that minted it.
-func (a *API) RevokeUnclaimedFPPPairings(ctx context.Context) {
-	a.h.revokePendingFPPPairings(ctx, a.h.fppPairings.drain())
+	return revoked
 }
 
 // handleGetFPPPairing serves GET /api/v1/fpp/{instanceId}/pairing.
@@ -441,7 +435,7 @@ func (h *handlers) handleGetFPPPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.revokePendingFPPPairings(r.Context(), h.fppPairings.sweepExpired(now))
+	h.fppPairings.sweepExpired(now)
 
 	state, pending, paired := h.fppPairings.state(instanceID, now)
 	resp := v1.FPPPairingStateResponse{ServerTime: formatTime(now), State: state}
@@ -460,9 +454,9 @@ func (h *handlers) handleGetFPPPairing(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleClaimFPPPairing serves POST /api/v1/integrations/fpp/pairing/claim.
-// This is the only unauthenticated write route in this API: the secret in
-// the body is the credential, and nothing else about the request is
-// trusted. Every refusal is the same 404 with the same text, so a caller
+// This is one of two writes that take no principal (node enrollment redeem
+// is the other): the secret in the body is the credential, and nothing else
+// about the request is trusted. Every refusal is the same 404 with the same text, so a caller
 // learns nothing from the difference between a wrong secret, an expired
 // pairing and one that was never opened.
 func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request) {
@@ -500,32 +494,55 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, fppPairingNotWaitingProblem())
 		return
 	}
-	pending, ok, expired := h.fppPairings.claim(code, now)
-	h.revokePendingFPPPairings(ctx, expired)
+	pending, ok := h.fppPairings.claim(code, now)
 	if !ok {
 		writeProblem(w, h.logger, now, fppPairingNotWaitingProblem())
 		return
 	}
 
-	// Recorded after the claim has already taken: this entry attributes
-	// the pairing to the principal it just handed a credential to, and an
-	// audit store that is down must not un-pair a plugin that is now
-	// holding the token.
+	// The token is minted only now, and never expires, so an unclaimed
+	// pairing holds no credential and a paired plugin keeps working.
+	principal, problem, err := h.ensureFPPPluginPrincipal(ctx, pending.instanceID)
+	if err != nil {
+		h.fppPairings.restore(pending)
+		h.writeInternalError(w, now, "ensure the fpp plugin principal for a claim", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("refused to mint a token for a paired fpp plugin", "instanceId", pending.instanceID, "reason", problem.Detail)
+		writeProblem(w, h.logger, now, fppPairingNotWaitingProblem())
+		return
+	}
+	token, err := h.deps.Identity.IssueToken(ctx, principal.ID, "pairing "+formatTime(now), nil)
+	if err != nil {
+		h.fppPairings.restore(pending)
+		h.writeInternalError(w, now, "issue the fpp plugin token for a claim", err)
+		return
+	}
+	h.fppPairings.markPaired(pending, now)
+	revoked := h.revokeEarlierFPPPluginTokens(ctx, principal.ID, token.ID, pending.instanceID)
+
+	// Recorded after the claim has already taken: an audit store that is
+	// down must not un-pair a plugin that is now holding the token.
+	reason := "the plugin presented the matching secret and received its own token"
+	if len(revoked) > 0 {
+		reason += "; revoked earlier tokens " + strings.Join(revoked, ", ")
+	}
 	entry := identity.AuditEntry{
-		Timestamp: now, PrincipalID: pending.principalID,
+		Timestamp: now, PrincipalID: principal.ID,
 		PrincipalName: fppPairingPrincipalPrefix + pending.instanceID,
 		Form:          identity.FormToken, ClientAddr: h.clientAddr(r),
 		Action: auditActionFPPPair, Target: pending.instanceID,
 		Kind: identity.AuditOutcome, Outcome: outcomeWordConfirmed,
-		OutcomeReason: "the plugin presented the matching secret and received its own token",
+		OutcomeReason: reason,
 	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("failed to audit a completed fpp pairing", "instanceId", pending.instanceID, "error", err)
 	}
 
 	jsonWrite(w, v1.FPPPairingClaimResponse{
-		Token:       pending.token,
-		PrincipalID: pending.principalID,
+		Token:       token.Value,
+		PrincipalID: principal.ID,
 		InstanceID:  pending.instanceID,
 	})
 }

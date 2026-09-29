@@ -507,6 +507,11 @@ type FPPInstance struct {
 	//, a stated finding, never a silently overwritten row. Empty, never
 	// null, when there is no duplicate.
 	DuplicateInstanceUUIDEndpointIDs []string `json:"duplicateInstanceUuidEndpointIds"`
+
+	// PlaylistObservationRefused is non-null exactly when this instance's
+	// playlist-entry reports are currently being refused. Cleared by the
+	// next accepted report or by the observation reset route.
+	PlaylistObservationRefused *FPPPlaylistObservationRefused `json:"playlistObservationRefused"`
 }
 
 // FPPInstanceUUIDChange is [FPPInstance.InstanceUUIDChange]'s shape: the
@@ -515,6 +520,14 @@ type FPPInstance struct {
 type FPPInstanceUUIDChange struct {
 	PreviousUUID string `json:"previousUuid"`
 	ChangedAt    string `json:"changedAt"`
+}
+
+// FPPPlaylistObservationRefused is [FPPInstance.PlaylistObservationRefused]'s
+// shape: the operator-facing reason for the current refusal, and when it
+// was recorded.
+type FPPPlaylistObservationRefused struct {
+	Reason    string `json:"reason"`
+	RefusedAt string `json:"refusedAt"`
 }
 
 // AcknowledgeFPPInstanceUUIDChangeResponse is the body of

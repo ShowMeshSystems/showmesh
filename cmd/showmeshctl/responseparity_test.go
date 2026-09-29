@@ -67,6 +67,7 @@ var getResponseTypeOverrides = map[string]string{
 	"GET /night/session":                   "nightSessionLifecycleResponse",
 	"GET /nodes":                           "nodesResponse",
 	"GET /resolume/recovery":               "resolumeRecoveryResponse",
+	"GET /node-enrollments":                "nodeEnrollmentsResponse",
 }
 
 // getResponseFieldExemptions is exemptWritePaths' convention mirrored for

@@ -297,6 +297,46 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 	}
 }
 
+// TestCmdNightStatusPrintsTheSpeakersNotPlayingTheBackgroundMusic proves
+// API-first parity for the live absent-speaker list: an operator watching
+// a night from the CLI is told which speaker dropped out and why, without
+// reading the step log and working it out.
+func TestCmdNightStatusPrintsTheSpeakersNotPlayingTheBackgroundMusic(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded","reason":"","steps":[],
+				"nodesNotPlaying":[{"nodeId":"node-b","reason":"This speaker is no longer holding the background music this night started."}]},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Speakers not playing the background music",
+		"node-b",
+		"no longer holding the background music",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not contain %q; stdout=%s", want, out)
+		}
+	}
+}
+
 // TestCmdNightStatusPrintsPinnedMaxGainConfiguredButNotStarted proves
 // finding 4's reconciliation directly: a non-nil pinnedMaxGainDb is proof
 // the pinned revision DOES configure background audio, so the "not
@@ -456,5 +496,45 @@ func TestCmdNightEndSessionHasNoOverrideFlag(t *testing.T) {
 	code := cmdNight([]string{"end-session", "--override", "cooldown=x", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
 	if code == exitOK {
 		t.Fatalf("exit code = %d, want a parse failure: end-session has no --override flag", code)
+	}
+}
+
+func nightStatusWithAudio(t *testing.T, audioJSON string) string {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:01Z","session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"preparing","stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":`+audioJSON+`,
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+	var stdout, stderr bytes.Buffer
+	if code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now); code != exitOK {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	return stdout.String()
+}
+
+func TestCmdNightStatusListsPlannedBackgroundAudioBeforeItStarts(t *testing.T) {
+	out := nightStatusWithAudio(t, `{"state":"recorded","reason":"","steps":[],"plan":{"state":"recorded","reason":"","configured":true,"mediaPlaylist":"porch-bed","repeat":"playlist","resume":"resume","itemTransition":"crossfade","crossfadeMs":2000,"nodes":["node-a"],
+		"items":[{"position":1,"itemId":"porch-bed-0","show":"halloween","sequence":"bg-1","target":"node-a"},{"position":2,"itemId":"porch-bed-1","show":"halloween","sequence":"bg-2","target":"node-a"}]}}`)
+	for _, want := range []string{
+		"Background audio: never started this cycle",
+		"Planned background audio (media playlist porch-bed): repeat=playlist resume=resume transition=crossfade crossfade=2000ms nodes=node-a",
+		"1. porch-bed-0 (show=halloween sequence=bg-1 node=node-a)",
+		"2. porch-bed-1 (show=halloween sequence=bg-2 node=node-a)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q; stdout=%s", want, out)
+		}
+	}
+}
+
+func TestCmdNightStatusSaysBackgroundAudioIsNotConfigured(t *testing.T) {
+	out := nightStatusWithAudio(t, `{"state":"recorded","reason":"","steps":[],"plan":{"state":"recorded","reason":"background audio is not configured on this night session","configured":false,"mediaPlaylist":"","repeat":"","resume":"","itemTransition":"","crossfadeMs":null,"nodes":[],"items":[]}}`)
+	if !strings.Contains(out, "Background audio: not configured\n") || strings.Contains(out, "never started") || strings.Contains(out, "Planned") {
+		t.Errorf("stdout should say only that background audio is not configured; stdout=%s", out)
 	}
 }

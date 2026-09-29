@@ -312,6 +312,7 @@ bundles of these (ADR-024).
 | `show:weatherdelay:invoke` | shipped | ADR-053 weather delay: start a weather delay, start a cancel night, change a delay into a cancel night |
 | `show:weatherdelay:resume` | shipped | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
+| `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -639,6 +640,7 @@ register entry comes from the code and never from a plan.
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
 | `show.weatherdelay.cancel_night` | shipped | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
+| `show.night.resume_show` | reserved | ADR-054: the resume-show night command cleared a level 1 stop hold and started the show playlist from its first entry |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
 | `show.weatherdelay.trigger` | shipped | ADR-053 weather delay: an automatic trigger was received from a source |
@@ -647,6 +649,9 @@ register entry comes from the code and never from a plan.
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 | `fpp.pair` | shipped | FPP plugin pairing: the dispatch entry when an operator opens a pairing, and the outcome entry when the plugin claims its token |
 | `fpp.set_brightness_ceiling` | shipped | the operator write of one FPP host's brightness ceiling, dispatching the plugin's own FPP command |
+| `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
+| `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
+| `node.enrollment.redeem` | reserved | ADR-055: a node redeemed an enrollment code and received its credentials, attributed to the principal who minted the code |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -764,6 +769,7 @@ listed because the last row was minted after the others had shipped:
 | Signal | Status | Owner |
 |---|---|---|
 | `surface.pipeline.state` | shipped | Track B seam B2 |
+| `surface.pipeline.changed_at` | shipped | Track B render confirmation (the node's last real pipeline-state transition time, RFC3339Nano UTC; render apply confirmation fences on it) |
 | `surface.pipeline.reason` | shipped | Track B seam B2 |
 | `surface.pipeline.restart_count` | shipped | Track B seam B2 |
 | `surface.pipeline.consecutive_failures` | shipped | Track B seam B2 |
@@ -807,7 +813,7 @@ divergence was reconciled below.
 | `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
 | `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
 | `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
-| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which is `node.audio.sync.rate_ppm` |
+| `node.clock.ptp.frequency_ppm` | shipped | how far the node's PTP-steered clock is being adjusted, in parts per million, read from the kernel with no mode set: the interface's hardware clock on a hardware-timestamping node, the system clock on a software-timestamping one. Not the audio interface's rate, which no build measures yet |
 | `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
 | `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
 | `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
@@ -844,8 +850,8 @@ All are on the `audio_session` resource kind, resource id the session id:
 | `audio_session.playlist.item_id` | shipped | C6/C7 |
 | `audio_session.playlist.item_index` | shipped | C6/C7 |
 | `audio_session.position_ms` | shipped | C6/C7 |
-| `audio_session.reference_position_ms` | shipped | C6/C7 |
-| `audio_session.drift_ms` | shipped | C6/C7 |
+| `audio_session.reference_position_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
+| `audio_session.drift_ms` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 | `audio_session.desired_revision` | shipped | C6/C7 |
 | `audio_session.gain.effective` | shipped | C6/C7 |
 | `audio_session.gain.ceiling` | shipped | C6/C7 |
@@ -910,7 +916,7 @@ right and never inferred from the pipeline still being up.
 | `node.audio.sync.state` | shipped | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
 | `node.audio.sync.follows` | shipped | ADR-052 decision 6: what the local clock follows, the PTP grandmaster identity and domain; blank when free-running |
 | `node.audio.sync.offset_ns` | shipped | ADR-052 decision 6: offset from the global clock; omitted when not measured |
-| `node.audio.sync.rate_ppm` | shipped | ADR-052 decision 6: measured rate adjustment in parts per million; omitted until a build measures it, never invented |
+| `node.audio.sync.rate_ppm` | withdrawn | no longer emitted; stored rows are purged when the coordinator starts. Not free to re-mint: a build that measures it re-ships this name |
 
 **Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
 software could measure program-to-LTC alignment, so it was never derived
@@ -1027,8 +1033,8 @@ naming which `Settings` struct field was refused.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.settings.state` | shipped | SM-161 (`accepted` or `substituted`; `""` from an older agent reads as `accepted`) |
-| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; not_collected, not empty, whenever state is not `substituted`) |
-| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; not_collected whenever state is not `substituted`) |
+| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; empty and current when state is `accepted`) |
+| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; empty and current when state is `accepted`) |
 
 **One more node-level signal, SM-494.** `audio.node.silence`'s own
 result reports a per-session outcome and count directly in its
@@ -1244,6 +1250,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `definition-superseded` | reserved | Lane 16, SM-290 |
 | `evidence-unavailable` | reserved | Lane 16, SM-290 |
 | `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
+| `fpp-plugin-reports-refused` | reserved | the coordinator is refusing the FPP plugin's playlist entry reports (sequence regression after a plugin reinstall or wiped state directory). Also the night readiness check name, reported as failing on any show that binds the instance, cleared by the next accepted report or the clear-observation route |
 | `assets-missing` | shipped | Lane 20.1, SM-329 |
 | `node-catalog-stale` | reserved | Lane 16, SM-285 |
 | `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
@@ -1390,6 +1397,8 @@ value, and it does not belong here.
 | `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
 | `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 | `localClockOverride` | shipped | ADR-052 decision 3: the optional `audio.node` field naming the local clock when the node cannot see it. No migration: absent means derived. In scope because `audio.node.configure` carries it to the agent, so the coordinator and the node must agree on the name |
+| `stopHold` | reserved | ADR-054: the night session record's hold set by a level 1 emergency stop (reason and time), absent when no hold stands. In scope because the API, `showmeshctl` and the UI must agree on it |
+| `nextCueId` | reserved | the optional field on the `cue.activate` activation (`pkg/cueactivation.Activation`) naming the Cue the bound playlist plays next, so a render node can open that sequence ahead and switch without drawing black. No migration: older agents ignore it. In scope because the coordinator and the agent must agree on the name across the wire |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two
@@ -1441,7 +1450,9 @@ The store schema version, bumped by migrations in
 | v41 | shipped | ADR-053 weather delay: the persisted delay state (active or not, delay or cancel night, who or what started it, when) so a coordinator restart comes back delayed |
 | v42 | shipped | ADR-053 weather delay: adds `started_by_name` to the persisted delay state, so an operator sees a name they recognise beside the principal id |
 | v43 | shipped | ADR-053 weather delay: a one-row `weather_delay_pending_decision` table, so a trigger's question and its deadline survive a coordinator restart |
-| v44+ | unallocated | free |
+| v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
+| v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
+| v46+ | unallocated | free. v46 and v47 were reserved 2026-09-28 for audio rejoin and routing work and released unused |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1580,6 +1591,7 @@ strings are registered here.
 | Warning message | Status | Owner |
 |---|---|---|
 | the coordinator's operator mismatch instruction (`fppreconcile.OperatorMismatchInstruction`, one constant shared by the raise and the clear) | reserved | pre-release notice: the bound playlist's on-disk content changed after it started; raised under id `0`, plugin name constant, C++ constant `ShowMesh_PlaylistMismatch` names the id in the plugin source |
+| `ShowMesh_ReportsRefused`: the coordinator's refusal reason followed by the sentence "Clear the playlist observation on the coordinator's Monitor screen, or run showmeshctl fpp reset-observation-sequence" | reserved | pre-release notice: the coordinator refused the plugin's last playlist entry report; raised under id `0`, cleared by the next accepted report |
 
 ## Change stream event kinds
 
@@ -1644,6 +1656,8 @@ That prefix is recorded here rather than the individual paths, because
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
 
+**Node-reported audio routing choices (2026-09-28) own `/api/v1/nodes/{nodeId}/audio/routing-choices`** and the `showmeshctl audio node choices` subcommand. The agent reports the evidence as `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes on the existing `audio.output.local` capability; no new capability id.
+
 **The long-run drift recording (2026-09-11) owns every path under
 `/api/v1/nodes/{nodeId}/audio/alignment-runs`**, and the `showmeshctl audio
 alignment-run` subcommand. Recorded on the `/api/v1/fallback-programs`
@@ -1658,6 +1672,13 @@ path on the node agent's inbound listener and one on the FPP plugin,
 [ADR-053](../decisions/ADR-053-weather-delay.md) decision 9 adds as the single
 exception to the paragraph above about that listener. That path accepts a
 signed start and nothing else, and stays out of `api/openapi.yaml`.
+
+**ADR-055 owns every path under `/api/v1/node-enrollments`**, including the
+unauthenticated `POST /api/v1/node-enrollments/redeem`, and the `showmeshctl
+node enroll` and `showmeshctl node enrollments` subcommands, on the
+`/api/v1/fallback-programs` precedent. It also mints the `node` role
+(`internal/coordinator/identity/types.go`), the machine role an enrolled
+node's API token carries.
 
 **Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
 `/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on

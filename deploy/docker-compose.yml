@@ -24,6 +24,9 @@ services:
       - ./mosquitto:/mosquitto/config:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-log:/mosquitto/log
+    # Reloads Mosquitto when passwd or acl.generated.conf changes, so a node
+    # the coordinator enrolls can connect without a broker restart.
+    command: ["sh", "/mosquitto/config/run-with-reload.sh"]
     ports:
       - "${MOSQUITTO_PORT:-1883}:1883"
     # No env_file here, deliberately, matching the reasoning already
@@ -110,12 +113,17 @@ services:
       SHOWMESH_MQTT_PASSWORD: ${SHOWMESH_MQTT_PASSWORD:-}
       SHOWMESH_DATA_DIR: ${SHOWMESH_DATA_DIR:-/var/lib/showmesh}
       SHOWMESH_LOG_LEVEL: ${SHOWMESH_LOG_LEVEL:-info}
+      # Where the coordinator writes enrolled nodes' broker logins (ADR-055).
+      SHOWMESH_BROKER_CONFIG_DIR: /showmesh/broker-config
     volumes:
       # Named volume, not a bind mount: SQLite (ADR-009) needs a
       # filesystem with normal POSIX locking semantics and consistent
       # ownership, which a host bind mount cannot guarantee portably
       # across macOS/Windows Docker Desktop and Linux hosts.
       - showmesh-data:/var/lib/showmesh
+      # The broker's config directory, read-write: node enrollment writes
+      # passwd and acl.generated.conf here. See README.md for its owner and mode.
+      - ./mosquitto:/showmesh/broker-config
     ports:
       - "${SHOWMESH_HTTP_PORT:-8080}:8080"
     depends_on:

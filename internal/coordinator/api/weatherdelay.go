@@ -682,11 +682,14 @@ func (h *handlers) weatherDelayResumeNightSession(ctx context.Context, now time.
 			result = "none"
 			return nil
 		}
+		// One resume clears a stop hold the delay superseded (ADR-054).
+		held := cur.StopHold != nil
 		if cur.Degraded {
 			result = "untouched: session " + cur.ID + " is degraded"
-			return nil
+			return clearStopHoldOnly(ctx, tx, cur, held, now)
 		}
 		next := cur
+		next.StopHold = nil
 		switch cur.State {
 		case nightStateLive, nightStateTransitionToShow:
 			payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, cur)
@@ -710,7 +713,7 @@ func (h *handlers) weatherDelayResumeNightSession(ctx context.Context, now time.
 			next.BoundaryJSON = ""
 		default:
 			result = "untouched: session " + cur.ID + " is " + cur.State
-			return nil
+			return clearStopHoldOnly(ctx, tx, cur, held, now)
 		}
 		next.StateEnteredAt = now
 		result = "session " + cur.ID + " moved from " + cur.State + " to " + next.State
@@ -726,6 +729,14 @@ func (h *handlers) weatherDelayResumeNightSession(ctx context.Context, now time.
 		}
 	}
 	return result
+}
+
+func clearStopHoldOnly(ctx context.Context, tx *store.Tx, cur store.NightSessionRecord, held bool, now time.Time) error {
+	if !held {
+		return nil
+	}
+	cur.StopHold = nil
+	return tx.UpdateNightSession(ctx, cur, now)
 }
 
 // buildWeatherDelayPlan resolves show.weatherdelay's alert config into the

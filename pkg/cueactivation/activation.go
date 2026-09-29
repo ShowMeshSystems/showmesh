@@ -74,6 +74,11 @@ type Activation struct {
 	// whenever ScheduledAtNs is set, and empty for a single-node
 	// activation, which never attempts scheduling at all.
 	UnalignedReason string `json:"unalignedReason,omitempty"`
+
+	// NextCueID names the Cue of the playlist entry after this one. A render
+	// node opens that Cue's sequence ahead and draws it only once MultiSync
+	// starts exactly that sequence. Empty when there is no next entry.
+	NextCueID string `json:"nextCueId,omitempty"`
 }
 
 // Tuple projects a's authorization fields into [cueauth.AuthorizationTuple]

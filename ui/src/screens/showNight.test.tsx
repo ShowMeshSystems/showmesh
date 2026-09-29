@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
+import { NO_AUDIO_PLAN } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
 import { ShowsNightSession } from './ShowsNightSession'
@@ -95,7 +96,7 @@ function session(overrides: Partial<NightSessionState> = {}): NightSessionState 
     transition: { state: 'recorded', reason: 'Enter-show transition completed.' },
     boundary: { state: 'none', expectedAt: null, reason: 'no boundary is armed for the current state' },
     cues: { state: 'recorded', reason: '', cues: [] },
-    backgroundAudio: { state: 'recorded', reason: 'Ducked to -18 dB.', steps: [] },
+    backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: 'Ducked to -18 dB.', steps: [], nodesNotPlaying: [] },
     degraded: false,
     attributionDegraded: false,
     authorization: { state: 'recorded', reason: '', principalName: 'erbartos', command: 'start-night', recordedAt: '2026-08-28T21:02:14Z' },
@@ -733,13 +734,44 @@ describe('Show Night', () => {
     expect(screen.queryByRole('button', { name: 'Run readiness again' })).not.toBeInTheDocument()
   })
 
+  it('names each speaker that is not playing the background music, with its reason, and clears when none are', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          plan: NO_AUDIO_PLAN,
+          state: 'recorded',
+          reason: '',
+          pinnedMaxGainDb: -18,
+          nodesNotPlaying: [
+            { nodeId: 'audio-02', reason: 'This speaker is no longer holding the background music this night started. The coordinator gives it the music again on its next check.' },
+          ],
+          steps: [],
+        },
+      }),
+    })
+    expect(screen.getByText('audio-02')).toBeInTheDocument()
+    expect(screen.getByText('Not playing the background music')).toBeInTheDocument()
+    expect(screen.getByText(/no longer holding the background music/)).toBeInTheDocument()
+  })
+
+  it('shows no absent-speaker strip while every configured speaker is playing the background music', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, nodesNotPlaying: [], steps: [] },
+      }),
+    })
+    expect(screen.queryByText('Not playing the background music')).not.toBeInTheDocument()
+  })
+
   it('renders background audio steps with their sequence, cue, kind, and state', () => {
     renderScreen({
       nightSession: session({
         backgroundAudio: {
+          plan: NO_AUDIO_PLAN,
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'background',
@@ -784,9 +816,11 @@ describe('Show Night', () => {
     renderScreen({
       nightSession: session({
         backgroundAudio: {
+          plan: NO_AUDIO_PLAN,
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'background',
@@ -824,9 +858,11 @@ describe('Show Night', () => {
     renderScreen({
       nightSession: session({
         backgroundAudio: {
+          plan: NO_AUDIO_PLAN,
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'announcement',
@@ -849,7 +885,7 @@ describe('Show Night', () => {
   it('renders the pinned background-audio ceiling distinctly from the audio.settings config value', () => {
     renderScreen({
       nightSession: session({
-        backgroundAudio: { state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [] },
+        backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [], nodesNotPlaying: [] },
       }),
     })
     expect(screen.getByText(/Pinned ceiling for this running session: -18 dB/)).toBeInTheDocument()
@@ -859,10 +895,92 @@ describe('Show Night', () => {
   it('says so honestly when the pinned ceiling is null because nothing is configured', () => {
     renderScreen({
       nightSession: session({
-        backgroundAudio: { state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [] },
+        backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [], nodesNotPlaying: [] },
       }),
     })
     expect(screen.getByText(/Pinned ceiling: none\. No background audio is configured on the pinned revision\./)).toBeInTheDocument()
+  })
+
+  it('lists the planned background audio in order before the bed has started', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          nodesNotPlaying: [],
+          state: 'recorded',
+          reason: '',
+          steps: [],
+          plan: {
+            state: 'recorded',
+            reason: '',
+            configured: true,
+            mediaPlaylist: 'porch-bed',
+            repeat: 'playlist',
+            resume: 'restart',
+            itemTransition: 'crossfade',
+            crossfadeMs: 2000,
+            nodes: ['audio-01'],
+            items: [
+              { position: 1, itemId: 'porch-bed-0', show: 'halloween', sequence: 'creaks', target: 'audio-01' },
+              { position: 2, itemId: 'porch-bed-1', show: 'halloween', sequence: 'wind', target: 'audio-01' },
+            ],
+          },
+        },
+      }),
+    })
+    const planned = screen.getByLabelText('Planned background audio items, scrollable')
+    const rows = within(planned).getAllByRole('row').slice(1)
+    expect(rows.map((row) => row.textContent)).toEqual(['1creaksaudio-01', '2windaudio-01'])
+    const summary = screen.getByText(/Media playlist porch-bed\./)
+    for (const label of ['Repeat', 'Resume', 'Transition']) expect(summary).toHaveTextContent(`${label}:`)
+    expect(summary).toHaveTextContent('2000')
+    expect(within(planned).getByRole('columnheader', { name: 'File on' })).toBeInTheDocument()
+    expect(screen.getByText('Not started')).toBeInTheDocument()
+    expect(screen.getByText(/Background audio has not started this cycle/)).toBeInTheDocument()
+  })
+
+  it('keeps the recorded steps beside the planned list once the bed has started', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          nodesNotPlaying: [],
+          state: 'recorded',
+          reason: '',
+          steps: [
+            { sequence: 'background', phase: 'resting.background', cueName: 'bed', nodeId: 'audio-01', kind: 'start', actionRevision: 3, state: 'resolved', outcome: 'confirmed', dispatchedAt: '2026-08-28T21:00:00Z', resolvedAt: '2026-08-28T21:00:01Z' },
+          ],
+          plan: {
+            state: 'recorded', reason: '', configured: true, mediaPlaylist: '', repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: null, nodes: ['audio-01'],
+            items: [{ position: 1, itemId: 'a', show: 'halloween', sequence: 'creaks', target: 'audio-01' }],
+          },
+        },
+      }),
+    })
+    expect(screen.getByLabelText('Planned background audio items, scrollable')).toBeInTheDocument()
+    expect(screen.getByLabelText('Background audio steps this cycle, scrollable')).toBeInTheDocument()
+    expect(screen.queryByText('Not started')).not.toBeInTheDocument()
+  })
+
+  it('tells a night with no background audio apart from one that has not started it', () => {
+    renderScreen({ nightSession: session({ backgroundAudio: { state: 'recorded', reason: '', steps: [], plan: NO_AUDIO_PLAN, nodesNotPlaying: [] } }) })
+    expect(screen.getByText('Not configured')).toBeInTheDocument()
+    expect(screen.queryByText('Not started')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Planned background audio items, scrollable')).not.toBeInTheDocument()
+  })
+
+  it('states why the plan is unavailable instead of showing an empty list', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          nodesNotPlaying: [],
+          state: 'recorded',
+          reason: '',
+          steps: [],
+          plan: { ...NO_AUDIO_PLAN, state: 'unknown', reason: 'Media playlist "gone" is missing. Restore it or choose another in the night definition.', configured: true, mediaPlaylist: 'gone' },
+        },
+      }),
+    })
+    expect(screen.getByText(/Media playlist "gone" is missing/)).toBeInTheDocument()
+    expect(screen.queryByText('Not configured')).not.toBeInTheDocument()
   })
 
   it('renders armedShowId, showCommitted, configRevision, admissionClosedAt, and updatedAt', () => {
@@ -1805,5 +1923,45 @@ describe('Show Night', () => {
       expect(screen.getByLabelText('Type Spring Thaw to confirm')).toHaveValue('')
       expect(screen.getByRole('button', { name: 'Delete definition' })).toBeDisabled()
     })
+  })
+})
+
+describe('ShowNight stop hold', () => {
+  afterEach(cleanup)
+  const nightCommandSession = {
+    serverTime: '2026-09-23T20:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['night:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+  const hold = { reason: 'The show was stopped with Stop.', at: '2026-09-23T20:05:00Z', principal: 'bench' }
+
+  it('disables Resume with a hint when no hold stands', () => {
+    renderScreen({ nightSession: session(), session: nightCommandSession })
+    const resume = screen.getByRole('button', { name: 'Resume' })
+    expect(resume).toBeDisabled()
+    expect(resume).toHaveAttribute('title', 'The show is not stopped, so there is nothing to resume.')
+  })
+
+  it('sends resume-show while held and shows the hold on the status line', async () => {
+    const sent: string[] = []
+    stubs.dispatchNightCommand = (...args: never[]) => {
+      sent.push((args as unknown[])[0] as string)
+      return Promise.resolve(commandResponse('resume-show'))
+    }
+    renderScreen({ nightSession: session({ stopHold: hold }), session: nightCommandSession })
+    expect(screen.getByText('Stopped')).toBeInTheDocument()
+    expect(screen.getByText(/Nothing starts until Resume/)).toBeInTheDocument()
+    const resume = screen.getByRole('button', { name: 'Resume' })
+    expect(resume).toBeEnabled()
+    fireEvent.click(resume)
+    const confirm = screen.getByRole('dialog', { name: 'Start the show playlist from its first song now?' })
+    expect(sent).toEqual([])
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Resume' }))
+    await waitFor(() => expect(sent).toEqual(['resume-show']))
   })
 })

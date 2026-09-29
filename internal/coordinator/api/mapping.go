@@ -727,6 +727,12 @@ func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipati
 			}
 		}
 	}
+	if fv.PlaylistObservationRefused != nil {
+		inst.PlaylistObservationRefused = &v1.FPPPlaylistObservationRefused{
+			Reason:    fv.PlaylistObservationRefused.Reason,
+			RefusedAt: formatTime(fv.PlaylistObservationRefused.RefusedAt),
+		}
+	}
 	return inst
 }
 

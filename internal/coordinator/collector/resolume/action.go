@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/sendsignal"
 )
 
 // TRACK-D-D3-SPEC.md §2's seven-action vocabulary: the registry, the
@@ -552,6 +554,7 @@ func (d *ActionDispatcher) writePhase(ctx context.Context, w dispatchWindow, nam
 	dispatchedAt := d.now()
 	err := fn(wctx)
 	if err == nil {
+		sendsignal.Sent(ctx)
 		return dispatchedAt, nil
 	}
 	// A write that ran out of budget may or may not have reached Arena, so it

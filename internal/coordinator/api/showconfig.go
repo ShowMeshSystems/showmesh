@@ -820,6 +820,13 @@ func checkRevisionPrecondition(kind, id string, precondition revisionPreconditio
 // its own, only to run inside this existing closure rather than before
 // it.
 func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac authContext, kind, id, payloadJSON string, precondition revisionPrecondition, auditParams map[string]any) (store.ConfigRevisionRecord, int64, error) {
+	return h.writeShowConfigRevisionChecked(r, now, ac, kind, id, payloadJSON, precondition, auditParams, nil)
+}
+
+// writeShowConfigRevisionChecked is writeShowConfigRevision with a check
+// that runs inside the write's own transaction; an error from it aborts the
+// write.
+func (h *handlers) writeShowConfigRevisionChecked(r *http.Request, now time.Time, ac authContext, kind, id, payloadJSON string, precondition revisionPrecondition, auditParams map[string]any, check func(ctx context.Context, tx *store.Tx) error) (store.ConfigRevisionRecord, int64, error) {
 	var (
 		activated      store.ConfigRevisionRecord
 		nextRevisionNo int64
@@ -845,6 +852,11 @@ func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac au
 
 		if err := checkRevisionPrecondition(kind, id, precondition, currentRevision); err != nil {
 			return identity.AuditEntry{}, err
+		}
+		if check != nil {
+			if err := check(ctx, tx); err != nil {
+				return identity.AuditEntry{}, err
+			}
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{

@@ -68,6 +68,8 @@ func cmdNight(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdNightPowerDown(rest, stdout, stderr, clock)
 	case "end-session":
 		return cmdNightEndSession(rest, stdout, stderr, clock)
+	case "resume-show":
+		return cmdNightResumeShow(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl night: unknown subcommand %q\n\n", sub)
 		printNightUsage(stderr)
@@ -119,6 +121,8 @@ writes require night:command):
   end-session       PROVISIONAL operator recovery: abandon the current
                      session, reach stopped, launch nothing (the only
                      command that runs against a degraded session)
+  resume-show       after Stop, start the show playlist from its first
+                     song (refused when the show is not stopped)
 
 Run "showmeshctl night <subcommand> --help" for flags specific to one
 subcommand.

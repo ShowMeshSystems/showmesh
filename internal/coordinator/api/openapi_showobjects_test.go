@@ -105,7 +105,7 @@ func TestOpenAPIShowObjectsResponsesMatchRealResponses(t *testing.T) {
 		"show": "halloween-2026",
 		"name": "Porch",
 		"node": "render-01",
-		"channelRange": {"startChannel": 1, "channelCount": 8},
+		"channelRange": {"startChannel": 3601, "channelCount": 8},
 		"geometry": {"width": 2, "height": 1, "pixelFormat": "rgbw"},
 		"frameRate": 30,
 		"output": {"transport": "hdmi", "hdmi": {"display": "HDMI-1"}}

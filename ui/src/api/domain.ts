@@ -86,6 +86,15 @@ export type TokensResponse = components['schemas']['TokensResponse']
 export type IssueTokenRequest = components['schemas']['IssueTokenRequest']
 export type IssueTokenResponse = components['schemas']['IssueTokenResponse']
 
+// ADR-055: node enrollment codes. CreateNodeEnrollmentResponse carries the
+// code itself, the only place it ever appears; NodeEnrollment (as listed)
+// never does.
+export type NodeEnrollment = components['schemas']['NodeEnrollment']
+export type NodeEnrollmentsResponse = components['schemas']['NodeEnrollmentsResponse']
+export type NodeEnrollmentResponse = components['schemas']['NodeEnrollmentResponse']
+export type CreateNodeEnrollmentRequest = components['schemas']['CreateNodeEnrollmentRequest']
+export type CreateNodeEnrollmentResponse = components['schemas']['CreateNodeEnrollmentResponse']
+
 // Step 7 seam A (RES-008 D1): the configuration write surface's shapes,
 // aliased for the identical reason as every type above. Not part of
 // `Model` — see store.ts's "Step 7 seam A" section header comment for why
@@ -235,6 +244,8 @@ export type ConfigAudioOutputLatency = components['schemas']['ConfigAudioOutputL
 export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
 export type AudioNodeSummary = components['schemas']['AudioNodeSummary']
 export type AudioNodeListResponse = components['schemas']['AudioNodeListResponse']
+export type AudioRoutingChoicesResponse = components['schemas']['AudioRoutingChoicesResponse']
+export type AudioRoutingRouteChoice = components['schemas']['AudioRoutingRouteChoice']
 
 // Long-run program-to-LTC drift recordings (audio alignment runs), aliased
 // for the identical reason as every type above. Not a config kind: these
@@ -344,6 +355,7 @@ export type ActionInvocationResult = components['schemas']['ActionInvocationResu
 // automatic FPP-observation-driven activation loop.
 export type CueActivateResponse = components['schemas']['CueActivateResponse']
 export type CueActivationNodeOutcome = components['schemas']['CueActivationNodeOutcome']
+export type CueActionOutcome = components['schemas']['CueActionOutcome']
 // The full stored composition id map (decks, layer groups, layers,
 // columns, clips, persistent clips) — distinct from
 // ResolumeCompositionSummary above, which is the display-only subset.
@@ -435,6 +447,7 @@ export type NightCommandName =
   | 'fade-out-night'
   | 'power-down-presentation'
   | 'end-session'
+  | 'resume-show'
 
 // Runner-neutral current playback projection. Unlike macroRuns, these are
 // the coordinator's authoritative FPP and showmesh-audio runs, including the
@@ -502,6 +515,7 @@ export type FPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlayl
 export type FPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 export type FPPPlaylistDefinitionEntry = components['schemas']['FPPPlaylistDefinitionEntry']
 export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+export type FPPDefinitionRepublishResponse = components['schemas']['FPPDefinitionRepublishResponse']
 
 // TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
 // stored playlist-entry observation an operator reviews before clearing

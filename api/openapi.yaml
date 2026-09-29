@@ -779,12 +779,12 @@ paths:
       description: >-
         Behind `principal:write`, which is admin-only: opening a pairing
         creates or reuses the machine principal
-        `fpp-plugin-{instanceId}` with the `scheduler` role and mints it a
-        fresh API token. That token is never in this response and is never
-        shown to an operator - it is held in memory for ten minutes and
-        handed only to a plugin that presents the secret this code was
-        derived from. An earlier open pairing for the same instance is
-        replaced.
+        `fpp-plugin-{instanceId}` with the `scheduler` role and holds the
+        code in memory for ten minutes. No token exists yet: one is minted
+        only when a plugin presents the secret this code was derived from,
+        and it is never shown to an operator. An earlier open pairing for
+        the same instance is replaced. A code already waiting on a
+        different player is a `409`.
 
         A code that is not in `XXXX-XXXX` form is a `400`.
       requestBody:
@@ -824,9 +824,10 @@ paths:
         "409":
           description: >-
             The account this plugin signs in as exists but is switched off,
-            or is no longer a machine account with the `scheduler` role. A
-            pairing never re-credentials it: `detail` names the account and
-            what to do. `type` is
+            or is no longer a machine account with the `scheduler` role, or
+            the same code is already waiting on a different player. A
+            pairing never re-credentials such an account: `detail` names
+            the account or player and what to do. `type` is
             `https://showmesh.dev/problems/conflict`.
           headers:
             ShowMesh-API-Version:
@@ -2178,6 +2179,56 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/routing-choices:
+    get:
+      operationId: getAudioRoutingChoices
+      summary: The program and LTC choices a node's own reported outputs support
+      description: >-
+        Requires `config:write`. Resolved live from the node's current
+        `audio.output.local` advertisement (its `outputs`,
+        `discoveryComplete` and `discoveryIncompleteReason` attributes)
+        and never stored. `routes` is non-empty only when `discovery` is
+        `available`: a node that is offline (`stale`), reported an
+        unreadable list (`failed`), checked only some outputs (`partial`),
+        predates channel reporting (`not_reported`) or reports no outputs
+        (`absent`) offers no choices, and `reason` says why. Channels are
+        offered only up to what the node proved: `channelBasis`
+        `inventory` is the full count its PipeWire graph reports,
+        `atLeast` is a floor an ALSA probe achieved. LTC choices are on
+        the same output as the program group and exclude its channels,
+        each exclusion listed in `conflicts`. `manualEntry` says whether
+        hand-typed channels are still accepted by PUT
+        /config/audio.node/{id}. `current` reports the stored placement
+        against these choices and never changes it. `clock.verification`
+        is `same_interface` when LTC leaves the program interface,
+        `operator_confirmed` when a local clock override is stored, and
+        `no_ltc` on a program-only node.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioRoutingChoicesResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/audio/alignment-runs:
     parameters:
       - name: nodeId
@@ -2897,6 +2948,179 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /node-enrollments:
+    post:
+      operationId: createNodeEnrollment
+      summary: Mint a one-time enrollment code for a node (ADR-055 decision 4)
+      description: >-
+        Requires `node:enroll`. Validates `nodeId` with the node ID rule
+        and refuses `coordinator`, `fpp`, `healthcheck` and `observer`.
+        Refused with `409` when the node is already enrolled (a code for
+        it was redeemed before, or on the built-in broker its login is
+        already in the password file) unless `reenroll` is true. Minting a
+        code cancels the node's earlier unused code. On the built-in
+        broker, refused with `503` when the coordinator cannot write the
+        broker's login files. The response is the only place the code
+        ever appears. A cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNodeEnrollmentRequest"
+      responses:
+        "201":
+          description: Created. Carries the code, once.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateNodeEnrollmentResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+    get:
+      operationId: listNodeEnrollments
+      summary: List every enrollment code, never the code itself (ADR-055)
+      description: >-
+        Requires `node:enroll`, whether or not reads are otherwise open.
+        Newest first.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeEnrollmentsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+  /node-enrollments/{id}:
+    delete:
+      operationId: cancelNodeEnrollment
+      summary: Cancel a pending enrollment code (ADR-055)
+      description: >-
+        Requires `node:enroll`. Refused with `409` when the code is not
+        pending (already redeemed, expired or cancelled). A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK. The cancelled code.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeEnrollmentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
+  /node-enrollments/redeem:
+    post:
+      operationId: redeemNodeEnrollment
+      summary: Exchange an enrollment code for the node's credentials (ADR-055 decision 5)
+      description: >-
+        Takes no principal and no same-origin check: the code is the
+        credential for this one call. It is one of two writes this API
+        accepts without a principal; the other is the FPP pairing claim. The code is accepted in any case,
+        with or without its hyphen. Returns, once, everything the node's
+        `/etc/showmesh/agent.env` needs. On the built-in broker the
+        coordinator writes the node's login into the broker's password
+        file and generated access list; on an external broker it returns
+        the shared login it was configured with, or empty strings. A
+        re-enrollment code replaces the node's broker password and revokes
+        every token of its previous enrollment. Every redemption is
+        audited as `node.enrollment.redeem`, attributed to the principal
+        who minted the code. Failed redemptions (unknown, expired, used or
+        cancelled codes) are limited to 5 a minute from one client address
+        and 30 an hour overall, then refused with `429`; a successful
+        redemption is not counted. When any step fails the coordinator
+        undoes what it did and the code stays pending.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemNodeEnrollmentRequest"
+      responses:
+        "200":
+          description: OK. The node's credentials, once.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedeemNodeEnrollmentResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          description: >-
+            The code expired, was already used, or was cancelled. `detail`
+            says which, and how to get a new one.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/NodeEnrollmentUnavailable"
   /audit:
     get:
       operationId: listAudit
@@ -4879,8 +5103,12 @@ paths:
         `programRoute` and `ltcRoute` must also name the SAME route, refused
         at decode time before evidence is even consulted. `programChannels`
         (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based,
-        never a member of `programChannels`) are checked structurally, not
-        against evidence. `localClockOverride` is optional and names this
+        never a member of `programChannels`) are checked structurally. When
+        the node is online and reports the full channel count of
+        `programRoute` (`channelBasis` `inventory` in its `outputs`), a
+        channel beyond that count is refused with `400`; a floor
+        (`atLeast`) or an older node that reports no channels never
+        refuses, so manual entry stays available. `localClockOverride` is optional and names this
         node's local clock explicitly; absent, the local clock is the
         interface `programRoute` names. Optionally
         carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
@@ -6151,9 +6379,15 @@ paths:
         see `result.noInstancesConfigured` for the FPP-specific
         zero-instance signal), and a failure to read this level's own
         follow-up configuration degrades to no follow-ups (see
-        `result.followUpConfigError`) rather than aborting the stop. No
-        night-session interaction of any kind - see
-        `/emergency-stop/stop-power-down` for level 2.
+        `result.followUpConfigError`) rather than aborting the stop. If a
+        night session is active (any state but `inactive` or `stopped`),
+        the stop first sets that session's `stopHold` (ADR-054): the night
+        loop and the cue activation loop then start nothing until the
+        `resume-show` night command, which starts the show playlist from
+        its first entry. `result.nightSession` reports that step, with
+        `present` `false` when no session was active; a failure is
+        reported in `result.nightSession.error` and never aborts the
+        stop. See `/emergency-stop/stop-power-down` for level 2.
       requestBody:
         required: true
         content:
@@ -7213,9 +7447,12 @@ paths:
         defaults a transport. This is a FULL REPLACEMENT: every field is
         required on every write (this payload has no optional/defaulted
         key), so the request and response share the same
-        ConfigShowSurface shape. A second surface assigned to the same
-        node is accepted (ADR-026's `N=1` is a scope limit on the
-        renderer, not a schema rule). Optionally carries
+        ConfigShowSurface shape. A second surface on the same show and node
+        is accepted unless its channel range overlaps another surface's
+        (refused on `channelRange`) or both use NDI with the same
+        `sourceName` (refused on `output.ndi.sourceName`); both are `400`
+        with the operator message in `detail`. Surfaces in different
+        shows may share channels and NDI names. Optionally carries
         `If-Match`/`If-None-Match` (opt-in; see those parameters): refused
         with `409` when the precondition names a revision that is no
         longer current.
@@ -8516,7 +8753,19 @@ paths:
         (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`,
         `request-final-show`, `fade-out-night`, `power-down-presentation`)
         plus `end-session`, a PROVISIONAL operator-recovery action not yet
-        part of ADR-038's own closed vocabulary (owner decision pending).
+        part of ADR-038's own closed vocabulary (owner decision pending),
+        and `resume-show` (ADR-054). `resume-show` clears the `stopHold` a
+        level 1 emergency stop set and moves the session to
+        `transition-to-show` with its launch due immediately, so the night
+        loop starts the show playlist from its first entry through the
+        same launch path `start-night` uses. It never returns to resting
+        first. It is refused with `409` when no hold stands
+        (`night-state-rejected`), while a weather delay is active, while
+        the session is degraded, and in `preparing`, `fading-out` and
+        `end-of-night-resting`, where no show can start. It is also refused
+        with `409` in `preshow`, where `start-night` has not run; in
+        `preshow`, `start-night` clears the hold when it runs. It is audited
+        as `show.night.resume_show` and takes no `interlockOverrides`.
         Answers `202`, never `200`: accepted and applied, or recognized as
         an idempotent duplicate - this layer holds no downstream
         confirmation loop.
@@ -8606,6 +8855,7 @@ paths:
               - fade-out-night
               - power-down-presentation
               - end-session
+              - resume-show
       requestBody:
         required: false
         content:
@@ -8654,15 +8904,16 @@ paths:
       operationId: claimFPPPairing
       summary: Finish pairing, presenting the plugin's own secret
       description: >-
-        The only unauthenticated write route in this API, and deliberately
-        so: the secret in the body IS the credential. A plugin that holds
+        One of two writes this API accepts without a principal (the other
+        is node enrollment redeem), and deliberately so: the secret in the body IS the credential. A plugin that holds
         it is the plugin the operator started a pairing for, and it has
         nothing else it could present, because it has no token yet. The
         coordinator derives the displayed code from the secret the same
         way the plugin did; it never accepts a code here.
 
         A successful claim consumes the pairing (it is used once) and
-        returns the token minted when the operator opened it. Every
+        mints the plugin's token, which does not expire, returns it, and
+        revokes every other token the plugin's principal held before. Every
         refusal - a wrong secret, an expired pairing, one that was never
         opened - is the identical `404` with the identical text, so an
         unauthenticated caller learns nothing from the difference. At most
@@ -10248,6 +10499,19 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    NodeEnrollmentUnavailable:
+      description: >-
+        The coordinator cannot hand out a node's credentials right now:
+        node enrollment is not set up, or on the built-in broker the
+        coordinator cannot read or write the broker's login files.
+        `detail` says what to fix. A code involved stays valid.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     TooManyRequests:
       description: >-
         `POST /session`'s login concurrency bound was exceeded (ADR-024
@@ -10945,7 +11209,7 @@ components:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
          instanceUuidChange, duplicateInstanceUuidEndpointIds,
-         showParticipation]
+         showParticipation, playlistObservationRefused]
       properties:
         instanceId:
           type: string
@@ -11002,6 +11266,33 @@ components:
             duplicate.
           items:
             type: string
+        playlistObservationRefused:
+          oneOf:
+            - $ref: "#/components/schemas/FPPPlaylistObservationRefused"
+            - type: "null"
+          description: >-
+            Non-null exactly when this instance's playlist-entry reports
+            are currently being refused (a sequence regression, most often
+            a plugin reinstall or a wiped state directory). Cleared by
+            this instance's next accepted report or by
+            DELETE .../playlist-entry-observations/{instanceUuid}.
+    FPPPlaylistObservationRefused:
+      type: object
+      description: >-
+        The operator-facing reason this instance's playlist-entry reports
+        are currently being refused, and when it was recorded.
+      required: [reason, refusedAt]
+      properties:
+        reason:
+          type: string
+        refusedAt:
+          type: string
+          format: date-time
+          description: >-
+            The most recent refusal's time. A retried refusal while the
+            condition is already recorded overwrites this to the newer
+            time, so this is never the first refusal's time once more
+            than one has occurred.
     FPPInstanceUUIDChange:
       type: object
       description: >-
@@ -13544,7 +13835,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
         disabled:
           type: boolean
         hasPassword:
@@ -13595,7 +13886,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
         password:
           type: string
     SetPrincipalRoleRequest:
@@ -13608,7 +13899,7 @@ components:
       properties:
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery]
+          enum: [viewer, operator, admin, scheduler, recovery, node]
     SetPrincipalPasswordRequest:
       type: object
       description: >-
@@ -15866,8 +16157,10 @@ components:
     EmergencyStopNightSessionOutcome:
       type: object
       description: >-
-        What, if anything, happened to the active night session as level
-        stop-power-down's or hard-stop's own night-session component.
+        What, if anything, happened to the active night session as the
+        stop level's own night-session component: the stop hold for level
+        stop (ADR-054), the forced shutdown for stop-power-down, the ended
+        session for hard-stop.
         present is false when no night session was active - a real, valid
         outcome, not an error. error is non-empty exactly when this
         component could not be attempted or did not complete; the stop
@@ -16431,6 +16724,134 @@ components:
           type: [string, "null"]
         source:
           type: string
+    AudioRoutingChoicesResponse:
+      type: object
+      description: The body of GET /nodes/{nodeId}/audio/routing-choices.
+      required: [serverTime, nodeId, discovery, manualEntry, ltc, routes]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodeId:
+          type: string
+        discovery:
+          type: string
+          enum: [available, partial, stale, failed, not_reported, absent]
+        reason:
+          type: string
+          description: Why no choices are offered. Absent when `discovery` is `available`.
+        discoveryDetail:
+          type: string
+          description: >-
+            The node's own reason a `partial` discovery was partial, such as
+            an enumeration error. Diagnostic text, not operator copy.
+        manualEntry:
+          type: object
+          required: [allowed]
+          properties:
+            allowed:
+              type: boolean
+            reason:
+              type: string
+        ltc:
+          type: object
+          required: [available]
+          properties:
+            available:
+              type: boolean
+            reason:
+              type: string
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioRoutingRouteChoice"
+        current:
+          $ref: "#/components/schemas/AudioRoutingCurrent"
+        clock:
+          $ref: "#/components/schemas/AudioRoutingClock"
+    AudioRoutingRouteChoice:
+      type: object
+      description: One output the node reports and the program groups it offers.
+      required: [route, interface, source, channels, channelBasis, ltcCapable, programGroups]
+      properties:
+        route:
+          type: string
+        interface:
+          type: string
+          description: The interface the route leaves through, which is its local clock.
+        source:
+          type: string
+          enum: [alsa, pipewire]
+        channels:
+          type: integer
+          minimum: 1
+        channelBasis:
+          type: string
+          enum: [inventory, atLeast]
+        ltcCapable:
+          type: boolean
+        ltcReason:
+          type: string
+          description: Why no LTC channel is offered on this route, when none is.
+        programGroups:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioProgramGroup"
+    AudioProgramGroup:
+      type: object
+      required: [channels, ltcChannels, conflicts]
+      properties:
+        channels:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+        ltcChannels:
+          type: array
+          description: Channels on the same route free to carry LTC beside this group.
+          items:
+            type: integer
+            minimum: 1
+        conflicts:
+          type: array
+          items:
+            type: object
+            required: [channel, reason]
+            properties:
+              channel:
+                type: integer
+                minimum: 1
+              reason:
+                type: string
+    AudioRoutingCurrent:
+      type: object
+      description: The stored audio.node placement, reported against the choices and never changed by them.
+      required: [programRoute, programChannels, offered]
+      properties:
+        programRoute:
+          type: string
+        programChannels:
+          type: array
+          items:
+            type: integer
+        ltcChannel:
+          type: integer
+        offered:
+          type: boolean
+        reason:
+          type: string
+    AudioRoutingClock:
+      type: object
+      required: [localClock, source, verification]
+      properties:
+        localClock:
+          type: string
+        source:
+          type: string
+          enum: [derived, override]
+        verification:
+          type: string
+          enum: [same_interface, operator_confirmed, no_ltc]
     ConfigNodeClock:
       type: object
       description: >-
@@ -16520,6 +16941,143 @@ components:
         createdByPrincipalName:
           type: [string, "null"]
         source:
+          type: string
+    CreateNodeEnrollmentRequest:
+      type: object
+      description: The body of POST /node-enrollments.
+      required: [nodeId]
+      properties:
+        nodeId:
+          type: string
+        reenroll:
+          type: boolean
+          default: false
+        expiresInSeconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 900
+    CreateNodeEnrollmentResponse:
+      type: object
+      description: >-
+        The 201 body of POST /node-enrollments. `code` appears here and
+        nowhere else, as XXXX-XXXX in Crockford base32. `coordinatorUrl`
+        is `SHOWMESH_PUBLIC_URL` when the coordinator has one, and empty
+        otherwise; a client then gives the node the address it used
+        itself.
+      required: [serverTime, id, nodeId, code, reenroll, expiresAt, coordinatorUrl]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        id:
+          type: string
+        nodeId:
+          type: string
+        code:
+          type: string
+          pattern: "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+        reenroll:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
+        coordinatorUrl:
+          type: string
+    NodeEnrollment:
+      type: object
+      description: One enrollment code as listed. Never carries the code.
+      required: [id, nodeId, reenroll, createdBy, createdAt, expiresAt, state, redeemedAt]
+      properties:
+        id:
+          type: string
+        nodeId:
+          type: string
+        reenroll:
+          type: boolean
+        createdBy:
+          type: string
+          description: The name of the principal who minted the code.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [pending, redeemed, expired, cancelled]
+        redeemedAt:
+          type: [string, "null"]
+          format: date-time
+    NodeEnrollmentsResponse:
+      type: object
+      description: The body of GET /node-enrollments.
+      required: [serverTime, enrollments]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        enrollments:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeEnrollment"
+    NodeEnrollmentResponse:
+      type: object
+      description: The body of DELETE /node-enrollments/{id}.
+      required: [serverTime, enrollment]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        enrollment:
+          $ref: "#/components/schemas/NodeEnrollment"
+    RedeemNodeEnrollmentRequest:
+      type: object
+      description: >-
+        The body of POST /node-enrollments/redeem. `hostname` and `arch`
+        are recorded with the redemption and change nothing else.
+      required: [code]
+      properties:
+        code:
+          type: string
+        hostname:
+          type: string
+        arch:
+          type: string
+    RedeemNodeEnrollmentResponse:
+      type: object
+      description: >-
+        The 200 body of POST /node-enrollments/redeem, returned once.
+        `brokerUrl` is the broker as the node reaches it:
+        `SHOWMESH_NODE_BROKER_URL` when set, otherwise
+        `tcp://<the host this request arrived on>:1883`. `coordinatorUrl`
+        is `SHOWMESH_PUBLIC_URL` when set, otherwise the scheme and host
+        this request arrived on. `mqttUsername` and `mqttPassword` are
+        empty strings on an external broker that allows anonymous
+        clients. `apiToken` belongs to a new machine principal named
+        `<nodeId> agent` holding the `node` role. `coordinatorPublicKey`
+        is the standard base64 of the coordinator's raw 32-byte Ed25519
+        public key, the content of the file
+        `SHOWMESH_WEATHERDELAY_COORDINATOR_PUBLIC_KEY_PATH` names.
+      required: [serverTime, nodeId, brokerUrl, mqttUsername, mqttPassword, apiToken, coordinatorUrl, coordinatorPublicKey]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodeId:
+          type: string
+        brokerUrl:
+          type: string
+        mqttUsername:
+          type: string
+        mqttPassword:
+          type: string
+        apiToken:
+          type: string
+        coordinatorUrl:
+          type: string
+        coordinatorPublicKey:
           type: string
     Problem:
       type: object
@@ -16716,6 +17274,8 @@ components:
             - https://showmesh.dev/problems/observation-entry-key-mismatch
             - https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed
             - https://showmesh.dev/problems/asset-resync-publish-failed
+            - https://showmesh.dev/problems/enrollment-code-gone
+            - https://showmesh.dev/problems/node-enrollment-unavailable
         title:
           type: string
         status:
@@ -17681,7 +18241,7 @@ components:
         The body of POST /cues/{id}/activate (status 202 - accepted, and
         each node's own outcome below is this coordinator's own evidence,
         never a claim of success).
-      required: [serverTime, cueId, nodes, aligned]
+      required: [serverTime, cueId, nodes, actions, aligned]
       properties:
         serverTime:
           type: string
@@ -17698,6 +18258,16 @@ components:
             for this Cue.
           items:
             $ref: "#/components/schemas/CueActivationNodeOutcome"
+        actions:
+          type: array
+          description: >-
+            One outcome per show action in the Cue's outputs.actions, in the
+            Cue's order, as known when this response is sent. An action still
+            waiting for its confirmation reads as unconfirmed. Empty when the
+            Cue declares no actions. An action failure never changes the node
+            outcomes above.
+          items:
+            $ref: "#/components/schemas/CueActionOutcome"
         aligned:
           type: boolean
           description: >-
@@ -17730,6 +18300,29 @@ components:
             1.79e18 nanoseconds, past IEEE-754 double's exact integer
             range (9.007e15): a client parsing this body with a stock
             JSON parser ROUNDS it. Parse it as an exact integer.
+    CueActionOutcome:
+      type: object
+      description: >-
+        One show action a Cue activation fired, in the outcome vocabulary
+        POST /actions/{id}/invocations reports. The action is recorded as
+        its own command and audited as action.invoke:<integration>, with
+        the Cue id and activationKey, a hash identifying the activation, in
+        the audit params. Once every action resolves, a cue.activate outcome
+        audit entry targeting cue:<cueId> carries the final outcomes in its
+        actions param.
+      required: [actionId, outcome]
+      properties:
+        actionId:
+          type: string
+        label:
+          type: string
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed"]
+        outcomeState:
+          type: string
+        outcomeReason:
+          type: string
     CueActivationNodeOutcome:
       type: object
       description: >-
@@ -19049,6 +19642,24 @@ components:
           $ref: "#/components/schemas/ConfigShowCueLTCOutput"
         announcement:
           $ref: "#/components/schemas/ConfigShowCueAnnouncementOutput"
+        actions:
+          type: array
+          description: >-
+            Ordered show.action ids the coordinator fires once per
+            activation of this Cue. Each is sent once the one before it is
+            sent, and the node dispatch waits up to 2 seconds for all of
+            them to be sent; an action sent after that is reported late.
+            Each id must name a show.action with an active revision in this
+            Cue's show; an unknown id is refused as an unknown reference and
+            another show's action as a cross-show reference. Duplicates are
+            refused. An empty array is the same as absent and is omitted on
+            read. A Cue whose only output is actions is refused: an
+            activation needs a render, audio, LTC or announcement output.
+            Actions claim no node resource.
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
     ConfigShowCue:
       type: object
       description: >-
@@ -20244,6 +20855,14 @@ components:
         threshold, and `not_verifiable` whenever this coordinator holds no
         current measurement for that node. A drifting show still runs;
         this is a warning, never a reason `outcome` blocks `start-night`.
+
+        It also checks `fpp-plugin-reports-refused`: one fleet-wide check,
+        not one per instance, that fails when any FPP instance this
+        session binds is currently refusing the plugin's playlist-entry
+        reports (a sequence regression, most often a plugin reinstall or a
+        wiped state directory), naming the reason in `reason`. Cleared by
+        the referenced instance's next accepted report or by
+        DELETE .../playlist-entry-observations/{instanceUuid}.
       required: [name, state, reason]
       properties:
         name:
@@ -20450,15 +21069,80 @@ components:
         resolvedAt:
           type: [string, "null"]
           format: date-time
+    NightBackgroundAudioPlanItem:
+      type: object
+      required: [position, itemId, show, sequence, target]
+      properties:
+        position:
+          type: integer
+          description: Playing order, counted from 1.
+        itemId:
+          type: string
+        show:
+          type: string
+        sequence:
+          type: string
+        target:
+          type: string
+          description: The audio node that holds this item's file.
+    NightBackgroundAudioPlan:
+      type: object
+      description: >-
+        The background audio the session will play, read from its own
+        pinned configuration revision so it never reports another
+        revision's items. It is available before the bed starts and is not
+        replaced by the step log. `state` "recorded" with `configured`
+        false means the revision has no background audio; `configured`
+        true with no steps means it is set up but has not started this
+        cycle. `state` "unknown" carries the `reason` the plan could not
+        be read, for example a missing media playlist.
+      required: [state, reason, configured, mediaPlaylist, repeat, resume,
+                 itemTransition, crossfadeMs, nodes, items]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown]
+        reason:
+          type: string
+        configured:
+          type: boolean
+        mediaPlaylist:
+          type: string
+          description: >-
+            The media playlist the bed plays, or empty when the pinned
+            revision lists the items inline.
+        repeat:
+          type: string
+          enum: ["", none, item, playlist]
+        resume:
+          type: string
+          enum: ["", resume, restart]
+        itemTransition:
+          type: string
+          enum: ["", sequential, gapless, crossfade]
+        crossfadeMs:
+          type: [integer, "null"]
+        nodes:
+          type: array
+          description: The audio nodes the bed will play on.
+          items:
+            type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NightBackgroundAudioPlanItem"
     NightBackgroundAudio:
       type: object
       description: >-
         resting.backgroundAudio's own durable step log for the current
         cycle, or the stated reason it could not be read. Empty `steps`
-        with `state` "recorded" means backgroundAudio is not configured
-        at all, or has never been started this cycle.
-      required: [state, reason, steps]
+        with `state` "recorded" means nothing has been played this cycle;
+        `plan.configured` says whether the session has any background
+        audio to play.
+      required: [state, reason, steps, plan, nodesNotPlaying]
       properties:
+        plan:
+          $ref: "#/components/schemas/NightBackgroundAudioPlan"
         state:
           type: string
           enum: [recorded, unknown, not_configured, not_available]
@@ -20474,6 +21158,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NightBackgroundAudioStep"
+        nodesNotPlaying:
+          type: array
+          description: >-
+            Every audio node the background bed is configured to play on
+            that is NOT playing it right now, read from each node's own
+            current audio report rather than from what the coordinator
+            last dispatched. A node reporting the bed session as playing
+            never appears, so the list clears itself once a node is back.
+            Only nodes this session has actually dispatched a bed step to
+            are considered, and a node this controller itself paused,
+            stopped or faded down never appears: it is not playing because
+            it was told not to. Always an array, and empty outside the
+            states the bed is meant to be audible in (preshow, the resting
+            gap between shows, and the resting state at the end of the
+            night) and on the historical by-id read, none of which has a
+            "right now" to answer about.
+          items:
+            $ref: "#/components/schemas/NightBedNodeNotPlaying"
         pinnedMaxGainDb:
           type: [number, "null"]
           description: >-
@@ -20498,6 +21200,22 @@ components:
             pinned ceiling, historical by construction, so it is
             populated regardless of state, including preparing and
             stopped.
+    NightBedNodeNotPlaying:
+      type: object
+      description: >-
+        One audio node the background bed is configured for and which is
+        not currently playing it, with an operator-facing reason. The
+        reason never collapses the cases it can tell apart: the node is
+        not reporting its audio at all, it was too busy to report this
+        session fresh, it is reporting and holds no bed session, it holds
+        one playback is no longer running in, or it holds one paused. The
+        reason says the coordinator will act only where it actually does.
+      required: [nodeId, reason]
+      properties:
+        nodeId:
+          type: string
+        reason:
+          type: string
     NightSessionState:
       type: object
       description: >-
@@ -20576,6 +21294,8 @@ components:
             "not recorded" entry.
           items:
             $ref: "#/components/schemas/NightCycleOutcome"
+        stopHold:
+          $ref: "#/components/schemas/NightStopHold"
         degraded:
           type: boolean
         degradedReason:
@@ -20592,6 +21312,24 @@ components:
         updatedAt:
           type: string
           format: date-time
+    NightStopHold:
+      type: object
+      description: >-
+        Present while a level 1 emergency stop holds the night session
+        (ADR-054): the night loop starts no playlist, background audio,
+        cue or announcement until `resume-show`. Absent when no hold
+        stands. A hard stop, power-down or end-session ends the session
+        and the hold with it; a weather delay resume clears it too.
+      required: [reason, at]
+      properties:
+        reason:
+          type: string
+        at:
+          type: string
+          format: date-time
+        principal:
+          type: string
+          description: The name of the principal who pressed Stop.
     NightCycleOutcome:
       type: object
       description: >-

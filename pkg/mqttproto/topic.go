@@ -148,8 +148,15 @@ func ValidateNodeID(id string) error {
 		return fmt.Errorf("%w: %q: must be 1-64 characters of [a-z0-9-], not starting or ending with '-'",
 			ErrInvalidNodeID, id)
 	}
+	if IsCommandNameNodeID(id) {
+		return fmt.Errorf("%w: %q is reserved because showmeshctl node uses it as a command name", ErrInvalidNodeID, id)
+	}
 	return nil
 }
+
+// IsCommandNameNodeID reports whether id is a showmeshctl node subcommand
+// name, which would otherwise shadow a node of the same name.
+func IsCommandNameNodeID(id string) bool { return id == "enroll" || id == "enrollments" }
 
 // subpathSegmentPattern bounds each '/'-separated segment of an
 // observed/<subpath> or events/<subpath> topic suffix, and a result/<cmd-id>

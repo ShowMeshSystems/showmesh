@@ -131,6 +131,10 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightTickDuringWeatherDelay(ctx, now, rec)
 		return
 	}
+	if nightStopHoldStands(rec) {
+		h.nightTickDuringStopHold(ctx, now, rec)
+		return
+	}
 	switch rec.State {
 	case nightStatePreshow:
 		h.nightAdvancePreshow(ctx, now, rec)
@@ -344,6 +348,26 @@ func (h *handlers) nightCommit(ctx context.Context, now time.Time, sessionID, ex
 	}
 }
 
+// nightSessionUnchanged re-reads the session immediately before the loop
+// starts output: a tick that read rec seconds ago may be racing an
+// operator stop that has since ended, moved or held the session.
+func (h *handlers) nightSessionUnchanged(ctx context.Context, rec store.NightSessionRecord) bool {
+	cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		h.logWarn("night loop: failed to re-read the night session before starting output; not starting it", "sessionId", rec.ID, "error", err)
+		return false
+	}
+	if !ok || cur.ID != rec.ID || cur.State != rec.State {
+		h.logWarn("night loop: the night session changed under this tick; not starting output", "sessionId", rec.ID, "state", rec.State)
+		return false
+	}
+	if nightStopHoldStands(cur) {
+		h.logWarn("night loop: the show was stopped under this tick; not starting output", "sessionId", rec.ID, "state", rec.State)
+		return false
+	}
+	return true
+}
+
 func (h *handlers) nightCommitAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor, boundary nightBoundary) {
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
@@ -426,6 +450,14 @@ const (
 	nightDispatchRetryBackoff = 10 * time.Second
 	nightDispatchRetryWindow  = 5 * time.Minute
 )
+
+// nightStartConfirmWindow bounds how long a playlist start FPP accepted may
+// go unconfirmed before the session degrades instead of waiting forever.
+const nightStartConfirmWindow = time.Minute
+
+func nightStartUnconfirmed(a nightContentAnchor, now time.Time) bool {
+	return !a.DispatchedAt.IsZero() && a.ObservedAt.IsZero() && now.Sub(a.DispatchedAt) >= nightStartConfirmWindow
+}
 
 // nightRefusalIsTerminal separates a refusal a later tick may clear (the
 // host is busy, or its evidence is not current yet) from one it cannot: a
@@ -1153,6 +1185,11 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 				return cur, true, true
 			}
 		}
+		if nightStartUnconfirmed(cur, now) {
+			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
+				"FPP did not report playlist %q playing on %q within a minute of starting it. The night closes at its next fade-out, or end the night session to close it now.",
+				playlist, instanceID))
+		}
 		return cur, false, false
 	}
 
@@ -1188,6 +1225,9 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 	// failed dispatch (err != nil, nothing persisted) legitimately mints
 	// a new key and retries on a later tick.
 	idemKey := fmt.Sprintf("night:%s:%d:%s:%d", rec.ID, rec.Cycle, purpose, now.UnixNano())
+	if !h.nightSessionUnchanged(ctx, rec) {
+		return nightContentAnchor{}, false, false
+	}
 	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
 		InstanceID:                  instanceID,
 		Action:                      "startPlaylist",
