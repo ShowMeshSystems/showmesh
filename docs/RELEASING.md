@@ -21,7 +21,8 @@ and versions in its own repository, `ShowMeshSystems/fpp-showmesh`.
    promise from the previous season's line.
 4. **MINOR is a feature drop within the season.** Each planned set of features
    for the season (for example the pre-release set, the Halloween set, the
-   Christmas set) raises MINOR. A MINOR bump may change or remove behavior.
+   Christmas set) raises MINOR. A MINOR bump may change or remove behavior,
+   within the compatibility rule below.
 5. **PATCH is a fix on a running line.** A PATCH release carries fixes only and
    is what gets deployed to a fleet mid-season without taking new features.
 6. **The `-rc.N` suffix is allowed only on a season's opening `MAJOR.0.0`.** It
@@ -38,8 +39,17 @@ and versions in its own repository, `ShowMeshSystems/fpp-showmesh`.
    `0.1.5`). It follows the same season rule for MAJOR, so a plugin and a
    coordinator from the same season share a major number, but MINOR and PATCH
    move independently.
-9. **The first ShowMesh Core pre-release is `0.1.0`.**
-10. **The release version is not the public API version.** `/api/v1` is
+9. **Compatibility within a major starts at `1.0.0`.** The `0.x` line makes no
+   compatibility promise between versions: a fix may need the plugin and the
+   coordinator upgraded together. From `1.0.0` on, every PATCH and MINOR works
+   with every other version in the same MAJOR: any `1.x.x` FPP plugin works
+   with any `1.x.x` coordinator, and the same for `2.x.x` and later. Between
+   the coordinator and the node agent this is the expected practice rather
+   than a guarantee; a MINOR that has to break it says so in its changelog
+   and upgrade notes. The intended way to run a season is to stay on one
+   MAJOR, take PATCH releases, and take a MINOR only for a feature it brings.
+10. **The first ShowMesh Core pre-release is `0.1.0`.**
+11. **The release version is not the public API version.** `/api/v1` is
     versioned and moves independently of the `VERSION` file. Do not read a
     `VERSION` bump as an API change, and do not read an API version as a
     release number. This distinction is the reason this scheme exists:
