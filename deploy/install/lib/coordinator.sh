@@ -32,11 +32,12 @@ version_at_least() {
 coord_install_docker() {
   step "Installing Docker from Debian's own packages"
   apt_install ca-certificates curl jq iproute2 docker.io docker-cli docker-compose avahi-daemon
-  local log
+  local log start_log
   log="$(run_tmp)"
+  start_log="$(run_tmp)"
   if ! run_step "checking Docker is running" "$log" docker info; then
-    if have_systemd; then
-      run_step "starting Docker" "$log" systemctl enable --now docker || true
+    if have_systemd && ! run_step "starting Docker" "$start_log" systemctl enable --now docker; then
+      fail_with "$start_log" "Docker is installed but did not start." "systemctl enable --now docker"
     fi
     run_step "checking Docker is running" "$log" docker info ||
       fail_with "$log" "Docker is installed but not running." "systemctl enable --now docker"

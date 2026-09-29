@@ -50,5 +50,6 @@ audio_setup_ptp() {
   if ! run_step "setting up the PTP audio clock" "$log" with_default_umask "$(ptp_script)" "${args[@]}"; then
     fail_with "$log" "The PTP audio clock setup stopped." "sudo $(ptp_script) ${args[*]}"
   fi
+  step_warnings "$log"
   ok "PTP audio clock set up on $iface, domain $domain, role $role"
 }

@@ -85,7 +85,9 @@ bench/node-install/run_installer_bench.sh     # render node and audio node
 bench/node-install/run_coordinator_bench.sh   # coordinator, after the line above
 ```
 
-`run_installer_bench.sh` builds two fake releases, `0.0.0-bench1` and
+`run_installer_bench.sh` first runs `run_step_interrupt_check.sh` on the host,
+which sends Ctrl-C to an installer step in each layout and fails if the step's
+command outlives it. It then builds two fake releases, `0.0.0-bench1` and
 `0.0.0-bench2`, into `dist/inst-bench/` with `build_installer_release.sh`
 (node agent tarball, installer bundle, `get-showmesh.sh`, one `SHA256SUMS`;
 bench1's node tarball carries a stand-in `libgstndi.so`, bench2's has none).

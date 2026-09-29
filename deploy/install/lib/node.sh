@@ -48,6 +48,7 @@ node_preflight() {
     with_default_umask "$AGENT_PKG_DIR/preflight.sh" --runtime-only; then
     fail_with "$log" "This machine is missing something the agent needs." "apt-get install -y ${NODE_RUNTIME_PACKAGES[*]}"
   fi
+  step_warnings "$log"
   ok "this machine has what the agent needs"
 }
 
@@ -179,8 +180,8 @@ node_enroll() {
       ask code "Enrollment code"
     fi
     if ! valid_code "$code"; then
-      info "The code $code is not in the form XXXX-XXXX."
-      can_prompt || fail "The enrollment code $code is not in the form XXXX-XXXX." "showmesh-install --code XXXX-XXXX"
+      info "That code is not in the form XXXX-XXXX."
+      can_prompt || fail "The enrollment code given is not in the form XXXX-XXXX." "showmesh-install --code XXXX-XXXX"
       code=""
       continue
     fi
@@ -249,6 +250,7 @@ node_install_agent() {
     with_default_umask "$AGENT_PKG_DIR/install.sh" "$AGENT_PKG_DIR/showmesh-agent-native"; then
     fail_with "$log" "The agent service did not install." "sudo $AGENT_PKG_DIR/install.sh $AGENT_PKG_DIR/showmesh-agent-native"
   fi
+  step_warnings "$log"
   if ! have_systemd; then
     warn "This machine is not running systemd, so the agent was not started. Start it with: systemctl enable --now showmesh-agent"
   fi

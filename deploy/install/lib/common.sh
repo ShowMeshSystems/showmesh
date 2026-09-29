@@ -63,6 +63,10 @@ redact_args() {
 # log_open starts this run's section of the install log. Enrollment codes, broker
 # passwords and tokens are never written to it.
 log_open() {
+  if [ -L "$INSTALL_LOG" ]; then
+    warn "$INSTALL_LOG is a link to another file, so this run keeps no install log. Remove the link, then run the installer again to keep one."
+    return 0
+  fi
   mkdir -p "$(dirname "$INSTALL_LOG")" 2>/dev/null || true
   ( umask 077 && : >> "$INSTALL_LOG" ) 2>/dev/null || return 0
   chmod 0600 "$INSTALL_LOG" 2>/dev/null || true
@@ -157,22 +161,26 @@ run_tmp() {
   mktemp "$RUN_TMP/XXXXXX"
 }
 
-# run_step LABEL FILE CMD... runs CMD with its output in FILE and in the install log,
-# showing a spinner while it works. Use it for anything whose output an operator may need.
+# run_step LABEL FILE CMD... runs CMD in this shell and the foreground, stdin from /dev/null,
+# output to FILE and the install log, in both layouts. Only the spinner runs in the background,
+# so Ctrl-C stops CMD itself and a function CMD can set variables.
 run_step() {
-  local label="$1" out="$2" rc=0 pid
+  local label="$1" out="$2" rc=0
   shift 2
-  if [ "$UI_LAYOUT" -eq 1 ]; then
-    "$@" >"$out" 2>&1 </dev/null &
-    pid=$!
-    spin_start "$label"
-    wait "$pid" || rc=$?
-    spin_stop
-  else
-    "$@" >"$out" 2>&1 || rc=$?
-  fi
+  spin_start "$label"
+  "$@" >"$out" 2>&1 </dev/null || rc=$?
+  spin_stop
   log_file "$label" "$out"
   return "$rc"
+}
+
+# step_warnings FILE shows each WARNING: line a step's own script printed, which would
+# otherwise reach only the install log when the step succeeds.
+step_warnings() {
+  local line
+  while IFS= read -r line; do
+    warn "${line#*WARNING: }"
+  done < <(grep -a 'WARNING: ' "$1" || true)
 }
 
 # fail prints the fact, anything FAIL_DETAIL holds, and the command that fixes it, then exits.

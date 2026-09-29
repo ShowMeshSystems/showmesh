@@ -84,6 +84,18 @@ check "no world-readable secret after the upgrade either" "in_box '$no_readable_
 check "upgrade saw the broker accept the login again" "in_box 'grep -q \"ok: the broker accepts the coordinator.s login\" /tmp/install-0.0.0-bench2.log'"
 
 echo
+echo "--- forced failure: the built-in broker login check with a wrong password ---"
+# shellcheck disable=SC2016
+wrong_login='sed "s/^SHOWMESH_MQTT_PASSWORD=.*/SHOWMESH_MQTT_PASSWORD=bench-wrong-password/" /opt/showmesh/coordinator/.env > /root/wrong.env
+  SHOWMESH_VERSION=0.0.0-bench2 bash -c ". /repo/deploy/install/lib/common.sh; . /repo/deploy/install/lib/coordinator.sh
+    COORD_ENV=/root/wrong.env; BROKER_MODE=builtin; log_open --forced-broker-failure; coord_check_broker" > /tmp/forced.log 2>&1'
+in_box "$wrong_login"
+check "a refused built-in broker login stops the check" "[ $? -eq 1 ]"
+in_box 'cat /tmp/forced.log'
+check "the refusal prints mosquitto_pub's own reason and the log path" "in_box 'grep -q \"The built-in broker refused the coordinator.s login\" /tmp/forced.log && grep -qi \"not authori\" /tmp/forced.log && grep -q /var/log/showmesh-install.log /tmp/forced.log'"
+check "the install log holds the broker's answer and not the wrong password" "in_box 'grep -q \"^--- the broker.s answer to the login check\" /var/log/showmesh-install.log && ! grep -q bench-wrong-password /var/log/showmesh-install.log'"
+
+echo
 if [ "$FAILED" -gt 0 ]; then
   echo "run_coordinator_bench: $FAILED check(s) failed"
   exit 1

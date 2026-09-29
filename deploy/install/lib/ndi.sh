@@ -37,6 +37,7 @@ render_build_ndi_plugin() {
   if ! run_step "building the NDI plugin" "$log" with_default_umask "$script" "$out"; then
     fail_with "$log" "The NDI plugin did not build." "sudo $script $out"
   fi
+  step_warnings "$log"
   install -D -m 0644 -o root -g root "$out/libgstndi.so" "$(gst_plugin_dir)/libgstndi.so"
   rm -rf "$out"
   ok "built and installed $(gst_plugin_dir)/libgstndi.so"

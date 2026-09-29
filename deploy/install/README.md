@@ -83,7 +83,12 @@ and `--broker-password`. `SHOWMESH_INSTALL_LOG` moves that file, which is how a
 test reads one run's log without root's `/var/log`.
 
 `run_step LABEL FILE CMD...` is how a step runs a command: it captures the
-output to `FILE`, appends it to the log and animates the spinner.
+output to `FILE`, appends it to the log and animates the spinner. `CMD` runs in
+the installer's own shell and in the foreground with stdin from `/dev/null`, in
+both layouts, so a function can set variables and Ctrl-C stops `CMD` itself.
+`step_warnings FILE` then shows any `WARNING:` line the step printed, which a
+successful step otherwise leaves only in the log. `log_open` keeps no log when
+the log path is a symbolic link.
 `fail_with FILE FACT FIX` stops with the fact, then the last lines that command
 printed, then the fix and the log path. Three commands print a secret of their
 own and so are recorded in the log as withheld rather than captured:
