@@ -107,6 +107,12 @@ export type {
   TokensResponse,
   IssueTokenRequest,
   IssueTokenResponse,
+  // ADR-055: node enrollment codes.
+  NodeEnrollment,
+  NodeEnrollmentsResponse,
+  NodeEnrollmentResponse,
+  CreateNodeEnrollmentRequest,
+  CreateNodeEnrollmentResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionSummary,
   ResolumeCompositionUploadResponse,
@@ -455,6 +461,10 @@ export {
   listPrincipalTokens,
   issuePrincipalToken,
   revokePrincipalToken,
+  // ADR-055: node enrollment codes.
+  createNodeEnrollment,
+  listNodeEnrollments,
+  cancelNodeEnrollment,
   // Track G seam G-8: the Operator UI for Track E.
   getShow,
   putShow,
