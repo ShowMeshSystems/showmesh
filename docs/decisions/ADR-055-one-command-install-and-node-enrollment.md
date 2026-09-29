@@ -6,6 +6,9 @@ Amended: 2026-09-28 - the owner ruled that the static banner, coloured step
 headers, check lines and spinners are the installer's default output, and that
 only animation and the hidden modes stay behind `--party`. Decision 9 carries
 the ruling.
+Amended: 2026-09-29 - ADR-057 records the FPP pairing claim as a second write
+that takes no principal, so the consequence that redeem is the only one no
+longer holds.
 
 ## Context
 

@@ -183,6 +183,57 @@ func TestPairingReplacesTheEarlierPendingPairingForOneInstance(t *testing.T) {
 	}
 }
 
+// TestRePairingLeavesExactlyOneLiveToken: the plugin that just claimed has
+// its replacement, so a token from the earlier pairing must stop working.
+func TestRePairingLeavesExactlyOneLiveToken(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	claim := func(secret string) pairingClaimForTest {
+		doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, token))
+		_, body := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`))
+		var c pairingClaimForTest
+		if err := json.Unmarshal(body, &c); err != nil {
+			t.Fatalf("decode claim: %v; body: %s", err, body)
+		}
+		return c
+	}
+	first := claim(pairingSecret(60))
+	second := claim(pairingSecret(61))
+
+	if _, err := setup.svc.AuthenticateToken(t.Context(), first.Token); err == nil {
+		t.Fatal("the token from the earlier pairing still authenticates")
+	}
+	if _, err := setup.svc.AuthenticateToken(t.Context(), second.Token); err != nil {
+		t.Fatalf("the token from the new pairing does not authenticate: %v", err)
+	}
+	if got := len(livePairingTokenIDs(t, setup)); got != 1 {
+		t.Fatalf("got %d live pairing tokens, want 1", got)
+	}
+}
+
+// TestStartPairingRefusesACodeWaitingOnAnotherPlayer: one code matching two
+// rows would hand a plugin the other player's token.
+func TestStartPairingRefusesACodeWaitingOnAnotherPlayer(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	setup.fppLister.views = append(setup.fppLister.views, FPPInstanceView{InstanceID: "other-fpp", Endpoint: "http://other.invalid"})
+	code := pairingCodeFor(t, pairingSecret(62))
+
+	if resp, body := doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+code+`"}`, token)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first start status = %d; body: %s", resp.StatusCode, body)
+	}
+	resp, body := doRawRequest(t, api.Handler, startPairingRequest(t, "other-fpp", `{"code":"`+code+`"}`, token))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second start status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "That code is already waiting on player bench-fpp.") {
+		t.Fatalf("409 detail does not name the waiting player: %s", body)
+	}
+	if resp, body := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+pairingSecret(62)+`"}`)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the first pairing was disturbed: status %d; body: %s", resp.StatusCode, body)
+	} else if !strings.Contains(string(body), `"instanceId":"bench-fpp"`) {
+		t.Fatalf("claim went to the wrong player: %s", body)
+	}
+}
+
 // TestClaimWithAWrongSecretIsAGeneric404: the refusal must not say which
 // part of the guess was wrong.
 func TestClaimWithAWrongSecretIsAGeneric404(t *testing.T) {

@@ -464,7 +464,33 @@ describe('Settings › Connections › FPP instance detail', () => {
     await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
     openDetail()
 
-    await waitFor(() => expect(screen.getAllByText('Unobserved')).toHaveLength(4))
+    await waitFor(() => expect(screen.getAllByText('Unobserved')).toHaveLength(5))
+    expect(screen.getAllByText('This FPP instance has not reported this signal.')).toHaveLength(1)
+  })
+
+  it('shows an unknown ceiling as a disabled slider with no number, and states the shared reason once', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    const reason = "This player's ShowMesh plugin does not report brightness. Update the plugin to 0.2 or later."
+    const absent = (signal: string) => makeEvidence({ signal, value: null, state: 'unsupported', reason })
+
+    renderAt('/settings/connections', {
+      session: signedIn(['config:write', 'fpp:command']),
+      fpp: [makeFPPInstance('barn-player', {
+        observations: ['fpp.brightness.ceiling', 'fpp.brightness.transition_gain', 'fpp.brightness.effective_output', 'fpp.brightness.fade_active'].map(absent),
+      })],
+    })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+
+    const slider = await screen.findByLabelText('Ceiling')
+    expect(slider).toBeDisabled()
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Unavailable')).toHaveLength(5)
+    expect(screen.getAllByText(reason)).toHaveLength(1)
   })
 
   it('debounces the ceiling write and keeps one write in flight at a time', async () => {

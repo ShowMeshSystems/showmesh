@@ -8,6 +8,14 @@
 > coordinator loss.  Its schema is frozen by J1 before plugin or node work
 > begins; it does not widen any existing observation route into a command route.
 
+> **2026-09-29 amendment, brightness state read.** §2 gains §2.6, the
+> plugin's read-only brightness state route, which the coordinator's
+> `fppbrightness` collector polls and which no earlier revision of this file
+> recorded. Plugin code comments that cite "section 3" for it mean this
+> section; §3 is playlist definition publication. §2.6 records what the plugin
+> serves today, including `weatherGateClosed`, which the collector does not
+> decode yet.
+
 [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [Track F](TRACK-F-resting-mode.md) · [Track H](TRACK-H-cues-and-playlists.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
 Status: frozen 2026-08-21, extended 2026-08-22, corrected 2026-08-23,
@@ -705,6 +713,55 @@ The coordinator reports that instance as unable to be held dark by ShowMesh;
 it is never counted as either open or closed.
 
 Related: [ADR-053](../decisions/ADR-053-weather-delay.md).
+
+### 2.6 The brightness state read
+
+The coordinator's `fppbrightness` collector polls this route every five
+seconds to fill the four `fpp.brightness.*` signals. It changes nothing on the
+plugin.
+
+```text
+GET /api/plugin-apis/showmesh/brightness
+```
+
+The plugin registers `/showmesh/brightness`; the address above is the one a
+caller uses, for the reasons section 2.2 gives. The route takes no body and no
+credential, on the same accepted posture as section 2.2's route. It never
+refuses a request, so a well-formed call always gets `200` with
+`application/json`.
+
+Response body, every field always present:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | integer | Currently `1`. |
+| `ceiling` | integer | The ceiling now, 0 to 100, rounded, as any fade in progress has moved it. |
+| `transitionGain` | integer | The transition gain now, 0 to 100, rounded, as any fade in progress has moved it. |
+| `effectiveOutput` | integer | The percentage actually applied to channel data: 0 whenever the weather gate is closed, `round(ceiling * transitionGain / 100)` otherwise. |
+| `fadeActive` | boolean | True while the ceiling or the transition gain is still fading. |
+| `weatherGateClosed` | boolean | True while the weather gate holds output at zero (section 2.5). `effectiveOutput` is then 0 whatever the ceiling and gain read. |
+| `updatedAtMillis` | number | The plugin's clock, in milliseconds, at the moment the snapshot was taken. |
+
+Example: `{"schemaVersion":1,"ceiling":60,"transitionGain":75,"effectiveOutput":45,"fadeActive":false,"weatherGateClosed":false,"updatedAtMillis":1790000000000}`
+
+Coordinator behavior:
+
+- A `200` fills `fpp.brightness.ceiling`, `fpp.brightness.transition_gain` and
+  `fpp.brightness.effective_output` with the integers (unit percent) and
+  `fpp.brightness.fade_active` with the boolean.
+- A `404` means the plugin predates this route or is not installed. Each of the
+  four signals then reads unsupported, with the reason "This player's ShowMesh
+  plugin does not report brightness. Update the plugin to 0.2 or later."
+- Any other status, a transport error, a body over 64 KiB, or a body that is
+  not JSON reads collection failed for all four signals, with the cause as the
+  reason.
+- A field missing from an otherwise valid body reads not collected for that
+  signal alone.
+- The collector decodes `ceiling`, `transitionGain`, `effectiveOutput` and
+  `fadeActive` only. `schemaVersion`, `weatherGateClosed` and `updatedAtMillis`
+  are informational for now: nothing in the coordinator reads them, and the
+  UI does not show `weatherGateClosed`. The weather delay's own gate routes
+  in section 2.5 remain how the coordinator reads and writes the gate.
 
 ## 3. Playlist definition publication
 

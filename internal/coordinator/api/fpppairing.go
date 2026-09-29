@@ -150,17 +150,39 @@ func newFPPPairingStore() *fppPairingStore {
 	}
 }
 
+// pendingElsewhere reports the other instance that already has this code
+// waiting, so one code never matches two rows.
+func (s *fppPairingStore) pendingElsewhere(code, instanceID string, now time.Time) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingElsewhereLocked(code, instanceID, now)
+}
+
+func (s *fppPairingStore) pendingElsewhereLocked(code, instanceID string, now time.Time) (string, bool) {
+	for id, p := range s.pending {
+		if id != instanceID && p.code == code && now.Before(p.expiresAt) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // open records a pending pairing and returns the earlier one for the same
 // instance, if any, for its caller to revoke: a replaced pairing's token
 // was minted and never handed out, so nothing should still accept it.
-func (s *fppPairingStore) open(p fppPendingPairing) (replaced []fppPendingPairing) {
+// When another instance already has the same code waiting it records
+// nothing and returns that instance's ID.
+func (s *fppPairingStore) open(p fppPendingPairing, now time.Time) (replaced []fppPendingPairing, otherInstance string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if other, ok := s.pendingElsewhereLocked(p.code, p.instanceID, now); ok {
+		return nil, other
+	}
 	if old, ok := s.pending[p.instanceID]; ok {
 		replaced = append(replaced, old)
 	}
 	s.pending[p.instanceID] = p
-	return replaced
+	return replaced, ""
 }
 
 // sweepExpired drops every pending pairing that has expired and returns
@@ -317,6 +339,11 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 
 	h.revokePendingFPPPairings(ctx, h.fppPairings.sweepExpired(now))
 
+	if other, taken := h.fppPairings.pendingElsewhere(code, instanceID, now); taken {
+		writeProblem(w, h.logger, now, fppPairingCodeTakenProblem(other))
+		return
+	}
+
 	ac := authFromContext(ctx)
 	if !h.writeAuditOrFail(ctx, w, now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
@@ -349,10 +376,16 @@ func (h *handlers) handleStartFPPPairing(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	replaced := h.fppPairings.open(fppPendingPairing{
+	pending := fppPendingPairing{
 		code: code, instanceID: instanceID, principalID: principal.ID,
 		token: token.Value, tokenID: token.ID, expiresAt: expiresAt,
-	})
+	}
+	replaced, other := h.fppPairings.open(pending, now)
+	if other != "" {
+		h.revokePendingFPPPairings(ctx, []fppPendingPairing{pending})
+		writeProblem(w, h.logger, now, fppPairingCodeTakenProblem(other))
+		return
+	}
 	h.revokePendingFPPPairings(ctx, replaced)
 
 	jsonWrite(w, v1.FPPPairingResponse{
@@ -424,6 +457,24 @@ func (h *handlers) revokePendingFPPPairings(ctx context.Context, dropped []fppPe
 	}
 }
 
+// revokeOtherFPPPluginTokens leaves the claimed token as the only live one
+// the plugin's principal holds, so a re-pair retires the earlier token.
+func (h *handlers) revokeOtherFPPPluginTokens(ctx context.Context, claimed fppPendingPairing) {
+	tokens, err := h.deps.Identity.ListTokens(ctx, claimed.principalID)
+	if err != nil {
+		h.logWarn("failed to list the earlier tokens of a re-paired fpp plugin", "instanceId", claimed.instanceID, "error", err)
+		return
+	}
+	for _, t := range tokens {
+		if t.ID == claimed.tokenID {
+			continue
+		}
+		if err := h.deps.Identity.RevokeToken(ctx, t.ID); err != nil {
+			h.logWarn("failed to revoke an earlier token of a re-paired fpp plugin", "instanceId", claimed.instanceID, "error", err)
+		}
+	}
+}
+
 // RevokeUnclaimedFPPPairings revokes every open pairing's unclaimed
 // token. The coordinator calls it while shutting down: a credential
 // nothing will ever claim must not outlive the process that minted it.
@@ -460,9 +511,9 @@ func (h *handlers) handleGetFPPPairing(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleClaimFPPPairing serves POST /api/v1/integrations/fpp/pairing/claim.
-// This is the only unauthenticated write route in this API: the secret in
-// the body is the credential, and nothing else about the request is
-// trusted. Every refusal is the same 404 with the same text, so a caller
+// This is one of two writes that take no principal (node enrollment redeem
+// is the other): the secret in the body is the credential, and nothing else
+// about the request is trusted. Every refusal is the same 404 with the same text, so a caller
 // learns nothing from the difference between a wrong secret, an expired
 // pairing and one that was never opened.
 func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +573,8 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("failed to audit a completed fpp pairing", "instanceId", pending.instanceID, "error", err)
 	}
+
+	h.revokeOtherFPPPluginTokens(ctx, pending)
 
 	jsonWrite(w, v1.FPPPairingClaimResponse{
 		Token:       pending.token,

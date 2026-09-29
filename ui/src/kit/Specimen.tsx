@@ -34,6 +34,7 @@ import {
   RadioCardList,
   RailBadge,
   RuledStrip,
+  AbsenceLabel,
   Section,
   Segmented,
   Select,
@@ -305,6 +306,7 @@ export function Specimen() {
             valueLabel={`${sliderValue}%`}
             onChange={(e) => setSliderValue(Number(e.target.value))}
           />
+          <Slider label="Brightness ceiling, no reading yet" value={0} min={0} max={100} unknown />
           <div className="sm-inline-row">
             <Input aria-label="Pairing code" placeholder="XXXX-XXXX" defaultValue="AB12-CD34" className="sm-input--narrow" />
             <Button variant="primary">Pair</Button>
@@ -334,6 +336,20 @@ export function Specimen() {
           {STRIPS.map((strip) => (
             <RuledStrip key={strip.label} absence={strip.absence} label={strip.label} fact={strip.fact} detail={strip.detail} />
           ))}
+
+          <div className="sm-strips__title">
+            <span className="sm-spec-mark">A2</span>
+            <span className="sm-subhead">Absence label, inside a narrow cell</span>
+            <span className="sm-small sm-muted">The word alone. One ruled strip below the group says why.</span>
+          </div>
+          <DefinitionStrip
+            items={[
+              { term: 'Ceiling', value: <AbsenceLabel absence="unavailable" label="Unavailable" /> },
+              { term: 'Effective output', value: <AbsenceLabel absence="unavailable" label="Unavailable" /> },
+              { term: 'Fade', value: <AbsenceLabel absence="unobserved" label="Unobserved" /> },
+            ]}
+          />
+          <RuledStrip absence="unavailable" label="Unavailable" fact="This player's ShowMesh plugin does not report brightness. Update the plugin to 0.2 or later." />
 
           <div className="sm-strips__title sm-spec-plate-title">
             <span className="sm-spec-mark">B</span>

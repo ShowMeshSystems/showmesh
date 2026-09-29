@@ -995,7 +995,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange an enrollment code for the node's credentials (ADR-055 decision 5)
-         * @description Takes no principal and no same-origin check: the code is the credential for this one call. It is the only write this API accepts without a principal. The code is accepted in any case, with or without its hyphen. Returns, once, everything the node's `/etc/showmesh/agent.env` needs. On the built-in broker the coordinator writes the node's login into the broker's password file and generated access list; on an external broker it returns the shared login it was configured with, or empty strings. A re-enrollment code replaces the node's broker password and revokes every token of its previous enrollment. Every redemption is audited as `node.enrollment.redeem`, attributed to the principal who minted the code. Failed redemptions (unknown, expired, used or cancelled codes) are limited to 5 a minute from one client address and 30 an hour overall, then refused with `429`; a successful redemption is not counted. When any step fails the coordinator undoes what it did and the code stays pending.
+         * @description Takes no principal and no same-origin check: the code is the credential for this one call. It is one of two writes this API accepts without a principal; the other is the FPP pairing claim. The code is accepted in any case, with or without its hyphen. Returns, once, everything the node's `/etc/showmesh/agent.env` needs. On the built-in broker the coordinator writes the node's login into the broker's password file and generated access list; on an external broker it returns the shared login it was configured with, or empty strings. A re-enrollment code replaces the node's broker password and revokes every token of its previous enrollment. Every redemption is audited as `node.enrollment.redeem`, attributed to the principal who minted the code. Failed redemptions (unknown, expired, used or cancelled codes) are limited to 5 a minute from one client address and 30 an hour overall, then refused with `429`; a successful redemption is not counted. When any step fails the coordinator undoes what it did and the code stays pending.
          */
         post: operations["redeemNodeEnrollment"];
         delete?: never;
@@ -3030,8 +3030,8 @@ export interface paths {
         put?: never;
         /**
          * Finish pairing, presenting the plugin's own secret
-         * @description The only unauthenticated write route in this API, and deliberately so: the secret in the body IS the credential. A plugin that holds it is the plugin the operator started a pairing for, and it has nothing else it could present, because it has no token yet. The coordinator derives the displayed code from the secret the same way the plugin did; it never accepts a code here.
-         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 120 claims per minute per client address are accepted; over that is `429`. The ceiling is well above one plugin's own three-second poll, so several plugins behind one NAT or proxy do not lock each other out. A body larger than 4 KiB is `413`.
+         * @description One of two writes this API accepts without a principal (the other is node enrollment redeem), and deliberately so: the secret in the body IS the credential. A plugin that holds it is the plugin the operator started a pairing for, and it has nothing else it could present, because it has no token yet. The coordinator derives the displayed code from the secret the same way the plugin did; it never accepts a code here.
+         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it, and revokes every other token the plugin's principal holds. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 120 claims per minute per client address are accepted; over that is `429`. The ceiling is well above one plugin's own three-second poll, so several plugins behind one NAT or proxy do not lock each other out. A body larger than 4 KiB is `413`.
          */
         post: operations["claimFPPPairing"];
         delete?: never;
@@ -8702,7 +8702,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
-            /** @description The account this plugin signs in as exists but is switched off, or is no longer a machine account with the `scheduler` role. A pairing never re-credentials it: `detail` names the account and what to do. `type` is `https://showmesh.dev/problems/conflict`. */
+            /** @description The account this plugin signs in as exists but is switched off, or is no longer a machine account with the `scheduler` role, or the same code is already waiting on a different player. A pairing never re-credentials such an account: `detail` names the account or player and what to do. `type` is `https://showmesh.dev/problems/conflict`. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

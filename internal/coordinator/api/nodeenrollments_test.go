@@ -443,11 +443,11 @@ func TestRedeemMalformedCodeIs400(t *testing.T) {
 	}
 }
 
-// TestRedeemIsTheOnlyUnauthenticatedWrite reads api.go's route table: every
+// TestUnauthenticatedWritesAreExactlyRedeemAndPairingClaim reads api.go's route table: every
 // non-GET route goes through writeGuard, except the two sign-in routes,
 // which run loginCSRFGuard, and the two token-authenticated routes, redeem
-// and the FPP pairing claim.
-func TestRedeemIsTheOnlyUnauthenticatedWrite(t *testing.T) {
+// and the FPP pairing claim (ADR-057).
+func TestUnauthenticatedWritesAreExactlyRedeemAndPairingClaim(t *testing.T) {
 	src, err := os.ReadFile("api.go")
 	if err != nil {
 		t.Fatal(err)

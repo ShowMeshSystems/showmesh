@@ -2047,8 +2047,8 @@ func New(deps Dependencies, opts Options) *API {
 	// credential to check a scope or CSRF header against. See bootstrap.go.
 	mux.HandleFunc("POST /api/v1/bootstrap", h.loginCSRFGuard(h.handleClaimBootstrap))
 
-	// ADR-055 node enrollment. The redeem route is the one write that takes
-	// no principal and no same-origin check: the code is the credential.
+	// ADR-055 node enrollment. The redeem route is one of two writes that take
+	// no principal and no same-origin check (ADR-057): the code is the credential.
 	mux.HandleFunc("POST /api/v1/node-enrollments", h.writeGuard(&scopeNodeEnroll, h.handleCreateNodeEnrollment))
 	mux.HandleFunc("GET /api/v1/node-enrollments", h.requireScope(identity.ScopeNodeEnroll, h.handleListNodeEnrollments))
 	mux.HandleFunc("DELETE /api/v1/node-enrollments/{id}", h.writeGuard(&scopeNodeEnroll, h.handleCancelNodeEnrollment))
@@ -2358,8 +2358,8 @@ func New(deps Dependencies, opts Options) *API {
 	// rule), so this is deliberately not the same scope that dispatches
 	// FPP's native commands. GET stays open under observation:read,
 	// matching every other FPP read surface.
-	// POST /api/v1/integrations/fpp/pairing/claim: the ONLY
-	// unauthenticated write route in this API, and deliberately so. The
+	// POST /api/v1/integrations/fpp/pairing/claim: one of two writes that
+	// take no principal (ADR-057), and deliberately so. The
 	// secret in the body is the credential: a plugin that holds it is the
 	// plugin the operator started a pairing for, and there is nothing
 	// else it could present, because it has no token yet. The body is

@@ -53,7 +53,7 @@ const PluginPath = "/api/plugin-apis/showmesh/brightness"
 
 // absentOn404Reason is what an operator reads when the host answers but
 // the plugin is not there to answer for it.
-const absentOn404Reason = "the ShowMesh plugin on this FPP does not serve brightness state"
+const absentOn404Reason = "This player's ShowMesh plugin does not report brightness. Update the plugin to 0.2 or later."
 
 const (
 	// DefaultPollInterval is the recommended collector.Runner.Add cadence.

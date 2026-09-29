@@ -824,9 +824,10 @@ paths:
         "409":
           description: >-
             The account this plugin signs in as exists but is switched off,
-            or is no longer a machine account with the `scheduler` role. A
-            pairing never re-credentials it: `detail` names the account and
-            what to do. `type` is
+            or is no longer a machine account with the `scheduler` role, or
+            the same code is already waiting on a different player. A
+            pairing never re-credentials such an account: `detail` names
+            the account or player and what to do. `type` is
             `https://showmesh.dev/problems/conflict`.
           headers:
             ShowMesh-API-Version:
@@ -3063,8 +3064,8 @@ paths:
       summary: Exchange an enrollment code for the node's credentials (ADR-055 decision 5)
       description: >-
         Takes no principal and no same-origin check: the code is the
-        credential for this one call. It is the only write this API
-        accepts without a principal. The code is accepted in any case,
+        credential for this one call. It is one of two writes this API
+        accepts without a principal; the other is the FPP pairing claim. The code is accepted in any case,
         with or without its hyphen. Returns, once, everything the node's
         `/etc/showmesh/agent.env` needs. On the built-in broker the
         coordinator writes the node's login into the broker's password
@@ -8903,15 +8904,16 @@ paths:
       operationId: claimFPPPairing
       summary: Finish pairing, presenting the plugin's own secret
       description: >-
-        The only unauthenticated write route in this API, and deliberately
-        so: the secret in the body IS the credential. A plugin that holds
+        One of two writes this API accepts without a principal (the other
+        is node enrollment redeem), and deliberately so: the secret in the body IS the credential. A plugin that holds
         it is the plugin the operator started a pairing for, and it has
         nothing else it could present, because it has no token yet. The
         coordinator derives the displayed code from the secret the same
         way the plugin did; it never accepts a code here.
 
         A successful claim consumes the pairing (it is used once) and
-        returns the token minted when the operator opened it. Every
+        returns the token minted when the operator opened it, and revokes
+        every other token the plugin's principal holds. Every
         refusal - a wrong secret, an expired pairing, one that was never
         opened - is the identical `404` with the identical text, so an
         unauthenticated caller learns nothing from the difference. At most

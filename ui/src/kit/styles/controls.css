@@ -278,6 +278,15 @@
   opacity: 0.5;
 }
 
+/* No reading yet: the thumb would sit at 0 and read as a value. */
+.sm-slider--unknown::-webkit-slider-thumb {
+  visibility: hidden;
+}
+
+.sm-slider--unknown::-moz-range-thumb {
+  visibility: hidden;
+}
+
 /* A single 240px column overflows the 122px content width available at
    390px; one column below 720px. */
 @media (max-width: 720px) {
