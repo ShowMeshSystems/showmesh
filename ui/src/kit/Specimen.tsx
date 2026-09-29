@@ -349,7 +349,7 @@ export function Specimen() {
               { term: 'Fade', value: <AbsenceLabel absence="unobserved" label="Unobserved" /> },
             ]}
           />
-          <RuledStrip absence="unavailable" label="Unavailable" fact="This player's ShowMesh plugin does not report brightness. Update the plugin to 0.2 or later." />
+          <RuledStrip absence="unavailable" label="Unavailable" fact="This player does not report brightness. Install or update the ShowMesh plugin to 0.2 or later." />
 
           <div className="sm-strips__title sm-spec-plate-title">
             <span className="sm-spec-mark">B</span>

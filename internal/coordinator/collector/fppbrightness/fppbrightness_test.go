@@ -199,3 +199,23 @@ func mustPoll(t *testing.T, c *Collector) []observation.Observation {
 	}
 	return obs
 }
+
+// TestAnAllZeroDocumentWithNoTimestampIsAbsentNotAZeroCeiling: the plugin
+// answers this way when it could not render its state.
+func TestAnAllZeroDocumentWithNoTimestampIsAbsentNotAZeroCeiling(t *testing.T) {
+	c := newCollector(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"schemaVersion":1,"ceiling":0,"transitionGain":0,"effectiveOutput":0,"fadeActive":false,"weatherGateClosed":false,"updatedAtMillis":0}`))
+	})
+	obs, _ := c.Poll(context.Background())
+	if len(obs) != len(AllSignals) {
+		t.Fatalf("got %d signals, want %d", len(obs), len(AllSignals))
+	}
+	for _, o := range obs {
+		if o.Absence != observation.StateCollectionFailed || o.Value != nil {
+			t.Errorf("%s = %+v, want collection_failed with no value", o.Signal, o)
+		}
+		if o.Reason != absentOnUnreadReason {
+			t.Errorf("%s reason = %q, want %q", o.Signal, o.Reason, absentOnUnreadReason)
+		}
+	}
+}

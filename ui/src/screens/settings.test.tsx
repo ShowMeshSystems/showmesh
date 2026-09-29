@@ -121,7 +121,11 @@ function signedIn(scopes: string[]): SessionResponse {
 }
 
 function renderAt(path: string, model: Partial<Model> = {}) {
-  return render(
+  return render(settingsTree(path, model))
+}
+
+function settingsTree(path: string, model: Partial<Model> = {}) {
+  return (
     <ModelContext.Provider value={{ ...initialModel(), session: signedIn(['config:write']), ...model }}>
       <WeatherDelayProvider>
         <MemoryRouter initialEntries={[path]}>
@@ -139,7 +143,7 @@ function renderAt(path: string, model: Partial<Model> = {}) {
           </Routes>
         </MemoryRouter>
       </WeatherDelayProvider>
-    </ModelContext.Provider>,
+    </ModelContext.Provider>
   )
 }
 
@@ -473,7 +477,7 @@ describe('Settings › Connections › FPP instance detail', () => {
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPPairing = () => Promise.resolve(pairingNone())
-    const reason = "This player's ShowMesh plugin does not report brightness. Update the plugin to 0.2 or later."
+    const reason = "This player does not report brightness. Install or update the ShowMesh plugin to 0.2 or later."
     const absent = (signal: string) => makeEvidence({ signal, value: null, state: 'unsupported', reason })
 
     renderAt('/settings/connections', {
@@ -491,6 +495,33 @@ describe('Settings › Connections › FPP instance detail', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
     expect(screen.getAllByText('Unavailable')).toHaveLength(5)
     expect(screen.getAllByText(reason)).toHaveLength(1)
+  })
+
+  it('follows the ceiling reading: value, then absent back to Unknown, then a new value', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    const session = signedIn(['config:write', 'fpp:command'])
+    const withCeiling = (evidence: ReturnType<typeof makeEvidence>) => ({
+      session,
+      fpp: [makeFPPInstance('barn-player', { observations: [evidence] })],
+    })
+
+    const view = renderAt('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })))
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+    const slider = await screen.findByLabelText('Ceiling')
+    expect(slider).toHaveValue('40')
+    expect(slider).toBeEnabled()
+
+    view.rerender(settingsTree('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: null, state: 'unsupported', reason: 'gone' }))))
+    await waitFor(() => expect(screen.getByLabelText('Ceiling')).toBeDisabled())
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+
+    view.rerender(settingsTree('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: 70 }))))
+    await waitFor(() => expect(screen.getByLabelText('Ceiling')).toHaveValue('70'))
+    expect(screen.getByLabelText('Ceiling')).toBeEnabled()
   })
 
   it('debounces the ceiling write and keeps one write in flight at a time', async () => {

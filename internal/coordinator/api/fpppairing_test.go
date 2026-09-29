@@ -401,86 +401,100 @@ func TestStartPairingAcceptsEveryWrittenFormOfOneCode(t *testing.T) {
 	}
 }
 
-// TestReplacingAPairingRevokesTheUnclaimedToken: the first pairing's
-// token was minted and never handed out, so nothing must still accept it.
-func TestReplacingAPairingRevokesTheUnclaimedToken(t *testing.T) {
+// TestAnOpenPairingHoldsNoCredential: the token is minted only when the
+// plugin claims, so nothing can be left behind by a pairing nobody finishes.
+func TestAnOpenPairingHoldsNoCredential(t *testing.T) {
 	api, setup, token := pairingAPI(t, fixedClock(testNow))
 
 	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(40))+`"}`, token))
-	first := onlyPairingTokenID(t, setup)
-
 	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(41))+`"}`, token))
 
-	if live := livePairingTokenIDs(t, setup); len(live) != 1 || live[0] == first {
-		t.Fatalf("live pairing tokens = %v, want only the replacement (not %s)", live, first)
+	if live := livePairingTokenIDs(t, setup); len(live) != 0 {
+		t.Fatalf("live pairing tokens while only open = %v, want none", live)
 	}
 }
 
-// TestAnExpiredPairingRevokesItsUnclaimedToken: the sweep every pairing
-// route runs must clear a pairing nobody finished, not only forget it.
-func TestAnExpiredPairingRevokesItsUnclaimedToken(t *testing.T) {
+// TestAnExpiredPairingCannotBeClaimed.
+func TestAnExpiredPairingCannotBeClaimed(t *testing.T) {
 	now := testNow
 	api, setup, token := pairingAPI(t, func() time.Time { return now })
-
-	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(42))+`"}`, token))
-	if len(livePairingTokenIDs(t, setup)) != 1 {
-		t.Fatal("the pairing did not mint a token")
-	}
+	secret := pairingSecret(42)
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, token))
 
 	now = testNow.Add(fppPairingTTL + time.Second)
-	doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+pairingSecret(43)+`"}`))
-
+	if resp, _ := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`)); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("claim of an expired pairing: status %d, want 404", resp.StatusCode)
+	}
 	if live := livePairingTokenIDs(t, setup); len(live) != 0 {
-		t.Fatalf("live pairing tokens after expiry = %v, want none", live)
+		t.Fatalf("live pairing tokens after an expired claim = %v, want none", live)
 	}
 }
 
-// TestAPairingTokenCarriesItsOwnExpiry bounds the leak if a revoke ever
-// fails: the credential dies on its own.
-func TestAPairingTokenCarriesItsOwnExpiry(t *testing.T) {
-	api, setup, token := pairingAPI(t, fixedClock(testNow))
-	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(44))+`"}`, token))
-
-	tokens := pairingTokens(t, setup)
-	if len(tokens) != 1 {
-		t.Fatalf("got %d pairing tokens, want 1", len(tokens))
-	}
-	if tokens[0].ExpiresAt == nil {
-		t.Fatal("the pairing token never expires; an unclaimed pairing would leave a live credential behind")
-	}
-	if want := testNow.Add(fppPairingTTL + fppPairingTokenMargin); !tokens[0].ExpiresAt.Equal(want) {
-		t.Fatalf("token expiry = %v, want %v", tokens[0].ExpiresAt, want)
-	}
-}
-
-// TestShutdownRevokesEveryUnclaimedPairingToken.
-func TestShutdownRevokesEveryUnclaimedPairingToken(t *testing.T) {
-	api, setup, token := pairingAPI(t, fixedClock(testNow))
-	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(45))+`"}`, token))
-
-	api.RevokeUnclaimedFPPPairings(t.Context())
-
-	if live := livePairingTokenIDs(t, setup); len(live) != 0 {
-		t.Fatalf("live pairing tokens after shutdown = %v, want none", live)
-	}
-}
-
-// TestAClaimedPairingKeepsItsToken: the revoke sweeps must never touch a
-// credential a plugin is actually using.
-func TestAClaimedPairingKeepsItsToken(t *testing.T) {
-	api, setup, token := pairingAPI(t, fixedClock(testNow))
-	secret := pairingSecret(46)
+// TestAClaimedTokenDoesNotExpire: a paired plugin has no way to refresh its
+// token, so the one it receives must outlive the pairing window.
+func TestAClaimedTokenDoesNotExpire(t *testing.T) {
+	now := testNow
+	api, setup, token := pairingAPI(t, func() time.Time { return now })
+	secret := pairingSecret(44)
 	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, token))
 	_, body := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`))
-
 	var claimed pairingClaimForTest
 	if err := json.Unmarshal(body, &claimed); err != nil {
-		t.Fatalf("decode claim: %v", err)
+		t.Fatalf("decode claim: %v; body: %s", err, body)
 	}
-	api.RevokeUnclaimedFPPPairings(t.Context())
+	if tokens := pairingTokens(t, setup); len(tokens) != 1 || tokens[0].ExpiresAt != nil {
+		t.Fatalf("claimed token = %+v, want one token with no expiry", tokens)
+	}
 
-	if _, err := setup.svc.AuthenticateToken(t.Context(), claimed.Token); err != nil {
-		t.Fatalf("the claimed token stopped working: %v", err)
+	for _, after := range []time.Duration{fppPairingTTL + 2*time.Minute + time.Second, 24 * time.Hour} {
+		now = testNow.Add(after)
+		if _, err := setup.svc.AuthenticateToken(t.Context(), claimed.Token); err != nil {
+			t.Fatalf("the claimed token stopped working %v after the pairing opened: %v", after, err)
+		}
+	}
+}
+
+// TestRePairingAfterAnInterleavedOpenKeepsTheNewToken: opening a pairing
+// between two claims must not leave the second claim with a dead token.
+func TestRePairingAfterAnInterleavedOpenKeepsTheNewToken(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	firstSecret, secondSecret := pairingSecret(70), pairingSecret(71)
+
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, firstSecret)+`"}`, token))
+	_, body := doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+firstSecret+`"}`))
+	var first pairingClaimForTest
+	_ = json.Unmarshal(body, &first)
+
+	doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secondSecret)+`"}`, token))
+	if _, err := setup.svc.AuthenticateToken(t.Context(), first.Token); err != nil {
+		t.Fatalf("opening a new pairing revoked the token in use: %v", err)
+	}
+	_, body = doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secondSecret+`"}`))
+	var second pairingClaimForTest
+	_ = json.Unmarshal(body, &second)
+
+	if _, err := setup.svc.AuthenticateToken(t.Context(), second.Token); err != nil {
+		t.Fatalf("the second claim received a dead token: %v", err)
+	}
+	if _, err := setup.svc.AuthenticateToken(t.Context(), first.Token); err == nil {
+		t.Fatal("the first token still authenticates after a re-pair")
+	}
+}
+
+// TestAClaimAuditsTheTokensItRevoked.
+func TestAClaimAuditsTheTokensItRevoked(t *testing.T) {
+	api, setup, token := pairingAPI(t, fixedClock(testNow))
+	for _, seed := range []byte{72, 73} {
+		secret := pairingSecret(seed)
+		doRawRequest(t, api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, token))
+		doRawRequest(t, api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`))
+	}
+	entries, err := setup.svc.ListAuditNewestFirst(t.Context(), 0, 5)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("read audit: %v (%d entries)", err, len(entries))
+	}
+	if !strings.Contains(entries[0].OutcomeReason, "revoked earlier tokens ") {
+		t.Fatalf("newest audit entry = %q, want it to name the revoked tokens", entries[0].OutcomeReason)
 	}
 }
 
@@ -566,15 +580,6 @@ func livePairingTokenIDs(t *testing.T, setup *fppCommandTestSetup) []string {
 		out = append(out, tok.ID)
 	}
 	return out
-}
-
-func onlyPairingTokenID(t *testing.T, setup *fppCommandTestSetup) string {
-	t.Helper()
-	ids := livePairingTokenIDs(t, setup)
-	if len(ids) != 1 {
-		t.Fatalf("got %d live pairing tokens, want 1", len(ids))
-	}
-	return ids[0]
 }
 
 func pairingState(t *testing.T, api *API, token string) string {

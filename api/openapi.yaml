@@ -779,12 +779,12 @@ paths:
       description: >-
         Behind `principal:write`, which is admin-only: opening a pairing
         creates or reuses the machine principal
-        `fpp-plugin-{instanceId}` with the `scheduler` role and mints it a
-        fresh API token. That token is never in this response and is never
-        shown to an operator - it is held in memory for ten minutes and
-        handed only to a plugin that presents the secret this code was
-        derived from. An earlier open pairing for the same instance is
-        replaced.
+        `fpp-plugin-{instanceId}` with the `scheduler` role and holds the
+        code in memory for ten minutes. No token exists yet: one is minted
+        only when a plugin presents the secret this code was derived from,
+        and it is never shown to an operator. An earlier open pairing for
+        the same instance is replaced. A code already waiting on a
+        different player is a `409`.
 
         A code that is not in `XXXX-XXXX` form is a `400`.
       requestBody:
@@ -8912,8 +8912,8 @@ paths:
         way the plugin did; it never accepts a code here.
 
         A successful claim consumes the pairing (it is used once) and
-        returns the token minted when the operator opened it, and revokes
-        every other token the plugin's principal holds. Every
+        mints the plugin's token, which does not expire, returns it, and
+        revokes every other token the plugin's principal held before. Every
         refusal - a wrong secret, an expired pairing, one that was never
         opened - is the identical `404` with the identical text, so an
         unauthenticated caller learns nothing from the difference. At most

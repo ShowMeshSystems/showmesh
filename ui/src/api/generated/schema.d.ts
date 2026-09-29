@@ -275,7 +275,7 @@ export interface paths {
         put?: never;
         /**
          * Start pairing one FPP host's plugin with this coordinator
-         * @description Behind `principal:write`, which is admin-only: opening a pairing creates or reuses the machine principal `fpp-plugin-{instanceId}` with the `scheduler` role and mints it a fresh API token. That token is never in this response and is never shown to an operator - it is held in memory for ten minutes and handed only to a plugin that presents the secret this code was derived from. An earlier open pairing for the same instance is replaced.
+         * @description Behind `principal:write`, which is admin-only: opening a pairing creates or reuses the machine principal `fpp-plugin-{instanceId}` with the `scheduler` role and holds the code in memory for ten minutes. No token exists yet: one is minted only when a plugin presents the secret this code was derived from, and it is never shown to an operator. An earlier open pairing for the same instance is replaced. A code already waiting on a different player is a `409`.
          *     A code that is not in `XXXX-XXXX` form is a `400`.
          */
         post: operations["startFPPPairing"];
@@ -3031,7 +3031,7 @@ export interface paths {
         /**
          * Finish pairing, presenting the plugin's own secret
          * @description One of two writes this API accepts without a principal (the other is node enrollment redeem), and deliberately so: the secret in the body IS the credential. A plugin that holds it is the plugin the operator started a pairing for, and it has nothing else it could present, because it has no token yet. The coordinator derives the displayed code from the secret the same way the plugin did; it never accepts a code here.
-         *     A successful claim consumes the pairing (it is used once) and returns the token minted when the operator opened it, and revokes every other token the plugin's principal holds. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 120 claims per minute per client address are accepted; over that is `429`. The ceiling is well above one plugin's own three-second poll, so several plugins behind one NAT or proxy do not lock each other out. A body larger than 4 KiB is `413`.
+         *     A successful claim consumes the pairing (it is used once) and mints the plugin's token, which does not expire, returns it, and revokes every other token the plugin's principal held before. Every refusal - a wrong secret, an expired pairing, one that was never opened - is the identical `404` with the identical text, so an unauthenticated caller learns nothing from the difference. At most 120 claims per minute per client address are accepted; over that is `429`. The ceiling is well above one plugin's own three-second poll, so several plugins behind one NAT or proxy do not lock each other out. A body larger than 4 KiB is `413`.
          */
         post: operations["claimFPPPairing"];
         delete?: never;

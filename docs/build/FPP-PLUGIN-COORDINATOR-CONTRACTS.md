@@ -750,15 +750,21 @@ Coordinator behavior:
   `fpp.brightness.effective_output` with the integers (unit percent) and
   `fpp.brightness.fade_active` with the boolean.
 - A `404` means the plugin predates this route or is not installed. Each of the
-  four signals then reads unsupported, with the reason "This player's ShowMesh
-  plugin does not report brightness. Update the plugin to 0.2 or later."
+  four signals then reads unsupported, with the reason "This player does not
+  report brightness. Install or update the ShowMesh plugin to 0.2 or later."
 - Any other status, a transport error, a body over 64 KiB, or a body that is
   not JSON reads collection failed for all four signals, with the cause as the
   reason.
 - A field missing from an otherwise valid body reads not collected for that
   signal alone.
-- The collector decodes `ceiling`, `transitionGain`, `effectiveOutput` and
-  `fadeActive` only. `schemaVersion`, `weatherGateClosed` and `updatedAtMillis`
+- A plugin that cannot render the document must answer `500`, never `200` with
+  zeros. The collector also treats a `200` whose `updatedAtMillis` is `0` as
+  collection failed for all four signals, with the reason "This player's
+  ShowMesh plugin could not read its brightness. Check the plugin on that
+  player.", so a plugin that still sends the all-zero fallback is not read as
+  a real ceiling of 0. A body with no `updatedAtMillis` is read as before.
+- The collector decodes `ceiling`, `transitionGain`, `effectiveOutput`,
+  `fadeActive` and `updatedAtMillis` only. `schemaVersion` and `weatherGateClosed`
   are informational for now: nothing in the coordinator reads them, and the
   UI does not show `weatherGateClosed`. The weather delay's own gate routes
   in section 2.5 remain how the coordinator reads and writes the gate.

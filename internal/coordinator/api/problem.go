@@ -815,7 +815,7 @@ func fppPairingCodeTakenProblem(otherInstanceID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Pairing code already in use",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf("That code is already waiting on player %s. Cancel that pairing or enter the code shown on this player's page.", otherInstanceID),
+		Detail: fmt.Sprintf("That code is already waiting on player %s. Enter it on that player, or wait ten minutes for it to expire and try again here.", otherInstanceID),
 	}
 }
 

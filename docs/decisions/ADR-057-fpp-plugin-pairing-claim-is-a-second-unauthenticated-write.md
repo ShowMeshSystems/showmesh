@@ -29,19 +29,21 @@ said redeem was the only one.
    redeem and the pairing claim. A test reads the route table and fails on any
    other.
 3. The claim route is bounded in these ways:
-   - A pairing is open for ten minutes and is then dropped, and its unclaimed
-     token is revoked. The token also carries its own expiry, two minutes past
-     the pairing's, so a failed revoke cannot leave it alive.
-   - The token is delivered once, in the claim response, to the caller that
-     presents the matching secret. It is never in an operator-facing response.
-   - Opening a new pairing for the same player replaces the earlier one and
-     revokes its token. The coordinator shutting down revokes every open one.
+   - A pairing is open for ten minutes and is then dropped. An open pairing
+     holds only the code, in memory, and no credential.
+   - The plugin's token is minted at the moment of a successful claim, has
+     no expiry, and is delivered once, in the claim response, to the caller
+     that presents the matching secret. It is never in an operator-facing
+     response. A paired plugin has no way to refresh a token, so an expiring
+     one would stop it working.
+   - Opening a new pairing for the same player replaces the earlier one.
    - A claim is limited per client address over a rolling minute.
    - Every refusal is the same `404` with the same text.
    - The claim limiter and the redeem limiter are separate and share no state.
    - The request body is limited to 4 KiB.
-4. A successful claim revokes every other token the plugin's principal holds,
-   so a re-pair leaves exactly one live token.
+4. A successful claim revokes every token the plugin's principal held before
+   the one it mints, so a re-pair leaves exactly one live token, and writes
+   one audit entry that names the revoked token IDs.
 5. Opening a pairing is refused with `409` when the same code is already
    waiting on a different player.
 
@@ -56,8 +58,7 @@ said redeem was the only one.
   Someone on that network who reads the code while it is displayed could
   produce a matching secret and race the real plugin for the token, which
   holds the `scheduler` role. The owner is ruling separately on the code
-  length. Until that ruling this is accepted for dedicated show networks, as
-  ADR-055 accepts cleartext redeem.
+  length. Until that ruling the exposure stands.
 - Because a pairing token is only ever handed out once, a plugin that loses
   it has to be paired again.
 

@@ -714,10 +714,11 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
   const inFlightRef = useRef(false)
   const pendingRef = useRef<number | null>(null)
 
+  const reading = readout.ceiling.kind === 'value' ? readout.ceiling.value : null
   useEffect(() => {
-    if (sliderValue === null && readout.ceiling.kind === 'value') setSliderValue(readout.ceiling.value)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readout.ceiling.kind])
+    const writing = debounceRef.current !== null || inFlightRef.current || pendingRef.current !== null
+    if (!writing) setSliderValue(reading)
+  }, [reading])
 
   const sendCeiling = (value: number) => {
     if (inFlightRef.current) {
@@ -741,7 +742,10 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
   const onChange = (value: number) => {
     setSliderValue(value)
     if (debounceRef.current !== null) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => sendCeiling(value), BRIGHTNESS_DEBOUNCE_MS)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      sendCeiling(value)
+    }, BRIGHTNESS_DEBOUNCE_MS)
   }
 
   useEffect(() => {
@@ -750,8 +754,8 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
     }
   }, [])
 
-  const ceilingUnknown = sliderValue === null && readout.ceiling.kind === 'absent'
-  const displayed = sliderValue ?? (readout.ceiling.kind === 'value' ? readout.ceiling.value : 0)
+  const ceilingUnknown = sliderValue === null
+  const displayed = sliderValue ?? 0
   const absentReasons = absentFacts([readout.ceiling, readout.transitionGain, readout.effectiveOutput, readout.fadeActive])
   const sliderTitle = !gate.allowed ? gate.reason : ceilingUnknown ? 'The ceiling is unknown until the plugin reports it.' : undefined
 
