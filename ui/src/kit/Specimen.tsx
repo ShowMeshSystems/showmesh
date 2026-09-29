@@ -18,6 +18,7 @@ import {
   WeatherDelayQuestionBanner,
   ConfirmDialog,
   ConnectionPill,
+  CopyButton,
   DefinitionStrip,
   DeletePanel,
   Drawer,
@@ -142,6 +143,7 @@ export function Specimen() {
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
 
   return (
@@ -608,7 +610,14 @@ export function Specimen() {
               </>
             }
             confirmLabel="Deploy anyway"
-            onConfirm={() => setConfirmOpen(false)}
+            busy={confirmBusy}
+            onConfirm={() => {
+              setConfirmBusy(true)
+              window.setTimeout(() => {
+                setConfirmBusy(false)
+                setConfirmOpen(false)
+              }, 800)
+            }}
             onCancel={() => setConfirmOpen(false)}
           />
         </SpecSection>
@@ -736,6 +745,7 @@ export function Specimen() {
                 <p>
                   Run this on the node: <span className="sm-data">sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M</span>
                 </p>
+                <CopyButton value="sudo showmesh-install --coordinator https://showmesh.local --code Q7XR-9K2M" label="Copy command" />
               </>
             }
             onDismiss={() => {}}

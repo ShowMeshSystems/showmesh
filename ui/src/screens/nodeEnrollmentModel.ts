@@ -1,10 +1,6 @@
 /**
- * ADR-055's node ID rule and install-command wording, mirrored from
- * pkg/mqttproto/topic.go's nodeIDPattern and cmd/showmeshctl's
- * cmd_node_enroll.go so the UI states the same thing the CLI does before
- * the operator ever sends the request. The coordinator remains the
- * authority: this is a hint that fails fast on an obviously bad id, not a
- * second copy of the server's validation.
+ * The node ID rule and install command, mirrored from pkg/mqttproto/topic.go
+ * and cmd/showmeshctl/cmd_node_enroll.go. The coordinator stays the authority.
  */
 
 const NODE_ID_PATTERN = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/
@@ -46,13 +42,10 @@ export function replaceLoopbackHost(rawUrl: string): { url: string; loopback: bo
   } catch {
     return { url: rawUrl, loopback: false }
   }
-  const host = parsed.hostname
-  const isLoopback = host.toLowerCase() === 'localhost' || host === '127.0.0.1' || host === '::1'
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const isLoopback = host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
   if (!isLoopback) return { url: rawUrl, loopback: false }
-  // The URL setter lower-cases a hostname it is assigned (WHATWG URL host
-  // normalization), which the placeholder must not go through: it is a
-  // literal string an operator matches against the fact below, not a real
-  // hostname. Rebuilt by hand so its case survives.
+  // Rebuilt by hand: the URL setter would lower-case the placeholder host.
   const replacedHost = parsed.port === '' ? COORDINATOR_PLACEHOLDER_HOST : `${COORDINATOR_PLACEHOLDER_HOST}:${parsed.port}`
   const path = parsed.pathname === '/' ? '' : parsed.pathname
   return { url: `${parsed.protocol}//${replacedHost}${path}${parsed.search}${parsed.hash}`, loopback: true }

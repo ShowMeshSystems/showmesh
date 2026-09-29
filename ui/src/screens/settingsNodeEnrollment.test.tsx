@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Model, NodeEnrollment, SessionResponse } from '../api'
@@ -143,6 +143,70 @@ describe('SettingsNodeEnrollment', () => {
 
     await waitFor(() => expect(screen.getByText('WXYZ-9001')).toBeInTheDocument())
     expect(lastRequest).toEqual({ nodeId: 'render-01', reenroll: true })
+  })
+
+  it('sends one re-enroll request when the confirm button is clicked twice while the mint is pending', async () => {
+    stubs.listNodeEnrollments = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', enrollments: [] })
+    const calls: boolean[] = []
+    stubs.createNodeEnrollment = (payload: { nodeId: string; reenroll: boolean }) => {
+      calls.push(payload.reenroll)
+      if (!payload.reenroll) return Promise.reject(new ApiError('Node "render-01" is already enrolled.', 409))
+      return new Promise(() => {})
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mint enrollment code' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'render-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Mint enrollment code' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Re-enroll this node?' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mint re-enrollment code' }))
+    const pending = await within(dialog).findByRole('button', { name: 'Minting…' })
+    expect(pending).toBeDisabled()
+    fireEvent.click(pending)
+
+    expect(calls).toEqual([false, true])
+  })
+
+  it('shows a failed re-enroll inside the dialog', async () => {
+    stubs.listNodeEnrollments = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', enrollments: [] })
+    stubs.createNodeEnrollment = (payload: { nodeId: string; reenroll: boolean }) =>
+      payload.reenroll
+        ? Promise.reject(new ApiError('The coordinator could not mint the code. Try again.', 503))
+        : Promise.reject(new ApiError('Node "render-01" is already enrolled.', 409))
+    renderScreen()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mint enrollment code' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'render-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Mint enrollment code' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Re-enroll this node?' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mint re-enrollment code' }))
+
+    await waitFor(() => expect(dialog).toHaveTextContent(/could not mint the code/))
+  })
+
+  it('offers a copy control for the install command', async () => {
+    stubs.listNodeEnrollments = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', enrollments: [] })
+    stubs.createNodeEnrollment = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        id: 'enr-1',
+        nodeId: 'render-01',
+        code: 'ABCD-2345',
+        reenroll: false,
+        expiresAt: '2026-08-30T21:22:00Z',
+        coordinatorUrl: 'https://coordinator.example',
+      })
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    renderScreen()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mint enrollment code' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'render-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Mint enrollment code' }))
+    await screen.findByText('ABCD-2345')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy command' }))
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('--code ABCD-2345'))
   })
 
   it('leaves the mint button disabled with the reason while the node id fails the client-side hint', async () => {

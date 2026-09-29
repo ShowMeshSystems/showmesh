@@ -67,6 +67,18 @@ describe('replaceLoopbackHost', () => {
     expect(url).toBe('http://COORDINATOR-ADDRESS:8080')
   })
 
+  it('replaces the bracketed IPv6 loopback with the placeholder', () => {
+    const { url, loopback } = replaceLoopbackHost('http://[::1]:8080')
+    expect(loopback).toBe(true)
+    expect(url).toBe('http://COORDINATOR-ADDRESS:8080')
+  })
+
+  it('replaces any 127.0.0.0/8 address with the placeholder', () => {
+    const { url, loopback } = replaceLoopbackHost('http://127.0.0.2:8080')
+    expect(loopback).toBe(true)
+    expect(url).toBe('http://COORDINATOR-ADDRESS:8080')
+  })
+
   it('leaves a real network address unchanged', () => {
     const { url, loopback } = replaceLoopbackHost('https://showmesh.example.com')
     expect(loopback).toBe(false)

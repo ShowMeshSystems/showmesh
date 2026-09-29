@@ -8,7 +8,7 @@ import {
   type CreateNodeEnrollmentResponse,
   type NodeEnrollment,
 } from '../api'
-import { Button, ButtonRow, ConfirmDialog, Field, Input, OneTimeSecret, RuledStrip, Section, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, ConfirmDialog, CopyButton, Field, Input, OneTimeSecret, RuledStrip, Section, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { ageMs, formatDateClock, formatDuration } from '../domain/time'
@@ -62,6 +62,7 @@ function InstallDetail({ issued, coordinatorVersion }: { issued: CreateNodeEnrol
       {issued.reenroll && <p>This replaces the node&rsquo;s current broker password and API token.</p>}
       <p>Run this on the node before it expires:</p>
       <p className="sm-data">{command}</p>
+      <CopyButton value={command} label="Copy command" />
       {loopback && (
         <p>
           {COORDINATOR_PLACEHOLDER_HOST} is a placeholder because this browser reached the coordinator at an address only
@@ -99,13 +100,16 @@ export function SettingsNodeEnrollment() {
   const [mintError, setMintError] = useState<string | null>(null)
   const [issued, setIssued] = useState<CreateNodeEnrollmentResponse | null>(null)
   const [pendingReenroll, setPendingReenroll] = useState<{ nodeId: string; detail: string } | null>(null)
+  const [reenrollError, setReenrollError] = useState<string | null>(null)
 
   const hint = nodeIdHint(nodeId.trim())
   const canMint = gate.allowed && !minting && nodeId.trim() !== '' && hint === null
 
   const mint = (id: string, reenroll: boolean) => {
+    if (minting) return
     setMinting(true)
     setMintError(null)
+    setReenrollError(null)
     createNodeEnrollment({ nodeId: id, reenroll })
       .then((response) => {
         setIssued(response)
@@ -118,6 +122,10 @@ export function SettingsNodeEnrollment() {
           setPendingReenroll({ nodeId: id, detail: describeApiError(err) })
           return
         }
+        if (reenroll) {
+          setReenrollError(describeApiError(err))
+          return
+        }
         setMintError(describeApiError(err))
       })
       .finally(() => setMinting(false))
@@ -128,7 +136,7 @@ export function SettingsNodeEnrollment() {
   const [cancelError, setCancelError] = useState<string | null>(null)
 
   const confirmCancel = () => {
-    if (cancelTarget === null) return
+    if (cancelTarget === null || cancelling) return
     setCancelling(true)
     setCancelError(null)
     cancelNodeEnrollment(cancelTarget.id)
@@ -248,10 +256,21 @@ export function SettingsNodeEnrollment() {
       <ConfirmDialog
         open={pendingReenroll !== null}
         title="Re-enroll this node?"
-        detail={pendingReenroll?.detail}
+        detail={
+          pendingReenroll !== null && (
+            <>
+              <p>{pendingReenroll.detail}</p>
+              {reenrollError !== null && <p>{reenrollError}</p>}
+            </>
+          )
+        }
         confirmLabel={minting ? 'Minting…' : 'Mint re-enrollment code'}
+        busy={minting}
         onConfirm={() => pendingReenroll !== null && mint(pendingReenroll.nodeId, true)}
-        onCancel={() => setPendingReenroll(null)}
+        onCancel={() => {
+          setPendingReenroll(null)
+          setReenrollError(null)
+        }}
       />
 
       <ConfirmDialog
@@ -269,6 +288,7 @@ export function SettingsNodeEnrollment() {
           )
         }
         confirmLabel={cancelling ? 'Cancelling…' : 'Cancel code'}
+        busy={cancelling}
         onConfirm={confirmCancel}
         onCancel={() => {
           setCancelTarget(null)

@@ -10,6 +10,8 @@ type ConfirmDialogProps = {
   detail: ReactNode
   confirmLabel: string
   cancelLabel?: string
+  /** Disables the confirm button while the decision's request is in flight. */
+  busy?: boolean
   onConfirm: () => void
   onCancel: () => void
 }
@@ -19,7 +21,7 @@ type ConfirmDialogProps = {
  * focus and returns it to the opener. Unlike Drawer and Popover it demands
  * a decision before the page behind it can be used again.
  */
-export function ConfirmDialog({ open, title, detail, confirmLabel, cancelLabel = 'Cancel', onConfirm, onCancel }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, title, detail, confirmLabel, cancelLabel = 'Cancel', busy = false, onConfirm, onCancel }: ConfirmDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<Element | null>(null)
   const titleId = useId()
@@ -68,7 +70,7 @@ export function ConfirmDialog({ open, title, detail, confirmLabel, cancelLabel =
         <p id={titleId} className="sm-confirm__title">{title}</p>
         <div className="sm-confirm__detail">{detail}</div>
         <ButtonRow>
-          <Button variant="danger" onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant="danger" onClick={onConfirm} disabled={busy}>{confirmLabel}</Button>
           <Button variant="quiet" onClick={onCancel}>{cancelLabel}</Button>
         </ButtonRow>
       </div>
