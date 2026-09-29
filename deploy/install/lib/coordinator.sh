@@ -358,6 +358,7 @@ coord_state_save() {
 }
 
 run_coordinator_role() {
+  upgrade_coordinator_preflight
   coord_install_docker
   coord_install_bundle
   coord_choose_broker
