@@ -118,3 +118,22 @@ as the new administrator, and the upgrade keeps the token and broker login.
 It also asserts that `/var/log/showmesh-install.log` is mode 0600, carries the
 run header and the captured output of a step, and holds no broker password or
 token. It removes its container and volume on exit.
+
+## Firewall
+
+`bench/node-install/run_firewall_bench.sh` proves `deploy/install/lib/firewall.sh`
+against every firewall precondition it detects. It needs `run_installer_bench.sh`'s
+releases in `dist/inst-bench/`, and runs one throwaway container per case:
+
+- ufw, through the real installer: `run_firewall_ufw_proof.sh` enables ufw in the
+  node-install bench container (`--cap-add=NET_ADMIN`), installs a render node
+  against the fake enrollment server, and asserts every port the role needs is
+  opened with a rule commented as ShowMesh's, and that an upgrade adds nothing
+  twice.
+- firewalld, a raw nftables ruleset with a drop policy, no firewall, `--firewall`
+  and `--no-firewall`: `run_firewall_lib_proof.sh CASE` sources `lib/firewall.sh`
+  directly, since none of these need anything else `showmesh-install` would
+  exercise. The `--firewall` case runs its own dockerd (`--privileged`) to prove
+  Docker's tables survive; firewalld needs `dbus` and runs without systemd as
+  PID 1, so it reports "not run" instead of failing when it cannot start in a
+  given container.
