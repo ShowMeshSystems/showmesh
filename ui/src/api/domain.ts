@@ -239,6 +239,8 @@ export type ConfigAudioOutputLatency = components['schemas']['ConfigAudioOutputL
 export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
 export type AudioNodeSummary = components['schemas']['AudioNodeSummary']
 export type AudioNodeListResponse = components['schemas']['AudioNodeListResponse']
+export type AudioRoutingChoicesResponse = components['schemas']['AudioRoutingChoicesResponse']
+export type AudioRoutingRouteChoice = components['schemas']['AudioRoutingRouteChoice']
 
 // Long-run program-to-LTC drift recordings (audio alignment runs), aliased
 // for the identical reason as every type above. Not a config kind: these

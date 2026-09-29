@@ -99,6 +99,7 @@ import type {
   AudioAlignmentRunListResponse,
   AudioAlignmentRunResponse,
   AudioNodeConfigResponse,
+  AudioRoutingChoicesResponse,
   AudioSettingsConfigResponse,
   ConfigAudioNode,
   ConfigAudioSettingsPayload,
@@ -357,6 +358,10 @@ export function getAudioSettingsConfigRevisions(): Promise<ConfigRevisionsRespon
 
 export function getAudioNode(id: string): Promise<AudioNodeConfigResponse> {
   return store.getAudioNode(id)
+}
+
+export function getAudioRoutingChoices(nodeId: string): Promise<AudioRoutingChoicesResponse> {
+  return store.getAudioRoutingChoices(nodeId)
 }
 
 export function putAudioNode(id: string, payload: ConfigAudioNode): Promise<AudioNodeConfigResponse> {
