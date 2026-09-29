@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -434,8 +435,8 @@ type OtherShowSurface struct {
 
 // CheckShowSurfaceConflict refuses a candidate whose channel range overlaps,
 // or whose NDI source name equals, that of another surface with the same show
-// and node. The candidate's own id is skipped, and NDI names are compared
-// exactly as stored because the agent hands them to the NDI sink unchanged.
+// and node. The candidate's own id is skipped. NDI names are compared
+// ignoring case and surrounding spaces, as mDNS instance names are.
 func CheckShowSurfaceConflict(id string, candidate ShowSurfacePayload, others []OtherShowSurface) *ValidationError {
 	candStart := candidate.ChannelRange.StartChannel
 	candEnd := candStart + candidate.ChannelRange.ChannelCount - 1
@@ -449,15 +450,15 @@ func CheckShowSurfaceConflict(id string, candidate ShowSurfacePayload, others []
 		if candStart <= end && start <= candEnd {
 			return &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "channelRange",
-				Detail: fmt.Sprintf("Channels %d to %d overlap the surface %s on this node. Choose a start channel after %d or move one surface to another node.",
-					start, end, p.Name, end),
+				Detail: fmt.Sprintf("The surface %q already uses channels %d to %d on this node. Choose channels outside that range or move one surface to another node.",
+					p.Name, start, end),
 			}
 		}
-		if candidate.Output.NDI != nil && p.Output.NDI != nil && candidate.Output.NDI.SourceName == p.Output.NDI.SourceName {
+		if candidate.Output.NDI != nil && p.Output.NDI != nil && strings.EqualFold(strings.TrimSpace(candidate.Output.NDI.SourceName), strings.TrimSpace(p.Output.NDI.SourceName)) {
 			return &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "output.ndi.sourceName",
-				Detail: fmt.Sprintf("The NDI name %s is already used by the surface %s on this node. Choose a different NDI name.",
-					p.Output.NDI.SourceName, p.Name),
+				Detail: fmt.Sprintf("The NDI name %q is already used by the surface %q on this node. Choose a different NDI name.",
+					strings.TrimSpace(candidate.Output.NDI.SourceName), p.Name),
 			}
 		}
 	}
