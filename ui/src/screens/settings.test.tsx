@@ -1224,6 +1224,18 @@ describe('Settings › Node routing › choices from the node', () => {
     }
   }
 
+  function reportingNode(routes: string[]) {
+    const none = { signal: '', value: null, unit: null, state: 'not_collected', reason: null, observedAt: null, collectedAt: null, source: '', quality: 'direct', validForSeconds: null }
+    return {
+      nodeId: 'audio-node-01', label: null, platform: null, agentVersion: null, bootId: null, startedAt: null,
+      firstSeenAt: '2026-09-28T00:00:00Z', updatedAt: '2026-09-28T00:00:00Z',
+      capabilities: [{ id: 'audio.output.local', attributes: { routes } }],
+      controlPlane: { state: 'online', reason: '' },
+      evidence: { hello: { ...none, signal: 'node.hello', state: 'current', source: 'mqtt' }, lastWill: none, heartbeat: none },
+      declaration: {} as never, render: [], audio: [], clock: [], fppConnect: [],
+    }
+  }
+
   function setUp(payload: Record<string, unknown>, choiceBody: unknown) {
     stubs.listConfigObjects = () =>
       Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: M4, show: '', currentRevision: 4, updatedAt: '2026-09-28T18:00:00Z' }] })
@@ -1325,11 +1337,82 @@ describe('Settings › Node routing › choices from the node', () => {
   })
 
   it('falls back to manual entry when the choices cannot be read', async () => {
-    setUp({ programRoute: M4, programChannels: [1, 2] }, new ApiError('You do not have permission to read this.', 403, 'https://showmesh.dev/problems/forbidden'))
+    setUp({ programRoute: M4, programChannels: [1, 2] }, new ApiError('The coordinator could not answer.', 500, 'https://showmesh.dev/problems/internal'))
     renderAt('/settings/node-routing', { nodes: [] })
 
     expect(await screen.findByText(/Enter channels by hand below/)).toBeInTheDocument()
     expect(screen.getByLabelText('Program channels')).toHaveValue('1, 2')
+  })
+
+  it('suggests manual entry after a failed read only when the session can save', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, new ApiError('You do not have permission to read this.', 403, 'https://showmesh.dev/problems/forbidden'))
+    renderAt('/settings/node-routing', { nodes: [] })
+    expect(await screen.findByText('You do not have permission to read this.')).toBeInTheDocument()
+    expect(screen.queryByText(/Enter channels by hand/)).not.toBeInTheDocument()
+
+    cleanup()
+    setUp({ programRoute: M4, programChannels: [1, 2] }, new ApiError('The coordinator could not answer.', 500, 'https://showmesh.dev/problems/internal'))
+    renderAt('/settings/node-routing', { nodes: [], session: signedIn(['observation:read']) })
+    expect(await screen.findByText(/The coordinator could not answer/)).toBeInTheDocument()
+    expect(screen.queryByText(/Enter channels by hand/)).not.toBeInTheDocument()
+  })
+
+  it('keeps a saved output the node no longer reports selected in manual entry, and a save of other fields keeps it', async () => {
+    const OLD = 'hw:CARD=USB,DEV=0'
+    setUp(
+      { programRoute: OLD, programChannels: [1, 2] },
+      choices({ current: { programRoute: OLD, programChannels: [1, 2], offered: false, reason: `This node no longer reports ${OLD}. The saved channels stay in use as saved.` } }),
+    )
+    let sent: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [reportingNode([M4])] } as unknown as Partial<Model>)
+
+    expect(await screen.findByText(/no longer reports/)).toBeInTheDocument()
+    const route = screen.getByRole('combobox', { name: 'Route' }) as HTMLSelectElement
+    expect(route.value).toBe(OLD)
+    expect(screen.getByRole('option', { name: `${OLD}, no longer reported by this node` })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Program' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ programRoute: OLD, programChannels: [1, 2], role: 'program' })
+  })
+
+  it('says once, in the body and on Save, to turn LTC off or pick another pair when a pair leaves no timecode channel', async () => {
+    const six = {
+      ...m4Route,
+      programGroups: [
+        { channels: [1, 2], ltcChannels: [], conflicts: [] },
+        { channels: [3, 4], ltcChannels: [1], conflicts: [] },
+      ],
+    }
+    setUp({ programRoute: M4, ltcRoute: M4, programChannels: [3, 4], ltcChannel: 1 }, choices({ routes: [six], current: { programRoute: M4, programChannels: [3, 4], ltcChannel: 1, offered: true } }))
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    fireEvent.click(await screen.findByRole('radio', { name: /Channels 1 and 2/ }))
+    const message = 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
+    expect(screen.getAllByText(message)).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Save routing' })).toHaveAttribute('title', message)
+  })
+
+  it('disables manual entry and shows the reason when the server does not accept it', async () => {
+    const refusal = 'This node reports no usable audio outputs, so no channels can be saved for it yet.'
+    setUp(
+      { programRoute: M4, programChannels: [1, 2] },
+      choices({ discovery: 'absent', reason: 'This node reports no usable audio outputs. Connect the audio interface, then restart ShowMesh on the node.', routes: [], ltc: { available: false }, manualEntry: { allowed: false, reason: refusal } }),
+    )
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(screen.queryByText(/Enter channels by hand/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Enter by hand' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Program channels')).toBeDisabled()
+    expect(screen.getByLabelText('Program channels')).toHaveValue('1, 2')
+    fireEvent.click(screen.getByRole('button', { name: 'Program' }))
+    expect(screen.getByRole('button', { name: 'Save routing' })).toHaveAttribute('title', refusal)
   })
 
   it('shows a save failure and withholds save without config:write', async () => {
@@ -1344,6 +1427,10 @@ describe('Settings › Node routing › choices from the node', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Channel' }), { target: { value: '2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
     expect(await screen.findByText(/Channel 5 does not exist/)).toBeInTheDocument()
+
+    stubs.putAudioNode = () => Promise.reject(new ApiError('Node audio-node-02 already sends timecode. Choose program only here, or change audio-node-02 first.', 422, 'https://showmesh.dev/problems/unprocessable'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    expect(await screen.findByText(/audio-node-02 already sends timecode/)).toBeInTheDocument()
 
     cleanup()
     renderAt('/settings/node-routing', { nodes: [], session: signedIn(['observation:read']) })

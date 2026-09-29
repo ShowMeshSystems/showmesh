@@ -68,7 +68,7 @@ const DEFAULT_HOLDOVER_LIMIT_SECONDS = 60
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeClockObjectsState = { kind: 'loading' } | { kind: 'loaded'; objects: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
-type ChoicesState = { kind: 'loading' } | { kind: 'loaded'; choices: AudioRoutingChoicesResponse } | { kind: 'failed'; reason: string }
+type ChoicesState = { kind: 'loading' } | { kind: 'loaded'; choices: AudioRoutingChoicesResponse } | { kind: 'failed'; reason: string; forbidden: boolean }
 
 const ENTRY_MODE_OPTIONS: readonly { value: RoutingEntryMode; label: string }[] = [
   { value: 'choices', label: 'From the node' },
@@ -314,7 +314,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         if (!cancelled) setChoicesState({ kind: 'loaded', choices })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setChoicesState({ kind: 'failed', reason: describeApiError(err) })
+        if (!cancelled) setChoicesState({ kind: 'failed', reason: describeApiError(err), forbidden: err instanceof ApiError && err.status === 403 })
       })
     return () => {
       cancelled = true
@@ -323,7 +323,12 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
 
   const choices = choicesState.kind === 'loaded' ? choicesState.choices : null
   const choicesUsable = choices !== null && choices.discovery === 'available' && choices.routes.length > 0
-  const entryMode: RoutingEntryMode = !choicesUsable ? 'manual' : (modeOverride ?? defaultRoutingEntryMode(choices))
+  const manualRefusal = choices !== null && !choices.manualEntry.allowed ? (choices.manualEntry.reason ?? 'This node does not accept channels entered by hand.') : null
+  const entryMode: RoutingEntryMode = !choicesUsable
+    ? 'manual'
+    : manualRefusal !== null
+      ? 'choices'
+      : (modeOverride ?? defaultRoutingEntryMode(choices))
   const routeChoice = entryMode === 'choices' ? (choices?.routes.find((r) => r.route === programRoute) ?? null) : null
 
   const removeNode = () => {
@@ -389,16 +394,26 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
       outputLatencyConfidence.trim() !== '' &&
       outputLatencyConfiguration.trim() !== '')
   const chosenGroup = routeChoice?.programGroups.find((g) => g.channels.join(',') === programChannels.join(',')) ?? null
+  const noLtcChannelReason =
+    chosenGroup === null || chosenGroup.ltcChannels.length > 0
+      ? null
+      : choices?.ltc.available === false && choices.ltc.reason !== undefined
+        ? choices.ltc.reason
+        : routeChoice?.programGroups.some((g) => g.ltcChannels.length > 0)
+          ? 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
+          : 'This output has no spare channel for timecode. Turn LTC off, or choose another output.'
   const choiceReason =
     entryMode !== 'choices'
-      ? undefined
+      ? (manualRefusal ?? undefined)
       : routeChoice === null
         ? 'Choose an output this node reports.'
         : chosenGroup === null
           ? 'Choose the program channels.'
-          : ltcOn && !chosenGroup.ltcChannels.includes(Number(ltcChannelText))
-            ? 'Choose a timecode channel from the ones offered.'
-            : undefined
+          : ltcOn && noLtcChannelReason !== null
+            ? noLtcChannelReason
+            : ltcOn && !chosenGroup.ltcChannels.includes(Number(ltcChannelText))
+              ? 'Choose a timecode channel from the ones offered.'
+              : undefined
   const canSave =
     choiceReason === undefined &&
     verdict.ok &&
@@ -555,9 +570,11 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
             state={choicesState}
             usable={choicesUsable}
             entryMode={entryMode}
+            suggestManual={saveGate.allowed && manualRefusal === null}
             onRefresh={() => setChoicesAttempt((n) => n + 1)}
           />
-          {choicesUsable && (
+          {manualRefusal !== null && !choicesUsable && <p className="sm-small sm-muted">{manualRefusal}</p>}
+          {choicesUsable && manualRefusal === null && (
             <Segmented label="Channels" value={entryMode} options={ENTRY_MODE_OPTIONS} onChange={setEntryMode} />
           )}
           {entryMode === 'choices' && choices !== null ? (
@@ -607,11 +624,15 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                     <Select
                       {...props}
                       value={programRoute}
+                      disabled={manualRefusal !== null}
                       onChange={(e) => {
                         setProgramRoute(e.target.value)
                         setDirty(true)
                       }}
                     >
+                      {programRoute !== '' && !programRoutes.includes(programRoute) && (
+                        <option value={programRoute}>{programRoute}, no longer reported by this node</option>
+                      )}
                       {programRoutes.map((route) => (
                         <option key={route} value={route}>
                           {route}
@@ -627,6 +648,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                       <Input
                         {...props}
                         value={programRoute}
+                        disabled={manualRefusal !== null}
                         onChange={(e) => {
                           setProgramRoute(e.target.value)
                           setDirty(true)
@@ -641,6 +663,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                   <Input
                     {...props}
                     value={programChannelsText}
+                    disabled={manualRefusal !== null}
                     onChange={(e) => {
                       setProgramChannelsText(e.target.value)
                       setDirty(true)
@@ -710,8 +733,8 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
             {entryMode === 'choices' ? (
               chosenGroup === null ? (
                 <p className="sm-small sm-muted">Choose the program channels first. Timecode uses a channel they leave free.</p>
-              ) : chosenGroup.ltcChannels.length === 0 ? (
-                <p className="sm-small sm-muted">{routeChoice?.ltcReason ?? choices?.ltc.reason ?? 'No channel is left for timecode.'}</p>
+              ) : noLtcChannelReason !== null ? (
+                <p className="sm-small sm-muted">{noLtcChannelReason}</p>
               ) : (
                 <Field label="Channel">
                   {(props) => (
@@ -1307,11 +1330,13 @@ function RoutingChoicesStatus({
   state,
   usable,
   entryMode,
+  suggestManual,
   onRefresh,
 }: {
   state: ChoicesState
   usable: boolean
   entryMode: RoutingEntryMode
+  suggestManual: boolean
   onRefresh: () => void
 }) {
   if (state.kind === 'loading') {
@@ -1325,7 +1350,7 @@ function RoutingChoicesStatus({
   if (state.kind === 'failed') {
     return (
       <div className="sm-grid sm-stack-4">
-        <RuledStrip absence="failed" label="Read failed" fact={`${state.reason} Enter channels by hand below.`} />
+        <RuledStrip absence="failed" label="Read failed" fact={suggestManual && !state.forbidden ? `${state.reason} Enter channels by hand below.` : state.reason} />
         <ButtonRow>{refresh}</ButtonRow>
       </div>
     )
@@ -1338,8 +1363,8 @@ function RoutingChoicesStatus({
   }
   const fact =
     choices.discovery === 'available'
-      ? 'This node reports no outputs with channels to choose from. Enter channels by hand below.'
-      : (choices.reason ?? 'This node reports no outputs. Enter channels by hand below.')
+      ? `This node reports no outputs with channels to choose from.${suggestManual ? ' Enter channels by hand below.' : ''}`
+      : (choices.reason ?? `This node reports no outputs.${suggestManual ? ' Enter channels by hand below.' : ''}`)
   return (
     <div className="sm-grid sm-stack-4">
       <RuledStrip absence={DISCOVERY_ABSENCE[choices.discovery]} label={DISCOVERY_LABEL[choices.discovery]} fact={fact} />
