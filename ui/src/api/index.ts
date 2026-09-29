@@ -30,6 +30,10 @@ export type {
   EventSeq,
   FPPEndpointsConfigResponse,
   FPPCommandResult,
+  // Pairing an FPP plugin by code, and its brightness ceiling write.
+  FPPPairingStateResponse,
+  FPPPairingResponse,
+  FPPBrightnessCeilingResponse,
   // The three-level emergency stop and its hard-stop arm/fire gate.
   EmergencyStopResult,
   EmergencyStopInstanceOutcome,
@@ -328,6 +332,9 @@ export {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
+  getFPPPairing,
+  postFPPPairing,
+  postFPPBrightnessCeiling,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
   acknowledgeFPPInstanceUUIDChange,

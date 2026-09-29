@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -442,10 +443,11 @@ func TestRedeemMalformedCodeIs400(t *testing.T) {
 	}
 }
 
-// TestRedeemIsTheOnlyUnauthenticatedWrite reads api.go's route table: every
+// TestUnauthenticatedWritesAreExactlyRedeemAndPairingClaim reads api.go's route table: every
 // non-GET route goes through writeGuard, except the two sign-in routes,
-// which run loginCSRFGuard, and the one named exception, redeem.
-func TestRedeemIsTheOnlyUnauthenticatedWrite(t *testing.T) {
+// which run loginCSRFGuard, and the two token-authenticated routes, redeem
+// and the FPP pairing claim (ADR-057).
+func TestUnauthenticatedWritesAreExactlyRedeemAndPairingClaim(t *testing.T) {
 	src, err := os.ReadFile("api.go")
 	if err != nil {
 		t.Fatal(err)
@@ -470,8 +472,9 @@ func TestRedeemIsTheOnlyUnauthenticatedWrite(t *testing.T) {
 			unguarded = append(unguarded, route)
 		}
 	}
-	if len(unguarded) != 1 || unguarded[0] != "POST /api/v1/node-enrollments/redeem" {
-		t.Fatalf("unauthenticated writes = %v, want exactly [POST /api/v1/node-enrollments/redeem]", unguarded)
+	want := []string{"POST /api/v1/node-enrollments/redeem", "POST /api/v1/integrations/fpp/pairing/claim"}
+	if !slices.Equal(unguarded, want) {
+		t.Fatalf("unauthenticated writes = %v, want exactly %v", unguarded, want)
 	}
 }
 

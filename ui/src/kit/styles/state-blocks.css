@@ -60,6 +60,11 @@
   border-bottom: 1px dashed var(--text-faint);
 }
 
+/* AbsenceLabel: the label on its own, inside a definition cell. */
+.sm-absence {
+  display: inline-block;
+}
+
 .sm-strip__fact {
   margin: 0;
   font: var(--t-subhead);

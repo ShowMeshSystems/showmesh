@@ -1879,6 +1879,8 @@ func New(deps Dependencies, opts Options) *API {
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
 		emergencyStopArms:         newEmergencyStopArmStore(),
+		fppPairings:               newFPPPairingStore(),
+		fppPairingClaims:          newFPPPairingClaimLimiter(),
 		redeemLimiter:             newRedeemLimiter(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
@@ -1937,6 +1939,23 @@ func New(deps Dependencies, opts Options) *API {
 	// scopeFPPTransitionGain's own doc comment. fpptransitiongain.go owns
 	// everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
+
+	// POST /api/v1/fpp/{instanceId}/brightness/ceiling: the operator
+	// write of one FPP host's brightness ceiling, behind fpp:command like
+	// every other operator write to one FPP host. Unlike the gain above,
+	// the ceiling IS one of FPP's own commands, registered by the
+	// resident plugin - fppbrightnessceiling.go owns everything past
+	// authorization.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/ceiling", h.writeGuard(&scopeFPPBrightnessCeiling, h.handleFPPBrightnessCeiling))
+
+	// GET/POST /api/v1/fpp/{instanceId}/pairing: pairing one FPP host's
+	// ShowMesh plugin with this coordinator. The POST creates a principal
+	// and mints a token, which is principal:write's own blast radius, so
+	// it is admin-only; the GET is an ordinary FPP read. The claim half
+	// is unauthenticated and registered with the other integration routes
+	// below - fpppairing.go owns all three.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/pairing", h.writeGuard(&scopeFPPPairing, h.handleStartFPPPairing))
+	mux.HandleFunc("GET /api/v1/fpp/{instanceId}/pairing", h.readGuard(identity.ScopeFPPRead, h.handleGetFPPPairing))
 
 	// POST /api/v1/fpp/{instanceId}/playlist-definitions/republish: ask
 	// one FPP host's plugin to resend its playlist definitions
@@ -2028,8 +2047,8 @@ func New(deps Dependencies, opts Options) *API {
 	// credential to check a scope or CSRF header against. See bootstrap.go.
 	mux.HandleFunc("POST /api/v1/bootstrap", h.loginCSRFGuard(h.handleClaimBootstrap))
 
-	// ADR-055 node enrollment. The redeem route is the one write that takes
-	// no principal and no same-origin check: the code is the credential.
+	// ADR-055 node enrollment. The redeem route is one of two writes that take
+	// no principal and no same-origin check (ADR-057): the code is the credential.
 	mux.HandleFunc("POST /api/v1/node-enrollments", h.writeGuard(&scopeNodeEnroll, h.handleCreateNodeEnrollment))
 	mux.HandleFunc("GET /api/v1/node-enrollments", h.requireScope(identity.ScopeNodeEnroll, h.handleListNodeEnrollments))
 	mux.HandleFunc("DELETE /api/v1/node-enrollments/{id}", h.writeGuard(&scopeNodeEnroll, h.handleCancelNodeEnrollment))
@@ -2339,6 +2358,15 @@ func New(deps Dependencies, opts Options) *API {
 	// rule), so this is deliberately not the same scope that dispatches
 	// FPP's native commands. GET stays open under observation:read,
 	// matching every other FPP read surface.
+	// POST /api/v1/integrations/fpp/pairing/claim: one of two writes that
+	// take no principal (ADR-057), and deliberately so. The
+	// secret in the body is the credential: a plugin that holds it is the
+	// plugin the operator started a pairing for, and there is nothing
+	// else it could present, because it has no token yet. The body is
+	// bounded, the rate is limited per client address, and every refusal
+	// is the same 404 - see handleClaimFPPPairing.
+	mux.HandleFunc("POST /api/v1/integrations/fpp/pairing/claim", h.handleClaimFPPPairing)
+
 	mux.HandleFunc("POST /api/v1/integrations/fpp/playlist-entry-observations", h.writeGuard(&scopeFPPObserve, h.handlePostFPPPlaylistEntryObservation))
 	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-entry-observations", h.readGuard(identity.ScopeObservationRead, h.handleListFPPPlaylistEntryObservations))
 
