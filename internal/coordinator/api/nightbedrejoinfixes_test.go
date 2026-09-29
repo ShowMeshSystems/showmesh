@@ -375,7 +375,7 @@ func TestNightBedNotPlayingReason_PromisesOnlyWhatHappens(t *testing.T) {
 		{"stale", nightBedSessionReading{Present: true, State: string(pkgaudio.StateStopped), Stale: true}, false},
 	}
 	for _, tc := range cases {
-		reason := nightBedNotPlayingReason(audio, testNow, "node-a", tc.reading)
+		reason := nightBedNotPlayingReason(audio, testNow, "node-a", nightBedNotPlayingFacts{Reading: tc.reading})
 		promises := strings.Contains(reason, "on its next check")
 		if promises != tc.wantRecovered {
 			t.Errorf("%s: reason %q promises a recovery = %v, want %v", tc.name, reason, promises, tc.wantRecovered)

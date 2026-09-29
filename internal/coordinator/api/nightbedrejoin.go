@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -187,6 +185,26 @@ func nightBedReportedStateIsLost(state string) bool {
 	return false
 }
 
+// nightBedRejoinStartFailed reports whether a rejoin this controller
+// already performed for nodeID went on to a start the node did not
+// confirm. One such attempt is the end of it: the bed was given back, the
+// node would not play it, and repeating that costs a dispatch every time
+// the node reports without ever changing the answer. The row and its
+// reason stay recorded, and [nightBedNotPlayingReason] names the state.
+func nightBedRejoinStartFailed(steps []nightBackgroundAudioHistoryRow) bool {
+	rejoined := false
+	for _, row := range steps {
+		switch {
+		case row.Step.Kind == nightBGStepApply && row.Step.Rejoin:
+			rejoined = true
+		case rejoined && row.Step.Kind == nightBGStepStart &&
+			row.Row.State == nightCueStateResolved && row.Row.Outcome != nightCueOutcomeConfirmed:
+			return true
+		}
+	}
+	return false
+}
+
 // nightBedNodeEverHeldTheBed reports whether nodeID ever confirmed an
 // apply for this bed: the evidence that it once held the session, which
 // is what separates "this node lost the bed" from "this node never
@@ -208,7 +226,8 @@ func nightBedNodeEverHeldTheBed(steps []nightBackgroundAudioHistoryRow) bool {
 // coordinator recorded before that dispatch cannot describe its result.
 //
 // A step still in flight is left alone; so is a node whose own latest
-// step is already a rejoin ([nightBedRejoinNotePrefix]), and so is one
+// step is already a rejoin ([nightBackgroundAudioCueNameRejoinApply]),
+// and so is one
 // whose latest step the node itself refused. Together those bound this to
 // ONE recovery attempt per genuine loss, after which the ordinary
 // per-step rules take the node back.
@@ -220,9 +239,13 @@ func nightBedNodeEverHeldTheBed(steps []nightBackgroundAudioHistoryRow) bool {
 // report cannot have truncated the session away.
 //
 // A PRESENT session counts only when the node claims a state playback is
-// not running in AND this node's ledger says the bed should be playing,
-// so a bed this controller paused or stopped on purpose is never
-// "recovered" back over a show. A stale claim never counts at all.
+// not running in AND this node's own latest step is a CONFIRMED one that
+// should have left the bed playing. Confirmed is what separates "this was
+// playing and stopped being" from "this never started": a start that
+// FAILED on the node, or one that timed out, resolves not-confirmed and
+// leaves the session reporting failed or ready, and treating that as a
+// loss would re-apply into the same failure under a new revision for the
+// rest of the night. A stale claim never counts at all.
 func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessionID string, steps []nightBackgroundAudioHistoryRow) (nightBackgroundAudioHistoryRow, bool) {
 	if len(steps) == 0 || !nightBedNodeEverHeldTheBed(steps) {
 		return nightBackgroundAudioHistoryRow{}, false
@@ -231,7 +254,10 @@ func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessi
 	if latest.Row.State != nightCueStateResolved || latest.Row.DispatchedAt == nil {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
-	if _, isRejoin := decodeNightBedRejoinNote(latest.Row.OutcomeReason); isRejoin {
+	if latest.Step.Kind == nightBGStepApply && latest.Step.Rejoin {
+		return nightBackgroundAudioHistoryRow{}, false
+	}
+	if nightBedRejoinStartFailed(steps) {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
 	// A node whose latest step it REFUSED is answering, and answering no.
@@ -260,6 +286,9 @@ func nightBedSessionLost(audio NodeAudioLister, now time.Time, nodeID, sessionID
 		return nightBedNodeSessionCount(audio, nodeID) < nightBedSessionReportLimit
 	}
 	if reading.Stale {
+		return false
+	}
+	if latest.Row.Outcome != nightCueOutcomeConfirmed {
 		return false
 	}
 	return nightBedStepShouldLeaveBedPlaying(latest.Step.Kind) && nightBedReportedStateIsLost(reading.State)
@@ -391,32 +420,41 @@ func nightBedReportedItemAndPosition(audio NodeAudioLister, now time.Time, nodeI
 	return itemID, index, positionMs, collectedAt, true
 }
 
-// nightBedStartPointNotePrefix tags a start row with whether it carried a
-// playback point, so the one retry below can tell "this start named a
-// position the node refused" from "this start already dropped it".
-const nightBedStartPointNotePrefix = "bedStartPoint="
-
-// nightBedStartPointNote records whether the start that wrote it had its
-// playback point dropped.
-type nightBedStartPointTag struct {
-	Dropped bool `json:"dropped"`
+// nightBedSessionTouchedOutsideLedger reports whether a command this
+// controller did not commit as a step has reached (nodeID, sessionID)
+// since the step at latestStepRevision.
+//
+// MANUAL CONTROL WINS. An operator stopping or clearing a bed session
+// through POST /nodes/{nodeId}/audio/sessions/{sessionId}/stop goes
+// through the ordinary audio dispatch path, which writes no night step,
+// so this controller's own ledger still reads "started and confirmed"
+// while the node correctly reports stopped. Without this check the rejoin
+// would read that as a lost bed and start the music again under the
+// operator, every time, for the rest of the night.
+//
+// The evidence is the audio session's own persisted revision, which every
+// successfully dispatched audio.session.* command advances
+// (persistAudioSessionDesiredState) whoever sent it. A revision higher
+// than this controller's own latest step is therefore a command from
+// outside this ledger, whatever it was. A refused or unanswered command
+// never advances it, so a refusal an operator made no progress with does
+// not silence the recovery either.
+func (h *handlers) nightBedSessionTouchedOutsideLedger(ctx context.Context, nodeID, sessionID string, latestStepRevision int64) bool {
+	return h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) > latestStepRevision
 }
 
-func encodeNightBedStartPointTag(t nightBedStartPointTag) string {
-	b, _ := json.Marshal(t)
-	return nightBedStartPointNotePrefix + string(b)
-}
-
-func decodeNightBedStartPointTag(reason string) (nightBedStartPointTag, bool) {
-	idx := strings.Index(reason, nightBedStartPointNotePrefix)
-	if idx < 0 {
-		return nightBedStartPointTag{}, false
+// nightBedSessionTouchedOutsideLedgerFor is
+// [handlers.nightBedSessionTouchedOutsideLedger] for the read path, which
+// holds only [Dependencies]. A read failure answers false: the not-playing
+// surface says what it can see, and inventing an operator stop it has no
+// evidence for would be worse than naming a speaker that is genuinely
+// absent.
+func nightBedSessionTouchedOutsideLedgerFor(ctx context.Context, deps Dependencies, nodeID, sessionID string, latestStepRevision int64) bool {
+	rec, err := deps.AudioSessions.GetAudioSession(ctx, nodeID, sessionID)
+	if err != nil {
+		return false
 	}
-	var t nightBedStartPointTag
-	if err := json.Unmarshal([]byte(reason[idx+len(nightBedStartPointNotePrefix):]), &t); err != nil {
-		return nightBedStartPointTag{}, false
-	}
-	return t, true
+	return int64(rec.Revision) > latestStepRevision
 }
 
 // nightBedStartPointWasRefused reports whether row is a start the node
@@ -426,60 +464,13 @@ func decodeNightBedStartPointTag(reason string) (nightBedStartPointTag, bool) {
 // the item the others are on is no longer at that index on this node; one
 // retry without the point then gets the node playing from the bed's first
 // item instead of leaving it silent.
-func nightBedStartPointWasRefused(row store.NightCueOutboxRecord) bool {
-	if !nightBedStepNodeRefused(row) {
-		return false
-	}
-	tag, ok := decodeNightBedStartPointTag(row.OutcomeReason)
-	return ok && !tag.Dropped
-}
-
-// nightBedRejoinNotePrefix tags the JSON fragment a rejoin apply row's
-// own OutcomeReason carries, exactly as [nightBedBookmarkNotePrefix]
-// tags a pause row's bookmark, so a later tick can tell which lost step
-// a rejoin already answered without a second column.
-const nightBedRejoinNotePrefix = "bedRejoin="
-
-// nightBedRejoinNote records the revision of the step whose loss this
-// rejoin repairs.
-type nightBedRejoinNote struct {
-	LostRevision int64 `json:"lostRevision"`
-}
-
-func encodeNightBedRejoinNote(n nightBedRejoinNote) string {
-	b, _ := json.Marshal(n)
-	return nightBedRejoinNotePrefix + string(b)
-}
-
-func decodeNightBedRejoinNote(reason string) (nightBedRejoinNote, bool) {
-	idx := strings.Index(reason, nightBedRejoinNotePrefix)
-	if idx < 0 {
-		return nightBedRejoinNote{}, false
-	}
-	var n nightBedRejoinNote
-	if err := json.Unmarshal([]byte(reason[idx+len(nightBedRejoinNotePrefix):]), &n); err != nil {
-		return nightBedRejoinNote{}, false
-	}
-	return n, true
-}
-
-// nightBedAlreadyRejoinedFor reports whether nodeID has already been
-// given the bed back once for the loss of the step at lostRevision. One
-// rejoin per lost step is the bound that keeps a node this coordinator
-// cannot reach from being re-applied on every tick: the rejoin's own
-// start becomes the next step whose loss can be answered, so a node that
-// keeps losing the bed keeps being recovered, while a node that confirms
-// nothing is left alone with its reason recorded.
-func nightBedAlreadyRejoinedFor(history []nightBackgroundAudioHistoryRow, nodeID string, lostRevision int64) bool {
-	for _, row := range nightBackgroundAudioStepsForNode(history, nodeID) {
-		if row.Step.Kind != nightBGStepApply {
-			continue
-		}
-		if note, ok := decodeNightBedRejoinNote(row.Row.OutcomeReason); ok && note.LostRevision == lostRevision {
-			return true
-		}
-	}
-	return false
+//
+// Which start carried a point is read from the step's own cue name
+// ([nightBackgroundAudioCueNameJoinStart]), never from its reason: the
+// reason is rendered to operators verbatim and must not carry this
+// controller's own bookkeeping.
+func nightBedStartPointWasRefused(step nightBackgroundAudioStep, row store.NightCueOutboxRecord) bool {
+	return step.Kind == nightBGStepStart && step.WithPoint && nightBedStepNodeRefused(row)
 }
 
 // nightBedRejoinOperatorReasonNote is the rejoin apply row's own
@@ -494,19 +485,14 @@ const nightBedRejoinOperatorReasonNote = "This speaker is no longer holding the 
 // to start on the following ticks, so nothing here duplicates the rest
 // of the sequence.
 //
-// lostRevision is the revision of the step whose loss this repairs, used
-// to keep the repair to one attempt per loss
-// ([nightBedAlreadyRejoinedFor]); pass 0 for a caller with no lost step
-// to name.
-func (h *handlers) nightGiveNodeTheBedNow(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow, note string, lostRevision int64) {
+// The apply is committed under [nightBackgroundAudioCueNameRejoinApply],
+// which is what marks it a rejoin durably without putting any of this
+// controller's own bookkeeping into the operator-facing reason.
+func (h *handlers) nightGiveNodeTheBedNow(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow, note string) {
 	revision := h.nightBedNodeDispatchRevision(ctx, nodeID, sessionID, history)
-	cueName := nightBackgroundAudioCueNameApply(int(revision))
+	cueName := nightBackgroundAudioCueNameRejoinApply(int(revision))
 	params := nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, owner, ba, items)
-	rejoinNote := note
-	if lostRevision > 0 {
-		rejoinNote = nightCueReasonWith(rejoinNote, encodeNightBedRejoinNote(nightBedRejoinNote{LostRevision: lostRevision}))
-	}
-	composeReason := func(reason string, _ map[string]any) string { return nightCueReasonWith(reason, rejoinNote) }
+	composeReason := func(reason string, _ map[string]any) string { return nightCueReasonWith(reason, note) }
 	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.apply", nodeID, sessionID, params, revision, history, composeReason); err != nil {
 		h.logWarn("night loop: background audio: giving this node the bed again failed", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 	}
@@ -516,17 +502,19 @@ func (h *handlers) nightGiveNodeTheBedNow(ctx context.Context, now time.Time, re
 // own rejoin check: true means this tick handled the node and the caller
 // must not also run its ordinary step machine.
 func (h *handlers) nightBedRecoverLostSessionForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) bool {
-	lost, ok := nightBedNodeLostSession(h.deps.Audio, now, nodeID, sessionID, nightBackgroundAudioStepsForNode(history, nodeID))
+	steps := nightBackgroundAudioStepsForNode(history, nodeID)
+	lost, ok := nightBedNodeLostSession(h.deps.Audio, now, nodeID, sessionID, steps)
 	if !ok {
 		return false
 	}
-	if nightBedAlreadyRejoinedFor(history, nodeID, lost.Row.ActionRevision) {
+	if h.nightBedSessionTouchedOutsideLedger(ctx, nodeID, sessionID, lost.Row.ActionRevision) {
+		h.logWarn("night loop: background audio: this bed session was addressed from outside this night's own controls; leaving it alone",
+			"sessionId", rec.ID, "nodeId", nodeID)
 		return false
 	}
 	h.logWarn("night loop: background audio: this node is no longer holding the bed session; giving it the bed again",
 		"sessionId", rec.ID, "nodeId", nodeID, "lostStep", lost.Step.Kind, "lostRevision", lost.Row.ActionRevision)
-	h.nightGiveNodeTheBedNow(ctx, now, rec, nodeID, sessionID, ba, owner, items, history,
-		nightBedRejoinOperatorReasonNote, lost.Row.ActionRevision)
+	h.nightGiveNodeTheBedNow(ctx, now, rec, nodeID, sessionID, ba, owner, items, history, nightBedRejoinOperatorReasonNote)
 	return true
 }
 
@@ -623,9 +611,23 @@ func nightBedNodesNotPlaying(ctx context.Context, deps Dependencies, rec store.N
 		if reading.Present && reading.State == string(pkgaudio.StatePlaying) {
 			continue
 		}
-		out = append(out, v1.NightBedNodeNotPlaying{NodeID: nodeID, Reason: nightBedNotPlayingReason(deps.Audio, now, nodeID, reading)})
+		steps := nightBackgroundAudioStepsForNode(history, nodeID)
+		facts := nightBedNotPlayingFacts{Reading: reading}
+		if latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID); ok {
+			facts.TouchedOutsideLedger = nightBedSessionTouchedOutsideLedgerFor(ctx, deps, nodeID, sessionID, latest.Row.ActionRevision)
+		}
+		facts.RejoinAlreadyFailed = nightBedRejoinStartFailed(steps)
+		out = append(out, v1.NightBedNodeNotPlaying{NodeID: nodeID, Reason: nightBedNotPlayingReason(deps.Audio, now, nodeID, facts)})
 	}
 	return out
+}
+
+// nightBedNotPlayingFacts is everything [nightBedNotPlayingReason] is
+// allowed to speak from, gathered once per node.
+type nightBedNotPlayingFacts struct {
+	Reading              nightBedSessionReading
+	TouchedOutsideLedger bool
+	RejoinAlreadyFailed  bool
 }
 
 // nightBedNodeDeliberatelySuspended reports whether this controller's own
@@ -650,12 +652,17 @@ func nightBedNodeDeliberatelySuspended(history []nightBackgroundAudioHistoryRow,
 // never collapsed into one: the node is not reporting at all, it is
 // reporting and has no background music session, or it has one that is
 // not playing.
-func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID string, reading nightBedSessionReading) string {
+func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID string, facts nightBedNotPlayingFacts) string {
+	reading := facts.Reading
 	switch {
 	case !nightBedNodeReportsAudioSince(audio, now, time.Time{}, nodeID):
 		return "This speaker is not reporting its audio, so whether the background music is playing on it is unknown. Check that the node is powered on and connected."
 	case reading.Stale:
 		return "This speaker was too busy to report the background music this time, so what it is doing now is unknown. It reports again on its next cycle."
+	case facts.TouchedOutsideLedger:
+		return "The background music on this speaker was stopped from outside this night's own controls. The coordinator is leaving it that way; start it again from the speaker's own controls if it should be playing."
+	case facts.RejoinAlreadyFailed:
+		return "The coordinator already gave this speaker the background music again and it did not start. It is not trying again on its own; check the speaker."
 	case !reading.Present:
 		return "This speaker is no longer holding the background music this night started. The coordinator gives it the music again on its next check."
 	case nightBedReportedStateIsLost(reading.State):

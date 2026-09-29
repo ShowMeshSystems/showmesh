@@ -2027,6 +2027,17 @@ func mapNightFinishedCycles(ctx context.Context, deps Dependencies, rec store.Ni
 // has ended or before it has begun; GET /night/sessions/{id} has no such
 // gate, because that value is already scoped to the specific historical
 // record requested.
+func nightSessionIsRunning(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
+		nightStateTransitionToResting, nightStateRestingIntershow,
+		nightStateEndOfNightResting, nightStateFadingOut:
+		return true
+	default:
+		return false
+	}
+}
+
 // nightBedIsMeantToBePlaying names the states the resting bed is supposed
 // to be audible in, which is exactly the set nightTick advances it in
 // (nightloop.go): preshow, the resting gap between shows, and the resting
@@ -2040,17 +2051,6 @@ func mapNightFinishedCycles(ctx context.Context, deps Dependencies, rec store.Ni
 func nightBedIsMeantToBePlaying(state string) bool {
 	switch state {
 	case nightStatePreshow, nightStateRestingIntershow, nightStateEndOfNightResting:
-		return true
-	default:
-		return false
-	}
-}
-
-func nightSessionIsRunning(state string) bool {
-	switch state {
-	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
-		nightStateTransitionToResting, nightStateRestingIntershow,
-		nightStateEndOfNightResting, nightStateFadingOut:
 		return true
 	default:
 		return false

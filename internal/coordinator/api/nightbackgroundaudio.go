@@ -165,11 +165,33 @@ const (
 type nightBackgroundAudioStep struct {
 	Seq  int
 	Kind string
+
+	// Rejoin marks an apply this controller committed to give a node the
+	// bed back ([handlers.nightGiveNodeTheBedNow]), and WithPoint marks a
+	// start that named a playback point. Both are carried by the row's own
+	// CUE NAME rather than by its reason: a step's reason is rendered to
+	// operators verbatim (v1.NightBackgroundAudioStep.Reason), so this
+	// controller's own bookkeeping may not live there.
+	Rejoin    bool
+	WithPoint bool
 }
 
-func nightBackgroundAudioCueNameApply(seq int) string    { return fmt.Sprintf("bg-%04d-apply", seq) }
-func nightBackgroundAudioCueNameGain(seq int) string     { return fmt.Sprintf("bg-%04d-gain", seq) }
-func nightBackgroundAudioCueNameStart(seq int) string    { return fmt.Sprintf("bg-%04d-start", seq) }
+func nightBackgroundAudioCueNameApply(seq int) string { return fmt.Sprintf("bg-%04d-apply", seq) }
+func nightBackgroundAudioCueNameGain(seq int) string  { return fmt.Sprintf("bg-%04d-gain", seq) }
+func nightBackgroundAudioCueNameStart(seq int) string { return fmt.Sprintf("bg-%04d-start", seq) }
+
+// nightBackgroundAudioCueNameJoinStart names a start that carries a
+// playback point, and nightBackgroundAudioCueNameRejoinApply an apply
+// that gives a node the bed back. Both parse to their ordinary kind, so
+// the state machine reads them exactly as it reads a plain start or
+// apply; the distinction is only ever read by nightbedrejoin.go.
+func nightBackgroundAudioCueNameJoinStart(seq int) string {
+	return fmt.Sprintf("bg-%04d-joinstart", seq)
+}
+
+func nightBackgroundAudioCueNameRejoinApply(seq int) string {
+	return fmt.Sprintf("bg-%04d-rejoinapply", seq)
+}
 func nightBackgroundAudioCueNamePause(seq int) string    { return fmt.Sprintf("bg-%04d-pause", seq) }
 func nightBackgroundAudioCueNameResume(seq int) string   { return fmt.Sprintf("bg-%04d-resume", seq) }
 func nightBackgroundAudioCueNameStop(seq int) string     { return fmt.Sprintf("bg-%04d-stop", seq) }
@@ -218,6 +240,10 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (step nightBac
 		return nightBackgroundAudioStep{}, "", false
 	}
 	switch {
+	case strings.HasSuffix(row.CueName, "-rejoinapply"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply, Rejoin: true}, nodeID, true
+	case strings.HasSuffix(row.CueName, "-joinstart"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart, WithPoint: true}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-apply"):
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-gain"):
@@ -1012,7 +1038,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepStart:
 		if !confirmed {
-			if nightBedStartPointWasRefused(latest.Row) {
+			if nightBedStartPointWasRefused(latest.Step, latest.Row) {
 				// The node refused the position this start named, so send
 				// the start once more without one: playing the bed from its
 				// first item beats leaving this speaker silent (ADR-049
@@ -2246,12 +2272,12 @@ func (h *handlers) nightBackgroundAudioStartScheduled(ctx context.Context, now t
 	params := map[string]any{}
 	note := nightBedScheduleNote("start", sched)
 	if point != nil {
+		cueName = nightBackgroundAudioCueNameJoinStart(int(revision))
 		params[pkgaudio.ParamStartItemID] = point.ItemID
 		params[pkgaudio.ParamStartIndex] = point.Index
 		params[pkgaudio.ParamStartPositionMs] = point.PositionMs
 		note = nightCueReasonWith(note, nightBedStartPointNote(*point))
 	}
-	note = nightCueReasonWith(note, encodeNightBedStartPointTag(nightBedStartPointTag{Dropped: point == nil}))
 	if sched.Aligned {
 		params[pkgaudio.ParamScheduledAtNs] = json.Number(fmt.Sprintf("%d", sched.ScheduledAtNs))
 	}
