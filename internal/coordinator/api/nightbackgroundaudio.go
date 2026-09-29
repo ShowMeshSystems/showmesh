@@ -586,10 +586,16 @@ func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.Me
 // that the same way a dangling reference is treated everywhere else in
 // this controller - warned and left for an operator, never dispatched.
 func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio) (*config.NightSessionBackgroundAudio, nightBackgroundAudioOwner, bool) {
+	return nightResolveBackgroundAudioFor(ctx, h.deps, rec, ba)
+}
+
+// nightResolveBackgroundAudioFor is [handlers.nightResolveBackgroundAudio]'s
+// own body, reachable from a read path that holds only [Dependencies].
+func nightResolveBackgroundAudioFor(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio) (*config.NightSessionBackgroundAudio, nightBackgroundAudioOwner, bool) {
 	if ba.MediaPlaylist == "" {
 		return ba, nightBackgroundAudioOwner{Kind: nightBackgroundAudioOwnerKindSession, ID: rec.ConfigObjectID, Revision: rec.ConfigRevision}, true
 	}
-	payload, revision, ok := nightResolveMediaPlaylist(ctx, h.deps, ba.MediaPlaylist)
+	payload, revision, ok := nightResolveMediaPlaylist(ctx, deps, ba.MediaPlaylist)
 	if !ok {
 		return nil, nightBackgroundAudioOwner{}, false
 	}
@@ -952,7 +958,17 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		return
 	}
 
+	// A node that is no longer holding the bed session at all is given
+	// the bed again before anything else is decided from its ledger: its
+	// latest step reads confirmed, so every branch below would otherwise
+	// either do nothing or address a session that is gone
+	// (nightbedrejoin.go).
+	if h.nightBedRecoverLostSessionForNode(ctx, now, rec, nodeID, sessionID, ba, owner, items, history) {
+		return
+	}
+
 	confirmed := latest.Row.Outcome == nightCueOutcomeConfirmed
+	refused := nightBedStepNodeRefused(latest.Row)
 
 	// The node's own reported session state is authoritative over this
 	// node's own step history: a bed a node-side cut paused outside the
@@ -984,6 +1000,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepGain:
 		if !confirmed {
+			if refused {
+				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepGain, latest.Row)
+				return
+			}
 			h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, nightBackgroundAudioInitialGainDb(ba), history) // retry under a fresh revision: never wedge here.
 			return
 		}
@@ -1011,6 +1031,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepFadeUp:
 		if !confirmed {
+			if refused {
+				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepFadeUp, latest.Row)
+				return
+			}
 			h.nightBackgroundAudioFadeUp(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, *ba.FadeInMs, history) // retry under a fresh revision: never wedge here.
 			return
 		}
@@ -1021,6 +1045,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepExpiryRefresh:
 		if !confirmed {
+			if refused {
+				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepExpiryRefresh, latest.Row)
+				return
+			}
 			h.nightBackgroundAudioRefreshExpiry(ctx, now, rec, nodeID, sessionID, history) // retry under a fresh revision: never let expiry lapse from a stuck refresh.
 			return
 		}
@@ -1041,9 +1069,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepResume:
 		if !confirmed {
-			if multiNode {
-				// Like start: a resume that did not confirm keeps its row and
-				// reason and is not re-sent every tick.
+			if multiNode || refused {
+				// Like start: a multi-node resume, and any resume the node
+				// itself refused, keeps its row and reason and is not
+				// re-sent every tick.
 				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepResume, latest.Row)
 				return
 			}
@@ -1059,6 +1088,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	case nightBGStepStop:
 		if !confirmed {
+			if refused {
+				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepStop, latest.Row)
+				return
+			}
 			h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history) // retry: never leave the bed running with a stop that never landed.
 			return
 		}
@@ -1382,12 +1415,35 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 		return
 	}
 
+	// The suspend itself, refused by the node: re-sending it under a
+	// fresh revision gets the same answer, and this path runs every
+	// tick, so there is nothing left to do but leave the reason recorded.
+	// A step that failed before the node answered still retries
+	// ([nightBedStepNodeRefused]).
+	switch latest.Step.Kind {
+	case nightBGStepStop, nightBGStepPause:
+		if nightBedStepNodeRefused(latest.Row) {
+			h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, latest.Step.Kind, latest.Row)
+			return
+		}
+	}
+
 	if ba.FadeOutMs == nil {
 		h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
 		return
 	}
 
 	confirmed := latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed
+	if latest.Step.Kind == nightBGStepFadeDown && nightBedStepNodeRefused(latest.Row) {
+		// The node refused the fade, so there is no ramp to wait for and
+		// no point sending another: go straight to the suspend the fade
+		// exists to precede. This is what stopped an earlier build
+		// re-sending a fade-down every tick to a node whose bed session
+		// was gone for the rest of the night.
+		h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepFadeDown, latest.Row)
+		h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
+		return
+	}
 	if latest.Step.Kind == nightBGStepFadeDown && confirmed {
 		// latest.Row.DispatchedAt is always set once a row reaches
 		// resolved (nightDispatchAndPersistCue marks it before ever
@@ -2107,7 +2163,12 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 	if _, already := nightBedScheduleForCycle(history, rec.Cycle); already {
 		for _, nodeID := range nodeIDs {
 			if state, _ := nightBedClassifyStartGate(history, nodeID); state == nightBedGateReady {
-				h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, nightBedScheduleResult{UnalignedReason: nightBedLateUnalignedReason("start")}, history)
+				point, has := nightBedPeerPlaybackPoint(h.deps.Audio, now, sessionID, nodeIDs, nodeID)
+				if !has {
+					h.logWarn("night loop: background audio: no node is reporting this bed session as playing; this node starts it from its first item",
+						"sessionId", rec.ID, "nodeId", nodeID)
+				}
+				h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, nightBedScheduleResult{UnalignedReason: nightBedLateUnalignedReason("start")}, nightBedPointOrNil(point, has), history)
 			}
 		}
 		return
@@ -2134,7 +2195,9 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 		return
 	}
 	h.nightDispatchBedNodesConcurrently(ready, func(nodeID string) {
-		h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, sched, history)
+		// The bed's own shared first start: every node begins at its first
+		// item together, so no node is given another's position.
+		h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, sched, nil, history)
 	})
 }
 
@@ -2179,13 +2242,21 @@ func (h *handlers) nightBedProgramLTCUnreadyReason(ctx context.Context, nodeIDs,
 }
 
 // nightBackgroundAudioStartScheduled dispatches nodeID's own
-// audio.session.start, carrying sched's instant when aligned. The
-// ordinary per-node state machine takes over from here.
-func (h *handlers) nightBackgroundAudioStartScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, sched nightBedScheduleResult, history []nightBackgroundAudioHistoryRow) {
+// audio.session.start, carrying sched's instant when aligned and, when
+// point is non-nil, the item and position to begin at instead of the
+// bed's first item ([nightBedPeerPlaybackPoint]). The ordinary per-node
+// state machine takes over from here.
+func (h *handlers) nightBackgroundAudioStartScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, sched nightBedScheduleResult, point *nightBedPlaybackPoint, history []nightBackgroundAudioHistoryRow) {
 	revision := h.nightBedNodeDispatchRevision(ctx, nodeID, sessionID, history)
 	cueName := nightBackgroundAudioCueNameStart(int(revision))
 	params := map[string]any{}
 	note := nightBedScheduleNote("start", sched)
+	if point != nil {
+		params[pkgaudio.ParamStartItemID] = point.ItemID
+		params[pkgaudio.ParamStartIndex] = point.Index
+		params[pkgaudio.ParamStartPositionMs] = point.PositionMs
+		note = nightCueReasonWith(note, nightBedStartPointNote(*point))
+	}
 	if sched.Aligned {
 		params[pkgaudio.ParamScheduledAtNs] = json.Number(fmt.Sprintf("%d", sched.ScheduledAtNs))
 	}

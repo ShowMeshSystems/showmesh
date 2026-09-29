@@ -167,6 +167,24 @@ type NightBackgroundAudio struct {
 	// (owner ruling 2026-08-30). Never defaulted to a plausible-looking
 	// value.
 	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+
+	// NodesNotPlaying names every speaker the background music is
+	// configured to play on that is not playing it right now, read from
+	// each node's own current report rather than from what this
+	// coordinator last asked for. It is empty on a session that is not
+	// running, and on the historical read of any session, because
+	// neither has a "right now" to answer about. An operator watching a
+	// night sees a speaker appear here when it drops out and leave again
+	// when it is back.
+	NodesNotPlaying []NightBedNodeNotPlaying `json:"nodesNotPlaying"`
+}
+
+// NightBedNodeNotPlaying is one speaker the background music is
+// configured for and which is not playing it, with the reason in
+// operator-facing words.
+type NightBedNodeNotPlaying struct {
+	NodeID string `json:"nodeId"`
+	Reason string `json:"reason"`
 }
 
 // NightSessionState is the full lifecycle resource.

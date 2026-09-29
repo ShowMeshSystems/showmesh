@@ -95,7 +95,7 @@ function session(overrides: Partial<NightSessionState> = {}): NightSessionState 
     transition: { state: 'recorded', reason: 'Enter-show transition completed.' },
     boundary: { state: 'none', expectedAt: null, reason: 'no boundary is armed for the current state' },
     cues: { state: 'recorded', reason: '', cues: [] },
-    backgroundAudio: { state: 'recorded', reason: 'Ducked to -18 dB.', steps: [] },
+    backgroundAudio: { state: 'recorded', reason: 'Ducked to -18 dB.', steps: [], nodesNotPlaying: [] },
     degraded: false,
     attributionDegraded: false,
     authorization: { state: 'recorded', reason: '', principalName: 'erbartos', command: 'start-night', recordedAt: '2026-08-28T21:02:14Z' },
@@ -733,6 +733,34 @@ describe('Show Night', () => {
     expect(screen.queryByRole('button', { name: 'Run readiness again' })).not.toBeInTheDocument()
   })
 
+  it('names each speaker that is not playing the background music, with its reason, and clears when none are', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          pinnedMaxGainDb: -18,
+          nodesNotPlaying: [
+            { nodeId: 'audio-02', reason: 'This speaker is no longer holding the background music this night started. The coordinator gives it the music again on its next check.' },
+          ],
+          steps: [],
+        },
+      }),
+    })
+    expect(screen.getByText('audio-02')).toBeInTheDocument()
+    expect(screen.getByText('Not playing the background music')).toBeInTheDocument()
+    expect(screen.getByText(/no longer holding the background music/)).toBeInTheDocument()
+  })
+
+  it('shows no absent-speaker strip while every configured speaker is playing the background music', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: { state: 'recorded', reason: '', pinnedMaxGainDb: -18, nodesNotPlaying: [], steps: [] },
+      }),
+    })
+    expect(screen.queryByText('Not playing the background music')).not.toBeInTheDocument()
+  })
+
   it('renders background audio steps with their sequence, cue, kind, and state', () => {
     renderScreen({
       nightSession: session({
@@ -740,6 +768,7 @@ describe('Show Night', () => {
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'background',
@@ -787,6 +816,7 @@ describe('Show Night', () => {
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'background',
@@ -827,6 +857,7 @@ describe('Show Night', () => {
           state: 'recorded',
           reason: '',
           pinnedMaxGainDb: -18,
+          nodesNotPlaying: [],
           steps: [
             {
               sequence: 'announcement',
@@ -849,7 +880,7 @@ describe('Show Night', () => {
   it('renders the pinned background-audio ceiling distinctly from the audio.settings config value', () => {
     renderScreen({
       nightSession: session({
-        backgroundAudio: { state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [] },
+        backgroundAudio: { state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [], nodesNotPlaying: [] },
       }),
     })
     expect(screen.getByText(/Pinned ceiling for this running session: -18 dB/)).toBeInTheDocument()
@@ -859,7 +890,7 @@ describe('Show Night', () => {
   it('says so honestly when the pinned ceiling is null because nothing is configured', () => {
     renderScreen({
       nightSession: session({
-        backgroundAudio: { state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [] },
+        backgroundAudio: { state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [], nodesNotPlaying: [] },
       }),
     })
     expect(screen.getByText(/Pinned ceiling: none\. No background audio is configured on the pinned revision\./)).toBeInTheDocument()

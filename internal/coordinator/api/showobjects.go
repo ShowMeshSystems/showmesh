@@ -82,20 +82,26 @@ func (h *handlers) audioNodeExists(ctx context.Context) func(id string) bool {
 // entry refused: there is nothing to exclude from.
 func (h *handlers) showAudioNodes(ctx context.Context) func(show string) []string {
 	return func(show string) []string {
-		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowConfigKind, show)
-		if err != nil || obj.CurrentRevision == 0 {
-			return nil
-		}
-		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowConfigKind, show, obj.CurrentRevision)
-		if err != nil {
-			return nil
-		}
-		payload, verr := config.DecodeShowPayload(rev.PayloadJSON, func(string) bool { return true })
-		if verr != nil {
-			return nil
-		}
-		return payload.AudioNodes
+		return showAudioNodesFor(ctx, h.deps, show)
 	}
+}
+
+// showAudioNodesFor is [handlers.showAudioNodes]' own body, reachable
+// from a read path that holds only [Dependencies].
+func showAudioNodesFor(ctx context.Context, deps Dependencies, show string) []string {
+	obj, err := deps.Config.GetConfigObject(ctx, config.ShowConfigKind, show)
+	if err != nil || obj.CurrentRevision == 0 {
+		return nil
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.ShowConfigKind, show, obj.CurrentRevision)
+	if err != nil {
+		return nil
+	}
+	payload, verr := config.DecodeShowPayload(rev.PayloadJSON, func(string) bool { return true })
+	if verr != nil {
+		return nil
+	}
+	return payload.AudioNodes
 }
 
 // resolveAudioActionTargetNodes is ADR-049 decision 10's own resolution,

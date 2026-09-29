@@ -20481,7 +20481,7 @@ components:
         cycle, or the stated reason it could not be read. Empty `steps`
         with `state` "recorded" means backgroundAudio is not configured
         at all, or has never been started this cycle.
-      required: [state, reason, steps]
+      required: [state, reason, steps, nodesNotPlaying]
       properties:
         state:
           type: string
@@ -20498,6 +20498,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NightBackgroundAudioStep"
+        nodesNotPlaying:
+          type: array
+          description: >-
+            Every audio node the background bed is configured to play on
+            that is NOT playing it right now, read from each node's own
+            current audio report rather than from what the coordinator
+            last dispatched. A node reporting the bed session as playing
+            never appears, so the list clears itself once a node is back.
+            Only nodes this session has actually dispatched a bed step to
+            are considered: a bed that has not been applied anywhere yet
+            is not a list of absent nodes. Always an array, empty on a
+            session that is not running and on the historical by-id read,
+            neither of which has a "right now" to answer about.
+          items:
+            $ref: "#/components/schemas/NightBedNodeNotPlaying"
         pinnedMaxGainDb:
           type: [number, "null"]
           description: >-
@@ -20522,6 +20537,20 @@ components:
             pinned ceiling, historical by construction, so it is
             populated regardless of state, including preparing and
             stopped.
+    NightBedNodeNotPlaying:
+      type: object
+      description: >-
+        One audio node the background bed is configured for and which is
+        not currently playing it, with an operator-facing reason. The
+        reason distinguishes three cases and never collapses them: the
+        node is not reporting its audio at all, it is reporting and holds
+        no bed session, or it holds one in a state other than playing.
+      required: [nodeId, reason]
+      properties:
+        nodeId:
+          type: string
+        reason:
+          type: string
     NightSessionState:
       type: object
       description: >-

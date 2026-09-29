@@ -1982,7 +1982,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
-	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, now, current)
 	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
 	if nightStopHoldStands(rec) {
 		out.StopHold = &v1.NightStopHold{Reason: rec.StopHold.Reason, At: formatTime(rec.StopHold.At), Principal: rec.StopHold.Principal}
@@ -2056,13 +2056,13 @@ func nightSessionIsRunning(state string) bool {
 // unrelated config-read hiccup). current selects which of the two
 // endpoint behaviors applies to pinnedMaxGainDb - see
 // [mapNightSessionState]'s own doc comment.
-func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, current bool) v1.NightBackgroundAudio {
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	// The announcement-session sequence is read here too, under its own
 	// phase family and tagged with its own sequence name. Its clear and
@@ -2073,7 +2073,7 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	// but a log line (ADR-039).
 	announcementRows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
@@ -2092,15 +2092,20 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
 
+	notPlaying := []v1.NightBedNodeNotPlaying{}
+	if current && nightSessionIsRunning(rec.State) {
+		notPlaying = nightBedNodesNotPlaying(ctx, deps, rec, now, rows)
+	}
+
 	if current && !nightSessionIsRunning(rec.State) {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out, NodesNotPlaying: notPlaying}
 	}
 
 	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out, NodesNotPlaying: notPlaying}
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb, NodesNotPlaying: notPlaying}
 }
 
 // nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session

@@ -7185,8 +7185,15 @@ export interface components {
             /** @description Usually only meaningful when state is not "recorded". The one exception: reason may be non-empty while state is "recorded", in which case it describes pinnedMaxGainDb alone (why that one field is null) and says nothing about steps, which are unaffected and reported as read. */
             reason: string;
             steps: components["schemas"]["NightBackgroundAudioStep"][];
+            /** @description Every audio node the background bed is configured to play on that is NOT playing it right now, read from each node's own current audio report rather than from what the coordinator last dispatched. A node reporting the bed session as playing never appears, so the list clears itself once a node is back. Only nodes this session has actually dispatched a bed step to are considered: a bed that has not been applied anywhere yet is not a list of absent nodes. Always an array, empty on a session that is not running and on the historical by-id read, neither of which has a "right now" to answer about. */
+            nodesNotPlaying: components["schemas"]["NightBedNodeNotPlaying"][];
             /** @description The background-audio ceiling the session pinned when it started (resting.backgroundAudio.maxGainDb on the session's own pinned configRevision), never the value night.session's config currently holds, which can differ across a later revision (owner ruling 2026-08-28). Null when the pinned revision configures no background audio at all, in which case `reason` says so. Never a fallback to the currently configured value. This schema is shared by two endpoints that populate it differently (owner ruling 2026-08-30): on GET /night/session (the current-session views, including the SSE nightSession.changed frame and a night command's own response), it is the ceiling the RUNNING session pinned, so it is populated ONLY while the top-level state is one of preshow, transition-to-show, live, transition-to-resting, resting-intershow, end-of-night-resting, or fading-out, and is otherwise null (including inactive, preparing, and stopped, so a past night's ceiling is never reported as live). On GET /night/sessions/{id}, it is that record's own pinned ceiling, historical by construction, so it is populated regardless of state, including preparing and stopped. */
             pinnedMaxGainDb?: number | null;
+        };
+        /** @description One audio node the background bed is configured for and which is not currently playing it, with an operator-facing reason. The reason distinguishes three cases and never collapses them: the node is not reporting its audio at all, it is reporting and holds no bed session, or it holds one in a state other than playing. */
+        NightBedNodeNotPlaying: {
+            nodeId: string;
+            reason: string;
         };
         /** @description The night-session lifecycle controller's own persisted state - a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {

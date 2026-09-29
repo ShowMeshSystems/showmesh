@@ -76,6 +76,15 @@ type nightBackgroundAudioWire struct {
 	Reason          string                         `json:"reason"`
 	Steps           []nightBackgroundAudioStepWire `json:"steps"`
 	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
+	NodesNotPlaying []nightBedNodeNotPlayingWire   `json:"nodesNotPlaying"`
+}
+
+// nightBedNodeNotPlayingWire is one node the bed is configured for and
+// which is not playing it right now: NightBedNodeNotPlaying in
+// api/openapi.yaml.
+type nightBedNodeNotPlayingWire struct {
+	NodeID string `json:"nodeId"`
+	Reason string `json:"reason"`
 }
 
 // nightCycleOutcomeWire is one already-finished cycle: NightCycleOutcome
