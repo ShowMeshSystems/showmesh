@@ -11,6 +11,99 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-30
+
+Second pre-release. Pre-alpha. Upgrade the coordinator and the FPP plugin
+together: plugin 0.2.0 pairs by code, which needs this coordinator, and the
+`0.x` line makes no compatibility promise between versions.
+
+### FPP
+
+- An FPP plugin pairs with the coordinator by the code it shows on its own
+  page, and receives its own scheduler credential without the operator ever
+  handling it. The coordinator URL and credential no longer have to be
+  written by hand on the player.
+- The coordinator can set a player's brightness ceiling through the plugin
+  and reports the ceiling only once the plugin reads it back; each player's
+  brightness is polled and shown on Live Control and Settings > Connections.
+  `showmeshctl fpp pair` and `showmeshctl fpp set-brightness-ceiling` do the
+  same from the CLI.
+- The Playlists tab Re-import button asks the FPP host to send a playlist
+  again and reports whether it was sent, landed, or could not be confirmed.
+
+### Audio
+
+- An audio node that loses the background bed mid-night, after an agent
+  restart or a host reboot, is given it again and rejoins at the track and
+  position the other speakers are playing. An operator's own stop of the bed
+  is respected and not undone.
+- A node that missed the background bed because its file had not arrived yet
+  gets it once the file lands, instead of staying silent for the night.
+- Show Night and `showmeshctl night status` list the background audio a night
+  will play before it starts, and name every speaker that should be playing
+  the bed and is not, with the reason.
+- Audio nodes report their output channels, and Settings > Node routing offers
+  program and timecode channels from what the node actually has, with manual
+  entry kept for older agents. `showmeshctl audio node choices` shows the same
+  choices.
+- A refused audio setting shows as a warning in words on Settings Audio and on
+  Node Detail.
+
+### Projection
+
+- A planned sequence change draws the next sequence with no black gap: the
+  render node opens the next playlist entry's sequence ahead of time and
+  switches on the first frame MultiSync names it.
+- A second render surface on the same node that shares output channels or an
+  NDI name with an existing one is refused, and the message names the
+  conflict.
+- A render node refuses a surface whose frame timing differs from its other
+  surfaces. A cue that cannot move every surface together holds the
+  mismatched surface black and says why.
+- Node Detail can add, edit and remove a render node's surfaces with the same
+  editor the Shows screen uses.
+
+### Nodes and install
+
+- Operators mint, list and cancel node enrollment codes from Settings > Node
+  enrollment, so adding a node no longer needs a shell on the coordinator.
+- The installer opens the ports ShowMesh needs in an active ufw or firewalld.
+  A hand-written nftables drop policy is left alone with the exact rules
+  printed; `--firewall` installs a ShowMesh nftables table and
+  `--no-firewall` skips firewall handling.
+- The installer keeps a log at `/var/log/showmesh-install.log`, prints the
+  underlying error when a step or check fails, and draws the approved layout
+  by default. Ctrl-C now stops the running step's command.
+- Upgrading a coordinator backs it up first, refuses while a night is running,
+  leaves the old coordinator running if the upgrade fails, and prints each
+  node's upgrade command.
+- Fixed: every coordinator install from the 0.1.0 bundle stopped at the
+  broker login check because the bundle left out the broker's start script.
+
+### API and CLI
+
+- `GET /macro-runs` with a show or state filter now returns matching runs
+  older than the newest 500.
+
+### Build and release
+
+- The release publishes the operator UI image for arm64 as well as amd64.
+- The NDI plugin build works when CI has restored a cached build directory,
+  which broke the first 0.1.0 tag run.
+- The FPP plugin releases from its own repository,
+  `ShowMeshSystems/showmesh-fpp-plugin`, so every tag in this repository is a
+  Core release.
+
+### Known limitations
+
+- There is no armv7 node agent package yet. Release assets are amd64 and
+  arm64 only.
+- The FPP plugin's local fallback refuses to run when
+  `/etc/showmesh-fpp-plugin` is not owned by root.
+- The end-of-night resting playlist does not repeat unless the night session
+  sets `endOfNightRepeat`.
+- Pre-alpha: there is no compatibility or migration promise before 1.0.
+
 ## 0.1.0 - 2026-09-28
 
 First pre-release. Pre-alpha.
