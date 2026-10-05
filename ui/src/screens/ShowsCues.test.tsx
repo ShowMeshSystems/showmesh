@@ -913,24 +913,65 @@ describe('Shows · Cues tab', () => {
       expect(payload.outputs.announcement?.targets).toEqual(['node-b'])
     })
 
-    it('warns which nodes will not duck, clears when they join the announcement list, and never blocks saving', async () => {
-      const cue = cueResponse(
-        cuePayload({
-          outputs: {
-            audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, targets: ['node-a', 'node-b'] },
-            announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, targets: ['node-b'] },
-          },
-        }),
-      )
-      setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
-      expect(await screen.findByText("node-a will play this cue's audio at full level during the announcement.")).toBeInTheDocument()
-      expect(screen.getByText('Add them to the announcement nodes to lower it.')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Save cue' })).toBeEnabled()
+    describe('audio-only node warning', () => {
+      const WARNING = /as show audio, not as an announcement/
+      const duckAnnouncement = { policy: 'duck' as const, duckGainDb: -18, fadeMillis: 400 }
 
-      const announcementGroup = await screen.findByRole('group', { name: 'Announcement target nodes' })
-      fireEvent.click(within(announcementGroup).getByRole('checkbox', { name: 'node-a Node A' }))
-      await waitFor(() => expect(screen.queryByText(/at full level during the announcement/)).not.toBeInTheDocument())
+      function welcomeCue(audioTargets: string[], announcement: object = duckAnnouncement) {
+        return cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, targets: audioTargets }, announcement } as ConfigShowCue['outputs'] }))
+      }
+
+      it('names the second node when the announcement list is empty and resolves to the default node, and never blocks saving', async () => {
+        setupWithTargets(welcomeCue(['node-a', 'node-b']))
+        stubs.listConfigObjects = (kind: string) => {
+          if (kind === 'audio.node') {
+            return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [{ ...audioNodeSummary('node-a', 'Node A'), ltcChannel: 2 }, audioNodeSummary('node-b', 'Node B')] })
+          }
+          return withContents(kind, [cueSummary()], [])
+        }
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        expect(await screen.findByText('node-b · Node B will play this cue as show audio, not as an announcement, and stops the audio already playing there.')).toBeInTheDocument()
+        expect(screen.getByText('Add node-b · Node B to the announcement nodes to play it over that audio.')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Save cue' })).toBeEnabled()
+      })
+
+      it('uses plural wording for several nodes and clears when they join the announcement list', async () => {
+        setupWithTargets(welcomeCue(['node-a', 'node-b'], { ...duckAnnouncement, targets: ['node-c'] }))
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        expect(
+          await screen.findByText('node-a · Node A and node-b · Node B will play this cue as show audio, not as an announcement, and stop the audio already playing there.'),
+        ).toBeInTheDocument()
+        expect(screen.getByText('Add them to the announcement nodes to play it over that audio.')).toBeInTheDocument()
+
+        const announcementGroup = await screen.findByRole('group', { name: 'Announcement target nodes' })
+        fireEvent.click(within(announcementGroup).getByRole('checkbox', { name: 'node-a Node A' }))
+        fireEvent.click(within(announcementGroup).getByRole('checkbox', { name: 'node-b Node B' }))
+        await waitFor(() => expect(screen.queryByText(WARNING)).not.toBeInTheDocument())
+      })
+
+      it('shows no warning while the show nodes are still loading', async () => {
+        setupWithTargets(welcomeCue(['node-a', 'node-b'], { ...duckAnnouncement, targets: ['node-b'] }))
+        stubs.getShow = () => new Promise(() => {})
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        await screen.findByRole('group', { name: 'Audio target nodes' })
+        expect(screen.queryByText(WARNING)).not.toBeInTheDocument()
+      })
+
+      it('shows no warning when the show nodes failed to load', async () => {
+        setupWithTargets(welcomeCue(['node-a', 'node-b'], { ...duckAnnouncement, targets: ['node-b'] }))
+        stubs.getShow = () => Promise.reject(new Error('network down'))
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        await screen.findByRole('group', { name: 'Audio target nodes' })
+        expect(screen.queryByText(WARNING)).not.toBeInTheDocument()
+      })
+
+      it('shows no warning when the audio node list failed to load', async () => {
+        setupWithTargets(welcomeCue(['node-a', 'node-b'], { ...duckAnnouncement, targets: ['node-b'] }))
+        stubs.listConfigObjects = (kind: string) => (kind === 'audio.node' ? Promise.reject(new Error('network down')) : withContents(kind, [cueSummary()], []))
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        await screen.findAllByText('Read failed')
+        expect(screen.queryByText(WARNING)).not.toBeInTheDocument()
+      })
     })
 
     it('an LTC target naming an undeclared node names the same save refusal the audio/announcement groups do', async () => {

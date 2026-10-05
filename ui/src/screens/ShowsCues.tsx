@@ -33,7 +33,8 @@ import {
   cueRows,
   formatBytes,
   installationDefaultAudioNode,
-  nodesWithoutDucking,
+  audioOnlyNodesWarning,
+  nodesWithoutAnnouncement,
   resolveAudioNodes,
   slugify,
 } from './showsModel'
@@ -596,11 +597,18 @@ function CueEditor({
   }
 
   const defaultNodeId = audioNodes.kind === 'loaded' ? installationDefaultAudioNode(audioNodes.nodes) : null
-  const noDuckingNodes = nodesWithoutDucking({
-    hasAnnouncement: kinds.has('announcement'),
-    audioNodes: resolveAudioNodes({ explicitList: audioTargets, showAudioNodes, excludeNodes: audioExcludeNodes, defaultNodeId }).nodes,
-    announcementNodes: resolveAudioNodes({ explicitList: announcementTargets, showAudioNodes, excludeNodes: announcementExcludeNodes, defaultNodeId }).nodes,
-  })
+  const audioOnlyNodes =
+    audioNodes.kind === 'loaded' && showAudioNodesState.kind === 'loaded'
+      ? nodesWithoutAnnouncement({
+          hasAnnouncement: kinds.has('announcement'),
+          audioNodes: resolveAudioNodes({ explicitList: audioTargets, showAudioNodes, excludeNodes: audioExcludeNodes, defaultNodeId }).nodes,
+          announcementNodes: resolveAudioNodes({ explicitList: announcementTargets, showAudioNodes, excludeNodes: announcementExcludeNodes, defaultNodeId }).nodes,
+        })
+      : []
+  const audioOnlyWarning =
+    audioNodes.kind === 'loaded' && audioOnlyNodes.length > 0
+      ? audioOnlyNodesWarning(audioOnlyNodes.map((id) => nodeIdentityText(audioNodes.nodes.find((n) => n.id === id) ?? { id, label: id })))
+      : null
 
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
@@ -802,7 +810,7 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
-          <p className="sm-field__help">Nodes that play this cue's audio. An announcement lowers it only on nodes that are also announcement nodes.</p>
+          <p className="sm-field__help">These nodes play this cue's audio. On a node that is not also an announcement node, it plays as show audio.</p>
         </div>
       )}
 
@@ -857,16 +865,9 @@ function CueEditor({
             nodesState={audioNodes}
           />
           <p className="sm-field__help">
-            Nodes that play the announcement. An announcement lowers the program audio only on nodes that are in both lists. With none ticked, it plays on the show's nodes, or on the main node when the show has none.
+            On these nodes the cue plays as an announcement over the audio already playing. A node must also be an audio node to play anything.
           </p>
-          {noDuckingNodes.length > 0 && (
-            <Notice
-              tone="warn"
-              live="status"
-              headline={`${noDuckingNodes.join(', ')} will play this cue's audio at full level during the announcement.`}
-              explanation="Add them to the announcement nodes to lower it."
-            />
-          )}
+          {audioOnlyWarning !== null && <Notice tone="warn" live="status" headline={audioOnlyWarning.headline} explanation={audioOnlyWarning.explanation} />}
         </div>
       )}
 

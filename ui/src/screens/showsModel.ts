@@ -640,11 +640,27 @@ export function resolveAudioNodes(params: {
   return { nodes: params.defaultNodeId === null ? [] : [params.defaultNodeId], from: 'default' }
 }
 
-/** Nodes that play a cue's audio but not its announcement, where the announcement cannot lower that audio. Empty when the cue has no announcement. */
-export function nodesWithoutDucking(params: { hasAnnouncement: boolean; audioNodes: readonly string[]; announcementNodes: readonly string[] }): string[] {
+/** Nodes that play a cue as show audio because they are not announcement nodes. Empty when the cue has no announcement. */
+export function nodesWithoutAnnouncement(params: { hasAnnouncement: boolean; audioNodes: readonly string[]; announcementNodes: readonly string[] }): string[] {
   if (!params.hasAnnouncement) return []
   const announced = new Set(params.announcementNodes)
   return params.audioNodes.filter((id) => !announced.has(id))
+}
+
+/** "a", "a and b", "a, b and c". */
+export function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join('')
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/** The two sentences shown for audio-only nodes: what they will do, then what to change. */
+export function audioOnlyNodesWarning(nodeNames: readonly string[]): { headline: string; explanation: string } {
+  const plural = nodeNames.length > 1
+  const names = joinNames(nodeNames)
+  return {
+    headline: `${names} will play this cue as show audio, not as an announcement, and stop${plural ? '' : 's'} the audio already playing there.`,
+    explanation: `Add ${plural ? 'them' : names} to the announcement nodes to play it over that audio.`,
+  }
 }
 
 /** The resolved-nodes line every audio-bearing shape shows: which nodes, and where the list came from. `ownLabel` names the object, e.g. "this cue". */
