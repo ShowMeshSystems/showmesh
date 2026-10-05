@@ -1,6 +1,6 @@
 # ADR-020: The Control API Is Versioned REST With a Server-Sent Events Change Stream
 
-Status: Accepted  
+Status: Accepted (decision 5's evidence states extended by [ADR-056](ADR-056-a-signal-with-nothing-to-measure-is-not-applicable.md))  
 Date: 2026-08-10
 
 ## Context
