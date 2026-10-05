@@ -170,7 +170,7 @@ func (h *handlers) weatherDelayCancelAlertEnded(now, fence time.Time, nodeIDs []
 		if !h.weatherDelayNodeAudioReachable(now, nodeID) {
 			continue
 		}
-		state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, fence, nodeID, weatherDelayCancelAlertSessionID)
+		state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, nightBedFence{Received: fence}, nodeID, weatherDelayCancelAlertSessionID)
 		switch {
 		case ok && state == string(pkgaudio.StatePlaying):
 			seenPlaying[nodeID] = true

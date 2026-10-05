@@ -101,6 +101,10 @@ type fakeAudioPublisher struct {
 	// lets one node's own still-pending dispatch delay another node's own
 	// publish (see nightDispatchBedNodesConcurrently's own tests).
 	blockUntilByNode map[string]<-chan struct{}
+
+	// respondedAt, when set, stamps every result's RespondedAt, the node's
+	// own answer time, as a real agent does.
+	respondedAt func() time.Time
 }
 
 // dispatchedAudioCommand is one recorded publish: the action string, the
@@ -202,6 +206,10 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 		result.CommandID = cmd.CommandID
 		result.IdempotencyKey = cmd.IdempotencyKey
 		result.Action = cmd.Action
+	}
+
+	if f.respondedAt != nil {
+		result.RespondedAt = f.respondedAt()
 	}
 
 	env, err := mqttproto.NewResultEnvelope(time.Now, cmdEnv.NodeID, result)

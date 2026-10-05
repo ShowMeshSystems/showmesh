@@ -383,8 +383,11 @@ type NightCueOutboxRecord struct {
 	State          string
 	DispatchedAt   *time.Time
 	ResolvedAt     *time.Time
-	Outcome        string
-	OutcomeReason  string
+	// NodeRespondedAt is when the node published its answer, on the node's
+	// own clock. Nil when the node never answered or the row predates it.
+	NodeRespondedAt *time.Time
+	Outcome         string
+	OutcomeReason   string
 }
 
 // ErrNightCueOutboxDuplicate is returned when (session, cycle, phase, cue)
@@ -428,12 +431,12 @@ func (t *Tx) InsertNightCueOutboxRow(ctx context.Context, rec NightCueOutboxReco
 
 func scanNightCueOutboxRow(row interface{ Scan(dest ...any) error }) (NightCueOutboxRecord, error) {
 	var (
-		rec                      NightCueOutboxRecord
-		dispatchedAt, resolvedAt sql.NullString
-		createdAt                string
+		rec                                       NightCueOutboxRecord
+		dispatchedAt, resolvedAt, nodeRespondedAt sql.NullString
+		createdAt                                 string
 	)
 	if err := row.Scan(&rec.ID, &rec.SessionID, &rec.Cycle, &rec.Phase, &rec.CueName, &rec.ActionRevision, &rec.State,
-		&dispatchedAt, &resolvedAt, &rec.Outcome, &rec.OutcomeReason, &createdAt); err != nil {
+		&dispatchedAt, &resolvedAt, &rec.Outcome, &rec.OutcomeReason, &createdAt, &nodeRespondedAt); err != nil {
 		return NightCueOutboxRecord{}, err
 	}
 	var err error
@@ -443,11 +446,14 @@ func scanNightCueOutboxRow(row interface{ Scan(dest ...any) error }) (NightCueOu
 	if rec.ResolvedAt, err = dbToTimePtr(resolvedAt); err != nil {
 		return NightCueOutboxRecord{}, fmt.Errorf("store: parse night cue outbox resolved_at: %w", err)
 	}
+	if rec.NodeRespondedAt, err = dbToTimePtr(nodeRespondedAt); err != nil {
+		return NightCueOutboxRecord{}, fmt.Errorf("store: parse night cue outbox node_responded_at: %w", err)
+	}
 	_ = createdAt
 	return rec, nil
 }
 
-const nightCueOutboxColumns = `id, session_id, cycle, phase, cue_name, action_revision, state, dispatched_at, resolved_at, outcome, outcome_reason, created_at`
+const nightCueOutboxColumns = `id, session_id, cycle, phase, cue_name, action_revision, state, dispatched_at, resolved_at, outcome, outcome_reason, created_at, node_responded_at`
 
 func getNightCueOutboxRow(ctx context.Context, q querier, sessionID string, cycle int64, phase, cueName string) (NightCueOutboxRecord, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+nightCueOutboxColumns+` FROM night_cue_outbox WHERE session_id = ? AND cycle = ? AND phase = ? AND cue_name = ?`, sessionID, cycle, phase, cueName)
@@ -575,9 +581,9 @@ func (s *Store) ListNightCueOutboxRowsForPhasePrefix(ctx context.Context, sessio
 
 func updateNightCueOutboxRow(ctx context.Context, q querier, rec NightCueOutboxRecord) error {
 	res, err := q.ExecContext(ctx, `
-		UPDATE night_cue_outbox SET state = ?, dispatched_at = ?, resolved_at = ?, outcome = ?, outcome_reason = ?
+		UPDATE night_cue_outbox SET state = ?, dispatched_at = ?, resolved_at = ?, node_responded_at = ?, outcome = ?, outcome_reason = ?
 		WHERE session_id = ? AND cycle = ? AND phase = ? AND cue_name = ?
-	`, rec.State, timePtrToDB(rec.DispatchedAt), timePtrToDB(rec.ResolvedAt), rec.Outcome, rec.OutcomeReason,
+	`, rec.State, timePtrToDB(rec.DispatchedAt), timePtrToDB(rec.ResolvedAt), timePtrToDB(rec.NodeRespondedAt), rec.Outcome, rec.OutcomeReason,
 		rec.SessionID, rec.Cycle, rec.Phase, rec.CueName)
 	if err != nil {
 		return fmt.Errorf("store: update night cue outbox row %s/%d/%s/%s: %w", rec.SessionID, rec.Cycle, rec.Phase, rec.CueName, err)
@@ -593,7 +599,7 @@ func updateNightCueOutboxRow(ctx context.Context, q querier, rec NightCueOutboxR
 }
 
 // UpdateNightCueOutboxRow overwrites the mutable columns (state,
-// dispatched_at, resolved_at, outcome, outcome_reason) of the row named by
+// dispatched_at, resolved_at, node_responded_at, outcome, outcome_reason) of the row named by
 // rec's own identity (session_id, cycle, phase, cue_name), which never
 // changes.
 func (s *Store) UpdateNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord) error {

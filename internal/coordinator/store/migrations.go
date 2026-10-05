@@ -186,6 +186,9 @@ var migrations = []migration{
 	{version: 44, fn: migrateV44AddNightSessionStopHoldColumns},
 	// v45 (ADR-055): adds node_enrollment_codes.
 	{version: 45, sql: schemaV45},
+	// v46: adds night_cue_outbox.node_responded_at. Existing rows read back
+	// with no node time.
+	{version: 46, fn: migrateV46AddNightCueOutboxNodeRespondedAt},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
