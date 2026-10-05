@@ -1743,6 +1743,33 @@ func TestApplyAlignmentNotMeasuredCarriesReasonNoNumbers(t *testing.T) {
 	if payload.AlignmentReason != "underrun suspected" {
 		t.Errorf("AlignmentReason = %q, want %q", payload.AlignmentReason, "underrun suspected")
 	}
+	if payload.AlignmentNotApplicable {
+		t.Error("AlignmentNotApplicable = true, want false: a missed sample is a missing reading")
+	}
+}
+
+// TestReportCarriesTheNodesOwnNothingToMeasureFlags proves each flag the
+// coordinator reads to report not_applicable reaches the wire.
+func TestReportCarriesTheNodesOwnNothingToMeasureFlags(t *testing.T) {
+	mgr := &stubSnapshotter{
+		alignment: audio.AlignmentSnapshot{Reason: "No session on this node holds the LTC run.", NotApplicable: true},
+		timeline:  audio.TimelineSnapshot{Reason: "No session on this node is playing against a scheduled start.", NotApplicable: true},
+	}
+	var payload mqttproto.AudioPayload
+	applyAlignment(context.Background(), &payload, mgr)
+	applyTimeline(context.Background(), &payload, mgr)
+	if !payload.AlignmentNotApplicable || !payload.TimelineNotApplicable {
+		t.Errorf("payload flags = alignment %v timeline %v, want both true", payload.AlignmentNotApplicable, payload.TimelineNotApplicable)
+	}
+
+	idle := sessionReportFromSnapshot(audio.SessionSnapshot{ID: "s1", NothingLoaded: true, GapNotApplicable: true, GapReason: "This session is stopped."})
+	if !idle.PositionNotApplicable || !idle.ItemGapNotApplicable {
+		t.Errorf("idle session flags = position %v gap %v, want both true", idle.PositionNotApplicable, idle.ItemGapNotApplicable)
+	}
+	playing := sessionReportFromSnapshot(audio.SessionSnapshot{ID: "s1", PositionKnown: true, GapReason: "successor item did not reach a confirmed start"})
+	if playing.PositionNotApplicable || playing.ItemGapNotApplicable {
+		t.Errorf("playing session flags = position %v gap %v, want both false", playing.PositionNotApplicable, playing.ItemGapNotApplicable)
+	}
 }
 
 // TestApplyAlignmentNilManagerLeavesFieldsZero proves a nil mgr (no asset

@@ -25,9 +25,9 @@ type Evidence struct {
 	Value any     `json:"value"`
 	Unit  *string `json:"unit"`
 
-	// State is one of the six values pkg/observation.State names:
+	// State is one of the seven values pkg/observation.State names:
 	// "current", "stale", "unknown_age", "not_collected",
-	// "collection_failed", "unsupported".
+	// "collection_failed", "unsupported", "not_applicable".
 	State  string  `json:"state"`
 	Reason *string `json:"reason"`
 

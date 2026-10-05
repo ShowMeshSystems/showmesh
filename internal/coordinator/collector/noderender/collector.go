@@ -270,19 +270,24 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 // an empty reason means this surface holds no assignment at all (never a
 // stale filename left over from a previous one); a non-empty reason means
 // the node withheld a real but malformed persisted assignment (see
-// applyContentIdentity's own doc comment) and states why. Either way all six
-// signals are NotCollected together with the applicable reason, mirroring
-// surfaceDrawStateObservations' identical "no active writer" grouping.
+// applyContentIdentity's own doc comment) and states why. All six signals
+// move together: not applicable with no assignment, NotCollected with the
+// node's reason when one was withheld.
 //
 // observedAt is sf.ContentObservedAt (the node's own content-identity read
 // time), NOT sf.ObservedAt — see surfaceReportObservations' contentObservedAt
 // comment for why the two must stay independent.
 func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
-	if sf.FSEQFilename == "" {
-		reason := "this surface holds no render assignment"
-		if sf.ContentIdentityReason != "" {
-			reason = sf.ContentIdentityReason
+	if sf.FSEQFilename == "" && sf.ContentIdentityReason == "" {
+		reason := "This surface holds no render assignment."
+		obs := make([]observation.Observation, 0, len(contentSignals))
+		for _, sig := range contentSignals {
+			obs = append(obs, notApplicable(nodeID, res, sig, reason, observedAt, rep))
 		}
+		return obs
+	}
+	if sf.FSEQFilename == "" {
+		reason := sf.ContentIdentityReason
 		return []observation.Observation{
 			notCollected(res, SignalSurfaceContentFSEQFilename, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceContentFSEQContentHash, SourceFor(nodeID), reason, rep.receivedAt),
@@ -302,8 +307,8 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 	// a cue activation: a direct render.surface.apply assignment has no
 	// cue at all, stated as not applicable rather than fabricated as "".
 	if sf.CueID == "" {
-		obs = append(obs, notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID),
-			"this surface's current assignment was not applied by a cue activation", rep.receivedAt))
+		obs = append(obs, notApplicable(nodeID, res, SignalSurfaceContentCueID,
+			"This surface's assignment was not applied by a cue.", observedAt, rep))
 	} else {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCueID, sf.CueID, observedAt, rep))
 	}
@@ -312,8 +317,8 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 	// carries an authorization tuple (TRACK-H-H3-SPEC.md section 5),
 	// absent for a legacy assignment persisted before that tuple existed.
 	if sf.CatalogRevision == "" {
-		obs = append(obs, notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID),
-			"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt))
+		obs = append(obs, notApplicable(nodeID, res, SignalSurfaceContentCatalogRevision,
+			noCatalogAuthorizationReason, observedAt, rep))
 	} else {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCatalogRevision, sf.CatalogRevision, observedAt, rep))
 	}
@@ -323,10 +328,8 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 	// mqttproto.RenderSurfaceReport.Show's own doc comment.
 	if sf.Show == "" {
 		obs = append(obs,
-			notCollected(res, SignalSurfaceContentShow, SourceFor(nodeID),
-				"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt),
-			notCollected(res, SignalSurfaceContentGeneration, SourceFor(nodeID),
-				"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt),
+			notApplicable(nodeID, res, SignalSurfaceContentShow, noCatalogAuthorizationReason, observedAt, rep),
+			notApplicable(nodeID, res, SignalSurfaceContentGeneration, noCatalogAuthorizationReason, observedAt, rep),
 		)
 	} else {
 		obs = append(obs,
@@ -374,8 +377,8 @@ func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf
 	// pipeline.Snapshot.TimelinePositionMS's own doc comment) — never a
 	// fabricated zero or the last content position echoed back.
 	if sf.TimelinePositionMS == nil {
-		obs = append(obs, notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID),
-			"no timeline position while drawing idle output", rep.receivedAt))
+		obs = append(obs, notApplicable(nodeID, res, SignalSurfaceTimelinePositionMS,
+			"This surface is not drawing content, so there is no timeline position.", observedAt, rep))
 	} else {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceTimelinePositionMS, *sf.TimelinePositionMS, observedAt, rep))
 	}
@@ -386,8 +389,8 @@ func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf
 	if sf.Drawing == mqttproto.RenderDrawingIdle {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceOutputIdleMode, sf.IdleMode, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSurfaceOutputIdleMode, SourceFor(nodeID),
-			"not applicable unless the writer is drawing a configured idle output", rep.receivedAt))
+		obs = append(obs, notApplicable(nodeID, res, SignalSurfaceOutputIdleMode,
+			"This surface is not drawing idle output.", observedAt, rep))
 	}
 
 	// FailureOutput is IdleMode's counterpart for the third drawing state:
@@ -397,8 +400,8 @@ func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf
 	if sf.Drawing == mqttproto.RenderDrawingFailure {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceOutputFailure, sf.FailureOutput, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSurfaceOutputFailure, SourceFor(nodeID),
-			"not applicable unless the writer failed to extract a frame", rep.receivedAt))
+		obs = append(obs, notApplicable(nodeID, res, SignalSurfaceOutputFailure,
+			"This surface has not failed to draw a frame.", observedAt, rep))
 	}
 
 	return obs
@@ -483,6 +486,30 @@ func buildValue(nodeID string, res observation.ResourceRef, sig observation.Sign
 	o, err := observation.Measured(res, sig, value, observedAt, opts...)
 	if err != nil {
 		return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)
+	}
+	return o
+}
+
+var contentSignals = []observation.SignalID{
+	SignalSurfaceContentFSEQFilename, SignalSurfaceContentFSEQContentHash, SignalSurfaceContentCueID,
+	SignalSurfaceContentCatalogRevision, SignalSurfaceContentShow, SignalSurfaceContentGeneration,
+}
+
+const noCatalogAuthorizationReason = "This surface's assignment was made before catalog authorization was recorded."
+
+// notApplicable reports that the node's own report at observedAt
+// established the signal's subject does not exist (ADR-056). A report
+// with no evidence time cannot establish that and stays not collected.
+func notApplicable(nodeID string, res observation.ResourceRef, sig observation.SignalID, reason string, observedAt time.Time, rep report) observation.Observation {
+	source := SourceFor(nodeID)
+	if observedAt.IsZero() {
+		return notCollected(res, sig, source, reason, rep.receivedAt)
+	}
+	o, err := observation.NotApplicable(res, sig, reason, observedAt,
+		observation.WithSource(source), observation.WithCollectedAt(rep.receivedAt),
+		observation.WithValidFor(DefaultValidFor))
+	if err != nil {
+		panic(fmt.Sprintf("noderender: NotApplicable(%q) unexpectedly failed: %v", sig, err))
 	}
 	return o
 }

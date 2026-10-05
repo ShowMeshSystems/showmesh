@@ -372,6 +372,53 @@ func TestMapEvidenceDeliversAuthoredReasonEvenWhenStateIsCurrent(t *testing.T) {
 	}
 }
 
+// TestMapEvidenceNotApplicableEnvelope pins ADR-056 decisions 2 and 3 on
+// the wire: null value, the reason, both times set, then stale.
+func TestMapEvidenceNotApplicableEnvelope(t *testing.T) {
+	observedAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	o := healthMustObs(observation.NotApplicable(healthRes, "audio_session.restore.next_attempt_ms", "No restore is queued for this session.", observedAt,
+		observation.WithSource("node-audio:audio-01"), observation.WithCollectedAt(observedAt.Add(time.Second)),
+		observation.WithValidFor(45*time.Second)))
+
+	ev := mapEvidence(o, observedAt.Add(10*time.Second))
+	if ev.State != "not_applicable" || ev.Value != nil {
+		t.Errorf("State = %q Value = %v, want not_applicable with a null value", ev.State, ev.Value)
+	}
+	if ev.Reason == nil || *ev.Reason != "No restore is queued for this session." {
+		t.Errorf("Reason = %v, want the stated absence", ev.Reason)
+	}
+	if ev.ObservedAt == nil || *ev.ObservedAt != formatTime(observedAt) {
+		t.Errorf("ObservedAt = %v, want the report's own time", ev.ObservedAt)
+	}
+	if ev.CollectedAt == nil {
+		t.Error("CollectedAt is null, want it set as for any reading")
+	}
+
+	stale := mapEvidence(o, observedAt.Add(time.Minute))
+	if stale.State != "stale" || stale.Value != nil || stale.Reason == nil {
+		t.Errorf("after the source went quiet: State = %q Value = %v Reason = %v, want stale with a reason", stale.State, stale.Value, stale.Reason)
+	}
+}
+
+// TestNotApplicableOutranksEveryOtherAbsence proves a reading that the
+// subject does not exist wins over a source that could not read it.
+func TestNotApplicableOutranksEveryOtherAbsence(t *testing.T) {
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	na := healthMustObs(observation.NotApplicable(healthRes, "fpp.x", "Nothing is queued.", at, observation.WithSource("fpp-mqtt")))
+	for _, other := range []observation.Observation{
+		healthMustObs(observation.Unsupported(healthRes, "fpp.x", "r", observation.WithSource("fpp-rest"))),
+		healthMustObs(observation.CollectionFailed(healthRes, "fpp.x", "r", observation.WithSource("fpp-rest"))),
+		healthMustObs(observation.NotCollected(healthRes, "fpp.x", "r", observation.WithSource("fpp-rest"))),
+	} {
+		if got := preferObservation(na, other); got.Absence != observation.StateNotApplicable {
+			t.Errorf("preferObservation(not_applicable, %s) picked %s", other.Absence, got.Absence)
+		}
+		if got := preferObservation(other, na); got.Absence != observation.StateNotApplicable {
+			t.Errorf("preferObservation(%s, not_applicable) picked %s", other.Absence, got.Absence)
+		}
+	}
+}
+
 // TestMapFPPInstanceResolvesMultiSourceObservations is Step 5 review
 // finding 1's most direct wiring-layer gap: deleting `resolved :=
 // ResolveObservations(fv.Observations)` from [mapFPPInstance] left the

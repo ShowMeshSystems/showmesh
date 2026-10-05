@@ -1332,7 +1332,7 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
-		s.setGapUnknownLocked("session is stopped")
+		s.setGapUnknownLocked(gapReasonStopped)
 		m.stopLTCLocked(ctx, s)
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	}
@@ -1354,7 +1354,7 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
-		s.setGapUnknownLocked("session is stopped")
+		s.setGapUnknownLocked(gapReasonStopped)
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	}
 	var releaseErr error
@@ -1383,7 +1383,7 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 			s.loadedIdentity = ""
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
-			s.setGapUnknownLocked("session is stopped")
+			s.setGapUnknownLocked(gapReasonStopped)
 		}
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
 	}
@@ -1397,7 +1397,7 @@ func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCa
 	s.loadedIdentity = ""
 	s.state = pkgaudio.StateStopped
 	s.bookmark = nil
-	s.setGapUnknownLocked("session is stopped")
+	s.setGapUnknownLocked(gapReasonStopped)
 	return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 }
 
@@ -1426,7 +1426,7 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 		s.currentIndex = -1
 		s.currentItemID = ""
 		s.bookmark = nil
-		s.setGapUnknownLocked("session was cleared")
+		s.setGapUnknownLocked(gapReasonCleared)
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
 	s.mu.Unlock()

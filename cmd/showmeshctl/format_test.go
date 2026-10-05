@@ -59,6 +59,7 @@ func TestStateGlyphCurrentIsBareNoOtherStateIs(t *testing.T) {
 		{stateNotCollected, "NOT-COLLECTED"},
 		{stateCollectionFailed, "COLLECTION-FAILED"},
 		{stateUnsupported, "UNSUPPORTED"},
+		{stateNotApplicable, "n/a"},
 	}
 	for _, tc := range cases {
 		got := stateGlyph(tc.state, nil)

@@ -3524,7 +3524,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the six values below; `value` is null only for the three genuine absence states - `not_collected`, `collection_failed`, `unsupported` - where nothing was ever obtained. It is non-null for `current`, `stale`, AND `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly - see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown - most importantly for a retained MQTT delivery (`state: "unknown_age"`) - and MUST NEVER be treated as equivalent to "now".
+         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the seven values below; `value` is null for the three genuine absence states - `not_collected`, `collection_failed`, `unsupported` - where nothing was ever obtained, and for `not_applicable`, where the signal's subject does not exist right now: nothing is queued, nothing is running, nothing has happened yet. `not_applicable` is a reading, not an absence: `reason` states what is absent, `observedAt` is the time of the report that established it, and a row whose source stops reporting turns `stale` with a null `value`. A client must not show it as a problem. A signal with a meaningful default reports that default as `current`, with `reason` naming it as the default. `value` is non-null for `current`, for `stale` unless the row was `not_applicable` before it aged, AND for `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly - see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown - most importantly for a retained MQTT delivery (`state: "unknown_age"`) - and MUST NEVER be treated as equivalent to "now".
          *
          *     **A signal can be reported by more than one collector source.** FPP's own REST API and its MQTT status topics both describe the same underlying facts (playback, controller/network health, pixel current), under identically-named `signal` values, distinguished only by `source` ("fpp-rest" vs "fpp-mqtt"). This API never renders more than one `Evidence` for the same signal on the same resource: when both sources have something to say, the coordinator resolves to a single value by a fixed precedence (a source with a known observation time beats one without, which beats an absence; a later observation time beats an earlier one; a tie prefers "fpp-rest" over "fpp-mqtt") before this envelope is ever built. A client reading this API never has to implement that resolution itself, and never sees two competing rows to reconcile.
          */
@@ -3535,7 +3535,7 @@ export interface components {
             /** @description Never a claimed unit this API cannot actually verify - for example, a "fpp.sensor.<key>.value" temperature reading's unit is always null (Celsius vs. Fahrenheit is not stated by the source and is not guessed); the reading's kind is instead carried on a separate "fpp.sensor.<key>.type" signal ("Temperature", "Voltage"). */
             unit: string | null;
             /** @enum {string} */
-            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "not_applicable";
             reason: string | null;
             /** Format: date-time */
             observedAt: string | null;
@@ -3768,7 +3768,7 @@ export interface components {
             value: boolean | string | number | null;
             unit: string | null;
             /** @enum {string} */
-            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "not_applicable";
             reason: string | null;
             /** Format: date-time */
             observedAt: string | null;

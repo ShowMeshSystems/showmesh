@@ -2,8 +2,9 @@ import type { Evidence, EvidenceState } from '../api'
 import type { Absence, Tone } from '../kit'
 
 /**
- * The wire's six evidence states, mapped onto the four absences. Only
+ * The wire's seven evidence states, mapped onto the four absences. Only
  * `not_collected` is never-collected, and only it takes the dashed edge.
+ * `not_applicable` is a settled fact: there is nothing to measure.
  */
 export const EVIDENCE_ABSENCE: Record<EvidenceState, Absence> = {
   current: 'empty',
@@ -12,6 +13,7 @@ export const EVIDENCE_ABSENCE: Record<EvidenceState, Absence> = {
   not_collected: 'unobserved',
   collection_failed: 'failed',
   unsupported: 'unavailable',
+  not_applicable: 'empty',
 }
 
 export const EVIDENCE_TONE: Record<EvidenceState, Tone> = {
@@ -21,6 +23,7 @@ export const EVIDENCE_TONE: Record<EvidenceState, Tone> = {
   not_collected: 'unknown',
   collection_failed: 'bad',
   unsupported: 'unknown',
+  not_applicable: 'pending',
 }
 
 export const EVIDENCE_LABEL: Record<EvidenceState, string> = {
@@ -30,6 +33,7 @@ export const EVIDENCE_LABEL: Record<EvidenceState, string> = {
   not_collected: 'Unobserved',
   collection_failed: 'Collection failed',
   unsupported: 'Unavailable',
+  not_applicable: 'N/A',
 }
 
 /** An empty string is a known empty value and renders as None. */
@@ -39,6 +43,9 @@ export function displayValue(value: string | number | boolean): string {
 
 export type SignalCounts = {
   total: number
+  /** Signals with something to measure: the total without `notApplicable`. */
+  measurable: number
+  notApplicable: number
   current: number
   stale: number
   unobserved: number
@@ -50,6 +57,8 @@ export type SignalCounts = {
 export function countSignals(groups: readonly (readonly Evidence[])[]): SignalCounts {
   const counts: SignalCounts = {
     total: 0,
+    measurable: 0,
+    notApplicable: 0,
     current: 0,
     stale: 0,
     unobserved: 0,
@@ -79,8 +88,12 @@ export function countSignals(groups: readonly (readonly Evidence[])[]): SignalCo
         case 'unknown_age':
           counts.unknownAge += 1
           break
+        case 'not_applicable':
+          counts.notApplicable += 1
+          break
       }
     }
   }
+  counts.measurable = counts.total - counts.notApplicable
   return counts
 }

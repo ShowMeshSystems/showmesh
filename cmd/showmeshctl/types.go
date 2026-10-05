@@ -41,7 +41,7 @@ type evidence struct {
 
 // Evidence states, per contract §4 / pkg/observation.State. Reproduced here
 // (not imported — see doc.go) because this package renders on the vocabulary
-// of the six values, not on the package that defines them.
+// of the seven values, not on the package that defines them.
 const (
 	stateCurrent          = "current"
 	stateStale            = "stale"
@@ -49,6 +49,7 @@ const (
 	stateNotCollected     = "not_collected"
 	stateCollectionFailed = "collection_failed"
 	stateUnsupported      = "unsupported"
+	stateNotApplicable    = "not_applicable"
 )
 
 // capability is one entry of node.capabilities.

@@ -369,7 +369,38 @@ func primaryDuckedByLocked(set map[pkgaudio.SessionID]struct{}) pkgaudio.Session
 // never run [Session.advanceLocked] to a successor item — a first item and
 // a session that never advanced report this identically, since neither
 // has a predecessor completion to measure against.
-const gapReasonNeverAdvanced = "no playlist advance has occurred yet"
+const gapReasonNeverAdvanced = "No playlist advance has happened yet."
+
+// The reasons a session states when no item gap exists to measure, as
+// opposed to a gap that should have been measured and was not.
+const (
+	gapReasonStopped       = "This session is stopped."
+	gapReasonCleared       = "This session was cleared."
+	gapReasonNoPlaylist    = "This session has no playlist."
+	gapReasonPlaylistEnded = "The playlist ended with no next item."
+	gapReasonForcedAdvance = "The last advance was forced by an operator, so there is no gap to measure."
+)
+
+// legacyGapReasons maps the wording a session persisted before these
+// reasons were sentences onto today's, so a restored session classifies.
+var legacyGapReasons = map[string]string{
+	"no playlist advance has occurred yet":                          gapReasonNeverAdvanced,
+	"session is stopped":                                            gapReasonStopped,
+	"session was cleared":                                           gapReasonCleared,
+	"session has no playlist to measure a gap within":               gapReasonNoPlaylist,
+	"playlist ended with no successor item":                         gapReasonPlaylistEnded,
+	"advance was operator-forced, not driven by natural completion": gapReasonForcedAdvance,
+}
+
+// gapSubjectAbsent reports whether reason says no item gap exists.
+func gapSubjectAbsent(reason string) bool {
+	switch reason {
+	case gapReasonNeverAdvanced, gapReasonStopped, gapReasonCleared,
+		gapReasonNoPlaylist, gapReasonPlaylistEnded, gapReasonForcedAdvance:
+		return true
+	}
+	return false
+}
 
 func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 	return &Session{
@@ -998,7 +1029,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.releaseEngineLocked(ctx)
 		s.state = pkgaudio.StateCompleted
 		s.bookmark = nil
-		s.setGapUnknownLocked("session has no playlist to measure a gap within")
+		s.setGapUnknownLocked(gapReasonNoPlaylist)
 		s.mgr.stopLTCLocked(ctx, s)
 		s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
 		s.persistBestEffortLocked("state change")
@@ -1013,7 +1044,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.releaseEngineLocked(ctx)
 		s.state = pkgaudio.StateCompleted
 		s.bookmark = nil
-		s.setGapUnknownLocked("playlist ended with no successor item")
+		s.setGapUnknownLocked(gapReasonPlaylistEnded)
 		s.mgr.stopLTCLocked(ctx, s)
 		s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
 		s.persistBestEffortLocked("state change")
@@ -1027,7 +1058,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 	// that ever overwrites this with a genuine measurement.
 	switch {
 	case forced:
-		s.setGapUnknownLocked("advance was operator-forced, not driven by natural completion")
+		s.setGapUnknownLocked(gapReasonForcedAdvance)
 	case completedAt.IsZero():
 		s.setGapUnknownLocked("no completion evidence was available for the predecessor item")
 	default:
@@ -1110,7 +1141,7 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
-		s.setGapUnknownLocked("session is stopped")
+		s.setGapUnknownLocked(gapReasonStopped)
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return
@@ -1171,6 +1202,10 @@ type SessionSnapshot struct {
 	// issued — never this call's own wall-clock time.
 	PositionKnown bool
 	Position      time.Duration
+
+	// NothingLoaded is true when no engine handle is loaded, so there is
+	// no position to read rather than one that could not be read.
+	NothingLoaded bool
 	ObservedAt    time.Time
 
 	State           pkgaudio.State
@@ -1207,11 +1242,13 @@ type SessionSnapshot struct {
 	// audio_session.item_gap_ms). GapReason is set whenever GapKnown is
 	// false; GapObservedAt is only meaningful when GapKnown is true, and
 	// is the successor's own engine-clock evidence time, never this
-	// call's own wall-clock time.
-	GapKnown      bool
-	Gap           time.Duration
-	GapReason     string
-	GapObservedAt time.Time
+	// call's own wall-clock time. GapNotApplicable is true when
+	// GapReason says no gap exists, not that one went unmeasured.
+	GapKnown         bool
+	Gap              time.Duration
+	GapReason        string
+	GapObservedAt    time.Time
+	GapNotApplicable bool
 
 	// RestorePending is [Manager.sessionPendingRestore]'s own verbatim
 	// answer: this session currently has a restore queued
@@ -1271,7 +1308,9 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
 		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
-		CollectedAt: s.mgr.now(),
+		GapNotApplicable: !s.gapKnown && gapSubjectAbsent(s.gapReason),
+		NothingLoaded:    !s.handleLoaded,
+		CollectedAt:      s.mgr.now(),
 	}
 
 	// Gated on m.pendingEngineRestore membership, not on s.state: this

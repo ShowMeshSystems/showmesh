@@ -18,7 +18,17 @@ type AlignmentSnapshot struct {
 	SampledAt time.Time
 	SessionID pkgaudio.SessionID
 	Reason    string
+
+	// NotApplicable is true when Reason says there is no playing LTC
+	// session to sample, not that a sample was attempted and missed.
+	NotApplicable bool
 }
+
+// The two reasons no alignment exists to sample.
+const (
+	alignmentReasonNoLTCHolder = "No session on this node holds the LTC run."
+	alignmentReasonHolderIdle  = "The session holding the LTC run is not playing."
+)
 
 // notMeasuredAlignment is what a node with no honest sample reports, not
 // collected with a reason, never a zeroed offset that would read as
@@ -68,7 +78,9 @@ func (s *Session) alignmentFieldsWithBudget(budget time.Duration) (alignmentSess
 func (m *Manager) AlignmentSnapshot(ctx context.Context) AlignmentSnapshot {
 	s, reason := m.ltcHolderSession()
 	if s == nil {
-		return notMeasuredAlignment(reason)
+		snap := notMeasuredAlignment(reason)
+		snap.NotApplicable = reason == alignmentReasonNoLTCHolder
+		return snap
 	}
 
 	fields, ok := s.alignmentFieldsWithBudget(snapshotLockBudget)
@@ -81,7 +93,8 @@ func (m *Manager) AlignmentSnapshot(ctx context.Context) AlignmentSnapshot {
 	override := fields.override
 
 	if !ready {
-		snap := notMeasuredAlignment("this node's LTC-holding session is not currently playing with a loaded engine handle")
+		snap := notMeasuredAlignment(alignmentReasonHolderIdle)
+		snap.NotApplicable = true
 		snap.SessionID = sessID
 		return snap
 	}
@@ -157,5 +170,5 @@ func (m *Manager) ltcHolderSession() (*Session, string) {
 			return s, ""
 		}
 	}
-	return nil, "no session on this node currently holds this node's one LTC run"
+	return nil, alignmentReasonNoLTCHolder
 }

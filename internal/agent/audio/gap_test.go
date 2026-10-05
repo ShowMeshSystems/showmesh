@@ -182,3 +182,54 @@ func TestItemGapUnknownAfterStop(t *testing.T) {
 		t.Fatal("gap reason is empty, want a stated reason")
 	}
 }
+
+// TestGapReasonsSayWhetherAGapExists pins the split the report carries: a
+// stopped or never-advanced session has no gap, a missed measurement does.
+func TestGapReasonsSayWhetherAGapExists(t *testing.T) {
+	for _, reason := range []string{
+		gapReasonNeverAdvanced, gapReasonStopped, gapReasonCleared,
+		gapReasonNoPlaylist, gapReasonPlaylistEnded, gapReasonForcedAdvance,
+	} {
+		if !gapSubjectAbsent(reason) {
+			t.Errorf("gapSubjectAbsent(%q) = false, want true", reason)
+		}
+	}
+	for _, reason := range []string{
+		"no completion evidence was available for the predecessor item",
+		"successor item did not reach a confirmed start",
+		"measured gap was negative; discarded as invalid evidence",
+		"",
+	} {
+		if gapSubjectAbsent(reason) {
+			t.Errorf("gapSubjectAbsent(%q) = true, want false: this gap went unmeasured", reason)
+		}
+	}
+	for legacy, modern := range legacyGapReasons {
+		if gapSubjectAbsent(legacy) || !gapSubjectAbsent(modern) {
+			t.Errorf("legacy reason %q must map onto a reason that classifies, got %q", legacy, modern)
+		}
+	}
+}
+
+// TestSnapshotSaysNothingIsLoadedAndNoGapExists proves a session that has
+// not started reports both absences as facts, not as missing readings.
+func TestSnapshotSaysNothingIsLoadedAndNoGapExists(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(twoItemPlaylist(t, m.assetDir))})
+
+	var snap SessionSnapshot
+	for _, s := range m.Snapshot(ctx) {
+		if s.ID == id {
+			snap = s
+		}
+	}
+	if !snap.NothingLoaded || snap.PositionKnown {
+		t.Errorf("snapshot = NothingLoaded %v PositionKnown %v, want nothing loaded and no position", snap.NothingLoaded, snap.PositionKnown)
+	}
+	if !snap.GapNotApplicable || snap.GapReason != gapReasonNeverAdvanced {
+		t.Errorf("snapshot gap = not applicable %v (%q), want true with %q", snap.GapNotApplicable, snap.GapReason, gapReasonNeverAdvanced)
+	}
+}

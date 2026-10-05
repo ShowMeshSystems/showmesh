@@ -113,6 +113,9 @@ func TestAlignmentSnapshotReportsNotMeasuredWithNoLTCHoldingSession(t *testing.T
 	if snap.SessionID != "" {
 		t.Errorf("SessionID = %q, want empty with no holding session", snap.SessionID)
 	}
+	if !snap.NotApplicable || snap.Reason != alignmentReasonNoLTCHolder {
+		t.Errorf("snapshot = not applicable %v (%q), want true: no session holds the LTC run", snap.NotApplicable, snap.Reason)
+	}
 }
 
 // TestAlignmentSnapshotNotMeasuredWhilePaused proves the gate that only a
@@ -140,6 +143,9 @@ func TestAlignmentSnapshotNotMeasuredWhilePaused(t *testing.T) {
 	snap := m.AlignmentSnapshot(ctx)
 	if snap.Measured {
 		t.Fatalf("AlignmentSnapshot while paused = %+v, want Measured false", snap)
+	}
+	if !snap.NotApplicable || snap.Reason != alignmentReasonHolderIdle {
+		t.Errorf("snapshot = not applicable %v (%q), want true: the holder is not playing", snap.NotApplicable, snap.Reason)
 	}
 }
 

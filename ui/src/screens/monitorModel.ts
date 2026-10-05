@@ -219,13 +219,15 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       return {
         key: `${prefix}:${entry.signal}:${index}`,
         label: entry.signal,
-        value: entry.value === null ? 'no value' : displayValue(entry.value),
+        value: entry.state === 'not_applicable' ? 'None' : entry.value === null ? 'no value' : displayValue(entry.value),
         state:
           alignmentLabel !== null
             ? alignmentLabel
             : entry.state === 'current'
               ? null
-              : `${entry.state.replace('_', ' ')}${entry.observedAt === null ? '' : ` · ${formatClock(entry.observedAt) ?? ''}`}`,
+              : entry.state === 'not_applicable'
+                ? EVIDENCE_LABEL.not_applicable
+                : `${entry.state.replace('_', ' ')}${entry.observedAt === null ? '' : ` · ${formatClock(entry.observedAt) ?? ''}`}`,
         detail: entry.state === 'current' ? null : entry.reason,
         tone:
           entry.state === 'current'
@@ -426,6 +428,7 @@ export type SignalRow = {
 }
 
 function signalValue(entry: Evidence): string {
+  if (entry.state === 'not_applicable') return 'None'
   if (entry.value === null) return 'not reported'
   return entry.unit === null || entry.unit === '' ? displayValue(entry.value) : `${entry.value} ${entry.unit}`
 }
@@ -510,7 +513,8 @@ export function signalSummary(rows: readonly SignalRow[]): string {
   const unobserved = byLabel(EVIDENCE_LABEL.not_collected)
   const failed = byLabel(EVIDENCE_LABEL.collection_failed)
   const unavailable = byLabel(EVIDENCE_LABEL.unsupported) + byLabel(EVIDENCE_LABEL.unknown_age)
-  return `${rows.length} signals · ${current} current, ${stale} stale, ${unobserved} unobserved, ${failed} failed, ${unavailable} unavailable.`
+  const notApplicable = byLabel(EVIDENCE_LABEL.not_applicable)
+  return `${rows.length} signals · ${current} current, ${stale} stale, ${unobserved} unobserved, ${failed} failed, ${unavailable} unavailable, ${notApplicable} N/A.`
 }
 
 // ---------------------------------------------------------------------

@@ -72,8 +72,12 @@ func TestSyncReportsFreeRunningOnASystemClockPipeline(t *testing.T) {
 	if got := findObs(t, obs, SignalSyncFollows); got.Value != "" {
 		t.Errorf("sync follows = %v, want blank while free-running", got.Value)
 	}
-	if got := findObs(t, obs, SignalSyncOffsetNs); got.Absence != observation.StateNotCollected {
-		t.Errorf("sync offset absence = %q, want %q", got.Absence, observation.StateNotCollected)
+	got := findObs(t, obs, SignalSyncOffsetNs)
+	if got.Absence != observation.StateNotApplicable {
+		t.Errorf("sync offset absence = %q, want %q", got.Absence, observation.StateNotApplicable)
+	}
+	if want := "This node's audio output is not following a global clock, so there is no offset."; got.Reason != want {
+		t.Errorf("sync offset reason = %q, want %q", got.Reason, want)
 	}
 }
 

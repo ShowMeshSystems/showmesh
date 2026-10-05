@@ -5,7 +5,7 @@ import type { Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { MonitorSignals } from './MonitorSignals'
-import { signalRows } from './monitorModel'
+import { signalRows, signalSummary } from './monitorModel'
 
 const observation = (signal: string, state = 'current', value: string | null = 'x') =>
   ({
@@ -80,6 +80,15 @@ describe('Monitor · Signals', () => {
     const rows = signalRows({ ...initialModel(), nodes: [node('a', [observation('surface.frames.rate', 'not_collected', null)])] }, '2026-08-28T21:07:00Z')
     expect(rows[0]?.state).toBe('Unobserved')
     expect(rows[0]?.tone).toBe('unknown')
+  })
+
+  it('labels a signal with nothing to measure N/A, with no unobserved or warning treatment', () => {
+    const entry = observation('audio_session.restore.next_attempt_ms', 'not_applicable', null)
+    const rows = signalRows({ ...initialModel(), nodes: [node('a', [entry])] }, '2026-08-28T21:07:00Z')
+    expect(rows[0]?.state).toBe('N/A')
+    expect(rows[0]?.tone).toBe('pending')
+    expect(rows[0]?.value).toBe('None')
+    expect(signalSummary(rows)).toBe('1 signals · 0 current, 0 stale, 0 unobserved, 0 failed, 0 unavailable, 1 N/A.')
   })
 
   it('never confuses a stale signal with an unobserved one', () => {
