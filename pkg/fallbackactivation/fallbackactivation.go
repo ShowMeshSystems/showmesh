@@ -210,7 +210,9 @@ func validExecutionID(id string) bool {
 				return false
 			}
 		default:
-			if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			isDigit := c >= '0' && c <= '9'
+			isLowerHex := c >= 'a' && c <= 'f'
+			if !isDigit && !isLowerHex {
 				return false
 			}
 		}
