@@ -166,6 +166,10 @@ type nightCommandOutcome struct {
 	// never a reason to fail the operator command that already decided
 	// the show is stopping.
 	closeCycleOutcome *nightCloseCycleOutcome
+
+	// reason, when non-empty, is reported to the caller as
+	// NightCommandResult.Reason.
+	reason string
 }
 
 // nightCloseCycleOutcome is [nightCommandOutcome.closeCycleOutcome]'s
@@ -246,7 +250,8 @@ func nightCommandHTTPWriteDeadline() time.Duration {
 // "skipEnterShowLead": bool?} body. An absent or empty body is valid:
 // every field is optional. skipEnterShowLead is honored only by
 // start-night, the same way idempotencyKey is honored only by
-// prepare-site; every other command ignores it.
+// prepare-site; every other command ignores it. stopFppPlayback is
+// honored only by prepare-site, too.
 // interlockOverrides is Track F seam F6's own addition
 // (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
 // override it, and is honored only where that rule itself declares
@@ -267,14 +272,15 @@ var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandResumeShow:       true,
 }
 
-func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead bool, problem *v1.Problem) {
+func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead, stopFPPPlayback bool, problem *v1.Problem) {
 	if r.ContentLength == 0 {
-		return "", nil, false, nil
+		return "", nil, false, false, nil
 	}
 	var body struct {
 		IdempotencyKey     string                          `json:"idempotencyKey"`
 		InterlockOverrides []nightInterlockOverrideRequest `json:"interlockOverrides"`
 		SkipEnterShowLead  bool                            `json:"skipEnterShowLead"`
+		StopFPPPlayback    bool                            `json:"stopFppPlayback"`
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNightCommandRequestBodyBytes+1))
 	// Strict decoding, found by review this seam's safety review round: a
@@ -283,20 +289,20 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	// with no hint the override never arrived at all.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?,\"skipEnterShowLead\":bool?}, with no other keys")
-		return "", nil, false, &p
+		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?,\"skipEnterShowLead\":bool?,\"stopFppPlayback\":bool?}, with no other keys")
+		return "", nil, false, false, &p
 	}
 	for _, o := range body.InterlockOverrides {
 		if o.Rule == "" || o.Reason == "" {
 			p := invalidParameterProblem("every interlockOverrides entry requires a non-empty \"rule\" and \"reason\"")
-			return "", nil, false, &p
+			return "", nil, false, false, &p
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
 		p := invalidParameterProblem(fmt.Sprintf("%q has no gate for interlockOverrides to affect, so omit that field instead of sending it ignored", cmd))
-		return "", nil, false, &p
+		return "", nil, false, false, &p
 	}
-	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, nil
+	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, body.StopFPPPlayback, nil
 }
 
 // handleNightCommand serves POST /api/v1/night/commands/{command}, behind
@@ -311,7 +317,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session, resume-show", cmd)))
 		return
 	}
-	idempotencyKey, interlockOverrides, skipEnterShowLead, problem := decodeNightCommandBody(r, cmd)
+	idempotencyKey, interlockOverrides, skipEnterShowLead, stopFPPPlayback, problem := decodeNightCommandBody(r, cmd)
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
@@ -373,7 +379,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// [handlers.nightPrepareSiteCommand]'s own doc comment for why
 		// prepare-site cannot be routed through nightRunGated directly the
 		// way start-preshow and start-night are.
-		out, problem, opErr = h.nightPrepareSiteCommand(ctx, now, issuer, idempotencyKey, interlockOverrides, callerHasOverrideScope)
+		out, problem, opErr = h.nightPrepareSiteCommand(ctx, now, issuer, idempotencyKey, interlockOverrides, callerHasOverrideScope, stopFPPPlayback)
 	case cmd == nightCommandFadeOutNight:
 		// Its own phase="fade-out-night" interlock evidence is dispatched
 		// live, outside any transaction; see
@@ -434,7 +440,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(v1.NightCommandResponse{
 		ServerTime: formatTime(now),
-		Command:    v1.NightCommandResult{Command: cmd, Outcome: out.outcome, AttributionDegraded: attributionDegraded},
+		Command:    v1.NightCommandResult{Command: cmd, Outcome: out.outcome, Reason: out.reason, AttributionDegraded: attributionDegraded},
 		Session:    state,
 	})
 }
@@ -750,7 +756,7 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 // [handlers.nightPrepareSiteTx] in one transaction). An idempotent
 // replay or an already-open session creates no new epoch, so it consults
 // no interlock at all: nothing is being "entered."
-func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, idempotencyKey string, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, idempotencyKey string, overrides []nightInterlockOverrideRequest, callerHasOverrideScope, stopFPPPlayback bool) (nightCommandOutcome, *v1.Problem, error) {
 	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
 		return nightCommandOutcome{}, nil, err
@@ -812,6 +818,9 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	// succeeded.
 	if err == nil && problem == nil && out.outcome == nightOutcomeApplied {
 		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
+	}
+	if err == nil && problem == nil && stopFPPPlayback {
+		out.reason = h.nightStopFPPAtPrepareSite(ctx, now, issuer, idempotencyKey, out.result)
 	}
 	return out, problem, err
 }

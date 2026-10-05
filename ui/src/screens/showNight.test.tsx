@@ -508,6 +508,51 @@ describe('Show Night', () => {
     expect(calls[0]?.[3]).toBeUndefined()
   })
 
+  it('opens a confirm dialog for prepare-site with the stop-FPP choice checked, and sends the stop by default', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    expect(calls).toHaveLength(0)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Stop whatever FPP is playing/)).toBeChecked()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
+    expect(calls[0]?.[0]).toBe('prepare-site')
+    expect(calls[0]?.[4]).toBe(true)
+  })
+
+  it('sends prepare-site without the stop when the choice is unchecked, and sends nothing on cancel', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(calls).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByLabelText(/Stop whatever FPP is playing/))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
+    expect(calls[0]?.[4]).toBe(false)
+  })
+
+  it('never sends the stop choice for a command other than prepare-site', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(calls[0]?.[4]).toBeUndefined()
+  })
+
   it('reuses the same idempotencyKey across a double press of prepare-site', () => {
     const calls: unknown[][] = []
     stubs.dispatchNightCommand = (...args: unknown[]) => {
@@ -515,9 +560,10 @@ describe('Show Night', () => {
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session({ id: '', state: 'inactive' }), session: allowedSession })
-    const button = screen.getByRole('button', { name: 'Prepare site' })
-    fireEvent.click(button)
-    fireEvent.click(button)
+    for (let press = 0; press < 2; press += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
+    }
     expect(calls).toHaveLength(2)
     expect(calls[0]?.[1]).toEqual(expect.any(String))
     expect(calls[0]?.[1]).toBe(calls[1]?.[1])
@@ -561,6 +607,7 @@ describe('Show Night', () => {
       )
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
     expect(await screen.findByText('Not dispatched')).toBeInTheDocument()
     expect(screen.getByText(/was not dispatched and nothing was recorded, so this is not a failed command/)).toBeInTheDocument()
     expect(screen.queryByText('Refused')).not.toBeInTheDocument()

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -536,5 +537,57 @@ func TestCmdNightStatusSaysBackgroundAudioIsNotConfigured(t *testing.T) {
 	out := nightStatusWithAudio(t, `{"state":"recorded","reason":"","steps":[],"plan":{"state":"recorded","reason":"background audio is not configured on this night session","configured":false,"mediaPlaylist":"","repeat":"","resume":"","itemTransition":"","crossfadeMs":null,"nodes":[],"items":[]}}`)
 	if !strings.Contains(out, "Background audio: not configured\n") || strings.Contains(out, "never started") || strings.Contains(out, "Planned") {
 		t.Errorf("stdout should say only that background audio is not configured; stdout=%s", out)
+	}
+}
+
+func TestCmdNightPrepareSiteStopFPPPlaybackFlag(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantBody string
+	}{
+		{"absent", nil, `{}`},
+		{"set", []string{"--stop-fpp-playback"}, `{"stopFppPlayback":true}`},
+		{"explicit false", []string{"--stop-fpp-playback=false"}, `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				gotBody = strings.TrimSpace(string(raw))
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{"command":"prepare-site","outcome":"applied","reason":"Stopped what FPP was playing on player-01."},
+					"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"preparing",
+					"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":0,"finalShowRequested":false,"finalShowRequestedAt":null,
+					"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+					"readiness":{"state":"unknown","reason":"","sameEpoch":false,"fresh":false,"checks":[]},
+					"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+					"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+			}))
+			defer ts.Close()
+
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"prepare-site", "--server", ts.URL, "--token", "smsh_test"}, tc.args...)
+			if code := cmdNight(args, &stdout, &stderr, time.Now); code != exitOK {
+				t.Fatalf("exit code = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if gotBody != tc.wantBody {
+				t.Errorf("request body = %s, want %s", gotBody, tc.wantBody)
+			}
+			if !strings.Contains(stdout.String(), "Stopped what FPP was playing on player-01.") {
+				t.Errorf("stdout = %q, want the stop result printed", stdout.String())
+			}
+		})
+	}
+}
+
+func TestCmdNightOtherCommandsRefuseStopFPPPlaybackFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"readiness", "--stop-fpp-playback", "--server", "http://127.0.0.1:1", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
 	}
 }

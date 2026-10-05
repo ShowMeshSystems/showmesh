@@ -107,6 +107,9 @@ func nightLifecycleCommandWithBody(stdout, stderr io.Writer, clock func() time.T
 		return exitOK
 	}
 	_, _ = fmt.Fprintf(stdout, "%s: %s\n", command, resp.Command.Outcome)
+	if resp.Command.Reason != "" {
+		_, _ = fmt.Fprintln(stdout, resp.Command.Reason)
+	}
 	printNightSessionStateDetail(stdout, resp.Session)
 	return exitOK
 }
@@ -119,7 +122,17 @@ func nightLifecycleCommandWithBody(stdout, stderr io.Writer, clock func() time.T
 // end-session consult no interlock and keep using
 // [runSimpleNightLifecycleCommand].
 func runGatedNightLifecycleCommand(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string) int {
+	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, label, command, help, false)
+}
+
+// runGatedNightLifecycleCommandStopping adds --stop-fpp-playback, which
+// only prepare-site honors.
+func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string, offerStopFPP bool) int {
 	fs, g := newFlagSet("showmeshctl "+label, stderr)
+	var stopFPP *bool
+	if offerStopFPP {
+		stopFPP = fs.Bool("stop-fpp-playback", false, "also stop whatever each of the night's FPP instances is playing; without it FPP keeps playing")
+	}
 	var overrides []nightCommandOverrideWire
 	fs.Var(nightOverrideFlag{overrides: &overrides}, "override",
 		"override one withholding interlock rule: RULE=REASON (repeatable; requires night:override and that rule's own overridePolicy: authorized-operator)")
@@ -141,12 +154,15 @@ func runGatedNightLifecycleCommand(args []string, stdout, stderr io.Writer, cloc
 	if len(overrides) > 0 {
 		body["interlockOverrides"] = overrides
 	}
+	if stopFPP != nil && *stopFPP {
+		body["stopFppPlayback"] = true
+	}
 	return nightLifecycleCommandWithBody(stdout, stderr, clock, g, label, command, body)
 }
 
 func cmdNightPrepareSite(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night prepare-site", "prepare-site",
-		"Open a new preparation epoch (POST /api/v1/night/commands/prepare-site,\nrequires night:command). Idempotent within the same preparation or\nactive session; rejected during finalization or fade-out.\n\nA configured \"block\" interlock for phase prepare-site is dispatched LIVE,\nat the instant this command runs, and can refuse it (409) unless covered\nby --override.")
+	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, "night prepare-site", "prepare-site",
+		"Open a new preparation epoch (POST /api/v1/night/commands/prepare-site,\nrequires night:command). Idempotent within the same preparation or\nactive session; rejected during finalization or fade-out.\n\nA configured \"block\" interlock for phase prepare-site is dispatched LIVE,\nat the instant this command runs, and can refuse it (409) unless covered\nby --override.\n\nFPP keeps playing unless --stop-fpp-playback is given, which also stops\nwhatever each of the night's FPP instances is playing and reports the\nresult. A stop FPP refuses or does not confirm is reported and does not\nfail prepare-site.", true)
 }
 
 func cmdNightReadiness(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

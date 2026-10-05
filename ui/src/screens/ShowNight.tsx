@@ -159,13 +159,21 @@ export function ShowNight() {
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [stopFppPlayback, setStopFppPlayback] = useState(true)
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
+  const [prepareSiteConfirmOpen, setPrepareSiteConfirmOpen] = useState(false)
   const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
-      dispatchNightCommand(command, idempotencyKey, interlockOverrides, command === 'start-night' ? skipEnterShowLead : undefined)
+      dispatchNightCommand(
+        command,
+        idempotencyKey,
+        interlockOverrides,
+        command === 'start-night' ? skipEnterShowLead : undefined,
+        command === 'prepare-site' ? stopFppPlayback : undefined,
+      )
         .then((response) => {
           setWithheld(null)
           setOverrideRule('')
@@ -219,7 +227,7 @@ export function ShowNight() {
           setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` })
         })
     },
-    [prepareSiteKey, skipEnterShowLead],
+    [prepareSiteKey, skipEnterShowLead, stopFppPlayback],
   )
 
   const submitOverride = useCallback(() => {
@@ -515,11 +523,36 @@ export function ShowNight() {
           groups={[
             {
               id: 'sn-lifecycle',
-              commands: nightLifecycleGroups(gate, (command) =>
-                command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
-              ).flatMap((group) => group.commands),
+              commands: nightLifecycleGroups(gate, (command) => {
+                if (command === 'start-night') setStartNightConfirmOpen(true)
+                else if (command === 'prepare-site') {
+                  setStopFppPlayback(true)
+                  setPrepareSiteConfirmOpen(true)
+                } else send(command)
+              }).flatMap((group) => group.commands),
             },
           ]}
+        />
+        <ConfirmDialog
+          open={prepareSiteConfirmOpen}
+          title="Prepare the site?"
+          detail={
+            <>
+              <p className="sm-body">This sets up everything for the night. It is accepted here, then the session reports what it does.</p>
+              <Choice
+                type="checkbox"
+                checked={stopFppPlayback}
+                onChange={(event) => setStopFppPlayback(event.target.checked)}
+                label="Stop whatever FPP is playing. Leave this off when FPP's own schedule started this."
+              />
+            </>
+          }
+          confirmLabel="Prepare site"
+          onConfirm={() => {
+            setPrepareSiteConfirmOpen(false)
+            send('prepare-site')
+          }}
+          onCancel={() => setPrepareSiteConfirmOpen(false)}
         />
         <ConfirmDialog
           open={startNightConfirmOpen}
