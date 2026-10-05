@@ -542,7 +542,7 @@ func TestRunFPPConnectHTTPListenerBindFailure(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
 	held := newTestFPPConnectHeldStore(t)
 
-	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", held, status, weatherDelayHTTPConfig{}, discardLogger())
+	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", held, status, weatherDelayHTTPConfig{}, nil, discardLogger())
 
 	listening, reason, observedAt := status.get()
 	if listening {

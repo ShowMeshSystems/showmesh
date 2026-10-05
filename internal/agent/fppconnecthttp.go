@@ -1102,7 +1102,7 @@ func newFPPConnectProductionServer(view fppConnectView, nodeID string, held *fpp
 // the listener still renders, still answers MQTT"): it is recorded on
 // status, exactly like runMultiSyncListener's identical bind-failure
 // handling in multisync.go, and this function simply returns.
-func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, weatherDelay weatherDelayHTTPConfig, logger *slog.Logger) {
+func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, weatherDelay weatherDelayHTTPConfig, fallback *fallbackIngress, logger *slog.Logger) {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
@@ -1113,6 +1113,9 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 	}
 
 	srv := newFPPConnectProductionServer(view, nodeID, held, weatherDelay, logger)
+	// ADR-048 decision 3: the fallback routes are matched ahead of every
+	// xLights route and change none of them.
+	srv.Handler = fallback.wrap(srv.Handler)
 
 	// The first status is a real poll of view.Enabled(), not a blind
 	// "listening, no reason": a node whose fppconnect.settings.enabled is

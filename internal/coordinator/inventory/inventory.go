@@ -139,6 +139,10 @@ type Manager struct {
 	// a "clock" observed subpath is then dropped exactly like any other
 	// subpath this step does not understand (the default case below).
 	clockSink ClockSink
+
+	// fallbackSink receives every decoded fallback report, see
+	// [WithFallbackSink]. nil drops the "fallback" observed subpath.
+	fallbackSink FallbackSink
 	// resyncIntentTrigger is notified after every fresh (non-retained)
 	// asset inventory report handleAssetInventory stores, see
 	// [WithResyncIntentTrigger]. nil (the default) means no notification:
@@ -253,6 +257,17 @@ func WithRenderSink(sink RenderSink) Option {
 // exactly like any other subpath this step does not model.
 func WithAudioSink(sink AudioSink) Option {
 	return func(m *Manager) { m.audioSink = sink }
+}
+
+// FallbackSink receives a node's decoded fallback report as it arrives.
+// *nodefallback.Store satisfies it.
+type FallbackSink interface {
+	Put(nodeID string, payload mqttproto.FallbackPayload, receivedAt time.Time)
+}
+
+// WithFallbackSink registers sink to receive every decoded fallback report.
+func WithFallbackSink(sink FallbackSink) Option {
+	return func(m *Manager) { m.fallbackSink = sink }
 }
 
 // WithClockSink registers sink to receive every decoded PTP clock status
@@ -512,6 +527,8 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 			m.handleAudio(topic.NodeID, msg)
 		case "clock":
 			m.handleClock(topic.NodeID, msg)
+		case mqttproto.ObservedSubpathFallback:
+			m.handleFallback(topic.NodeID, msg)
 		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
@@ -841,6 +858,26 @@ func (m *Manager) handleClock(nodeID string, msg broker.Message) {
 	// never evidence of the node's own state (see [Manager.handleRender]'s
 	// identical comment on why this bypasses [Manager.classify]).
 	m.clockSink.Put(nodeID, clockPayload, m.now())
+	m.notify()
+}
+
+// handleFallback ingests a node's fallback report into m.fallbackSink. A
+// retained delivery is stored: the payload's own observedAt carries its age.
+func (m *Manager) handleFallback(nodeID string, msg broker.Message) {
+	if m.fallbackSink == nil {
+		return
+	}
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("fallback", nodeID, err)
+		return
+	}
+	payload, err := mqttproto.DecodeFallbackPayload(env)
+	if err != nil {
+		m.logMalformed("fallback", nodeID, err)
+		return
+	}
+	m.fallbackSink.Put(nodeID, payload, m.now())
 	m.notify()
 }
 

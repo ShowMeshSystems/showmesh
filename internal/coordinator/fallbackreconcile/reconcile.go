@@ -35,6 +35,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // systemPrincipalID/Name attribute this loop's own audit entries: an
@@ -124,6 +125,10 @@ type Service struct {
 	// zero value) disables auto-deploy entirely: reconcileOnce still
 	// compiles, logs, and audits exactly as before this field existed.
 	catalogDeployer CatalogDeployer
+
+	// nodeAddresses supplies each target node's delivery address. nil
+	// leaves a program's targets with whatever address it already had.
+	nodeAddresses fallbackcompile.NodeAddresses
 }
 
 // NewService constructs a [Service]. audit may be nil: a coordinator that
@@ -152,6 +157,10 @@ func NewService(st *store.Store, signer Signer, audit AuditWriter, logger *slog.
 // this one is set later). Call it once, before [Service.Run] starts; it is
 // not safe to call concurrently with a reconcile pass.
 func (s *Service) SetCatalogDeployer(d CatalogDeployer) { s.catalogDeployer = d }
+
+// SetNodeAddresses wires where each node's inbound listener address
+// comes from. Call it once, before [Service.Run] starts.
+func (s *Service) SetNodeAddresses(a fallbackcompile.NodeAddresses) { s.nodeAddresses = a }
 
 // Nudge requests an immediate reconciliation pass, coalescing: a Nudge
 // while one is already pending is a no-op, matching
@@ -208,6 +217,71 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 	if missingAck && s.catalogDeployer != nil {
 		s.autoDeployStaleCatalogs(ctx, s.now())
 	}
+	s.recordExecutorKeyPresence(ctx, hosts, s.now())
+}
+
+// ObservationSource names this package on the observations it writes. It
+// is a direct source, not a collector.Runner entry.
+const ObservationSource = "fallback-reconcile"
+
+// SignalExecutorKeyPresent says whether the fallback program published
+// for an FPP host carries an executor key. With none, the program still
+// installs and acknowledges, and no node accepts an activation under it.
+const SignalExecutorKeyPresent observation.SignalID = "fallback_program.executor_key_present"
+
+// executorKeyPresenceValidFor keeps the signal current across two missed
+// passes and lets it go stale when the reconciler has stopped.
+func (s *Service) executorKeyPresenceValidFor() time.Duration {
+	return 2*s.interval + s.interval/2
+}
+
+// recordExecutorKeyPresence writes [SignalExecutorKeyPresent] for every
+// host with a stored program and every participating host. A host with no
+// program, or only an expired one, reads as not collected, never as a
+// value left over from an earlier pass.
+func (s *Service) recordExecutorKeyPresence(ctx context.Context, participating []string, now time.Time) {
+	stored, err := s.st.ListFallbackPrograms(ctx)
+	if err != nil {
+		s.logger.Warn("fallback reconcile: list stored programs for the executor key signal failed", "error", err)
+		return
+	}
+	opts := []observation.Option{observation.WithSource(ObservationSource), observation.WithCollectedAt(now)}
+	written := make(map[string]bool, len(stored))
+	for _, rec := range stored {
+		res := observation.ResourceRef{Kind: observation.ResourceFallbackProgram, ID: rec.FPPInstanceUUID}
+		written[rec.FPPInstanceUUID] = true
+		var (
+			obs    observation.Observation
+			signed fallbackprogram.SignedProgram
+		)
+		switch decodeErr := json.Unmarshal([]byte(rec.ProgramJSON), &signed); {
+		case decodeErr != nil:
+			obs, err = observation.CollectionFailed(res, SignalExecutorKeyPresent, "the stored fallback program for this FPP player could not be read", opts...)
+		case !now.Before(rec.ExpiresAt):
+			obs, err = observation.NotCollected(res, SignalExecutorKeyPresent, "the fallback program published for this FPP player has expired", opts...)
+		default:
+			obs, err = observation.Measured(res, SignalExecutorKeyPresent, signed.Program.ExecutorPublicKey != "", now,
+				append(opts, observation.WithValidFor(s.executorKeyPresenceValidFor()))...)
+		}
+		s.upsertObservation(ctx, obs, err)
+	}
+	for _, instanceUUID := range participating {
+		if written[instanceUUID] {
+			continue
+		}
+		res := observation.ResourceRef{Kind: observation.ResourceFallbackProgram, ID: instanceUUID}
+		obs, err := observation.NotCollected(res, SignalExecutorKeyPresent, "no fallback program is published for this FPP player", opts...)
+		s.upsertObservation(ctx, obs, err)
+	}
+}
+
+func (s *Service) upsertObservation(ctx context.Context, obs observation.Observation, buildErr error) {
+	if buildErr == nil {
+		buildErr = s.st.UpsertObservation(ctx, obs)
+	}
+	if buildErr != nil {
+		s.logger.Warn("fallback reconcile: writing the executor key signal failed", "error", buildErr)
+	}
 }
 
 // reconcileHost compiles and, on success, publishes the current fallback
@@ -220,7 +294,7 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 // own signal for whether an auto-deploy pass is worth running this cycle.
 func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
 	now := s.now()
-	result, err := fallbackcompile.Compile(ctx, s.st, s.signer, instanceUUID, now)
+	result, err := fallbackcompile.CompileWithAddresses(ctx, s.st, s.signer, s.nodeAddresses, instanceUUID, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: compile failed", "fppInstanceUuid", instanceUUID, "error", err)
 		return false

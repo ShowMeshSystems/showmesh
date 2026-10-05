@@ -3519,6 +3519,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fallback-programs/{fppInstanceId}/executor-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * A paired FPP plugin registers the public key it signs fallback activations with (ADR-048, Track J's J3)
+         * @description Behind `fpp:fallback`, and only for the plugin paired as this FPP instance. The key is the plugin's Ed25519 public key, never a secret. The coordinator carries it in this FPP instance's signed fallback program, and a node accepts a fallback activation only when it is signed by that key. Registering the stored key again changes nothing; registering a different key replaces it and republishes the program. A paired plugin gets `409` while the coordinator has not yet read its player's instance UUID.
+         */
+        put: operations["putFallbackExecutorKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7949,6 +7969,8 @@ export interface components {
         /** @description One named node target and the exact output activation it may perform (ADR-048 decision 1). At least one of render/audio is always present. */
         FallbackProgramTarget: {
             nodeId: string;
+            /** @description The `host:port` of this node's inbound listener, where the FPP host delivers this target's activation. Absent when the coordinator has no reported address for the node. */
+            address?: string;
             render?: components["schemas"]["FallbackProgramRenderActivation"];
             audio?: components["schemas"]["FallbackProgramAudioActivation"];
         };
@@ -7976,6 +7998,8 @@ export interface components {
             /** Format: date-time */
             compiledAt: string;
             fppInstanceUuid: string;
+            /** @description The Ed25519 public key this FPP instance's plugin registered, in standard base64. A node accepts a fallback activation only when it is signed by this key. Absent when no key is registered. */
+            executorPublicKey?: string;
             show: string;
             generation: number;
             /** @description Every fpp-runner show.playlist object id this program drew entries from, mapped to its compiled config revision. */
@@ -8029,6 +8053,26 @@ export interface components {
             verificationResult: "verified" | "signature-invalid" | "mismatched-program";
             /** Format: date-time */
             installedAt: string;
+        };
+        /** @description The request body of PUT /fallback-programs/{fppInstanceId}/executor-key. */
+        FallbackExecutorKeyRequest: {
+            /** @description The raw 32 byte Ed25519 public key in standard base64 with padding. */
+            publicKey: string;
+        };
+        /** @description The response body of PUT /fallback-programs/{fppInstanceId}/executor-key. */
+        FallbackExecutorKeyResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            fppInstanceUuid: string;
+            /** @description The key now stored for this FPP instance. */
+            publicKey: string;
+            /**
+             * Format: date-time
+             * @description When the stored key was first registered.
+             */
+            registeredAt: string;
+            /** @description True when this call stored a first key or replaced a different one. */
+            changed: boolean;
         };
         /** @description The response body of POST /fallback-programs/{fppInstanceId}/acknowledge. */
         FallbackProgramAcknowledgeResponse: {
@@ -15226,6 +15270,40 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFallbackExecutorKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FallbackExecutorKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackExecutorKeyResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -27,6 +27,7 @@ func TestOpenAPIFallbackProgramsDocumentIsWellFormed(t *testing.T) {
 		"FallbackProgramEntry", "FallbackProgramRules", "FallbackProgramBody", "FallbackProgramResponse",
 		"FallbackProgramListEntry", "FallbackProgramListResponse",
 		"FallbackProgramAcknowledgeRequest", "FallbackProgramAcknowledgeResponse",
+		"FallbackExecutorKeyRequest", "FallbackExecutorKeyResponse",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -122,10 +123,11 @@ func TestOpenAPIFallbackProgramsResponsesMatchRealResponses(t *testing.T) {
 	// merely "the response happens to look right."
 	const expectedProgramBytes = `{  "fppInstanceUuid":"` + instanceUUID + `",  "schemaVersion":1,"packageId":"pkg-1","revision":"rev-1",` +
 		`"expiresAt":"2026-08-30T12:15:00Z","compiledAt":"2026-08-30T12:00:00Z",` +
+		`"executorPublicKey":"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",` +
 		`"show":"halloween-2026","generation":1,` +
 		`"playlistRevisions":{"main":1},"catalogRevisions":{"render-01":"catalog-rev-1"},` +
 		`"entries":[{"entryKey":"entry-key-1","cueId":"thriller","cueRevision":1,` +
-		`"targets":[{"nodeId":"render-01","render":{"sequence":"thriller","filename":"thriller.fseq","assetHashes":["aaaa"]}}]}],` +
+		`"targets":[{"nodeId":"render-01","address":"192.0.2.21:80","render":{"sequence":"thriller","filename":"thriller.fseq","assetHashes":["aaaa"]}}]}],` +
 		`"rules":{"fallbackBoundary":"safe-playback-boundary","restHold":"hold","localShutdown":"local-shutdown","recoveryBoundary":"next-scheduled-show-boundary"}}`
 	programJSON := `{"program":` + expectedProgramBytes + `,"signature":"dGVzdC1zaWduYXR1cmU="}`
 	expiresAt, err := time.Parse(time.RFC3339, "2026-08-30T12:15:00Z")

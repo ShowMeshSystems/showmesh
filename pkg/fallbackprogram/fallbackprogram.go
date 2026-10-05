@@ -24,6 +24,7 @@ package fallbackprogram
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -67,9 +68,12 @@ type AudioActivation struct {
 // optional but at least one is always set; a compiler that resolved
 // neither for a node does not include that node as a target at all.
 type NodeTarget struct {
-	NodeID string            `json:"nodeId"`
-	Render *RenderActivation `json:"render,omitempty"`
-	Audio  *AudioActivation  `json:"audio,omitempty"`
+	NodeID string `json:"nodeId"`
+	// Address is the "host:port" of this node's inbound listener, where
+	// the FPP host delivers this target's activation. Empty when unknown.
+	Address string            `json:"address,omitempty"`
+	Render  *RenderActivation `json:"render,omitempty"`
+	Audio   *AudioActivation  `json:"audio,omitempty"`
 }
 
 // EntryMapping is one deterministic playlist-entry key and its resolved
@@ -140,6 +144,11 @@ type Program struct {
 	// decision 1: "the FPP identity ... it applies to").
 	FPPInstanceUUID string `json:"fppInstanceUuid"`
 
+	// ExecutorPublicKey is the base64 Ed25519 public key this FPP host's
+	// plugin registered. A node accepts a fallback activation only when
+	// it is signed by this key. Empty when no key is registered.
+	ExecutorPublicKey string `json:"executorPublicKey,omitempty"`
+
 	Show       string `json:"show"`
 	Generation int64  `json:"generation"`
 
@@ -200,6 +209,7 @@ func (p Program) CanonicalBytes() ([]byte, error) {
 type RevisionInput struct {
 	SchemaVersion     int               `json:"schemaVersion"`
 	FPPInstanceUUID   string            `json:"fppInstanceUuid"`
+	ExecutorPublicKey string            `json:"executorPublicKey,omitempty"`
 	Show              string            `json:"show"`
 	Generation        int64             `json:"generation"`
 	PlaylistRevisions map[string]int64  `json:"playlistRevisions"`
@@ -251,4 +261,50 @@ func (sp SignedProgram) Verify(publicKey ed25519.PublicKey) error {
 		return err
 	}
 	return sp.Signature.Verify(payload, publicKey)
+}
+
+// ExecutorKeyEncoding is how an executor public key is written wherever
+// it appears: the raw 32 bytes in standard base64 with padding.
+var ExecutorKeyEncoding = base64.StdEncoding
+
+// ParseExecutorPublicKey decodes an executor public key from its wire
+// form, refusing anything that is not exactly one Ed25519 public key.
+func ParseExecutorPublicKey(encoded string) (ed25519.PublicKey, error) {
+	raw, err := ExecutorKeyEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("fallbackprogram: executor public key is not standard base64: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("fallbackprogram: executor public key is %d bytes, want %d", len(raw), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
+// VerifyDocument checks a signed program document as it arrived: the
+// signature is verified over the canonical bytes of the received
+// "program" object itself, so a member this build does not know is still
+// covered. It returns the decoded program only when the signature holds.
+func VerifyDocument(document []byte, publicKey ed25519.PublicKey) (Program, error) {
+	var envelope struct {
+		Program   json.RawMessage    `json:"program"`
+		Signature coordsig.Signature `json:"signature"`
+	}
+	if err := json.Unmarshal(document, &envelope); err != nil {
+		return Program{}, fmt.Errorf("fallbackprogram: decode signed program document: %w", err)
+	}
+	if len(envelope.Program) == 0 {
+		return Program{}, fmt.Errorf("fallbackprogram: signed program document has no program")
+	}
+	canonical, _, err := fppidentity.HashCanonical(envelope.Program)
+	if err != nil {
+		return Program{}, fmt.Errorf("fallbackprogram: canonicalize program: %w", err)
+	}
+	if err := envelope.Signature.Verify(canonical, publicKey); err != nil {
+		return Program{}, err
+	}
+	var program Program
+	if err := json.Unmarshal(envelope.Program, &program); err != nil {
+		return Program{}, fmt.Errorf("fallbackprogram: decode program: %w", err)
+	}
+	return program, nil
 }
