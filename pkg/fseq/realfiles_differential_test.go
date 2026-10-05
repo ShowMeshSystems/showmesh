@@ -69,7 +69,7 @@ func naiveDecodeAll(path string) (channelCount int, frames [][]byte, err error) 
 func TestRealFiles_DifferentialBlockWalk(t *testing.T) {
 	files := findRealFseqFiles(t)
 	if len(files) == 0 {
-		t.Skip("no real .fseq files found under ~/Documents, ~/Downloads or ~/showmesh-fseq-samples; skipping differential verification")
+		t.Skip("no real .fseq files found under ~/showmesh-fseq-samples; skipping differential verification")
 	}
 
 	// Bounded to a handful of files: this test decodes an entire file
