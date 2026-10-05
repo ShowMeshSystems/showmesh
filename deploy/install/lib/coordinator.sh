@@ -339,6 +339,37 @@ coord_check_broker() {
   ok "the broker accepts the coordinator's login"
 }
 
+# coord_fpp_event_feed saves the built-in broker as the coordinator's FPP event feed, unless one is already saved.
+coord_fpp_event_feed() {
+  [ "$BROKER_MODE" = "builtin" ] || return 0
+  step "Connecting the FPP event feed to the built-in broker"
+  local url="http://127.0.0.1:$HTTP_PORT/api/v1/config/fpp.mqtt" by_hand="Set it in the UI under Settings, Connections."
+  if [ "${ADMIN_READY:-0}" -ne 1 ]; then
+    info "The FPP event feed was not set up because there is no administrator yet. $by_hand"
+    return 0
+  fi
+  local token body
+  token="$(env_get "$CTL_ENV" SHOWMESH_CTL_TOKEN)"
+  http_request GET "$url" "" "$token"
+  case "$HTTP_STATUS" in
+    200) ok "the FPP event feed is already set up and was left as it is"; return 0 ;;
+    404) ;;
+    *) warn "The FPP event feed could not be read. $(problem_detail) $by_hand"; return 0 ;;
+  esac
+  # The password reaches jq through its environment and the body stays in this run's private directory.
+  body="$(run_tmp)"
+  MQ_URL="$(env_get "$COORD_ENV" SHOWMESH_MQTT_BROKER)" MQ_USER="$(env_get "$COORD_ENV" SHOWMESH_MQTT_USERNAME)" \
+    MQ_PASS="$(env_get "$COORD_ENV" SHOWMESH_MQTT_PASSWORD)" \
+    jq -n '{brokerURL: env.MQ_URL, username: env.MQ_USER, password: env.MQ_PASS}' > "$body"
+  http_request PUT "$url" "$body" "$token"
+  rm -f "$body"
+  case "$HTTP_STATUS" in
+    2*) ok "the built-in broker is saved as the FPP event feed"
+      info "Add each FPP player's host name in the UI under Settings, Connections." ;;
+    *) warn "The FPP event feed could not be saved. $(problem_detail) $by_hand" ;;
+  esac
+}
+
 coord_advertise() {
   step "Announcing the coordinator on the network"
   install -d -m 0755 /etc/avahi/services
@@ -368,6 +399,7 @@ run_coordinator_role() {
   coord_start
   coord_admin
   coord_check_broker
+  coord_fpp_event_feed
   coord_advertise
 }
 

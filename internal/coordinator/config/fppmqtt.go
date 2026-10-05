@@ -142,9 +142,6 @@ func ValidateFPPMQTTConfigKind(cfg FPPMQTTConfig, fppEndpoints []FPPEndpoint) er
 		if u.Host == "" {
 			return fmt.Errorf("fpp.mqtt: brokerURL %q must include a host", cfg.BrokerURL)
 		}
-		if len(cfg.Hosts) == 0 {
-			return fmt.Errorf("fpp.mqtt: brokerURL is set but hosts is empty")
-		}
 	}
 
 	seenHostNames := make(map[string]string, len(cfg.Hosts))

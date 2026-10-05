@@ -143,7 +143,9 @@ type fppMQTTManager struct {
 
 	mu     sync.Mutex
 	bundle *fppMQTTBundle
-	wg     sync.WaitGroup
+	// brokerWithoutHosts is true while a broker is saved with no FPP player mapped, which runs no collector.
+	brokerWithoutHosts bool
+	wg                 sync.WaitGroup
 }
 
 var (
@@ -223,7 +225,8 @@ func (m *fppMQTTManager) reconcile(ctx context.Context, cfg config.FPPMQTTConfig
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	configured := cfg.Configured()
+	m.brokerWithoutHosts = cfg.Configured() && len(cfg.Hosts) == 0
+	configured := cfg.Configured() && !m.brokerWithoutHosts
 
 	if m.bundle != nil {
 		if configured && config.FPPMQTTConfigEqual(m.bundle.cfg, cfg) && m.bundle.password == password {
@@ -297,21 +300,20 @@ func (m *fppMQTTManager) Run(ctx context.Context) {
 func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
 	m.mu.Lock()
 	bundle := m.bundle
+	brokerWithoutHosts := m.brokerWithoutHosts
 	m.mu.Unlock()
 
+	if bundle == nil && brokerWithoutHosts {
+		reason := "The FPP event feed has a broker but no FPP player. Add each player's host name under Settings, Connections."
+		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
+	}
 	if bundle == nil {
 		reason := "no FPP MQTT broker configured"
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 
-	// A bundle with zero hosts should be unreachable through reconcile:
-	// both config.ValidateFPPMQTTConfigKind (write time) and fppmqtt.New
-	// itself (construction time, independent of the store-side check)
-	// refuse a broker configured with no hosts. Guarded anyway, because a
-	// ranging loop over an empty map silently produces zero rows, which
-	// would make this collector vanish from the snapshot entirely if that
-	// guarantee is ever lost, and an absent collector is the exact shape
-	// of failure this method exists to make visible instead.
+	// reconcile never builds a bundle with zero hosts and fppmqtt.New refuses one.
+	// Guarded anyway: ranging over an empty map would drop this collector from the snapshot.
 	if len(bundle.cfg.Hosts) == 0 {
 		reason := "fpp.mqtt broker is configured but names no hosts to poll"
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning), Reason: &reason}}, nil
