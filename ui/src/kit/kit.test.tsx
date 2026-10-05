@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ChoiceGroup, RadioCardList, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { AbsenceLabel, BlankingPlate, Slider, Button, ChoiceGroup, RadioCardList, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
@@ -45,6 +45,22 @@ describe('RuledStrip', () => {
     const fact = screen.getByText('Pipeline state is old')
     const detail = screen.getByText('Stale is unknown, never healthy.')
     expect(fact.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('Slider', () => {
+  it('shows no number and disables the control while the value is unknown', () => {
+    render(<Slider label="Ceiling" value={0} min={0} max={100} valueLabel="0%" unknown />)
+    expect(screen.getByLabelText('Ceiling')).toBeDisabled()
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+})
+
+describe('AbsenceLabel', () => {
+  it('renders the state word alone', () => {
+    render(<AbsenceLabel absence="unavailable" label="Unavailable" />)
+    expect(screen.getByText('Unavailable')).toBeInTheDocument()
   })
 })
 

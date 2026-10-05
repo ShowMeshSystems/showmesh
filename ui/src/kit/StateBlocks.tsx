@@ -26,6 +26,14 @@ const LABEL_TONE: Record<Absence, string> = {
   noPermission: 'sm-strip__label--warn',
 }
 
+/**
+ * The state word alone, for a cell too narrow to carry a fact. Pair it with
+ * one RuledStrip below the group that says why.
+ */
+export function AbsenceLabel({ absence, label }: { absence: Absence; label: string }) {
+  return <span className={['sm-strip__label', 'sm-absence', LABEL_TONE[absence]].filter(Boolean).join(' ')}>{label}</span>
+}
+
 type StripProps = {
   absence: Absence
   /** The state word, plus any qualifier: "Stale · 4 m 12 s". */

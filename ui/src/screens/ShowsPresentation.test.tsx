@@ -391,7 +391,7 @@ describe('Shows · Presentation tab', () => {
     fireEvent.change(screen.getByLabelText('NDI source name'), { target: { value: 'ShowMesh Side wall' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create surface' }))
 
-    await waitFor(() => expect(screen.getByText(/already names a surface in this show/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/already names another surface/)).toBeInTheDocument())
     expect(wrote).toBe(false)
   })
 

@@ -1,6 +1,6 @@
 # ADR-056: A signal with nothing to measure reports `not_applicable`
 
-Status: Proposed
+Status: Accepted (owner, 2026-10-05)
 Date: 2026-09-29
 
 ## Context

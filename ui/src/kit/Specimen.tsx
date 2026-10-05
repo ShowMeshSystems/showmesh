@@ -34,9 +34,11 @@ import {
   RadioCardList,
   RailBadge,
   RuledStrip,
+  AbsenceLabel,
   Section,
   Segmented,
   Select,
+  Slider,
   StatusPair,
   Table,
   TableWrap,
@@ -146,6 +148,7 @@ export function Specimen() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
+  const [sliderValue, setSliderValue] = useState(72)
   const [radioCardValue, setRadioCardValue] = useState('1,2')
 
   return (
@@ -295,6 +298,23 @@ export function Specimen() {
             same route on two hosts never reads as one option. The route itself is a real, unbreakable device
             string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
           </p>
+          <Slider
+            label="Brightness ceiling"
+            value={sliderValue}
+            min={0}
+            max={100}
+            valueLabel={`${sliderValue}%`}
+            onChange={(e) => setSliderValue(Number(e.target.value))}
+          />
+          <Slider label="Brightness ceiling, no reading yet" value={0} min={0} max={100} unknown />
+          <div className="sm-inline-row">
+            <Input aria-label="Pairing code" placeholder="XXXX-XXXX" defaultValue="AB12-CD34" className="sm-input--narrow" />
+            <Button variant="primary">Pair</Button>
+          </div>
+          <p className="sm-small sm-muted">
+            <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
+            inline row, such as a pairing code. Never for a field that can hold an operator-length string.
+          </p>
           <RadioCardList
             label="Program channels"
             help="Channel pairs this output reports."
@@ -316,6 +336,20 @@ export function Specimen() {
           {STRIPS.map((strip) => (
             <RuledStrip key={strip.label} absence={strip.absence} label={strip.label} fact={strip.fact} detail={strip.detail} />
           ))}
+
+          <div className="sm-strips__title">
+            <span className="sm-spec-mark">A2</span>
+            <span className="sm-subhead">Absence label, inside a narrow cell</span>
+            <span className="sm-small sm-muted">The word alone. One ruled strip below the group says why.</span>
+          </div>
+          <DefinitionStrip
+            items={[
+              { term: 'Ceiling', value: <AbsenceLabel absence="unavailable" label="Unavailable" /> },
+              { term: 'Effective output', value: <AbsenceLabel absence="unavailable" label="Unavailable" /> },
+              { term: 'Fade', value: <AbsenceLabel absence="unobserved" label="Unobserved" /> },
+            ]}
+          />
+          <RuledStrip absence="unavailable" label="Unavailable" fact="This player does not report brightness. Install or update the ShowMesh plugin to 0.2 or later." />
 
           <div className="sm-strips__title sm-spec-plate-title">
             <span className="sm-spec-mark">B</span>

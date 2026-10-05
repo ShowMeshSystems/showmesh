@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -254,7 +255,7 @@ func TestPutShowSurfaceChannelRangeThreeDistinctRefusals(t *testing.T) {
 
 // TestShowSurfaceAllowsTwoSurfacesOnSameNode proves ADR-026's N=1 is a
 // scope limit that does not reach the schema: a second surface assigned to
-// the same node is accepted, never refused as a collision.
+// the same node is accepted when its channels and NDI name are its own.
 func TestShowSurfaceAllowsTwoSurfacesOnSameNode(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -263,8 +264,9 @@ func TestShowSurfaceAllowsTwoSurfacesOnSameNode(t *testing.T) {
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
 	mustDeclareNode(t, st, "render-01")
 
-	for _, id := range []string{"garage", "porch"} {
-		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, validSurfaceBodyNDI,
+	porchBody := strings.NewReplacer(`"startChannel": 1,`, `"startChannel": 3601,`, "ShowMesh Garage", "ShowMesh Porch").Replace(validSurfaceBodyNDI)
+	for id, surfaceBody := range map[string]string{"garage": validSurfaceBodyNDI, "porch": porchBody} {
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, surfaceBody,
 			map[string]string{"Authorization": "Bearer " + token})
 		resp, body := doRawRequest(t, api.Handler, req)
 		if resp.StatusCode != http.StatusOK {
@@ -1067,4 +1069,97 @@ func TestPutShowParticipationDuplicateIsRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("PUT with a duplicate instance id: status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
+}
+
+func TestPutShowSurfaceRefusesConflictOnSameNodeAndShow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	put := func(id, name string, start int, ndi string) (*http.Response, []byte) {
+		body := fmt.Sprintf(`{"show":"halloween-2026","name":%q,"node":"render-01",
+			"channelRange":{"startChannel":%d,"channelCount":3600},
+			"geometry":{"width":40,"height":30,"pixelFormat":"rgb"},"frameRate":40,
+			"output":{"transport":"ndi","ndi":{"sourceName":%q}}}`, name, start, ndi)
+		return doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, body, auth))
+	}
+
+	if resp, body := put("left", "Matrix Left", 1, "Matrix"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first surface status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	resp, body := put("right", "Matrix Right", 3000, "Other")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("overlapping surface status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if want := `channelRange: The surface "Matrix Left" already uses channels 1 to 3600 on this node. Choose channels outside that range or move one surface to another node.`; !strings.Contains(problemDetail(t, body), want) {
+		t.Fatalf("body = %s, want detail %q", body, want)
+	}
+
+	resp, body = put("right", "Matrix Right", 3601, "Matrix")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("same NDI name status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if want := `output.ndi.sourceName: The NDI name "Matrix" is already used by the surface "Matrix Left" on this node. Choose a different NDI name.`; !strings.Contains(problemDetail(t, body), want) {
+		t.Fatalf("body = %s, want detail %q", body, want)
+	}
+
+	// Nothing was written for the refused id.
+	if _, err := st.GetConfigObject(context.Background(), config.ShowSurfaceConfigKind, "right"); !errors.Is(err, store.ErrConfigObjectNotFound) {
+		t.Fatalf("refused surface was stored: err = %v", err)
+	}
+
+	if resp, body := put("right", "Matrix Right", 3601, "Other"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid second surface status = %d; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put("left", "Matrix Left", 1, "Matrix"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("re-save of first surface status = %d; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPutShowSurfaceConflictAcrossNodeMoveAndDelete(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	put := func(id, node string, start int, ndi string) (*http.Response, []byte) {
+		body := fmt.Sprintf(`{"show":"halloween-2026","name":%q,"node":%q,
+			"channelRange":{"startChannel":%d,"channelCount":3600},
+			"geometry":{"width":40,"height":30,"pixelFormat":"rgb"},"frameRate":40,
+			"output":{"transport":"ndi","ndi":{"sourceName":%q}}}`, id, node, start, ndi)
+		return doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, body, auth))
+	}
+	mustOK := func(id, node string, start int, ndi string) {
+		t.Helper()
+		if resp, body := put(id, node, start, ndi); resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s on %s: status = %d; body: %s", id, node, resp.StatusCode, body)
+		}
+	}
+
+	mustOK("left", "render-01", 1, "Left")
+	mustOK("right", "render-02", 1, "Right")
+
+	// Moving right onto render-01 collides with left's channels.
+	resp, body := put("right", "render-01", 1, "Right")
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(problemDetail(t, body), `The surface "left" already uses channels 1 to 3600`) {
+		t.Fatalf("move into conflict: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	// A deleted surface no longer blocks its channels or NDI name.
+	delReq := newJSONRequest(t, http.MethodDelete, "/api/v1/config/show.surface/left", `{"confirm":true}`, auth)
+	if resp, body := doRawRequest(t, api.Handler, delReq); resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE left: status = %d; body: %s", resp.StatusCode, body)
+	}
+	mustOK("right", "render-01", 1, "Left")
 }

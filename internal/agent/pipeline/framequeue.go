@@ -54,6 +54,13 @@ func (fw *FrameWriter) SetQueueHandlers(onSwitch, onDrop func(*QueuedSequence)) 
 	fw.onDrop = onDrop
 }
 
+// SetSwitchGuard registers a check that runs on the writer's goroutine before
+// it switches to a queued sequence. When it returns false the queued sequence
+// is dropped instead. Call before Run.
+func (fw *FrameWriter) SetSwitchGuard(allow func(*QueuedSequence) bool) {
+	fw.allowSwitch = allow
+}
+
 // holdsSequence reports whether filename is a sequence this writer may draw,
 // switching to the queued sequence first when filename names exactly it.
 // An empty filename is no evidence either way and never blanks a surface.
@@ -62,7 +69,16 @@ func (fw *FrameWriter) holdsSequence(filename string) bool {
 		return true
 	}
 	q := fw.queued.Load()
-	if q == nil || q.Filename != filename || !fw.queued.CompareAndSwap(q, nil) {
+	if q == nil || q.Filename != filename {
+		return false
+	}
+	if fw.allowSwitch != nil && !fw.allowSwitch(q) {
+		if fw.queued.CompareAndSwap(q, nil) && fw.onDrop != nil {
+			fw.onDrop(q)
+		}
+		return false
+	}
+	if !fw.queued.CompareAndSwap(q, nil) {
 		return false
 	}
 	fw.source = q.source
