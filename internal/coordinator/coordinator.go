@@ -798,7 +798,8 @@ func Run() int {
 		// FallbackPrograms is Track J's J1 own dependency: the SAME
 		// *st fallbackReconcile above publishes into, wired the same
 		// AssetManifests/Config/Assets/Commands/Discovery already are.
-		FallbackPrograms: st,
+		FallbackPrograms:      st,
+		FallbackProgramNudger: fallbackReconcile,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -1105,6 +1106,7 @@ func Run() int {
 	// api. See cuecatalogautodeploy.go's own doc comment for the dispatch
 	// and safety-hold logic this delegates to.
 	fallbackReconcile.SetCatalogDeployer(apiInst)
+	fallbackReconcile.SetNodeAddresses(inv)
 
 	// Resolve any command a PRIOR process left dispatched-but-unresolved
 	// (a crash, a kill, or an abandoned client connection between dispatch

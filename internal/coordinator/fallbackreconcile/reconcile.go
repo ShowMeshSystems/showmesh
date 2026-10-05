@@ -124,6 +124,10 @@ type Service struct {
 	// zero value) disables auto-deploy entirely: reconcileOnce still
 	// compiles, logs, and audits exactly as before this field existed.
 	catalogDeployer CatalogDeployer
+
+	// nodeAddresses supplies each target node's delivery address. nil
+	// leaves a program's targets with whatever address it already had.
+	nodeAddresses fallbackcompile.NodeAddresses
 }
 
 // NewService constructs a [Service]. audit may be nil: a coordinator that
@@ -152,6 +156,10 @@ func NewService(st *store.Store, signer Signer, audit AuditWriter, logger *slog.
 // this one is set later). Call it once, before [Service.Run] starts; it is
 // not safe to call concurrently with a reconcile pass.
 func (s *Service) SetCatalogDeployer(d CatalogDeployer) { s.catalogDeployer = d }
+
+// SetNodeAddresses wires where each node's inbound listener address
+// comes from. Call it once, before [Service.Run] starts.
+func (s *Service) SetNodeAddresses(a fallbackcompile.NodeAddresses) { s.nodeAddresses = a }
 
 // Nudge requests an immediate reconciliation pass, coalescing: a Nudge
 // while one is already pending is a no-op, matching
@@ -220,7 +228,7 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 // own signal for whether an auto-deploy pass is worth running this cycle.
 func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
 	now := s.now()
-	result, err := fallbackcompile.Compile(ctx, s.st, s.signer, instanceUUID, now)
+	result, err := fallbackcompile.CompileWithAddresses(ctx, s.st, s.signer, s.nodeAddresses, instanceUUID, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: compile failed", "fppInstanceUuid", instanceUUID, "error", err)
 		return false

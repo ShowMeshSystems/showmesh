@@ -308,7 +308,8 @@ func TestStalePackageIsNotTreatedAsCurrent(t *testing.T) {
 // fields rather than from what ComputeRevision actually received.
 func revisionInputFromProgram(p fallbackprogram.Program) fallbackprogram.RevisionInput {
 	return fallbackprogram.RevisionInput{
-		SchemaVersion: p.SchemaVersion, FPPInstanceUUID: p.FPPInstanceUUID, Show: p.Show, Generation: p.Generation,
+		SchemaVersion: p.SchemaVersion, FPPInstanceUUID: p.FPPInstanceUUID, ExecutorPublicKey: p.ExecutorPublicKey,
+		Show: p.Show, Generation: p.Generation,
 		PlaylistRevisions: p.PlaylistRevisions, CatalogRevisions: p.CatalogRevisions, Entries: p.Entries, Rules: p.Rules,
 	}
 }

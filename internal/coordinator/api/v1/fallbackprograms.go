@@ -180,3 +180,19 @@ type FallbackProgramAcknowledgeResponse struct {
 	FPPInstanceUUID string `json:"fppInstanceUuid"`
 	AcknowledgedAt  string `json:"acknowledgedAt"`
 }
+
+// FallbackExecutorKeyRequest is PUT
+// /fallback-programs/{fppInstanceId}/executor-key's request body.
+type FallbackExecutorKeyRequest struct {
+	PublicKey string `json:"publicKey"`
+}
+
+// FallbackExecutorKeyResponse is that route's response body. Changed is
+// true when the call stored a first key or replaced a different one.
+type FallbackExecutorKeyResponse struct {
+	ServerTime      string `json:"serverTime"`
+	FPPInstanceUUID string `json:"fppInstanceUuid"`
+	PublicKey       string `json:"publicKey"`
+	RegisteredAt    string `json:"registeredAt"`
+	Changed         bool   `json:"changed"`
+}
