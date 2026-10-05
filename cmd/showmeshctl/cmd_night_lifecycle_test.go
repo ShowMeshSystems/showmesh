@@ -591,3 +591,9 @@ func TestCmdNightOtherCommandsRefuseStopFPPPlaybackFlag(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
 	}
 }
+
+func TestMinNightPrepareSiteStopClientTimeoutOutlastsTheFPPConfirmationDeadline(t *testing.T) {
+	if minNightPrepareSiteStopClientTimeout < minFPPCommandClientTimeout+30*time.Second {
+		t.Fatalf("minNightPrepareSiteStopClientTimeout = %s, want at least the FPP command budget plus the announcement reset pass", minNightPrepareSiteStopClientTimeout)
+	}
+}

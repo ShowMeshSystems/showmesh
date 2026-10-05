@@ -83,6 +83,7 @@ import {
   runOfShow,
   type RailStep,
 } from './showNightModel'
+import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
 
 function useNightSession(): { session: NightSessionState | null; error: string | null } {
   const model = useModelContext()
@@ -159,20 +160,19 @@ export function ShowNight() {
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
-  const [stopFppPlayback, setStopFppPlayback] = useState(true)
+  const [stopFppPlayback, setStopFppPlayback] = useState(false)
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
-  const [prepareSiteConfirmOpen, setPrepareSiteConfirmOpen] = useState(false)
   const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
-    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
+    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[], stopOverride?: boolean) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
       dispatchNightCommand(
         command,
         idempotencyKey,
         interlockOverrides,
         command === 'start-night' ? skipEnterShowLead : undefined,
-        command === 'prepare-site' ? stopFppPlayback : undefined,
+        command === 'prepare-site' ? (stopOverride ?? stopFppPlayback) : undefined,
       )
         .then((response) => {
           setWithheld(null)
@@ -194,6 +194,7 @@ export function ShowNight() {
           setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No-op', detail: parts.join(' ') })
         })
         .catch((err: unknown) => {
+          if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
           if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady) {
             setWithheld({ command, detail: err.message })
             setOutcome({ tone: 'bad', label: 'Withheld', detail: err.message })
@@ -229,6 +230,11 @@ export function ShowNight() {
     },
     [prepareSiteKey, skipEnterShowLead, stopFppPlayback],
   )
+
+  const prepareSite = usePrepareSiteConfirm((stop) => {
+    setStopFppPlayback(stop)
+    send('prepare-site', undefined, stop)
+  })
 
   const submitOverride = useCallback(() => {
     if (withheld === null) return
@@ -525,35 +531,13 @@ export function ShowNight() {
               id: 'sn-lifecycle',
               commands: nightLifecycleGroups(gate, (command) => {
                 if (command === 'start-night') setStartNightConfirmOpen(true)
-                else if (command === 'prepare-site') {
-                  setStopFppPlayback(true)
-                  setPrepareSiteConfirmOpen(true)
-                } else send(command)
+                else if (command === 'prepare-site') prepareSite.start()
+                else send(command)
               }).flatMap((group) => group.commands),
             },
           ]}
         />
-        <ConfirmDialog
-          open={prepareSiteConfirmOpen}
-          title="Prepare the site?"
-          detail={
-            <>
-              <p className="sm-body">This sets up everything for the night. It is accepted here, then the session reports what it does.</p>
-              <Choice
-                type="checkbox"
-                checked={stopFppPlayback}
-                onChange={(event) => setStopFppPlayback(event.target.checked)}
-                label="Stop whatever FPP is playing. Leave this off when FPP's own schedule started this."
-              />
-            </>
-          }
-          confirmLabel="Prepare site"
-          onConfirm={() => {
-            setPrepareSiteConfirmOpen(false)
-            send('prepare-site')
-          }}
-          onCancel={() => setPrepareSiteConfirmOpen(false)}
-        />
+        {prepareSite.dialog}
         <ConfirmDialog
           open={startNightConfirmOpen}
           title="Start the night and its first cycle?"

@@ -61,6 +61,7 @@ import {
   ApiClient,
   AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
+  NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS,
   RENDER_COMMAND_REQUEST_TIMEOUT_MS,
   RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
   RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
@@ -3069,6 +3070,7 @@ export class ApiStore {
         `/night/commands/${encodeURIComponent(command)}`,
         body,
         controller.signal,
+        body.stopFppPlayback === true ? NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS : undefined,
       )
     } finally {
       this.endSideCall(controller)

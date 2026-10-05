@@ -518,7 +518,7 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     expect(calls).toHaveLength(0)
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByLabelText(/Stop whatever FPP is playing/)).toBeChecked()
+    expect(within(dialog).getByLabelText(/Stop whatever is playing on/)).toBeChecked()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
     expect(calls[0]?.[0]).toBe('prepare-site')
     expect(calls[0]?.[4]).toBe(true)
@@ -537,9 +537,36 @@ describe('Show Night', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByLabelText(/Stop whatever FPP is playing/))
+    fireEvent.click(within(dialog).getByLabelText(/Stop whatever is playing on/))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
     expect(calls[0]?.[4]).toBe(false)
+  })
+
+  it("names the night's own FPP players in the stop choice", async () => {
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge'))
+    stubs.getNightSessionConfig = () =>
+      Promise.resolve({ payload: { resting: { fppInstanceId: 'main-player' }, showPlaylist: { fppInstanceId: 'barn-player' } } })
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    expect(
+      await within(screen.getByRole('dialog')).findByLabelText(/Stop whatever is playing on main-player and barn-player\. Other FPP players keep playing/),
+    ).toBeInTheDocument()
+  })
+
+  it('sends a fresh idempotency key on the press after a failed prepare-site', async () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return Promise.reject(new Error('request timed out'))
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    for (let press = 0; press < 2; press += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
+      await screen.findByText('Refused')
+    }
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.[1]).not.toBe(calls[1]?.[1])
   })
 
   it('never sends the stop choice for a command other than prepare-site', () => {

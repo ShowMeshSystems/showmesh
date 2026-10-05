@@ -75,6 +75,13 @@ func cmdNightLifecycleStatus(args []string, stdout, stderr io.Writer, clock func
 // drift stale, never silently disagree with an import.
 const minNightReadinessClientTimeout = 15 * time.Second
 
+// minNightPrepareSiteStopClientTimeout is the budget for prepare-site with
+// --stop-fpp-playback: the coordinator waits one FPP confirmation deadline
+// for the stop, after the announcement reset pass prepare-site also runs
+// (30s), so --timeout's 10s default would abort before an unconfirmed stop
+// could be reported. Derived from minFPPCommandClientTimeout.
+const minNightPrepareSiteStopClientTimeout = minFPPCommandClientTimeout + 30*time.Second
+
 func nightLifecycleCommand(stdout, stderr io.Writer, clock func() time.Time, g *globalFlags, label, command string) int {
 	return nightLifecycleCommandWithBody(stdout, stderr, clock, g, label, command, map[string]any{})
 }
@@ -90,6 +97,9 @@ func nightLifecycleCommandWithBody(stdout, stderr io.Writer, clock func() time.T
 	timeout := g.timeout
 	if command == "run-readiness" && timeout < minNightReadinessClientTimeout {
 		timeout = minNightReadinessClientTimeout
+	}
+	if command == "prepare-site" && body["stopFppPlayback"] == true && timeout < minNightPrepareSiteStopClientTimeout {
+		timeout = minNightPrepareSiteStopClientTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

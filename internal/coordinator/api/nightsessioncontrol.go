@@ -219,30 +219,24 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 const maxNightCommandRequestBodyBytes = 4 << 10
 
 // nightCommandHTTPWriteDeadlineMargin matches fppcommand_handler.go's own
-// 30s margin - the closest precedent for "one write deadline, not a series
-// of resets" over a single handler's own post-wait work (here, the
-// AuditedWrite transaction nightRunExempt/nightRunGated runs after the
-// live interlock dispatch below has already returned).
+// 30s margin: slack over the work the deadline below already counts, for
+// the AuditedWrite transaction nightRunExempt/nightRunGated runs after the
+// live interlock dispatch has returned.
 const nightCommandHTTPWriteDeadlineMargin = 30 * time.Second
 
 // nightCommandHTTPWriteDeadline bounds handleNightCommand's own HTTP write
-// deadline, set before dispatch - mirroring emergencyStopHTTPWriteDeadline's
-// identical reasoning for the identical hazard: internal/coordinator/httpapi.
-// NewServer's shared http.Server.WriteTimeout would otherwise sever the
-// connection out from under a still-working live interlock dispatch.
-// prepare-site, fade-out-night, power-down-presentation, and run-readiness
-// each dispatch their own phase's live interlock evidence OUTSIDE any
-// transaction (their own doc comments), bounded by
-// nightBoundInterlockDispatch's nightInterlockAggregateDispatchBudget
-// (nightinterlock.go) - the actually configured source that dispatch
-// itself is bounded by, never a fresh constant re-derived here, so a
-// larger test-shrunk (or future-configured) budget carries through
-// automatically. start-preshow/start-night/end-session/request-final-show
-// never dispatch outside their own transaction (Invariant 7,
-// handleNightCommand's own doc comment), so this bound is this handler's
-// single worst case across every command it serves, not a per-command one.
-func nightCommandHTTPWriteDeadline() time.Duration {
-	return nightInterlockAggregateDispatchBudget + nightCommandHTTPWriteDeadlineMargin
+// deadline, set before dispatch, so the shared http.Server.WriteTimeout
+// cannot sever the connection under a still-working command (the same
+// hazard emergencyStopHTTPWriteDeadline guards). prepare-site is the
+// worst case: its live interlock dispatch, then the announcement reset
+// pass plus one in-flight audio confirmation, then an FPP stop that waits
+// one FPP confirmation deadline (the instances are stopped concurrently).
+// Every term is the configured bound itself, never a copy of its value.
+func (h *handlers) nightCommandHTTPWriteDeadline() time.Duration {
+	return nightInterlockAggregateDispatchBudget +
+		nightAnnouncementResetAtPrepareSiteBudget + audioCommandConfirmDeadline +
+		h.fppCommandConfirmDeadline +
+		nightCommandHTTPWriteDeadlineMargin
 }
 
 // decodeNightCommandBody reads the optional {"idempotencyKey": string,
@@ -310,7 +304,7 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 // anything beyond the transaction itself.
 func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
-	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(nightCommandHTTPWriteDeadline()))
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(h.nightCommandHTTPWriteDeadline()))
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
@@ -820,7 +814,13 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
 	}
 	if err == nil && problem == nil && stopFPPPlayback {
-		out.reason = h.nightStopFPPAtPrepareSite(ctx, now, issuer, idempotencyKey, out.result)
+		// Only a prepare-site that actually prepared the night may stop
+		// FPP: on an open session FPP may be playing the night's own show.
+		if out.outcome == nightOutcomeApplied {
+			out.reason = h.nightStopFPPAtPrepareSite(ctx, now, issuer, idempotencyKey, out.result)
+		} else {
+			out.reason = nightPrepareSiteAlreadyPreparedReason
+		}
 	}
 	return out, problem, err
 }
