@@ -119,6 +119,7 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	if !ok {
 		return
 	}
+	h.nightLightsAdvance(ctx, now, rec)
 	// A degraded session advances nothing, with one exception: fading out
 	// is how the operator stops the show through this session, and the
 	// three shutdown commands are accepted while degraded precisely so
@@ -431,6 +432,9 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
+	if nightLightsConfigured(payload) {
+		h.nightLightsRestore(ctx, now, rec, payload, "preshow")
+	}
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.Playlist, true, 0, fppIfBusyRefuse)
 	if !changed {
 		return
@@ -691,6 +695,7 @@ func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec s
 		cur.DegradedReason = reason
 		return cur
 	})
+	h.nightLightsRestoreIfFading(ctx, now, rec, "degrade")
 }
 
 func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
@@ -708,6 +713,9 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
 			obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 			if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
+				if h.nightLightsGain.fadeOutRan(rec) || payload.LightsFadeOutMs != nil {
+					h.nightLightsRestore(ctx, now, rec, payload, "abandon")
+				}
 				h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 					cur.State = nightStateRestingIntershow
 					cur.StateEnteredAt = now
@@ -991,7 +999,6 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	if !has || anchor.Purpose != nightAnchorPurposeShow {
 		return
 	}
-	h.nightRetryShowGain(ctx, now, rec)
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, anchor.ObservedAt, now)
 	var unmet string
 	switch {
@@ -1126,6 +1133,9 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 
 	if rec.FinalShowRequested {
 		anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.EndOfNightPlaylist, payload.Resting.EndOfNightRepeat, 0, fppIfBusyRefuse)
+		if !anchor.DispatchedAt.IsZero() {
+			h.nightLightsFadeIn(ctx, now, rec, payload)
+		}
 		if !changed {
 			return
 		}
@@ -1133,7 +1143,6 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 			h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
 			return
 		}
-		h.nightLightsFadeIn(ctx, now, rec, payload)
 		h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 			cur.State = nightStateEndOfNightResting
 			cur.StateEnteredAt = now
@@ -1150,6 +1159,9 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		return
 	}
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingOneShot, payload.Resting.FPPInstanceID, payload.Resting.Playlist, false, res.DurationMS, fppIfBusyRefuse)
+	if !anchor.DispatchedAt.IsZero() {
+		h.nightLightsFadeIn(ctx, now, rec, payload)
+	}
 	if !changed {
 		return
 	}
@@ -1157,7 +1169,6 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
 		return
 	}
-	h.nightLightsFadeIn(ctx, now, rec, payload)
 	boundary := deriveNightBoundary(anchor)
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.State = nightStateRestingIntershow

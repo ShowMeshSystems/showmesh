@@ -20657,7 +20657,7 @@ components:
             $ref: "#/components/schemas/ConfigNightSessionInterlock"
         lightsFadeOutMs:
           type: integer
-          minimum: 1
+          minimum: 1000
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade out, finishing as
@@ -20666,7 +20666,7 @@ components:
             transition gain on the resting and show FPP instances.
         lightsFadeInMs:
           type: integer
-          minimum: 1
+          minimum: 1000
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade in, starting when
@@ -20725,7 +20725,7 @@ components:
             $ref: "#/components/schemas/ConfigNightSessionInterlock"
         lightsFadeOutMs:
           type: integer
-          minimum: 1
+          minimum: 1000
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade out, finishing as
@@ -20734,7 +20734,7 @@ components:
             transition gain on the resting and show FPP instances.
         lightsFadeInMs:
           type: integer
-          minimum: 1
+          minimum: 1000
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade in, starting when

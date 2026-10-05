@@ -653,6 +653,13 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	if verr := rejectLightsFadeCueOverlap("lightsFadeOutMs", lightsFadeOutMs, "enterShow", enterShow.Cues); verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	if verr := rejectLightsFadeCueOverlap("lightsFadeInMs", lightsFadeInMs, "enterResting", enterResting.Cues); verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting,
@@ -1308,9 +1315,29 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 	return &v, &v2, nil
 }
 
+// rejectLightsFadeCueOverlap refuses a lights fade setting alongside a lighting
+// cue that fades the same way: the two would write the gain against each other.
+func rejectLightsFadeCueOverlap(field string, ms *int, phase string, cues []NightSessionCue) *ValidationError {
+	if ms == nil {
+		return nil
+	}
+	for _, c := range cues {
+		if c.Role == NightSessionCueRoleLighting && c.FadeDurationMs != nil {
+			return &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: field,
+				Detail: fmt.Sprintf("%s and the fadeDurationMs on lighting cue %q in %s both fade the lights the same way. Remove one of them.", field, c.Name, phase),
+			}
+		}
+	}
+	return nil
+}
+
 // nightLightsFadeMaxMs is the longest fade the FPP plugin's transition gain
 // accepts: 86400 seconds.
 const nightLightsFadeMaxMs = 86400 * 1000
+
+// nightLightsFadeMinMs is the shortest fade: the plugin takes whole seconds.
+const nightLightsFadeMinMs = 1000
 
 // decodeOptionalLightsFadeMs reads an optional lights fade duration: absent
 // means no fade, and a present value must be a positive whole number of
@@ -1323,10 +1350,10 @@ func decodeOptionalLightsFadeMs(top map[string]json.RawMessage, key string) (*in
 	if verr != nil {
 		return nil, verr
 	}
-	if v == 0 {
+	if v < nightLightsFadeMinMs {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: key,
-			Detail: fmt.Sprintf("%s must be greater than 0. Leave it out for no fade.", key),
+			Detail: fmt.Sprintf("%s must be at least %d, one second. Use a longer fade, or leave it out for no fade.", key, nightLightsFadeMinMs),
 		}
 	}
 	if v > nightLightsFadeMaxMs {

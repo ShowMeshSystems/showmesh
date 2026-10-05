@@ -1270,9 +1270,9 @@ describe('Show Night', () => {
     expect(screen.getByLabelText('Lights fade-out (ms)')).toHaveValue(20000)
     expect(screen.getByLabelText('Lights fade-in (ms)')).toHaveValue(8000)
 
-    fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '0' } })
+    fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '999' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
-    expect(await screen.findByText(/Lights fade-out must be a whole number of milliseconds from 1 to 86400000/)).toBeInTheDocument()
+    expect(await screen.findByText(/Lights fade-out must be a whole number of milliseconds from 1000 to 86400000/)).toBeInTheDocument()
     expect(captured.body).toBeNull()
 
     fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '' } })
