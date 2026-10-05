@@ -14,7 +14,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, DeletePanel, Field, Input, Notice, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -32,6 +32,10 @@ import {
   cueActivationSummary,
   cueRows,
   formatBytes,
+  installationDefaultAudioNode,
+  audioOnlyNodesWarning,
+  nodesWithoutAnnouncement,
+  resolveAudioNodes,
   slugify,
 } from './showsModel'
 
@@ -592,6 +596,20 @@ function CueEditor({
       (announcementTargets.length === 0 ? excludeNodesError(showAudioNodes, announcementExcludeNodes) : null)
   }
 
+  const defaultNodeId = audioNodes.kind === 'loaded' ? installationDefaultAudioNode(audioNodes.nodes) : null
+  const audioOnlyNodes =
+    audioNodes.kind === 'loaded' && showAudioNodesState.kind === 'loaded'
+      ? nodesWithoutAnnouncement({
+          hasAnnouncement: kinds.has('announcement'),
+          audioNodes: resolveAudioNodes({ explicitList: audioTargets, showAudioNodes, excludeNodes: audioExcludeNodes, defaultNodeId }).nodes,
+          announcementNodes: resolveAudioNodes({ explicitList: announcementTargets, showAudioNodes, excludeNodes: announcementExcludeNodes, defaultNodeId }).nodes,
+        })
+      : []
+  const audioOnlyWarning =
+    audioNodes.kind === 'loaded' && audioOnlyNodes.length > 0
+      ? audioOnlyNodesWarning(audioOnlyNodes.map((id) => nodeIdentityText(audioNodes.nodes.find((n) => n.id === id) ?? { id, label: id })))
+      : null
+
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
     audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, targets: audioTargets } : null,
@@ -792,6 +810,7 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
+          <p className="sm-field__help">These nodes play this cue's audio. On a node that is not also an announcement node, it plays as show audio.</p>
         </div>
       )}
 
@@ -845,6 +864,10 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
+          <p className="sm-field__help">
+            On these nodes the cue plays as an announcement over the audio already playing. A node must also be an audio node to play anything.
+          </p>
+          {audioOnlyWarning !== null && <Notice tone="warn" live="status" headline={audioOnlyWarning.headline} explanation={audioOnlyWarning.explanation} />}
         </div>
       )}
 
