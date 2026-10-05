@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -41,6 +43,11 @@ func newNightShutdownFixture(t *testing.T, now *time.Time, payload config.NightS
 	f := &nightShutdownFixture{obs: &mutableObservationLister{}}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == fppcommand.TransitionGainPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"schemaVersion":%d,"applied":true}`, fppcommand.TransitionGainSchemaVersion)
+			return
+		}
 		var body struct {
 			Command string   `json:"command"`
 			Args    []string `json:"args"`
