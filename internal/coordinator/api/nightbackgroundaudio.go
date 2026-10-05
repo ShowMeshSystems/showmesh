@@ -1030,7 +1030,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	// it alone holds the shared resume instant more than one resuming
 	// node must share.
 	if !multiNode && latest.Step.Kind != nightBGStepPause && latest.Step.Kind != nightBGStepResume {
-		if state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, time.Time{}, nodeID, sessionID); ok && state == string(pkgaudio.StatePaused) {
+		if state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, nightBedStepEffectFence(latest.Row), nodeID, sessionID); ok && state == string(pkgaudio.StatePaused) {
 			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history)
 			return
 		}
@@ -1115,6 +1115,10 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	case nightBGStepResume:
 		if !confirmed {
 			if multiNode {
+				if h.nightBedRefusedResumeIsPlaying(now, nodeID, sessionID, latest.Row) {
+					h.nightMaybeRefreshBackgroundAudioExpiry(ctx, now, rec, nodeID, sessionID, latest, history)
+					return
+				}
 				// Like start: a resume that did not confirm keeps its row and
 				// reason and is not re-sent every tick.
 				h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepResume, latest.Row)
@@ -1137,6 +1141,17 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		}
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, owner, items, history)
 	}
+}
+
+// nightBedRefusedResumeIsPlaying reports whether a resume the node refused
+// is followed by that node's own report of the bed playing, so the refusal
+// means the bed is already running and the node keeps its ordinary upkeep.
+func (h *handlers) nightBedRefusedResumeIsPlaying(now time.Time, nodeID, sessionID string, row store.NightCueOutboxRecord) bool {
+	if !nightBedStepNodeRefused(row) {
+		return false
+	}
+	state, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, nightBedStepEffectFence(row), nodeID, sessionID)
+	return ok && state == string(pkgaudio.StatePlaying)
 }
 
 // logBackgroundAudioDidNotConfirmOnce logs a background-audio start or
@@ -1977,8 +1992,12 @@ func (h *handlers) nightBedResumeGateClassifier(now time.Time, sessionID string)
 		if state, latest := nightBedClassifyResumeGate(history, nodeID); state != nightBedGateNotReady {
 			return state, latest
 		}
-		latest, _ := nightBackgroundAudioLatestStepForNode(history, nodeID)
-		if reported, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, time.Time{}, nodeID, sessionID); ok && reported == string(pkgaudio.StatePaused) {
+		latest, has := nightBackgroundAudioLatestStepForNode(history, nodeID)
+		var fence time.Time
+		if has {
+			fence = nightBedStepEffectFence(latest.Row)
+		}
+		if reported, ok := nightBackgroundAudioReportedSessionState(h.deps.Audio, now, fence, nodeID, sessionID); ok && reported == string(pkgaudio.StatePaused) {
 			return nightBedGateReady, latest
 		}
 		return nightBedGateNotReady, latest

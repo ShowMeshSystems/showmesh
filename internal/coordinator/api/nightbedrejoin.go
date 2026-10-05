@@ -247,10 +247,25 @@ func nightBedNodeEverHeldTheBed(steps []nightBackgroundAudioHistoryRow) bool {
 	return false
 }
 
+// nightBedStepEffectFence is the earliest record time a node report can
+// have to describe row's result. A scheduled start or resume is dispatched
+// seconds before it takes effect and resolves only once it has, so a
+// report recorded between dispatch and resolution still shows the old
+// state. An unresolved row falls back to its dispatch instant.
+func nightBedStepEffectFence(row store.NightCueOutboxRecord) time.Time {
+	switch {
+	case row.ResolvedAt != nil:
+		return *row.ResolvedAt
+	case row.DispatchedAt != nil:
+		return *row.DispatchedAt
+	}
+	return time.Time{}
+}
+
 // nightBedNodeLostSession reports whether nodeID has lost a bed it once
 // held, and returns the step the loss is attributed to. That step's
-// DispatchedAt is what fences the report: an audio report this
-// coordinator recorded before that dispatch cannot describe its result.
+// [nightBedStepEffectFence] fences the report: a report this coordinator
+// recorded before the step took effect cannot describe its result.
 //
 // A step still in flight is left alone; so is a node whose own latest
 // step is already a rejoin ([nightBackgroundAudioCueNameRejoinApply]),
@@ -295,7 +310,7 @@ func nightBedNodeLostSession(audio NodeAudioLister, now time.Time, nodeID, sessi
 	if nightBedStepNodeRefused(latest.Row) {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
-	if !nightBedNodeReportsAudioSince(audio, now, *latest.Row.DispatchedAt, nodeID) {
+	if !nightBedNodeReportsAudioSince(audio, now, nightBedStepEffectFence(latest.Row), nodeID) {
 		return nightBackgroundAudioHistoryRow{}, false
 	}
 	if nightBedSessionLost(audio, now, nodeID, sessionID, latest) {
