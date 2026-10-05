@@ -1,6 +1,7 @@
 package api
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -163,7 +164,7 @@ func TestNightContentAnchorEncodeDecodeRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("decode reported not ok")
 	}
-	if got != a {
+	if !reflect.DeepEqual(got, a) {
 		t.Fatalf("round trip mismatch: got %+v, want %+v", got, a)
 	}
 }
