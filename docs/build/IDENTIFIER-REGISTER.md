@@ -1453,6 +1453,7 @@ The store schema version, bumped by migrations in
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
 | v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
 | v46 | shipped | `night_cue_outbox` gains nullable `node_responded_at` (`migration_v46.go`): when the node published a bed step's answer, on the node's clock, so a node report built before the answer is not read as the step's result |
+| v47 | reserved | FPP fallback executor public key: storage for the public key a paired FPP plugin registers, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
 | v47+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
