@@ -17,6 +17,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -363,6 +364,10 @@ type Dependencies struct {
 	// identical concrete value. A nil field is checked explicitly by each
 	// handler, matching AssetManifests's identical nil-check posture.
 	FallbackPrograms *store.Store
+
+	// FallbackHolds answers whether an FPP player's plugin is, or may be,
+	// running the show from its fallback program. nil holds no player.
+	FallbackHolds *fallbackhold.Service
 
 	// FallbackProgramNudger asks for an immediate fallback-program
 	// rebuild after an executor key changes. nil is a no-op.
@@ -2496,6 +2501,8 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.requireScope(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
 	mux.HandleFunc("POST /api/v1/fallback-programs/{fppInstanceId}/acknowledge", h.writeGuard(&scopeFPPFallback, h.handlePostFallbackProgramAcknowledge))
 	mux.HandleFunc("PUT /api/v1/fallback-programs/{fppInstanceId}/executor-key", h.writeGuard(&scopeFPPFallback, h.handlePutFallbackExecutorKey))
+	mux.HandleFunc("PUT /api/v1/fallback-programs/{fppInstanceId}/fallback-state", h.writeGuard(&scopeFPPFallback, h.handlePutFallbackState))
+	mux.HandleFunc("DELETE /api/v1/fallback-programs/{fppInstanceId}/fallback-state", h.writeGuard(&scopeFPPCommand, h.handleDeleteFallbackState))
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own
 	// reported revision through the same PutNodeCueCatalogAck path the

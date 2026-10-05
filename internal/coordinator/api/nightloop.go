@@ -135,6 +135,11 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightTickDuringStopHold(ctx, now, rec)
 		return
 	}
+	// ADR-048 decision 4. A session that is fading out or stopped keeps
+	// going: only FPP's schedule or an operator can ask for that.
+	if rec.State != nightStateFadingOut && rec.State != nightStateStopped && h.nightHeldForFallback(ctx, now, rec) {
+		return
+	}
 	switch rec.State {
 	case nightStatePreshow:
 		h.nightAdvancePreshow(ctx, now, rec)

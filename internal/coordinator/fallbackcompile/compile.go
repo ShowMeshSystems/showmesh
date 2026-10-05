@@ -37,14 +37,11 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 )
 
-// ProgramTTL bounds how long a compiled program is valid before it must
-// be reconciled again, TRACK-J-fpp-fallback.md J1's own "reconciles the
-// program periodically" requirement needs an expiry to reconcile
-// against. This is a ShowMesh hypothesis (CONTRIBUTING.md's evidence
-// ladder), not a measured value: nothing about a real FPP outage has
-// been observed yet, and RES-009 is where that measurement belongs.
-// Exported so a reconciler can size its own retry cadence relative to it.
-const ProgramTTL = 15 * time.Minute
+// ProgramTTL is how long a compiled program is valid. Its end is also the
+// cutoff of a fallback that began under it (contracts section 5.14), so it
+// must outlast the show that was playing when the coordinator was lost.
+// A hypothesis, not a measured value.
+const ProgramTTL = 24 * time.Hour
 
 // Outcome is the closed vocabulary TRACK-J-fpp-fallback.md J1 fixes for
 // [Compile]'s result, on [pkg/cueauth.Outcome] and

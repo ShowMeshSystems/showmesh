@@ -34,6 +34,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/enrollment"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -137,6 +138,9 @@ func Run() int {
 	// interval. Constructed here, beside signingMgr, because it is the
 	// only other thing this service needs besides st and identitySvc.
 	fallbackReconcile := fallbackreconcile.NewService(st, signingMgr, identitySvc, logger, fallbackreconcile.DefaultInterval)
+	// fallbackHolds keeps what each FPP plugin reports about running the
+	// show from its fallback program (ADR-048 decision 4).
+	fallbackHolds := fallbackhold.NewService(st, time.Now(), logger)
 
 	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
 	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE
@@ -804,6 +808,7 @@ func Run() int {
 		// AssetManifests/Config/Assets/Commands/Discovery already are.
 		FallbackPrograms:      st,
 		FallbackProgramNudger: fallbackReconcile,
+		FallbackHolds:         fallbackHolds,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -1346,6 +1351,9 @@ func Run() int {
 	// like every other background loop here.
 	spawnBackground(func() {
 		fallbackReconcile.Run(ctx)
+	})
+	spawnBackground(func() {
+		fallbackHolds.Run(ctx)
 	})
 	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
 	// persistent" unclaimed-bootstrap signal's other half — the log side,

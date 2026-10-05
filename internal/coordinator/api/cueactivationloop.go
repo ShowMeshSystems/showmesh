@@ -320,6 +320,13 @@ func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cu
 }
 
 func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord, pin *cueactivate.ShowPin, held *cueHeldTracker) {
+	// ADR-048 decision 4: while the player's plugin runs the show from its
+	// fallback program, what the coordinator last started is no longer
+	// known, and nothing is started, stopped or cleared for that player.
+	if h.cueActivationHeldForFallback(ctx, now, obs) {
+		held.clear(obs.InstanceUUID)
+		return
+	}
 	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, obs)
 	if err != nil {
 		h.logWarn("cue activation loop: reconcile failed", "instanceUuid", obs.InstanceUUID, "error", err)

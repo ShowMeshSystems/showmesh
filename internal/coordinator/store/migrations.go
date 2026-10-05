@@ -192,6 +192,9 @@ var migrations = []migration{
 	// v47 (ADR-048 decision 3): adds fallback_executor_keys. No existing
 	// table is touched.
 	{version: 47, sql: schemaV47},
+	// v48 (ADR-048 decision 4): adds fallback_player_states. No existing
+	// table is touched.
+	{version: 48, sql: schemaV48},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

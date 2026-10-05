@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackcompile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -111,7 +112,7 @@ func TestExecutorKeySignalDoesNotKeepReadingTrueForALapsedProgram(t *testing.T) 
 	}
 
 	breakCatalogAcknowledgement(t, st, now)
-	now = now.Add(time.Hour)
+	now = now.Add(fallbackcompile.ProgramTTL + time.Minute)
 	svc.reconcileOnce(context.Background())
 
 	got := executorKeySignal(t, st)

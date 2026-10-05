@@ -71,6 +71,7 @@ func (h *handlers) handleListFallbackPrograms(w http.ResponseWriter, r *http.Req
 			FPPInstanceUUID: rec.FPPInstanceUUID, PackageID: rec.PackageID, Revision: rec.Revision,
 			Show: rec.ShowID, Generation: rec.Generation,
 			ExpiresAt: formatTime(rec.ExpiresAt), CompiledAt: formatTime(rec.CompiledAt),
+			PlayerState: h.fallbackPlayerStateFor(ctx, rec.FPPInstanceUUID, now),
 		})
 	}
 	jsonWrite(w, v1.FallbackProgramListResponse{ServerTime: formatTime(now), Programs: entries})
@@ -105,6 +106,7 @@ func (h *handlers) handleGetFallbackProgram(w http.ResponseWriter, r *http.Reque
 		jsonWrite(w, v1.FallbackProgramResponse{
 			ServerTime: formatTime(now), FPPInstanceUUID: instanceUUID, Published: false,
 			AcknowledgedStatus: ackStatus, AcknowledgedPackage: ackPackage, AcknowledgedAt: ackAt,
+			PlayerState: h.fallbackPlayerStateFor(ctx, instanceUUID, now),
 		})
 		return
 	}
@@ -129,6 +131,7 @@ func (h *handlers) handleGetFallbackProgram(w http.ResponseWriter, r *http.Reque
 		ServerTime: formatTime(now), FPPInstanceUUID: instanceUUID, Published: true,
 		Program: programBytes, SignatureBase64: rec.SignatureB64,
 		AcknowledgedStatus: ackStatus, AcknowledgedPackage: ackPackage, AcknowledgedAt: ackAt,
+		PlayerState: h.fallbackPlayerStateFor(ctx, instanceUUID, now),
 	})
 }
 
