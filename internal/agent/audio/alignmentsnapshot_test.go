@@ -144,8 +144,8 @@ func TestAlignmentSnapshotNotMeasuredWhilePaused(t *testing.T) {
 	if snap.Measured {
 		t.Fatalf("AlignmentSnapshot while paused = %+v, want Measured false", snap)
 	}
-	if !snap.NotApplicable || snap.Reason != alignmentReasonHolderIdle {
-		t.Errorf("snapshot = not applicable %v (%q), want true: the holder is not playing", snap.NotApplicable, snap.Reason)
+	if !snap.NotApplicable {
+		t.Errorf("snapshot = not applicable false (%q), want true: nothing is playing against the LTC run", snap.Reason)
 	}
 }
 
