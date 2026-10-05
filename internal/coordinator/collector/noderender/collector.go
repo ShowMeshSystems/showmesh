@@ -495,7 +495,7 @@ var contentSignals = []observation.SignalID{
 	SignalSurfaceContentCatalogRevision, SignalSurfaceContentShow, SignalSurfaceContentGeneration,
 }
 
-const noCatalogAuthorizationReason = "This surface's assignment was made before catalog authorization was recorded."
+const noCatalogAuthorizationReason = "This surface's assignment carries no catalog authorization."
 
 // notApplicable reports that the node's own report at observedAt
 // established the signal's subject does not exist (ADR-056). A report

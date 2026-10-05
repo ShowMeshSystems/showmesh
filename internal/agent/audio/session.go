@@ -392,6 +392,18 @@ var legacyGapReasons = map[string]string{
 	"advance was operator-forced, not driven by natural completion": gapReasonForcedAdvance,
 }
 
+// stateExpectsLoadedHandle reports whether a session in state should hold
+// a loaded engine handle. Only the states that can rest with nothing
+// loaded are exempt, so a new state counts as expecting one.
+func stateExpectsLoadedHandle(state pkgaudio.State) bool {
+	switch state {
+	case pkgaudio.StateUnknown, pkgaudio.StateReady, pkgaudio.StatePreparing,
+		pkgaudio.StateStopped, pkgaudio.StateCompleted, pkgaudio.StateFailed:
+		return false
+	}
+	return true
+}
+
 // gapSubjectAbsent reports whether reason says no item gap exists.
 func gapSubjectAbsent(reason string) bool {
 	switch reason {
@@ -1203,8 +1215,9 @@ type SessionSnapshot struct {
 	PositionKnown bool
 	Position      time.Duration
 
-	// NothingLoaded is true when no engine handle is loaded, so there is
-	// no position to read rather than one that could not be read.
+	// NothingLoaded is true when no engine handle is loaded and State
+	// says none should be, so there is no position to read. A session
+	// that should hold a handle and does not is a missing reading.
 	NothingLoaded bool
 	ObservedAt    time.Time
 
@@ -1309,7 +1322,7 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 		GapNotApplicable: !s.gapKnown && gapSubjectAbsent(s.gapReason),
-		NothingLoaded:    !s.handleLoaded,
+		NothingLoaded:    !s.handleLoaded && !stateExpectsLoadedHandle(reportedState),
 		CollectedAt:      s.mgr.now(),
 	}
 

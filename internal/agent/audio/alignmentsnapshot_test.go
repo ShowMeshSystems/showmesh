@@ -185,3 +185,47 @@ func TestAlignmentSnapshotDoesNotStallOnBusySessionLock(t *testing.T) {
 		t.Error("Reason is empty, want a stated explanation naming the busy lock")
 	}
 }
+
+// ltcHoldingShow starts a playing show session that holds the LTC run.
+func ltcHoldingShow(t *testing.T) (*Manager, *Session) {
+	t.Helper()
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+	ref := writeTestAsset(t, m.assetDir, "show.wav", "asset-show", []byte("show"))
+	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+	s, _ := m.get("show")
+	return m, s
+}
+
+// TestAlignmentSnapshotHolderNotPlayingIsNotApplicable proves a holder
+// whose own state is not playing has no alignment to sample.
+func TestAlignmentSnapshotHolderNotPlayingIsNotApplicable(t *testing.T) {
+	m, s := ltcHoldingShow(t)
+	s.mu.Lock()
+	s.state = pkgaudio.StatePaused
+	s.mu.Unlock()
+
+	snap := m.AlignmentSnapshot(context.Background())
+	if snap.Measured || !snap.NotApplicable || snap.Reason != alignmentReasonHolderIdle {
+		t.Errorf("snapshot = %+v, want not applicable with %q", snap, alignmentReasonHolderIdle)
+	}
+}
+
+// TestAlignmentSnapshotPlayingHolderWithoutHandleIsAMissingReading proves
+// a holder that should be playing and lost its handle still owes a sample.
+func TestAlignmentSnapshotPlayingHolderWithoutHandleIsAMissingReading(t *testing.T) {
+	m, s := ltcHoldingShow(t)
+	s.mu.Lock()
+	s.handleLoaded = false
+	s.mu.Unlock()
+
+	snap := m.AlignmentSnapshot(context.Background())
+	if snap.Measured || snap.NotApplicable || snap.Reason != alignmentReasonHolderUnloaded {
+		t.Errorf("snapshot = %+v, want a missing reading with %q", snap, alignmentReasonHolderUnloaded)
+	}
+	if snap.SessionID != "show" {
+		t.Errorf("SessionID = %q, want the holder", snap.SessionID)
+	}
+}

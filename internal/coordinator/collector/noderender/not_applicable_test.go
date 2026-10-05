@@ -14,7 +14,7 @@ import (
 // time it carries, and that it goes stale when the node stops reporting.
 func TestSurfaceSubjectAbsentIsNotApplicable(t *testing.T) {
 	const noAssignment = "This surface holds no render assignment."
-	const noAuthorization = "This surface's assignment was made before catalog authorization was recorded."
+	const noAuthorization = "This surface's assignment carries no catalog authorization."
 
 	cases := []struct {
 		name       string

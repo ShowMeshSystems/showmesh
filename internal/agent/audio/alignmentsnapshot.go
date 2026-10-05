@@ -30,6 +30,10 @@ const (
 	alignmentReasonHolderIdle  = "The session holding the LTC run is not playing."
 )
 
+// alignmentReasonHolderUnloaded is a missing reading, not an absent
+// subject: the holder should be playing and has nothing to sample.
+const alignmentReasonHolderUnloaded = "The session holding the LTC run should be playing, but nothing is loaded for it."
+
 // notMeasuredAlignment is what a node with no honest sample reports, not
 // collected with a reason, never a zeroed offset that would read as
 // perfectly aligned.
@@ -43,7 +47,8 @@ func notMeasuredAlignment(reason string) AlignmentSnapshot {
 type alignmentSessionFields struct {
 	id       pkgaudio.SessionID
 	handle   EngineHandle
-	ready    bool
+	playing  bool
+	loaded   bool
 	override *pkgaudio.LTCTimecode
 }
 
@@ -58,7 +63,8 @@ func (s *Session) alignmentFieldsWithBudget(budget time.Duration) (alignmentSess
 		f := alignmentSessionFields{
 			id:       s.id,
 			handle:   s.handle,
-			ready:    s.handleLoaded && s.state == pkgaudio.StatePlaying,
+			playing:  s.state == pkgaudio.StatePlaying,
+			loaded:   s.handleLoaded,
 			override: s.desired.LTCStartOffset,
 		}
 		s.mu.Unlock()
@@ -89,12 +95,16 @@ func (m *Manager) AlignmentSnapshot(ctx context.Context) AlignmentSnapshot {
 	}
 	sessID := fields.id
 	handle := fields.handle
-	ready := fields.ready
 	override := fields.override
 
-	if !ready {
+	if !fields.playing {
 		snap := notMeasuredAlignment(alignmentReasonHolderIdle)
 		snap.NotApplicable = true
+		snap.SessionID = sessID
+		return snap
+	}
+	if !fields.loaded {
+		snap := notMeasuredAlignment(alignmentReasonHolderUnloaded)
 		snap.SessionID = sessID
 		return snap
 	}

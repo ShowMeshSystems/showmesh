@@ -227,9 +227,42 @@ func TestSnapshotSaysNothingIsLoadedAndNoGapExists(t *testing.T) {
 		}
 	}
 	if !snap.NothingLoaded || snap.PositionKnown {
-		t.Errorf("snapshot = NothingLoaded %v PositionKnown %v, want nothing loaded and no position", snap.NothingLoaded, snap.PositionKnown)
+		t.Errorf("snapshot = state %q NothingLoaded %v PositionKnown %v, want nothing loaded and no position", snap.State, snap.NothingLoaded, snap.PositionKnown)
 	}
 	if !snap.GapNotApplicable || snap.GapReason != gapReasonNeverAdvanced {
 		t.Errorf("snapshot gap = not applicable %v (%q), want true with %q", snap.GapNotApplicable, snap.GapReason, gapReasonNeverAdvanced)
+	}
+}
+
+// TestSnapshotPlayingSessionWithoutHandleOwesAPosition proves a session
+// whose state says it should be loaded never reports nothing loaded.
+func TestSnapshotPlayingSessionWithoutHandleOwesAPosition(t *testing.T) {
+	m, s := ltcHoldingShow(t)
+	s.mu.Lock()
+	s.handleLoaded = false
+	s.mu.Unlock()
+
+	var snap SessionSnapshot
+	for _, got := range m.Snapshot(context.Background()) {
+		if got.ID == "show" {
+			snap = got
+		}
+	}
+	if snap.State != pkgaudio.StatePlaying || snap.PositionKnown || snap.NothingLoaded {
+		t.Errorf("snapshot = state %q PositionKnown %v NothingLoaded %v, want playing with a missing position", snap.State, snap.PositionKnown, snap.NothingLoaded)
+	}
+}
+
+func TestOnlyRestingStatesExpectNoLoadedHandle(t *testing.T) {
+	for state, want := range map[pkgaudio.State]bool{
+		pkgaudio.StateUnknown: false, pkgaudio.StateStopped: false,
+		pkgaudio.StateCompleted: false, pkgaudio.StateFailed: false,
+		pkgaudio.StatePreparing: false, pkgaudio.StateReady: false,
+		pkgaudio.StatePlaying: true, pkgaudio.StatePaused: true,
+		pkgaudio.StateStopping: true, pkgaudio.StateRestorePending: true,
+	} {
+		if got := stateExpectsLoadedHandle(state); got != want {
+			t.Errorf("stateExpectsLoadedHandle(%q) = %v, want %v", state, got, want)
+		}
 	}
 }
