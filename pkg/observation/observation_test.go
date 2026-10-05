@@ -385,3 +385,51 @@ func TestValidateAllowsDerivedOnlyStateAtOutput(t *testing.T) {
 		t.Fatalf("StateAt() = %q, want current", got)
 	}
 }
+
+// TestNotApplicableIsAReadingThatAges pins ADR-056 decisions 2 and 3: the
+// row has no value, carries the report's own time, and goes stale.
+func TestNotApplicableIsAReadingThatAges(t *testing.T) {
+	res := ResourceRef{Kind: ResourceNode, ID: "node-1"}
+	observedAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	o, err := NotApplicable(res, "node.audio.engine.restore.next_attempt_ms", "No restore is queued.", observedAt,
+		WithValidFor(45*time.Second))
+	if err != nil {
+		t.Fatalf("NotApplicable: %v", err)
+	}
+	if o.Value != nil || o.Reason != "No restore is queued." || o.ObservedAt == nil || !o.ObservedAt.Equal(observedAt) {
+		t.Errorf("NotApplicable = %+v, want no value, the reason, and the report's own time", o)
+	}
+	if got := o.StateAt(observedAt.Add(45 * time.Second)); got != StateNotApplicable {
+		t.Errorf("state inside the validity window = %q, want %q", got, StateNotApplicable)
+	}
+	if got := o.StateAt(observedAt.Add(46 * time.Second)); got != StateStale {
+		t.Errorf("state after reports stop = %q, want %q", got, StateStale)
+	}
+	if h := DeriveHealth(o, observedAt, func(any) Health { return HealthHealthy }); h != HealthUnknown {
+		t.Errorf("DeriveHealth = %q, want %q: no value is never healthy", h, HealthUnknown)
+	}
+}
+
+func TestNotApplicableRejectsMissingReasonOrTime(t *testing.T) {
+	res := ResourceRef{Kind: ResourceNode, ID: "node-1"}
+	if _, err := NotApplicable(res, "node.x", "", time.Now()); !errors.Is(err, ErrObservationMissingReason) {
+		t.Errorf("empty reason error = %v, want %v", err, ErrObservationMissingReason)
+	}
+	o := Observation{Resource: res, Signal: "node.x", CollectedAt: time.Now(), Absence: StateNotApplicable, Reason: "Nothing is queued."}
+	if err := o.Validate(); !errors.Is(err, ErrObservationNotApplicableWithoutObservedAt) {
+		t.Errorf("nil ObservedAt error = %v, want %v", err, ErrObservationNotApplicableWithoutObservedAt)
+	}
+}
+
+// TestMeasuredDefaultCarriesItsReason pins ADR-056 decision 4.
+func TestMeasuredDefaultCarriesItsReason(t *testing.T) {
+	res := ResourceRef{Kind: ResourceAudioSession, ID: "sess-1"}
+	observedAt := time.Now()
+	o, err := Measured(res, "audio_session.gain.ceiling", 12.0, observedAt, WithReason("No ceiling is set."))
+	if err != nil {
+		t.Fatalf("Measured: %v", err)
+	}
+	if o.StateAt(observedAt) != StateCurrent || o.Reason != "No ceiling is set." {
+		t.Errorf("default = %+v, want a current value carrying its reason", o)
+	}
+}

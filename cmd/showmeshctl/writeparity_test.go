@@ -75,6 +75,11 @@ var exemptWritePaths = map[string]string{
 		"unconditionally (requireScope), the installed FPP plugin principal, not a general operator read " +
 		"scope. Neither needs a CLI verb of its own in this PR; growing one is future work, not a gap this " +
 		"exemption hides.",
+	"/fallback-programs/{fppInstanceId}/executor-key": "PUT is the installed FPP plugin registering the " +
+		"public half of a key pair it made itself (ADR-048 decision 3). The route answers only the plugin " +
+		"paired as that FPP instance, so an operator token is refused, and an operator has no key to offer: " +
+		"the private half never leaves the FPP host. The registered key is visible to an operator inside " +
+		"the signed program, read through GET /fallback-programs/{fppInstanceId}.",
 	"/weather-delay/cancel-night": "Always answers 501; a later branch ships the CLI verb with the behavior.",
 	"/config/show.weatherdelay":   "The CLI verb ships with the weather delay behavior that reads this configuration.",
 }

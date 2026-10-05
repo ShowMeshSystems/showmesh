@@ -30,6 +30,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppplugin"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodefallback"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/enrollment"
@@ -283,6 +284,8 @@ func Run() int {
 	// package doc comment. Constructed first because audioStore reads it
 	// for node.audio.sync.* (ADR-052).
 	clockStore := nodeclock.NewStore()
+	// fallbackStore holds each node's fallback report (ADR-048 decision 3).
+	fallbackStore := nodefallback.NewStore()
 
 	// Track C seam C1a: audio's own push cache, the identical shape as
 	// renderStore above, one report type over — see nodeaudio's package
@@ -349,7 +352,7 @@ func Run() int {
 		}
 	})
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(alignmentRecorder), inventory.WithClockSink(clockStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(alignmentRecorder), inventory.WithClockSink(clockStore), inventory.WithFallbackSink(fallbackStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
 
 	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
@@ -523,6 +526,7 @@ func Run() int {
 	// to seed here either (node.clock.ptp.* are fixed, one-per-node
 	// signals).
 	fppRunner.Add(nodeclock.New(clockStore), nodeclock.DefaultPollInterval)
+	fppRunner.Add(nodefallback.New(fallbackStore), nodefallback.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -798,7 +802,8 @@ func Run() int {
 		// FallbackPrograms is Track J's J1 own dependency: the SAME
 		// *st fallbackReconcile above publishes into, wired the same
 		// AssetManifests/Config/Assets/Commands/Discovery already are.
-		FallbackPrograms: st,
+		FallbackPrograms:      st,
+		FallbackProgramNudger: fallbackReconcile,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -1105,6 +1110,7 @@ func Run() int {
 	// api. See cuecatalogautodeploy.go's own doc comment for the dispatch
 	// and safety-hold logic this delegates to.
 	fallbackReconcile.SetCatalogDeployer(apiInst)
+	fallbackReconcile.SetNodeAddresses(inv)
 
 	// Resolve any command a PRIOR process left dispatched-but-unresolved
 	// (a crash, a kill, or an abandoned client connection between dispatch

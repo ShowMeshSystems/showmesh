@@ -146,7 +146,7 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 	if p.LockedSecondsKnown {
 		obs = append(obs, buildValue(nodeID, SignalLockedSeconds, p.LockedSeconds, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLockedSeconds, source, "not currently locked or in holdover", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalLockedSeconds, source, "This node's clock is not locked, so there is no lock duration.", observedAt, rep))
 	}
 
 	if p.LastStepKnown {
@@ -159,10 +159,10 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 			buildValue(nodeID, SignalLastStepNs, p.LastStepNs, observedAt, rep),
 		)
 	} else {
-		reason := "no step (grandmaster change) has been observed since this node's clock provider started"
+		reason := "No clock step has been seen since this node's clock provider started."
 		obs = append(obs,
-			notCollected(res, SignalLastStepAt, source, reason, rep.receivedAt),
-			notCollected(res, SignalLastStepNs, source, reason, rep.receivedAt),
+			notApplicable(res, SignalLastStepAt, source, reason, observedAt, rep),
+			notApplicable(res, SignalLastStepNs, source, reason, observedAt, rep),
 		)
 	}
 
@@ -176,6 +176,22 @@ func notCollected(res observation.ResourceRef, sig observation.SignalID, source,
 		observation.WithSource(source), observation.WithCollectedAt(at))
 	if err != nil {
 		panic(fmt.Sprintf("nodeclock: NotCollected(%q) unexpectedly failed: %v", sig, err))
+	}
+	return o
+}
+
+// notApplicable reports that the node's own clock report at observedAt
+// established the signal's subject does not exist (ADR-056). A report
+// with no evidence time cannot establish that and stays not collected.
+func notApplicable(res observation.ResourceRef, sig observation.SignalID, source, reason string, observedAt *time.Time, rep report) observation.Observation {
+	if observedAt == nil {
+		return notCollected(res, sig, source, reason, rep.receivedAt)
+	}
+	o, err := observation.NotApplicable(res, sig, reason, *observedAt,
+		observation.WithSource(source), observation.WithCollectedAt(rep.receivedAt),
+		observation.WithValidFor(DefaultValidFor))
+	if err != nil {
+		panic(fmt.Sprintf("nodeclock: NotApplicable(%q) unexpectedly failed: %v", sig, err))
 	}
 	return o
 }

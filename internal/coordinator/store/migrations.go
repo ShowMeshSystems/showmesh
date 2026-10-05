@@ -189,6 +189,9 @@ var migrations = []migration{
 	// v46: adds night_cue_outbox.node_responded_at. Existing rows read back
 	// with no node time.
 	{version: 46, fn: migrateV46AddNightCueOutboxNodeRespondedAt},
+	// v47 (ADR-048 decision 3): adds fallback_executor_keys. No existing
+	// table is touched.
+	{version: 47, sql: schemaV47},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

@@ -53,6 +53,7 @@ import {
   type ObservationEntry,
   type ResolumeActionResult,
   type WeatherDelayTargetOutcome,
+  randomUUIDv4,
 } from '../api'
 import {
   Button,
@@ -105,6 +106,7 @@ import {
   type CommandOutcome,
   type StartPlaylistConflictReason,
 } from './liveControlModel'
+import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
 
 /** Kept apart from the generic Refused outcome: the busy guard needs a distinct render and its own "start anyway" CTA. */
 type StartPlaylistState =
@@ -488,6 +490,7 @@ export function LiveControl() {
   const [startRepeat, setStartRepeat] = useState(false)
   const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
   const [emergencyOutcome, setEmergencyOutcome] = useState<EmergencyOutcomeState | null>(null)
   const [emergencyBusy, setEmergencyBusy] = useState<EmergencyLevel | false>(false)
@@ -586,20 +589,33 @@ export function LiveControl() {
   )
 
   const night = useCallback(
-    (command: NightCommandName) => {
-      dispatchNightCommand(command, undefined, undefined, command === 'start-night' ? skipEnterShowLead : undefined)
-        .then(() => {
+    (command: NightCommandName, stopFppPlayback?: boolean) => {
+      dispatchNightCommand(
+        command,
+        command === 'prepare-site' ? prepareSiteKey : undefined,
+        undefined,
+        command === 'start-night' ? skipEnterShowLead : undefined,
+        command === 'prepare-site' ? stopFppPlayback : undefined,
+      )
+        .then((response) => {
           if (command === 'start-night') setSkipEnterShowLead(false)
+          if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
+          const reason = response.command.reason
           setNightOutcome({
             tone: 'warn',
             label: 'Accepted',
-            detail: `${command} was accepted. The coordinator answers 202 and reports nothing further here; Show Night carries the session's own state.`,
+            detail: `${command} was accepted. The coordinator answers 202 and reports nothing further here; Show Night carries the session's own state.${reason === undefined || reason === '' ? '' : ` ${reason}`}`,
           })
         })
-        .catch((err: unknown) => setNightOutcome({ tone: 'bad', label: 'Refused', detail: `${command}: ${describeApiError(err)}` }))
+        .catch((err: unknown) => {
+          if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
+          setNightOutcome({ tone: 'bad', label: 'Refused', detail: `${command}: ${describeApiError(err)}` })
+        })
     },
-    [skipEnterShowLead],
+    [skipEnterShowLead, prepareSiteKey],
   )
+
+  const prepareSite = usePrepareSiteConfirm((stop) => night('prepare-site', stop))
 
   const state = instance === undefined ? null : transportState(instance)
   const rows = [...outputRows(model, nowIso), ...audioRows(model, nowIso)]
@@ -1004,9 +1020,10 @@ export function LiveControl() {
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <LifecycleCommands
           groups={nightLifecycleGroups(nightGate, (command) =>
-            command === 'start-night' ? setStartNightConfirmOpen(true) : night(command),
+            command === 'start-night' ? setStartNightConfirmOpen(true) : command === 'prepare-site' ? prepareSite.start() : night(command),
           )}
         />
+        {prepareSite.dialog}
         <ConfirmDialog
           open={startNightConfirmOpen}
           title="Start the night and its first cycle?"

@@ -36,10 +36,11 @@ const (
 	// program audio and its LTC output, sampled by the agent against one
 	// shared pipeline running time and reported with its own sample time
 	// (see [mqttproto.AudioPayload.AlignmentSampledAt]). It is
-	// [observation.StateNotCollected] with a reason whenever the node's
-	// own report carries no measured sample, an unmeasured tick, or an
-	// agent build that predates this evidence, and never inferred from
-	// the program and LTC buses both being usable. See
+	// [observation.StateNotApplicable] when the node states no playing
+	// session holds the LTC run, and [observation.StateNotCollected] with
+	// a reason for an unmeasured tick or an agent build that predates
+	// this evidence. Never inferred from the program and LTC buses both
+	// being usable. See
 	// [alignmentObservation].
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 
@@ -130,10 +131,10 @@ const (
 // ErrorMs is expected minus actual. Resyncs counts discontinuity seeks
 // performed, and LastResyncReason names why the most recent one fired.
 //
-// All six report [observation.StateNotCollected] on a node that is not
-// running a scheduled session, which includes every node whose clock
-// provider is not locked: such a node keeps today's start-on-arrival
-// behaviour and has no timeline to report against.
+// All six report [observation.StateNotApplicable] on a node that states
+// it is running no scheduled session, which includes every node whose
+// clock provider is not locked: such a node keeps today's
+// start-on-arrival behaviour and has no timeline to report against.
 const (
 	SignalTimelineScheduledAt      observation.SignalID = "node.audio.timeline.scheduled_at"
 	SignalTimelineExpectedMs       observation.SignalID = "node.audio.timeline.expected_ms"
@@ -290,7 +291,7 @@ const (
 	// introduces the pkg/audio.State value "restore_pending" for what
 	// State itself reports while this is happening).
 	// Attempts and LastReason are always current, 0/empty when nothing
-	// is queued; NextAttemptMs reports [observation.StateNotCollected]
+	// is queued; NextAttemptMs reports [observation.StateNotApplicable]
 	// with a stated reason whenever no restore is currently queued.
 	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
 	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
@@ -299,11 +300,10 @@ const (
 	// SignalSessionItemGapMs and SignalSessionItemGapReason are the
 	// measured interval between one playlist item's natural completion
 	// and its successor's confirmed start — a measurement, never a
-	// restatement of the requested transition. Both report
-	// [observation.StateNotCollected] with a stated reason, never zero,
-	// whenever the node itself could not measure a gap (a first item, a
-	// stopped session, a session that never advanced, or an advance whose
-	// predecessor did not complete naturally).
+	// restatement of the requested transition. Never zero: both report
+	// [observation.StateNotApplicable] when the node states no gap exists
+	// (a first item, a stopped session, a forced advance), and
+	// [observation.StateNotCollected] when a gap went unmeasured.
 	SignalSessionItemGapMs     observation.SignalID = "audio_session.item_gap_ms"
 	SignalSessionItemGapReason observation.SignalID = "audio_session.item_gap.reason"
 
@@ -323,10 +323,10 @@ const (
 	// sequence filename a MultiSync START answered (multisync only), that
 	// packet's arrival on the node's own media clock (multisync only), the
 	// fixed lead applied after it (multisync only), and whether prepare ran
-	// on the OPEN packet instead of ahead of time. All five are
-	// [observation.StateNotCollected], never a fabricated zero or empty
-	// string, whenever the session has not started or the node's own build
-	// predates this reporting.
+	// on the OPEN packet instead of ahead of time. Never a fabricated zero
+	// or empty string: all five are [observation.StateNotApplicable] when
+	// the node states it holds no start record for the session, and
+	// [observation.StateNotCollected] when its build predates this.
 	SignalSessionStartTrigger            observation.SignalID = "audio_session.start.trigger"
 	SignalSessionTriggerSequenceFilename observation.SignalID = "audio_session.start.trigger_sequence_filename"
 	SignalSessionTriggerArrivalNs        observation.SignalID = "audio_session.start.trigger_arrival_ns"

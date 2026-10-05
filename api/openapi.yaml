@@ -10407,6 +10407,54 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fallback-programs/{fppInstanceId}/executor-key:
+    put:
+      operationId: putFallbackExecutorKey
+      summary: A paired FPP plugin registers the public key it signs fallback activations with (ADR-048, Track J's J3)
+      description: >-
+        Behind `fpp:fallback`, and only for the plugin paired as this FPP
+        instance. The key is the plugin's Ed25519 public key, never a
+        secret. The coordinator carries it in this FPP instance's signed
+        fallback program, and a node accepts a fallback activation only
+        when it is signed by that key. Registering the stored key again
+        changes nothing; registering a different key replaces it and
+        republishes the program. A paired plugin gets `409` while the
+        coordinator has not yet read its player's instance UUID.
+      parameters:
+        - name: fppInstanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The FPP instance UUID (`instanceUuid`, contracts section 1.2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FallbackExecutorKeyRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackExecutorKeyResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -10685,10 +10733,19 @@ components:
       type: object
       description: >-
         The evidence envelope every observation-bearing field on this API
-        uses (contract section 6.3). `state` is one of the six values
-        below; `value` is null only for the three genuine absence states -
+        uses (contract section 6.3). `state` is one of the seven values
+        below; `value` is null for the three genuine absence states -
         `not_collected`, `collection_failed`, `unsupported` - where nothing
-        was ever obtained. It is non-null for `current`, `stale`, AND
+        was ever obtained, and for `not_applicable`, where the signal's
+        subject does not exist right now: nothing is queued, nothing is
+        running, nothing has happened yet. `not_applicable` is a reading,
+        not an absence: `reason` states what is absent, `observedAt` is the
+        time of the report that established it, and a row whose source
+        stops reporting turns `stale` with a null `value`. A client must
+        not show it as a problem. A signal with a meaningful default
+        reports that default as `current`, with `reason` naming it as the
+        default. `value` is non-null for `current`, for `stale` unless the
+        row was `not_applicable` before it aged, AND for
         `unknown_age`: `unknown_age` means a value exists but the time it
         was observed does not, which is a distinct condition from having no
         value at all, and a client that treats `unknown_age` as absent is
@@ -10752,7 +10809,7 @@ components:
           type: string
           enum:
             [current, stale, unknown_age, not_collected, collection_failed,
-             unsupported]
+             unsupported, not_applicable]
         reason:
           type: [string, "null"]
         observedAt:
@@ -11384,7 +11441,7 @@ components:
           type: string
           enum:
             [current, stale, unknown_age, not_collected, collection_failed,
-             unsupported]
+             unsupported, not_applicable]
         reason:
           type: [string, "null"]
         observedAt:
@@ -21521,6 +21578,17 @@ components:
         night without waiting out the enterShow lead (RESTING-MODE.md
         section 7.1) before the show itself launches; an enterShow
         announcement still dispatches. Every other command ignores it.
+        `stopFppPlayback` is honored only by `prepare-site`: when true
+        and that call actually prepares the night (outcome `applied`),
+        prepare-site also stops whatever each of the night's FPP
+        instances is playing, all at once, and reports the result in the
+        response's `command.reason`. The response can take up to the FPP
+        confirmation deadline longer, so a client needs a longer request
+        budget when it sends this. A stop FPP refuses or does not confirm
+        is reported there and does not fail prepare-site. When the night
+        is already prepared (outcome `idempotent_no_op`) nothing is sent
+        to FPP and the reason says so. Absent or false leaves FPP
+        playing. Every other command ignores it.
       properties:
         idempotencyKey:
           type: string
@@ -21529,6 +21597,8 @@ components:
           items:
             $ref: "#/components/schemas/NightInterlockOverride"
         skipEnterShowLead:
+          type: boolean
+        stopFppPlayback:
           type: boolean
     NightCommandResult:
       type: object
@@ -22491,6 +22561,12 @@ components:
       properties:
         nodeId:
           type: string
+        address:
+          type: string
+          description: >-
+            The `host:port` of this node's inbound listener, where the FPP
+            host delivers this target's activation. Absent when the
+            coordinator has no reported address for the node.
         render:
           $ref: "#/components/schemas/FallbackProgramRenderActivation"
         audio:
@@ -22560,6 +22636,13 @@ components:
           format: date-time
         fppInstanceUuid:
           type: string
+        executorPublicKey:
+          type: string
+          description: >-
+            The Ed25519 public key this FPP instance's plugin registered,
+            in standard base64. A node accepts a fallback activation only
+            when it is signed by this key. Absent when no key is
+            registered.
         show:
           type: string
         generation:
@@ -22671,6 +22754,36 @@ components:
         installedAt:
           type: string
           format: date-time
+    FallbackExecutorKeyRequest:
+      type: object
+      description: The request body of PUT /fallback-programs/{fppInstanceId}/executor-key.
+      additionalProperties: false
+      required: [publicKey]
+      properties:
+        publicKey:
+          type: string
+          description: The raw 32 byte Ed25519 public key in standard base64 with padding.
+    FallbackExecutorKeyResponse:
+      type: object
+      description: The response body of PUT /fallback-programs/{fppInstanceId}/executor-key.
+      additionalProperties: false
+      required: [serverTime, fppInstanceUuid, publicKey, registeredAt, changed]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        fppInstanceUuid:
+          type: string
+        publicKey:
+          type: string
+          description: The key now stored for this FPP instance.
+        registeredAt:
+          type: string
+          format: date-time
+          description: When the stored key was first registered.
+        changed:
+          type: boolean
+          description: True when this call stored a first key or replaced a different one.
     FallbackProgramAcknowledgeResponse:
       type: object
       description: The response body of POST /fallback-programs/{fppInstanceId}/acknowledge.

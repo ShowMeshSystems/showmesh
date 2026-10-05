@@ -364,6 +364,10 @@ type Dependencies struct {
 	// handler, matching AssetManifests's identical nil-check posture.
 	FallbackPrograms *store.Store
 
+	// FallbackProgramNudger asks for an immediate fallback-program
+	// rebuild after an executor key changes. nil is a no-op.
+	FallbackProgramNudger FallbackProgramNudger
+
 	// AssetSettings is Track G seam G-4's live, no-restart view of the
 	// assets.settings configuration kind (ADR-039): the upload byte limit,
 	// the manifest staleness interval, and (via ContentBaseURL) whether the
@@ -775,6 +779,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
+	}
+	if d.FallbackProgramNudger == nil {
+		d.FallbackProgramNudger = noFallbackProgramNudger{}
 	}
 	if d.AudioRenditionNudger == nil {
 		d.AudioRenditionNudger = noAudioRenditionNudger{}
@@ -2488,6 +2495,7 @@ func New(deps Dependencies, opts Options) *API {
 	// /api/v1/audit uses for equivalently sensitive material.
 	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.requireScope(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
 	mux.HandleFunc("POST /api/v1/fallback-programs/{fppInstanceId}/acknowledge", h.writeGuard(&scopeFPPFallback, h.handlePostFallbackProgramAcknowledge))
+	mux.HandleFunc("PUT /api/v1/fallback-programs/{fppInstanceId}/executor-key", h.writeGuard(&scopeFPPFallback, h.handlePutFallbackExecutorKey))
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own
 	// reported revision through the same PutNodeCueCatalogAck path the

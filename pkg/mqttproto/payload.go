@@ -1398,6 +1398,10 @@ type AudioSessionReport struct {
 	PositionKnown bool  `json:"positionKnown"`
 	PositionMs    int64 `json:"positionMs"`
 
+	// PositionNotApplicable is true when the node states nothing is
+	// loaded, so no position exists. False from an older agent.
+	PositionNotApplicable bool `json:"positionNotApplicable,omitempty"`
+
 	State           string `json:"state"`
 	DesiredRevision uint64 `json:"desiredRevision"`
 
@@ -1430,6 +1434,10 @@ type AudioSessionReport struct {
 	ItemGapMs         int64      `json:"itemGapMs"`
 	ItemGapReason     string     `json:"itemGapReason"`
 	ItemGapObservedAt *time.Time `json:"itemGapObservedAt"`
+
+	// ItemGapNotApplicable is true when ItemGapReason says no gap exists,
+	// not that one went unmeasured. False from an older agent.
+	ItemGapNotApplicable bool `json:"itemGapNotApplicable,omitempty"`
 
 	// Fault is "none" or one of the six named AUDIO-ENGINE section 11.4
 	// fault classes; FaultReason is required whenever Fault != "none".
@@ -1500,6 +1508,10 @@ type AudioSessionReport struct {
 	// other start. "" is a session that has never started. The other four
 	// fields below are meaningful only while StartTrigger is "multisync".
 	StartTrigger string `json:"startTrigger"`
+
+	// StartTriggerNotApplicable is true when the node states it holds no
+	// start record for this session. False from an older agent.
+	StartTriggerNotApplicable bool `json:"startTriggerNotApplicable,omitempty"`
 
 	// TriggerSequenceFilename is the FPP sequence filename whose START
 	// packet started this session.
@@ -1813,6 +1825,10 @@ type AudioPayload struct {
 	TimelineErrorMs          int64  `json:"timelineErrorMs"`
 	TimelineReason           string `json:"timelineReason"`
 
+	// TimelineNotApplicable is true when TimelineReason says no session
+	// is scheduled. False from an older agent, which omits it.
+	TimelineNotApplicable bool `json:"timelineNotApplicable,omitempty"`
+
 	// The Alignment* fields are node.audio.clock.alignment's own evidence:
 	// the signed millisecond offset between this node's program audio and
 	// its LTC output, sampled against the same pipeline running time, and
@@ -1836,6 +1852,10 @@ type AudioPayload struct {
 	AlignmentSampledAt *time.Time `json:"alignmentSampledAt"`
 	AlignmentSessionID string     `json:"alignmentSessionId"`
 	AlignmentReason    string     `json:"alignmentReason"`
+
+	// AlignmentNotApplicable is true when AlignmentReason says no playing
+	// session holds the LTC run. False from an older agent.
+	AlignmentNotApplicable bool `json:"alignmentNotApplicable,omitempty"`
 
 	// SettingsState, SettingsSubstitutedFields, and SettingsReason are
 	// internal/agent/audio.Manager's own report of whether this node's

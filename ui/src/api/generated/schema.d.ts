@@ -3519,12 +3519,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fallback-programs/{fppInstanceId}/executor-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * A paired FPP plugin registers the public key it signs fallback activations with (ADR-048, Track J's J3)
+         * @description Behind `fpp:fallback`, and only for the plugin paired as this FPP instance. The key is the plugin's Ed25519 public key, never a secret. The coordinator carries it in this FPP instance's signed fallback program, and a node accepts a fallback activation only when it is signed by that key. Registering the stored key again changes nothing; registering a different key replaces it and republishes the program. A paired plugin gets `409` while the coordinator has not yet read its player's instance UUID.
+         */
+        put: operations["putFallbackExecutorKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the six values below; `value` is null only for the three genuine absence states - `not_collected`, `collection_failed`, `unsupported` - where nothing was ever obtained. It is non-null for `current`, `stale`, AND `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly - see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown - most importantly for a retained MQTT delivery (`state: "unknown_age"`) - and MUST NEVER be treated as equivalent to "now".
+         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the seven values below; `value` is null for the three genuine absence states - `not_collected`, `collection_failed`, `unsupported` - where nothing was ever obtained, and for `not_applicable`, where the signal's subject does not exist right now: nothing is queued, nothing is running, nothing has happened yet. `not_applicable` is a reading, not an absence: `reason` states what is absent, `observedAt` is the time of the report that established it, and a row whose source stops reporting turns `stale` with a null `value`. A client must not show it as a problem. A signal with a meaningful default reports that default as `current`, with `reason` naming it as the default. `value` is non-null for `current`, for `stale` unless the row was `not_applicable` before it aged, AND for `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly - see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown - most importantly for a retained MQTT delivery (`state: "unknown_age"`) - and MUST NEVER be treated as equivalent to "now".
          *
          *     **A signal can be reported by more than one collector source.** FPP's own REST API and its MQTT status topics both describe the same underlying facts (playback, controller/network health, pixel current), under identically-named `signal` values, distinguished only by `source` ("fpp-rest" vs "fpp-mqtt"). This API never renders more than one `Evidence` for the same signal on the same resource: when both sources have something to say, the coordinator resolves to a single value by a fixed precedence (a source with a known observation time beats one without, which beats an absence; a later observation time beats an earlier one; a tie prefers "fpp-rest" over "fpp-mqtt") before this envelope is ever built. A client reading this API never has to implement that resolution itself, and never sees two competing rows to reconcile.
          */
@@ -3535,7 +3555,7 @@ export interface components {
             /** @description Never a claimed unit this API cannot actually verify - for example, a "fpp.sensor.<key>.value" temperature reading's unit is always null (Celsius vs. Fahrenheit is not stated by the source and is not guessed); the reading's kind is instead carried on a separate "fpp.sensor.<key>.type" signal ("Temperature", "Voltage"). */
             unit: string | null;
             /** @enum {string} */
-            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "not_applicable";
             reason: string | null;
             /** Format: date-time */
             observedAt: string | null;
@@ -3768,7 +3788,7 @@ export interface components {
             value: boolean | string | number | null;
             unit: string | null;
             /** @enum {string} */
-            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "not_applicable";
             reason: string | null;
             /** Format: date-time */
             observedAt: string | null;
@@ -7563,11 +7583,12 @@ export interface components {
             rule: string;
             reason: string;
         };
-        /** @description The optional body of POST /night/commands/{command}. Decoded strictly: an unrecognized key is refused, not silently ignored. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` (Track F seam F6) is consulted by `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, and `power-down-presentation`, each against the "block" interlock rules declared for that command's own phase, described in full on `POST /night/commands/{command}` itself. `request-final-show` and `end-session` consult no interlock at all and REFUSE a non-empty `interlockOverrides` rather than silently ignoring it. `skipEnterShowLead` is honored only by `start-night`: the operator's own request to start a late night without waiting out the enterShow lead (RESTING-MODE.md section 7.1) before the show itself launches; an enterShow announcement still dispatches. Every other command ignores it. */
+        /** @description The optional body of POST /night/commands/{command}. Decoded strictly: an unrecognized key is refused, not silently ignored. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` (Track F seam F6) is consulted by `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, and `power-down-presentation`, each against the "block" interlock rules declared for that command's own phase, described in full on `POST /night/commands/{command}` itself. `request-final-show` and `end-session` consult no interlock at all and REFUSE a non-empty `interlockOverrides` rather than silently ignoring it. `skipEnterShowLead` is honored only by `start-night`: the operator's own request to start a late night without waiting out the enterShow lead (RESTING-MODE.md section 7.1) before the show itself launches; an enterShow announcement still dispatches. Every other command ignores it. `stopFppPlayback` is honored only by `prepare-site`: when true and that call actually prepares the night (outcome `applied`), prepare-site also stops whatever each of the night's FPP instances is playing, all at once, and reports the result in the response's `command.reason`. The response can take up to the FPP confirmation deadline longer, so a client needs a longer request budget when it sends this. A stop FPP refuses or does not confirm is reported there and does not fail prepare-site. When the night is already prepared (outcome `idempotent_no_op`) nothing is sent to FPP and the reason says so. Absent or false leaves FPP playing. Every other command ignores it. */
         NightCommandRequest: {
             idempotencyKey?: string;
             interlockOverrides?: components["schemas"]["NightInterlockOverride"][];
             skipEnterShowLead?: boolean;
+            stopFppPlayback?: boolean;
         };
         /** @description What POST /night/commands/{command} accepted, and how - `idempotent_no_op` is a real, distinct outcome from `applied`. */
         NightCommandResult: {
@@ -7956,6 +7977,8 @@ export interface components {
         /** @description One named node target and the exact output activation it may perform (ADR-048 decision 1). At least one of render/audio is always present. */
         FallbackProgramTarget: {
             nodeId: string;
+            /** @description The `host:port` of this node's inbound listener, where the FPP host delivers this target's activation. Absent when the coordinator has no reported address for the node. */
+            address?: string;
             render?: components["schemas"]["FallbackProgramRenderActivation"];
             audio?: components["schemas"]["FallbackProgramAudioActivation"];
         };
@@ -7983,6 +8006,8 @@ export interface components {
             /** Format: date-time */
             compiledAt: string;
             fppInstanceUuid: string;
+            /** @description The Ed25519 public key this FPP instance's plugin registered, in standard base64. A node accepts a fallback activation only when it is signed by this key. Absent when no key is registered. */
+            executorPublicKey?: string;
             show: string;
             generation: number;
             /** @description Every fpp-runner show.playlist object id this program drew entries from, mapped to its compiled config revision. */
@@ -8036,6 +8061,26 @@ export interface components {
             verificationResult: "verified" | "signature-invalid" | "mismatched-program";
             /** Format: date-time */
             installedAt: string;
+        };
+        /** @description The request body of PUT /fallback-programs/{fppInstanceId}/executor-key. */
+        FallbackExecutorKeyRequest: {
+            /** @description The raw 32 byte Ed25519 public key in standard base64 with padding. */
+            publicKey: string;
+        };
+        /** @description The response body of PUT /fallback-programs/{fppInstanceId}/executor-key. */
+        FallbackExecutorKeyResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            fppInstanceUuid: string;
+            /** @description The key now stored for this FPP instance. */
+            publicKey: string;
+            /**
+             * Format: date-time
+             * @description When the stored key was first registered.
+             */
+            registeredAt: string;
+            /** @description True when this call stored a first key or replaced a different one. */
+            changed: boolean;
         };
         /** @description The response body of POST /fallback-programs/{fppInstanceId}/acknowledge. */
         FallbackProgramAcknowledgeResponse: {
@@ -15233,6 +15278,40 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFallbackExecutorKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FallbackExecutorKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackExecutorKeyResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -278,6 +278,14 @@ describe('Dashboard', () => {
     expect(counts.signals).toMatchObject({ total: 5, current: 2, stale: 1, unobserved: 1, unavailable: 1 })
   })
 
+  it('counts a signal with nothing to measure apart from unobserved, and out of the measurable total', () => {
+    const counts = fleetCounts({
+      ...initialModel(),
+      nodes: [node('a', 'online', ['current', 'not_applicable', 'not_applicable', 'not_collected'])],
+    })
+    expect(counts.signals).toMatchObject({ total: 4, measurable: 2, notApplicable: 2, current: 1, unobserved: 1, stale: 0 })
+  })
+
   it('names a held import in the FPP tile', () => {
     expect(fppDetail([fpp('a', 'healthy'), fpp('b', 'healthy', true)])).toBe('healthy · 1 import held')
   })

@@ -526,6 +526,13 @@ func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger
 	}
 }
 
+// operation returns the registered operation for action, the same
+// function a dispatched command runs.
+func (h *CommandHandler) operation(action string) (OperationFunc, bool) {
+	op, ok := h.ops[action]
+	return op, ok
+}
+
 // HandleMessage processes one inbound MQTT PUBLISH received on (what
 // should always be) this node's cmd topic. publisher is passed per call,
 // not held on h, because mqtt.go's AddOnPublishReceived handler is

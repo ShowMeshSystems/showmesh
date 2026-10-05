@@ -134,14 +134,57 @@ func TestCollectorPollNotLockedReportsReasonAndNoOffset(t *testing.T) {
 		t.Errorf("frequencyPpm: expected a fallback reason when the payload carried none, got empty")
 	}
 
-	lockedSeconds := findObs(t, obs, SignalLockedSeconds)
-	if lockedSeconds.Absence == "" {
-		t.Errorf("lockedSeconds: expected not_collected while not locked, got a value")
+	if offset.Absence != observation.StateNotCollected {
+		t.Errorf("offsetNs absence = %q, want %q: an unlocked clock still owes an offset", offset.Absence, observation.StateNotCollected)
 	}
+}
 
-	lastStepAt := findObs(t, obs, SignalLastStepAt)
-	if lastStepAt.Absence == "" {
-		t.Errorf("lastStepAt: expected not_collected (no step observed), got a value")
+// TestNothingToMeasureIsNotApplicableAndGoesStale pins ADR-056 for the
+// clock signals: no lock and no step are readings, and they age.
+func TestNothingToMeasureIsNotApplicableAndGoesStale(t *testing.T) {
+	st := NewStore()
+	observedAt := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	st.Put("node-1", mqttproto.ClockPayload{
+		State: "acquiring", Reason: "not yet locked", Provider: "external",
+		Timescale: "unknown", ObservedAt: &observedAt,
+	}, observedAt)
+	obs, _ := New(st).Poll(context.Background())
+
+	noStep := "No clock step has been seen since this node's clock provider started."
+	want := map[observation.SignalID]string{
+		SignalLockedSeconds: "This node's clock is not locked, so there is no lock duration.",
+		SignalLastStepAt:    noStep,
+		SignalLastStepNs:    noStep,
+	}
+	for sig, reason := range want {
+		got := findObs(t, obs, sig)
+		if state := got.StateAt(observedAt); state != observation.StateNotApplicable {
+			t.Errorf("%s state = %q, want %q", sig, state, observation.StateNotApplicable)
+		}
+		if got.Reason != reason {
+			t.Errorf("%s reason = %q, want %q", sig, got.Reason, reason)
+		}
+		if got.ObservedAt == nil || !got.ObservedAt.Equal(observedAt) {
+			t.Errorf("%s observedAt = %v, want the report's own %s", sig, got.ObservedAt, observedAt)
+		}
+		if state := got.StateAt(observedAt.Add(DefaultValidFor + time.Second)); state != observation.StateStale {
+			t.Errorf("%s state after the node went quiet = %q, want %q", sig, state, observation.StateStale)
+		}
+	}
+}
+
+// TestStepAndLockDurationAreValuesWhenTheyExist is the other half: the
+// same signals carry a current value once their subject exists.
+func TestStepAndLockDurationAreValuesWhenTheyExist(t *testing.T) {
+	st := NewStore()
+	observedAt := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	st.Put("node-1", lockedPayload(observedAt), observedAt)
+	obs, _ := New(st).Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalLockedSeconds, SignalLastStepAt, SignalLastStepNs} {
+		if state := findObs(t, obs, sig).StateAt(observedAt); state != observation.StateCurrent {
+			t.Errorf("%s state = %q, want %q", sig, state, observation.StateCurrent)
+		}
 	}
 }
 

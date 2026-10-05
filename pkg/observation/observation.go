@@ -121,8 +121,8 @@ const (
 // State is the evidence state of one observation. It is the vocabulary
 // BUILD-PLAN Step 3 requires when it says the API must distinguish "not
 // supported" from "not collected" from "collection failed", extended with
-// the two freshness cases ADR-011 requires. See the package doc comment
-// for why there are exactly six members.
+// the two freshness cases ADR-011 requires and ADR-056's reading of a
+// subject that does not exist. See the package doc comment.
 type State string
 
 const (
@@ -151,6 +151,11 @@ const (
 	// StateUnsupported means this source cannot provide this signal at
 	// all.
 	StateUnsupported State = "unsupported"
+
+	// StateNotApplicable means the source's own report established that
+	// the signal's subject does not exist right now (ADR-056). It is a
+	// reading: it carries ObservedAt and ages to stale like a value.
+	StateNotApplicable State = "not_applicable"
 )
 
 // derivedOnlyStates are the [State] values [Observation.StateAt] computes
@@ -171,8 +176,8 @@ var derivedOnlyStates = map[State]bool{
 // must satisfy.
 //
 // Do not construct one by hand outside a test: use [Measured],
-// [MeasuredUnknownAge], [Unsupported], [NotCollected], or
-// [CollectionFailed]. Those constructors are what make the invariants
+// [MeasuredUnknownAge], [Unsupported], [NotCollected], [CollectionFailed],
+// or [NotApplicable]. Those constructors are what make the invariants
 // unbreakable in practice; Validate is the backstop for the value that
 // still gets hand-built anyway, because the struct is exported.
 type Observation struct {
@@ -207,17 +212,20 @@ type Observation struct {
 
 	// Absence is the stored State for an observation carrying no value.
 	// It is empty when Value != nil, and one of StateNotCollected,
-	// StateCollectionFailed or StateUnsupported otherwise.
+	// StateCollectionFailed, StateUnsupported or StateNotApplicable
+	// otherwise.
 	Absence State
 
 	// Reason is a short human-readable explanation. Required whenever
-	// there is no current value.
+	// there is no current value. A current value may carry one too, to
+	// say what the value is, such as a default nobody set.
 	Reason string
 }
 
 // StateAt derives this observation's State at now, against the caller's
 // clock:
 //
+//	Absence == not_applicable -> StateStale once aged out, else itself
 //	Absence != ""             -> Absence
 //	Value == nil              -> StateNotCollected (defensive; Validate rejects)
 //	ObservedAt == nil         -> StateUnknownAge
@@ -227,6 +235,12 @@ type Observation struct {
 // StateCurrent is unreachable unless both Value is non-nil and ObservedAt
 // is non-nil: every other branch returns first.
 func (o Observation) StateAt(now time.Time) State {
+	if o.Absence == StateNotApplicable {
+		if o.agedOut(now) {
+			return StateStale
+		}
+		return StateNotApplicable
+	}
 	if o.Absence != "" {
 		return o.Absence
 	}
@@ -240,10 +254,14 @@ func (o Observation) StateAt(now time.Time) State {
 	if o.ObservedAt == nil {
 		return StateUnknownAge
 	}
-	if o.ValidFor > 0 && now.Sub(*o.ObservedAt) > o.ValidFor {
+	if o.agedOut(now) {
 		return StateStale
 	}
 	return StateCurrent
+}
+
+func (o Observation) agedOut(now time.Time) bool {
+	return o.ObservedAt != nil && o.ValidFor > 0 && now.Sub(*o.ObservedAt) > o.ValidFor
 }
 
 // Option adjusts a field on an Observation under construction that is not
@@ -285,6 +303,12 @@ func WithUnit(unit string) Option {
 // on its own.
 func WithValidFor(d time.Duration) Option {
 	return func(o *Observation) { o.ValidFor = d }
+}
+
+// WithReason sets Reason on a measured value: what the value is when that
+// is not obvious from the value alone, such as a default nobody set.
+func WithReason(reason string) Option {
+	return func(o *Observation) { o.Reason = reason }
 }
 
 func newObservation(res ResourceRef, sig SignalID, opts []Option) Observation {
@@ -367,6 +391,21 @@ func CollectionFailed(res ResourceRef, sig SignalID, reason string, opts ...Opti
 	return absenceObservation(res, sig, StateCollectionFailed, reason, opts)
 }
 
+// NotApplicable builds an Observation recording that the source's own
+// report, taken at observedAt, established that this signal's subject does
+// not exist (ADR-056). reason is required and states what is absent. Pass
+// [WithValidFor] so the row goes stale when the source stops reporting.
+func NotApplicable(res ResourceRef, sig SignalID, reason string, observedAt time.Time, opts ...Option) (Observation, error) {
+	o := newObservation(res, sig, opts)
+	o.Absence = StateNotApplicable
+	o.Reason = reason
+	o.ObservedAt = &observedAt
+	if err := o.Validate(); err != nil {
+		return Observation{}, err
+	}
+	return o, nil
+}
+
 // Sentinel errors wrapped by [Observation.Validate]. Each is returned
 // (wrapped with the specific value that violated it) rather than a bare
 // string, so a caller can errors.Is against the specific rule that failed.
@@ -398,6 +437,11 @@ var (
 	// actual absence of a value.
 	ErrObservationDerivedAbsence = errors.New("observation: Absence is set to a derived-only State")
 
+	// ErrObservationNotApplicableWithoutObservedAt is returned when
+	// Absence is StateNotApplicable and ObservedAt is nil: only a report
+	// with a known time can establish that a subject does not exist.
+	ErrObservationNotApplicableWithoutObservedAt = errors.New("observation: not_applicable has no ObservedAt")
+
 	// ErrObservationMissingSignal is returned when Signal is empty.
 	ErrObservationMissingSignal = errors.New("observation: Signal is empty")
 
@@ -425,6 +469,8 @@ var (
 //   - an empty Reason on any absence ([ErrObservationMissingReason]);
 //   - an Absence set to a derived-only state: current, stale, unknown_age
 //     ([ErrObservationDerivedAbsence]);
+//   - a not_applicable Absence with a nil ObservedAt
+//     ([ErrObservationNotApplicableWithoutObservedAt]);
 //   - an empty Signal ([ErrObservationMissingSignal]);
 //   - a non-empty Signal that fails [ValidateSignalID] ([ErrInvalidSignalID]);
 //   - an empty Resource.ID ([ErrObservationMissingResourceID]);
@@ -459,6 +505,9 @@ func (o Observation) Validate() error {
 		}
 		if o.Reason == "" {
 			return fmt.Errorf("%w: signal %q", ErrObservationMissingReason, o.Signal)
+		}
+		if o.Absence == StateNotApplicable && o.ObservedAt == nil {
+			return fmt.Errorf("%w: signal %q", ErrObservationNotApplicableWithoutObservedAt, o.Signal)
 		}
 	}
 	if o.CollectedAt.IsZero() {

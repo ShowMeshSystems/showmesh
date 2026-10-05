@@ -514,6 +514,8 @@ the wrong device, because every collector shares one
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 | `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
 | `node-clock` | reserved | Track I seam I1 (`collector/nodeclock`) |
+| `node-fallback` | shipped | Track J seam J3 (`collector/nodefallback`) |
+| `fallback-reconcile` | shipped | Track J seam J3 (`fallbackreconcile`). A direct source written by the fallback reconciler on each pass, not a `collector.Runner` entry |
 | `fpp-brightness` | shipped | `collector/fppbrightness`, the plugin's own brightness route. Its `collector.Runner` key is `fpp-brightness:<instanceId>`, never the bare instance id the FPP REST collector already holds on the same Runner |
 
 **Instance ids share this namespace.** A Resolume instance id must not
@@ -633,6 +635,7 @@ register entry comes from the code and never from a plan.
 | `fallback.program.publish` | shipped | Track J seam J1: the coordinator building and signing a new fallback-program revision |
 | `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
 | `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
+| `fallback.executor_key.register` | shipped | Track J seam J3: a paired FPP plugin registering or replacing the public key it signs fallback activations with |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
@@ -696,7 +699,8 @@ dotted `SignalID` namespace that hangs off each one.
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
-| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1 |
+| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1. Track J seam J3 writes the first signal in it: `fallback_program.executor_key_present` |
+| `node` | `node.fallback.*` | shipped | Track J seam J3 (what a node holds and answered on its fallback routes): `coordinator_key_loaded`, `program_count`, `enrolled_program_count`, `unenrolled_fpp_instance_uuids`, `execution_record_problem`, `accepted_count`, `refused_count`, `last_outcome`, `last_reason`, `last_at`, `last_refusal_outcome`, `last_refusal_reason`, `last_refusal_at`, `last_refusal_fpp_instance_uuid` |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -910,7 +914,7 @@ right and never inferred from the pipeline still being up.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.clock.alignment` | shipped | C6/C7; measured since 2026-09-11 (PR #451): the node's signed program-to-LTC offset in ms, observedAt = the node's own sample time |
-| `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
+| `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_applicable` when no playing session holds the LTC run or no threshold is set, `not_collected` when a sample was missed |
 | `node.audio.clock.local` | shipped | ADR-052 decisions 2 and 3: the node's local clock, the interface its program route leaves through, or the operator's override. Replaces `node.audio.clock.domain` |
 | `node.audio.clock.local.source` | shipped | ADR-052 decisions 2 and 3 (`derived`, `override`). Replaces `node.audio.clock.provenance` |
 | `node.audio.sync.state` | shipped | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
@@ -951,7 +955,7 @@ alongside them.
 | `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
 | `node.audio.engine.restore.state` | shipped | SM-384 (`idle`/`scheduled`/`exhausted`; a node with a delivered `audio.node` binding and no persisted session has nothing in the per-session `audio_session.restore.*` fields, so this is its only remaining wire evidence that the automatic retry driver gave up) |
 | `node.audio.engine.restore.attempts` | shipped | SM-384 (node-level counterpart to `audio_session.restore.attempts`) |
-| `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
+| `node.audio.engine.restore.next_attempt_ms` | shipped | node-level counterpart to `audio_session.restore.next_attempt_ms`; not_applicable, not zero, once the state is not `scheduled` |
 | `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
 | `node.audio.engine.sink_backend` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`alsasink` or `pipewiresink`; the sibling `node.audio.engine.*` rows above already carry this section's no-additions-without-the-owner rule's standing exception) |
 | `node.audio.engine.sink_target` | shipped | RES-019 section 7.2 candidate A, ADR-046 (the PipeWire node name pipewiresink was configured to target; blank when `sink_backend` is not `pipewiresink` or no target was named at all) |
@@ -1057,7 +1061,7 @@ sample count over the nominal rate, read from the sink clock and never
 from the decode frontier; `error_ms` is expected minus actual; `resyncs`
 counts discontinuity seeks performed; `last_resync_reason` names why the
 most recent one fired. A node with no locked clock provider keeps
-start-on-arrival and reports all six as `not_collected`.
+start-on-arrival and reports all six as `not_applicable`.
 
 | Signal | Status | Owner |
 |---|---|---|
@@ -1335,6 +1339,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
+| `showmesh/nodes/<id>/observed/fallback` (retained) | shipped | Track J seam J3. The existing `observed/#` write grant for each node and read grant for the coordinator cover it, so the generated ACL is unchanged |
 | `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
@@ -1453,7 +1458,8 @@ The store schema version, bumped by migrations in
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
 | v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
 | v46 | shipped | `night_cue_outbox` gains nullable `node_responded_at` (`migration_v46.go`): when the node published a bed step's answer, on the node's clock, so a node report built before the answer is not read as the step's result |
-| v47+ | unallocated | free |
+| v47 | shipped | `fallback_executor_keys`: the public key a paired FPP plugin registers, one per FPP instance, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
+| v48+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1656,6 +1662,17 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Track J seam J3 adds one path under that prefix and two on the node's
+inbound listener**, on the `/api/v1/fallback-programs` precedent.
+`PUT /api/v1/fallback-programs/{fppInstanceId}/executor-key` is in
+`api/openapi.yaml`, behind `fpp:fallback`, and answers only the plugin paired
+as that FPP instance. `PUT /showmesh/v1/fallback/programs/{fppInstanceUuid}`
+and `POST /showmesh/v1/fallback/activations` are served by the node agent,
+accept only coordinator-signed and executor-signed bodies, and stay out of
+`api/openapi.yaml` like the weather delay start beside them. Their wire shape
+is section 5 of
+[FPP-PLUGIN-COORDINATOR-CONTRACTS.md](FPP-PLUGIN-COORDINATOR-CONTRACTS.md).
 
 **Node-reported audio routing choices (2026-09-28) own `/api/v1/nodes/{nodeId}/audio/routing-choices`** and the `showmeshctl audio node choices` subcommand. The agent reports the evidence as `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes on the existing `audio.output.local` capability; no new capability id.
 

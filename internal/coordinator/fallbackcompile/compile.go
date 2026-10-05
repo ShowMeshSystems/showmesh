@@ -167,6 +167,37 @@ func ParticipatingFPPHosts(ctx context.Context, st *store.Store) ([]string, erro
 // injected rather than read from the clock so a caller (and every test)
 // controls ExpiresAt/CompiledAt deterministically.
 func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUID string, now time.Time) (Result, error) {
+	return CompileWithAddresses(ctx, st, signer, nil, fppInstanceUUID, now)
+}
+
+// NodeAddresses reports the "host:port" a node last advertised for its
+// inbound listener. inventory.Manager satisfies it.
+type NodeAddresses interface {
+	InboundListener(nodeID string) (addr string, ok bool)
+}
+
+// CompileWithAddresses is [Compile] with each target's delivery address
+// filled in from addrs. A node addrs does not know keeps the address the
+// stored program already carries for it, so a coordinator restart does
+// not publish a program that forgets where its nodes are.
+func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, addrs NodeAddresses, fppInstanceUUID string, now time.Time) (Result, error) {
+	priorAddresses, err := storedTargetAddresses(ctx, st, fppInstanceUUID)
+	if err != nil {
+		return Result{}, err
+	}
+	addressFor := func(nodeID string) string {
+		if addrs != nil {
+			if addr, ok := addrs.InboundListener(nodeID); ok && addr != "" {
+				return addr
+			}
+		}
+		return priorAddresses[nodeID]
+	}
+	executorKey, err := st.GetFallbackExecutorKey(ctx, fppInstanceUUID)
+	if err != nil && !errors.Is(err, store.ErrFallbackExecutorKeyNotFound) {
+		return Result{}, fmt.Errorf("fallbackcompile: get executor key for %q: %w", fppInstanceUUID, err)
+	}
+
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
 		return Result{}, fmt.Errorf("fallbackcompile: resolve active show: %w", err)
@@ -294,7 +325,7 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 					continue
 				}
 
-				target := fallbackprogram.NodeTarget{NodeID: n.NodeID}
+				target := fallbackprogram.NodeTarget{NodeID: n.NodeID, Address: addressFor(n.NodeID)}
 				if outputs.Render != nil {
 					if outputs.Render.Filename == "" {
 						return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
@@ -364,7 +395,8 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 	sort.Slice(entries, func(i, j int) bool { return entries[i].EntryKey < entries[j].EntryKey })
 
 	revision, err := fallbackprogram.ComputeRevision(fallbackprogram.RevisionInput{
-		SchemaVersion: fallbackprogram.SchemaVersion, FPPInstanceUUID: fppInstanceUUID, Show: active.ShowID, Generation: active.Generation,
+		SchemaVersion: fallbackprogram.SchemaVersion, FPPInstanceUUID: fppInstanceUUID, ExecutorPublicKey: executorKey.PublicKeyB64,
+		Show: active.ShowID, Generation: active.Generation,
 		PlaylistRevisions: playlistRevisions, CatalogRevisions: catalogRevisions, Entries: entries, Rules: fallbackprogram.FixedRules,
 	})
 	if err != nil {
@@ -380,7 +412,8 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 	program := fallbackprogram.Program{
 		SchemaVersion: fallbackprogram.SchemaVersion, PackageID: packageID, Revision: revision,
 		ExpiresAt: compiledAt.Add(ProgramTTL), CompiledAt: compiledAt,
-		FPPInstanceUUID: fppInstanceUUID, Show: active.ShowID, Generation: active.Generation,
+		FPPInstanceUUID: fppInstanceUUID, ExecutorPublicKey: executorKey.PublicKeyB64,
+		Show: active.ShowID, Generation: active.Generation,
 		PlaylistRevisions: playlistRevisions, CatalogRevisions: catalogRevisions,
 		Entries: entries, Rules: fallbackprogram.FixedRules,
 	}
@@ -416,6 +449,31 @@ func packageIDFor(ctx context.Context, st *store.Store, fppInstanceUUID, revisio
 		return existing.PackageID, nil
 	}
 	return uuid.NewString(), nil
+}
+
+// storedTargetAddresses returns the delivery address the stored program
+// carries for each node, empty when nothing is stored.
+func storedTargetAddresses(ctx context.Context, st *store.Store, fppInstanceUUID string) (map[string]string, error) {
+	existing, err := st.GetFallbackProgram(ctx, fppInstanceUUID)
+	if errors.Is(err, store.ErrFallbackProgramNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fallbackcompile: get existing fallback program for %q: %w", fppInstanceUUID, err)
+	}
+	var signed fallbackprogram.SignedProgram
+	if err := json.Unmarshal([]byte(existing.ProgramJSON), &signed); err != nil {
+		return nil, fmt.Errorf("fallbackcompile: decode existing fallback program for %q: %w", fppInstanceUUID, err)
+	}
+	out := make(map[string]string)
+	for _, entry := range signed.Program.Entries {
+		for _, target := range entry.Targets {
+			if target.Address != "" {
+				out[target.NodeID] = target.Address
+			}
+		}
+	}
+	return out, nil
 }
 
 // --- internal helpers ---
