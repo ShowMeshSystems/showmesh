@@ -165,6 +165,7 @@ type nightSessionStateWire struct {
 	StopHold            *nightStopHoldWire `json:"stopHold,omitempty"`
 	Degraded            bool               `json:"degraded"`
 	DegradedReason      string             `json:"degradedReason,omitempty"`
+	FallbackHold        *nightFallbackHold `json:"fallbackHold,omitempty"`
 	AttributionDegraded bool               `json:"attributionDegraded"`
 
 	Authorization nightAuthorizationWire `json:"authorization"`
@@ -203,4 +204,12 @@ type nightStopHoldWire struct {
 	Reason    string `json:"reason"`
 	At        string `json:"at"`
 	Principal string `json:"principal,omitempty"`
+}
+
+// nightFallbackHold is the held FPP player a session is waiting on.
+type nightFallbackHold struct {
+	FPPInstanceID   string `json:"fppInstanceId"`
+	FPPInstanceUUID string `json:"fppInstanceUuid"`
+	Reason          string `json:"reason"`
+	Message         string `json:"message"`
 }

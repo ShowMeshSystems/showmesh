@@ -24,6 +24,11 @@ const fallbackListBody = `{"serverTime":"2026-10-05T20:10:00Z","programs":[
   "playerState":{"state":"normal","since":"2026-10-05T19:00:00Z","reportedAt":"2026-10-05T19:30:00Z","pluginReporting":false,"held":false}},
  {"fppInstanceUuid":"u-old-plugin","packageId":"pkg-5","revision":"rev-5","show":"halloween","generation":3,
   "expiresAt":"2026-10-06T20:00:00Z","compiledAt":"2026-10-05T20:00:00Z"}
+],"playerStatesWithoutProgram":[
+ {"fppInstanceUuid":"u-orphan","playerState":{"state":"fallback","since":"2026-09-28T20:05:00Z","playlistName":"Old Show",
+  "packageId":"pkg-0","packageRevision":"rev-0","cutoffAt":"2026-09-29T08:00:00Z","reportedAt":"2026-09-28T20:09:55Z",
+  "pluginReporting":false,"held":true,"holdReason":"running-from-fallback",
+  "message":"This player's plugin has stopped reporting while it was running the show from its fallback program."}}
 ]}`
 
 func fallbackListServer(t *testing.T) *httptest.Server {
@@ -61,6 +66,12 @@ func TestCmdFallbackListShowsEveryPlayersStateAndTheOperatorMessage(t *testing.T
 		if !strings.Contains(out, want) {
 			t.Errorf("list output is missing %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(out, "u-orphan") || !strings.Contains(out, "Old Show") || !strings.Contains(out, "u-orphan: This player's plugin has stopped reporting") {
+		t.Errorf("a stored state with no program is not listed with its message:\n%s", out)
+	}
+	if strings.Contains(out, "revision") {
+		t.Errorf("the listing uses the word revision:\n%s", out)
 	}
 	var quiet, old string
 	for _, line := range strings.Split(out, "\n") {
@@ -112,6 +123,11 @@ func TestCmdFallbackShowPrintsOnePlayerInFull(t *testing.T) {
 		t.Errorf("show for a plugin that never reported: exit %d, output:\n%s", code, out)
 	}
 
+	code, out, _ = runFallback(t, "show", "--server", ts.URL, "u-orphan")
+	if code != exitOK || !strings.Contains(out, "none") || !strings.Contains(out, "Old Show") || strings.Contains(out, "revision") {
+		t.Errorf("show for a stored state with no program: exit %d, output:\n%s", code, out)
+	}
+
 	code, _, errOut = runFallback(t, "show", "--server", ts.URL, "u-nobody")
 	if code != exitNotFound || !strings.Contains(errOut, "u-nobody") {
 		t.Errorf("show for an unknown player: exit %d, stderr %q, want exitNotFound naming the player", code, errOut)
@@ -150,5 +166,18 @@ func TestCmdFallbackWithNoSubcommandPrintsUsage(t *testing.T) {
 	code, _, errOut := runFallback(t)
 	if code != exitUsage || !strings.Contains(errOut, "fallback list") && !strings.Contains(errOut, "list") {
 		t.Fatalf("exit %d, stderr %q, want exitUsage and the subcommands", code, errOut)
+	}
+}
+
+func TestNightSessionPrintSaysWhichHeldPlayerTheNightWaitsOn(t *testing.T) {
+	var out bytes.Buffer
+	printNightSessionStateDetail(&out, nightSessionStateWire{State: "live", FallbackHold: &nightFallbackHold{
+		FPPInstanceID: "fpp-main", FPPInstanceUUID: "u-fallback", Reason: "running-from-fallback",
+		Message: "This player is running the show from its fallback program. The coordinator starts no Cues for it until the playlist ends.",
+	}})
+	for _, want := range []string{"WAITING:", "FPP player fpp-main is held", "running the show from its fallback program", "showmeshctl fallback clear --confirm u-fallback"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("night session output is missing %q:\n%s", want, out.String())
+		}
 	}
 }

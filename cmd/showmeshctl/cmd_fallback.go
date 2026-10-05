@@ -41,9 +41,26 @@ type fallbackProgramListEntry struct {
 	PlayerState     *fallbackPlayerState `json:"playerState,omitempty"`
 }
 
+type fallbackPlayerStateEntry struct {
+	FPPInstanceUUID string              `json:"fppInstanceUuid"`
+	PlayerState     fallbackPlayerState `json:"playerState"`
+}
+
 type fallbackProgramListResponse struct {
-	ServerTime time.Time                  `json:"serverTime"`
-	Programs   []fallbackProgramListEntry `json:"programs"`
+	ServerTime                 time.Time                  `json:"serverTime"`
+	Programs                   []fallbackProgramListEntry `json:"programs"`
+	PlayerStatesWithoutProgram []fallbackPlayerStateEntry `json:"playerStatesWithoutProgram,omitempty"`
+}
+
+// rows is every listed player: those with a published program first, then
+// those with only a stored plugin report.
+func (r fallbackProgramListResponse) rows() []fallbackProgramListEntry {
+	rows := append([]fallbackProgramListEntry(nil), r.Programs...)
+	for _, e := range r.PlayerStatesWithoutProgram {
+		state := e.PlayerState
+		rows = append(rows, fallbackProgramListEntry{FPPInstanceUUID: e.FPPInstanceUUID, PlayerState: &state})
+	}
+	return rows
 }
 
 func cmdFallback(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -78,7 +95,7 @@ starts no Cues for that player until the playlist ends.
 
 Subcommands:
   list                          every FPP player with a published fallback
-                                program, and its plugin's reported state
+                                program or a stored plugin report
   show <fpp-instance-uuid>      one player in full
   clear --confirm <fpp-instance-uuid>
                                 forget what the coordinator stored about one
@@ -173,25 +190,26 @@ func dashIfEmpty(s string) string {
 }
 
 func printFallbackTable(w io.Writer, resp fallbackProgramListResponse) {
-	if len(resp.Programs) == 0 {
-		_, _ = fmt.Fprintln(w, "No fallback program is published for any FPP player.")
+	rows := resp.rows()
+	if len(rows) == 0 {
+		_, _ = fmt.Fprintln(w, "No fallback program is published for any FPP player, and no plugin has reported a fallback state.")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "FPP PLAYER\tSHOW\tSTATE\tHELD\tPLAYLIST\tPROGRAM ENDS\tPLUGIN")
-	for _, p := range resp.Programs {
-		playlist, ends := "", p.ExpiresAt
+	for _, p := range rows {
+		playlist, ends := "", dashIfEmpty(p.ExpiresAt)
 		if p.PlayerState != nil {
 			playlist = p.PlayerState.PlaylistName
 			if p.PlayerState.CutoffAt != "" {
 				ends = p.PlayerState.CutoffAt
 			}
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.FPPInstanceUUID, p.Show,
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.FPPInstanceUUID, dashIfEmpty(p.Show),
 			fallbackStateWord(p.PlayerState), fallbackHeldWord(p.PlayerState), dashIfEmpty(playlist), ends, fallbackPluginWord(p.PlayerState))
 	}
 	_ = tw.Flush()
-	for _, p := range resp.Programs {
+	for _, p := range rows {
 		if p.PlayerState != nil && p.PlayerState.Message != "" {
 			_, _ = fmt.Fprintf(w, "\n%s: %s\n", p.FPPInstanceUUID, p.PlayerState.Message)
 		}
@@ -221,7 +239,7 @@ func cmdFallbackShow(args []string, stdout, stderr io.Writer, clock func() time.
 	if err != nil {
 		return reportError(stderr, "fallback show", err)
 	}
-	for _, p := range resp.Programs {
+	for _, p := range resp.rows() {
 		if p.FPPInstanceUUID != rest[0] {
 			continue
 		}
@@ -234,16 +252,20 @@ func cmdFallbackShow(args []string, stdout, stderr io.Writer, clock func() time.
 		printFallbackDetail(stdout, p)
 		return exitOK
 	}
-	_, _ = fmt.Fprintf(stderr, "showmeshctl fallback show: no fallback program is published for FPP player %s\n", rest[0])
+	_, _ = fmt.Fprintf(stderr, "showmeshctl fallback show: FPP player %s has no published fallback program and no stored fallback state\n", rest[0])
 	return exitNotFound
 }
 
 func printFallbackDetail(w io.Writer, p fallbackProgramListEntry) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "FPP player:\t%s\n", p.FPPInstanceUUID)
-	_, _ = fmt.Fprintf(tw, "Show:\t%s\n", p.Show)
-	_, _ = fmt.Fprintf(tw, "Published program:\t%s (revision %s)\n", p.PackageID, p.Revision)
-	_, _ = fmt.Fprintf(tw, "Published program ends:\t%s\n", p.ExpiresAt)
+	if p.PackageID == "" {
+		_, _ = fmt.Fprintf(tw, "Published program:\tnone\n")
+	} else {
+		_, _ = fmt.Fprintf(tw, "Show:\t%s\n", p.Show)
+		_, _ = fmt.Fprintf(tw, "Published program:\t%s\n", p.PackageID)
+		_, _ = fmt.Fprintf(tw, "Published program ends:\t%s\n", p.ExpiresAt)
+	}
 	s := p.PlayerState
 	if s == nil {
 		_, _ = fmt.Fprintf(tw, "Plugin state:\tnot reported\n")
@@ -257,7 +279,7 @@ func printFallbackDetail(w io.Writer, p fallbackProgramListEntry) {
 		_, _ = fmt.Fprintf(tw, "Playlist:\t%s\n", s.PlaylistName)
 	}
 	if s.PackageID != "" {
-		_, _ = fmt.Fprintf(tw, "Program in use:\t%s (revision %s)\n", s.PackageID, s.PackageRevision)
+		_, _ = fmt.Fprintf(tw, "Program in use:\t%s\n", s.PackageID)
 	}
 	if s.CutoffAt != "" {
 		_, _ = fmt.Fprintf(tw, "Program in use ends:\t%s\n", s.CutoffAt)
