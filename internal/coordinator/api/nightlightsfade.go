@@ -225,7 +225,7 @@ func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *
 			if st.after != "" {
 				if prev := l.steps[st.after]; prev != nil {
 					ps := prev.inst[id]
-					if ps != nil && !ps.done && !(prev.oneShot && ps.attempts > 0 && !ps.inflight) {
+					if ps != nil && !ps.done && (!prev.oneShot || ps.attempts == 0 || ps.inflight) {
 						continue
 					}
 				}
