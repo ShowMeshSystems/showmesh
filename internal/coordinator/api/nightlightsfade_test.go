@@ -42,6 +42,7 @@ type lightsNight struct {
 	noPosition    bool
 	failIf        func(f nightLightingFade, instance string) bool
 	hang          bool
+	operatorOK    bool
 	delay         func(f nightLightingFade) time.Duration
 	reportedGain  *int64
 	fadeActive    bool
@@ -182,6 +183,17 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 			_, _ = w.Write([]byte(`{"name":"` + name + `","mainPlaylist":[{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"resting-loop.fseq"}]}`))
 		})
 	}
+	mux.HandleFunc(fppcommand.TransitionGainPath, func(w http.ResponseWriter, r *http.Request) {
+		n.mu.Lock()
+		ok := n.operatorOK
+		n.mu.Unlock()
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"schemaVersion":%d,"applied":true}`, fppcommand.TransitionGainSchemaVersion)
+	})
 	mux.HandleFunc("/api/command", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Command string   `json:"command"`
@@ -1165,9 +1177,12 @@ func TestLightsFade_APendingWriteToFullYieldsToTheOperatorRoute(t *testing.T) {
 	n.h.lights().wait()
 
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/player-01/brightness/transition-gain", `{"targetPercent":10,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
-	// The route's own write may fail against the fake player; the lights code
-	// must have yielded either way.
-	doRawRequest(t, n.api.Handler, req)
+	n.mu.Lock()
+	n.operatorOK = true
+	n.mu.Unlock()
+	if resp, body := doRawRequest(t, n.api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the operator write should be accepted: %d %s", resp.StatusCode, body)
+	}
 	n.setFail(nil)
 	before := len(n.events())
 	n.advance(nightLightsSlowRetry + time.Minute*3)
@@ -1175,6 +1190,53 @@ func TestLightsFade_APendingWriteToFullYieldsToTheOperatorRoute(t *testing.T) {
 	n.h.lights().wait()
 	if got := n.events()[before:]; len(got) != 0 {
 		t.Fatalf("a pending write to 100 must not land after the operator's gain, got %v", got)
+	}
+}
+
+// An operator write the player did not take must not cancel the way back to 100.
+func TestLightsFade_AFailedOperatorWriteDoesNotCancelTheFadeIn(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeInMs": 4000, `)
+	n.openToFirstShow()
+	n.setFail(func(f nightLightingFade, _ string) bool { return f.TargetPercent == 100 && f.FadeSeconds > 0 })
+	n.endShowIntoResting()
+	n.advance(nightLightsRetryBackoff)
+	n.tick()
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/player-01/brightness/transition-gain", `{"targetPercent":100,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
+	if resp, _ := doRawRequest(t, n.api.Handler, req); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("the operator write should fail against this player, got %d", resp.StatusCode)
+	}
+	n.setFail(nil)
+	for i := 0; i < 3; i++ {
+		n.advance(nightLightsRetryBackoff)
+		n.tick()
+	}
+	if got := lastLanding(t, n); got != "100" {
+		t.Fatalf("resting must still get its way back to 100, landings: %v", n.landings())
+	}
+}
+
+// A cue whose own gain write fails must not cancel a pending launch write to 100.
+func TestLightsFade_AFailedCueWriteDoesNotCancelThePendingLaunchWrite(t *testing.T) {
+	n := newLightsNight(t, "")
+	rec := mustCreateTransitionToShowSession(t, n.st, "sess-1", 1, testNow)
+	payload := config.NightSessionPayload{Resting: config.NightSessionResting{FPPInstanceID: "player-01"}}
+	ctx := context.Background()
+	n.setFail(func(nightLightingFade, string) bool { return true })
+	n.h.nightLightsStart(ctx, n.now, rec, payload, nightLightsStep{step: nightLightsStepShowGain, target: 100})
+	n.h.lights().wait()
+
+	cue := nightLightingCue("dim", nightFadeMs(3000))
+	cue.Action = "lights-cue"
+	if _, err := n.h.nightRunCue(ctx, n.now, rec, nightPhaseEnterShow, cue, testIssuer, true); err != nil {
+		t.Fatal(err)
+	}
+	n.setFail(nil)
+	n.advance(nightLightsRetryBackoff)
+	n.h.nightLightsAdvance(ctx, n.now, rec)
+	n.h.lights().wait()
+	if got := lastLanding(t, n); got != "100" {
+		t.Fatalf("the launch write to 100 must still go out, landings: %v", n.landings())
 	}
 }
 

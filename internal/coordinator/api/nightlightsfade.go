@@ -552,3 +552,11 @@ func (h *handlers) nightLightsYield(sessionID, instanceID string) {
 		}
 	}
 }
+
+// nightLightsYieldToAcceptedCue makes pending lights writes to the cue's player
+// give way, but only when the player accepted the cue's own gain write.
+func (h *handlers) nightLightsYieldToAcceptedCue(rec store.NightSessionRecord, target config.ShowActionTarget, gain nightGainResult) {
+	if target.Integration == config.ShowActionIntegrationFPP && gain.note != "" && !gain.failed {
+		h.nightLightsYield(rec.ID, target.InstanceID)
+	}
+}
