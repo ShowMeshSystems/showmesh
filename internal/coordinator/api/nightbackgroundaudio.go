@@ -1716,19 +1716,38 @@ func nightEndSessionClearIdempotencyKey(nodeID, sessionID string, attempt int64)
 	return fmt.Sprintf("night-end-session-clear-retry:%s:%s:%d", nodeID, sessionID, attempt)
 }
 
-// nightRetryEndSessionClear is nightTick's own stopped-state entry point -
-// see nightloop.go's own case nightStateStopped comment for why doing
-// nothing here would reintroduce, one layer down, the exact problem
-// end-session's own clear exists to fix. A confirmed anchor costs only
-// this function's own JSON decode to recheck: no payload read, no store
-// call, no dispatch.
+// nightEndSessionClearRetrySpacing is the least time between two clear
+// attempts to the same node. Ticks run every second, so this keeps an
+// unreachable node from being dispatched to on each one while still
+// clearing a node that comes back within a few seconds.
+const nightEndSessionClearRetrySpacing = 5 * time.Second
+
+// nightEndSessionClearNode is one node's own clear progress. ConfirmedAt
+// non-zero means that node is done for the life of this stopped session.
+type nightEndSessionClearNode struct {
+	Attempts    int64     `json:"attempts,omitempty"`
+	AttemptedAt time.Time `json:"attemptedAt,omitempty"`
+	ConfirmedAt time.Time `json:"confirmedAt,omitempty"`
+	Source      string    `json:"source,omitempty"`
+}
+
+// nightRetryEndSessionClear is nightTick's stopped-state entry point. A
+// stopped night, by whatever route, clears its bed on every node the bed
+// was dispatched to. Each node is retried on later ticks until its own
+// clear confirms, and one node failing never holds back another.
 func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
-	if has && anchor.Purpose == nightAnchorPurposeEndSessionClear && !anchor.ObservedAt.IsZero() {
-		return // genuinely confirmed cleared already; nothing more to do.
+	if has && anchor.Purpose == nightAnchorPurposeEndSessionClear && !anchor.ObservedAt.IsZero() && anchor.EndSessionClears != nil {
+		return // every node is confirmed cleared; nothing more to do.
 	}
 	if !has || anchor.Purpose != nightAnchorPurposeEndSessionClear {
 		anchor = nightContentAnchor{Purpose: nightAnchorPurposeEndSessionClear}
+	}
+	if anchor.EndSessionClears == nil {
+		anchor.EndSessionClears = map[string]nightEndSessionClearNode{}
+		if !anchor.ObservedAt.IsZero() && anchor.FPPInstanceID != "" {
+			anchor.EndSessionClears[anchor.FPPInstanceID] = nightEndSessionClearNode{ConfirmedAt: anchor.ObservedAt}
+		}
 	}
 
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
@@ -1756,42 +1775,65 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	} else {
 		h.logWarn("night loop: end-session clear retry: referenced media.playlist is missing or tombstoned; retrying from dispatch history instead", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
 	}
-	// KNOWN GAP, flagged for an owner decision: this retry safety net
-	// tracks its confirmation via ONE anchor slot on the record
-	// (ContentAnchorJSON), which can only represent one node's own
-	// retry state. A bed dispatched onto more than one node only gets
-	// this crash-recovery retry for its first dispatched node
-	// (nodeIDs[0]); nightClearBackgroundAudioAtEndSession's own
-	// synchronous warn-and-proceed attempt above still reaches every
-	// node once, so only a node whose SYNCHRONOUS attempt also failed
-	// is left unrecovered by this tick-based safety net.
-	fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeIDs[0])
-	if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeIDs[0], sessionID, fadeOutMs) {
-		return // fade still ramping and within bound; retried again next tick.
+
+	changed := false
+	for _, nodeID := range nodeIDs {
+		state := anchor.EndSessionClears[nodeID]
+		if !state.ConfirmedAt.IsZero() {
+			continue
+		}
+		if !state.AttemptedAt.IsZero() && now.Sub(state.AttemptedAt) < nightEndSessionClearRetrySpacing {
+			continue
+		}
+		fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeID)
+		if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeID, sessionID, fadeOutMs) {
+			continue // fade still ramping and within bound; retried again next tick.
+		}
+		anchor.EndSessionClears[nodeID] = h.nightDispatchEndSessionClearRetry(ctx, now, nodeID, sessionID, state)
+		changed = true
 	}
-	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)
+	if anchor.ObservedAt.IsZero() && nightEndSessionClearsAllConfirmed(anchor, nodeIDs) {
+		anchor.ObservedAt, anchor.DispatchedAt = now, now
+		changed = true
+	}
+	if changed {
+		h.nightCommitEndSessionClearAnchor(ctx, now, rec, anchor)
+	}
 }
 
-// nightDispatchEndSessionClearRetry issues one clear attempt and persists
-// the anchor's next state, mirroring nightDispatchShutdownStop's own
-// dispatch/persist shape (nightshutdown.go). Every non-confirming outcome
-// - a plain error, a structural refusal, or a resolved-but-not-confirmed
-// result - takes the SAME path: advance Attempts so the next tick's
-// idempotency key is genuinely new, per [nightEndSessionClearIdempotencyKey]'s
-// own doc comment. Nothing here fails end-session itself; it already
-// reached stopped durably before nightTick ever calls this.
-func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, anchor nightContentAnchor) {
-	retry := func(reason string) {
-		next := anchor
-		next.Purpose, next.FPPInstanceID = nightAnchorPurposeEndSessionClear, nodeID
-		next.DispatchedAt = time.Time{}
-		next.AttemptedAt = now
-		next.Attempts = anchor.Attempts + 1
-		next.Source = reason
-		h.nightCommitEndSessionClearAnchor(ctx, now, rec, next)
+func nightEndSessionClearsAllConfirmed(anchor nightContentAnchor, nodeIDs []string) bool {
+	for _, id := range nodeIDs {
+		if anchor.EndSessionClears[id].ConfirmedAt.IsZero() {
+			return false
+		}
+	}
+	return true
+}
+
+// nightDispatchEndSessionClearRetry issues one clear attempt to one node
+// and returns that node's next state. Every non-confirming outcome takes
+// the same path: advance Attempts so the next key is genuinely new, per
+// [nightEndSessionClearIdempotencyKey]'s own doc comment. A refusal from
+// a node whose own report shows the session absent counts as cleared,
+// since there is nothing left on it to clear.
+func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now time.Time, nodeID, sessionID string, state nightEndSessionClearNode) nightEndSessionClearNode {
+	failed := func(reason string) nightEndSessionClearNode {
+		state.Attempts++
+		state.AttemptedAt = now
+		state.Source = reason
+		return state
+	}
+	confirmed := func(reason string) nightEndSessionClearNode {
+		state.AttemptedAt, state.ConfirmedAt = now, now
+		state.Source = reason
+		return state
+	}
+	sessionGone := func() bool {
+		return !nightBedReadSession(h.deps.Audio, now, nodeID, sessionID).Present &&
+			nightBedNodeSessionCount(h.deps.Audio, nodeID) < nightBedSessionReportLimit
 	}
 
-	idemKey := nightEndSessionClearIdempotencyKey(nodeID, sessionID, anchor.Attempts)
+	idemKey := nightEndSessionClearIdempotencyKey(nodeID, sessionID, state.Attempts)
 	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
@@ -1803,27 +1845,25 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 	})
 	if err != nil {
 		h.logWarn("night loop: end-session clear retry: dispatch failed", "sessionId", sessionID, "nodeId", nodeID, "error", err)
-		retry("the clear could not be dispatched: " + err.Error())
-		return
+		return failed("the clear could not be dispatched: " + err.Error())
 	}
 	if problem != nil {
 		h.logWarn("night loop: end-session clear retry: refused", "sessionId", sessionID, "nodeId", nodeID, "reason", problem.Detail)
-		retry("refused: " + problem.Detail)
-		return
+		if sessionGone() {
+			return confirmed("the node no longer holds the session")
+		}
+		return failed("refused: " + problem.Detail)
 	}
-	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
-		h.logWarn("night loop: end-session clear retry: did not confirm", "sessionId", sessionID, "nodeId", nodeID, "outcome", result.Outcome, "reason", result.Reason)
-		retry("not confirmed: " + result.Reason)
-		return
+	switch nightAudioCueOutcome(result.Outcome) {
+	case nightCueOutcomeConfirmed:
+		return confirmed(result.Reason)
+	case nightCueOutcomeRefused:
+		if sessionGone() {
+			return confirmed("the node no longer holds the session")
+		}
 	}
-
-	next := anchor
-	next.Purpose, next.FPPInstanceID = nightAnchorPurposeEndSessionClear, nodeID
-	next.DispatchedAt = now
-	next.ObservedAt = now // confirmed: permanently done for this stopped session.
-	next.AttemptedAt = now
-	next.Source = result.Reason
-	h.nightCommitEndSessionClearAnchor(ctx, now, rec, next)
+	h.logWarn("night loop: end-session clear retry: did not confirm", "sessionId", sessionID, "nodeId", nodeID, "outcome", result.Outcome, "reason", result.Reason)
+	return failed("not confirmed: " + result.Reason)
 }
 
 // nightCommitEndSessionClearAnchor persists anchor only while rec is still

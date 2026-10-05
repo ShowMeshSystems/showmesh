@@ -67,6 +67,10 @@ type nightContentAnchor struct {
 	// zero on a successful (armed) re-derivation, and naturally zero on any
 	// freshly dispatched anchor.
 	DerivationInvalidAttempts int `json:"derivationInvalidAttempts,omitempty"`
+
+	// EndSessionClears tracks each node's own bed clear once the night is
+	// stopped, keyed by node id.
+	EndSessionClears map[string]nightEndSessionClearNode `json:"endSessionClears,omitempty"`
 }
 
 // nightBoundary is the derived expected content-end time E, or the

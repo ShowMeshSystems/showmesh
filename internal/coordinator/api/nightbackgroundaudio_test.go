@@ -2371,7 +2371,7 @@ func TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns(t *testing.T) {
 	// 3. Ticks occur while the session is stopped and the node is still
 	// unreachable: the clear is retried, but nothing lands.
 	h.nightTick(context.Background(), testNow)
-	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow.Add(nightEndSessionClearRetrySpacing))
 	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
 		t.Fatalf("audio.session.clear reached the wire while the node was still unreachable, want 0, got %d", got)
 	}
@@ -2380,7 +2380,7 @@ func TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns(t *testing.T) {
 	// clear again, under a fresh idempotency key, and this time it lands.
 	pub.beforePublishErr = nil
 	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
-	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow.Add(2*nightEndSessionClearRetrySpacing))
 
 	if pub.lastAction != "audio.session.clear" {
 		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
@@ -2859,5 +2859,96 @@ func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
 	}
 	if curGain != nil {
 		t.Fatalf("GET /night/session on a stopped session: pinnedMaxGainDb = %v, want nil (never a dead session's ceiling reported as live)", curGain)
+	}
+}
+
+func countClearsForNode(pub *fakeAudioPublisher, nodeID string) int {
+	n := 0
+	for _, d := range pub.dispatched {
+		if d.Action == "audio.session.clear" && d.NodeID == nodeID {
+			n++
+		}
+	}
+	return n
+}
+
+// stoppedTwoNodeBed returns a bed playing on node-a and node-b whose night
+// has reached stopped by its schedule, with no end-session command ever sent.
+func stoppedTwoNodeBed(t *testing.T) (*handlers, *store.Store, *fakeAudioPublisher, string) {
+	t.Helper()
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-a", "node-a", "asset-a")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-b", "node-b", "asset-b")
+	ba := twoNodeBackgroundAudioConfig("node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	rec.State = nightStateStopped
+	rec.ShutdownIntent = "power-down"
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	return h, st, pub, nightBackgroundAudioSessionID(rec)
+}
+
+func TestNightTick_ScheduledStopClearsBedOnEveryNode(t *testing.T) {
+	h, _, pub, sessionID := stoppedTwoNodeBed(t)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+
+	h.nightTick(context.Background(), testNow)
+
+	for _, node := range []string{"node-a", "node-b"} {
+		if got := countClearsForNode(pub, node); got != 1 {
+			t.Fatalf("%s clear dispatches after a scheduled stop = %d, want 1", node, got)
+		}
+	}
+	h.nightTick(context.Background(), testNow.Add(time.Minute))
+	if a, b := countClearsForNode(pub, "node-a"), countClearsForNode(pub, "node-b"); a != 1 || b != 1 {
+		t.Fatalf("clears after both confirmed = node-a %d, node-b %d, want 1 each", a, b)
+	}
+}
+
+func TestNightTick_StoppedRetriesOnlyTheNodeThatDidNotConfirm(t *testing.T) {
+	h, _, pub, sessionID := stoppedTwoNodeBed(t)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.clear": {Outcome: mqttproto.OutcomeFailed, Reason: "the node sent no result"},
+	}
+	h.nightTick(context.Background(), testNow)
+
+	pub.resultsByNode = nil
+	h.nightTick(context.Background(), testNow.Add(nightEndSessionClearRetrySpacing))
+
+	if got := countClearsForNode(pub, "node-a"); got != 1 {
+		t.Fatalf("node-a was cleared %d times, want 1 (it confirmed the first time)", got)
+	}
+	if got := countClearsForNode(pub, "node-b"); got != 2 {
+		t.Fatalf("node-b clear dispatches = %d, want 2 (one unconfirmed, one retry)", got)
+	}
+}
+
+func TestNightTick_StoppedRetriesUnreachableNodeAtSpacingUntilItAnswers(t *testing.T) {
+	h, _, pub, sessionID := stoppedTwoNodeBed(t)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.clear": {Outcome: mqttproto.OutcomeFailed, Reason: "the node sent no result"},
+	}
+	for i := 0; i < 4; i++ {
+		h.nightTick(context.Background(), testNow.Add(time.Duration(i)*nightEndSessionClearRetrySpacing/2))
+	}
+	if got := countClearsForNode(pub, "node-b"); got != 2 {
+		t.Fatalf("node-b dispatches over two spacings = %d, want 2 (one per spacing, not one per tick)", got)
+	}
+	if got := countClearsForNode(pub, "node-a"); got != 1 {
+		t.Fatalf("node-a was cleared %d times while node-b was unreachable, want 1", got)
+	}
+
+	pub.resultsByNode = nil
+	h.nightTick(context.Background(), testNow.Add(10*time.Second))
+	if got := countClearsForNode(pub, "node-b"); got != 3 {
+		t.Fatalf("node-b dispatches once it answers = %d, want 3", got)
+	}
+	h.nightTick(context.Background(), testNow.Add(time.Hour))
+	if got := countClearsForNode(pub, "node-b"); got != 3 {
+		t.Fatalf("node-b was cleared again after confirming: %d dispatches, want 3", got)
 	}
 }
