@@ -1834,9 +1834,9 @@ func nightEndSessionClearsAllConfirmed(anchor nightContentAnchor, nodeIDs []stri
 // nightDispatchEndSessionClearRetry issues one clear attempt to one node
 // and returns that node's next state. Every non-confirming outcome takes
 // the same path: advance Attempts so the next key is genuinely new, per
-// [nightEndSessionClearIdempotencyKey]'s own doc comment. A refusal from
-// a refusal the node itself answered is remembered, so a later tick can
-// count the node as cleared once its own fresh report shows no session.
+// [nightEndSessionClearIdempotencyKey]'s own doc comment. A refusal the
+// node itself answered is remembered, so a later tick can count the node
+// as cleared once its own fresh report shows no session.
 // A failure on the coordinator side never says anything about the node.
 func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now time.Time, nodeID, sessionID string, state nightEndSessionClearNode) nightEndSessionClearNode {
 	failed := func(reason string) nightEndSessionClearNode {
