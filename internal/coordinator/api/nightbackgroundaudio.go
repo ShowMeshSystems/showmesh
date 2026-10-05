@@ -1716,17 +1716,32 @@ func nightEndSessionClearIdempotencyKey(nodeID, sessionID string, attempt int64)
 	return fmt.Sprintf("night-end-session-clear-retry:%s:%s:%d", nodeID, sessionID, attempt)
 }
 
-// nightEndSessionClearRetrySpacing is the least time between two clear
-// attempts to the same node. Ticks run every second, so this keeps an
-// unreachable node from being dispatched to on each one while still
-// clearing a node that comes back within a few seconds.
-const nightEndSessionClearRetrySpacing = 5 * time.Second
+// The wait before retrying a node's clear starts at
+// nightEndSessionClearRetrySpacing and doubles with each unconfirmed
+// attempt up to nightEndSessionClearRetryCap, so a node that stays offline
+// is not dispatched to (and does not gain a command record) every few
+// seconds for the rest of the session. Each node backs off on its own.
+const (
+	nightEndSessionClearRetrySpacing = 5 * time.Second
+	nightEndSessionClearRetryCap     = 60 * time.Second
+)
+
+func nightEndSessionClearRetryDelay(attempts int64) time.Duration {
+	if attempts < 1 {
+		return 0
+	}
+	if attempts > 4 {
+		return nightEndSessionClearRetryCap
+	}
+	return min(nightEndSessionClearRetrySpacing<<(attempts-1), nightEndSessionClearRetryCap)
+}
 
 // nightEndSessionClearNode is one node's own clear progress. ConfirmedAt
 // non-zero means that node is done for the life of this stopped session.
 type nightEndSessionClearNode struct {
 	Attempts    int64     `json:"attempts,omitempty"`
 	AttemptedAt time.Time `json:"attemptedAt,omitempty"`
+	RefusedAt   time.Time `json:"refusedAt,omitempty"`
 	ConfirmedAt time.Time `json:"confirmedAt,omitempty"`
 	Source      string    `json:"source,omitempty"`
 }
@@ -1782,7 +1797,13 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 		if !state.ConfirmedAt.IsZero() {
 			continue
 		}
-		if !state.AttemptedAt.IsZero() && now.Sub(state.AttemptedAt) < nightEndSessionClearRetrySpacing {
+		if !state.RefusedAt.IsZero() && h.nightEndSessionClearNodeReportsSessionGone(now, state.RefusedAt, nodeID, sessionID) {
+			state.ConfirmedAt, state.Source = now, "the node no longer holds the session"
+			anchor.EndSessionClears[nodeID] = state
+			changed = true
+			continue
+		}
+		if !state.AttemptedAt.IsZero() && now.Sub(state.AttemptedAt) < nightEndSessionClearRetryDelay(state.Attempts) {
 			continue
 		}
 		fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeID)
@@ -1814,8 +1835,9 @@ func nightEndSessionClearsAllConfirmed(anchor nightContentAnchor, nodeIDs []stri
 // and returns that node's next state. Every non-confirming outcome takes
 // the same path: advance Attempts so the next key is genuinely new, per
 // [nightEndSessionClearIdempotencyKey]'s own doc comment. A refusal from
-// a node whose own report shows the session absent counts as cleared,
-// since there is nothing left on it to clear.
+// a refusal the node itself answered is remembered, so a later tick can
+// count the node as cleared once its own fresh report shows no session.
+// A failure on the coordinator side never says anything about the node.
 func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now time.Time, nodeID, sessionID string, state nightEndSessionClearNode) nightEndSessionClearNode {
 	failed := func(reason string) nightEndSessionClearNode {
 		state.Attempts++
@@ -1828,11 +1850,6 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 		state.Source = reason
 		return state
 	}
-	sessionGone := func() bool {
-		return !nightBedReadSession(h.deps.Audio, now, nodeID, sessionID).Present &&
-			nightBedNodeSessionCount(h.deps.Audio, nodeID) < nightBedSessionReportLimit
-	}
-
 	idemKey := nightEndSessionClearIdempotencyKey(nodeID, sessionID, state.Attempts)
 	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
@@ -1849,21 +1866,32 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 	}
 	if problem != nil {
 		h.logWarn("night loop: end-session clear retry: refused", "sessionId", sessionID, "nodeId", nodeID, "reason", problem.Detail)
-		if sessionGone() {
-			return confirmed("the node no longer holds the session")
-		}
 		return failed("refused: " + problem.Detail)
 	}
 	switch nightAudioCueOutcome(result.Outcome) {
 	case nightCueOutcomeConfirmed:
 		return confirmed(result.Reason)
 	case nightCueOutcomeRefused:
-		if sessionGone() {
-			return confirmed("the node no longer holds the session")
-		}
+		state.RefusedAt = now
 	}
 	h.logWarn("night loop: end-session clear retry: did not confirm", "sessionId", sessionID, "nodeId", nodeID, "outcome", result.Outcome, "reason", result.Reason)
 	return failed("not confirmed: " + result.Reason)
+}
+
+// nightEndSessionClearNodeReportsSessionGone reports whether nodeID sent a
+// current audio report after since that does not carry sessionID. No
+// current report from the node after since, or a report that may have been
+// truncated, says nothing about the session.
+func (h *handlers) nightEndSessionClearNodeReportsSessionGone(now, since time.Time, nodeID, sessionID string) bool {
+	reported := false
+	for _, o := range h.deps.Audio.NodeAudioObservations(nodeID) {
+		if o.StateAt(now) == observation.StateCurrent && !o.CollectedAt.Before(since) {
+			reported = true
+		}
+	}
+	return reported &&
+		!nightBedReadSession(h.deps.Audio, now, nodeID, sessionID).Present &&
+		nightBedNodeSessionCount(h.deps.Audio, nodeID) < nightBedSessionReportLimit
 }
 
 // nightCommitEndSessionClearAnchor persists anchor only while rec is still
