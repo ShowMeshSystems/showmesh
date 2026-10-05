@@ -82,16 +82,16 @@ type nightBedPlaybackPoint struct {
 
 // nightBedNodeReportsAudioSince reports whether nodeID is publishing
 // audio reports this coordinator currently holds and recorded strictly
-// after notBefore. False means there is no report to draw any conclusion
+// after fence. False means there is no report to draw any conclusion
 // from, which is never the same as a report that says the bed is gone.
 // Strictly after, not at or after: a report recorded in the same instant
 // as a command's own dispatch cannot describe that command's result.
-func nightBedNodeReportsAudioSince(audio NodeAudioLister, now, notBefore time.Time, nodeID string) bool {
+func nightBedNodeReportsAudioSince(audio NodeAudioLister, now time.Time, fence nightBedFence, nodeID string) bool {
 	for _, o := range audio.NodeAudioObservations(nodeID) {
 		if o.Signal != audioNodeEngineStateSignalID || o.Resource.Kind != observation.ResourceNode {
 			continue
 		}
-		return o.StateAt(now) == observation.StateCurrent && o.CollectedAt.After(notBefore)
+		return o.StateAt(now) == observation.StateCurrent && o.CollectedAt.After(fence.Received) && fence.builtAfterAnswer(o)
 	}
 	return false
 }
@@ -247,19 +247,38 @@ func nightBedNodeEverHeldTheBed(steps []nightBackgroundAudioHistoryRow) bool {
 	return false
 }
 
-// nightBedStepEffectFence is the earliest record time a node report can
-// have to describe row's result. A scheduled start or resume is dispatched
-// seconds before it takes effect and resolves only once it has, so a
-// report recorded between dispatch and resolution still shows the old
-// state. An unresolved row falls back to its dispatch instant.
-func nightBedStepEffectFence(row store.NightCueOutboxRecord) time.Time {
+// nightBedFence is what a node report must clear to describe a bed step's
+// result. Received is on this coordinator's clock, NodeAnswered on the node's.
+type nightBedFence struct {
+	Received     time.Time
+	NodeAnswered time.Time
+}
+
+// builtAfterAnswer reports whether the node observed o after it answered. The
+// node builds reports one at a time, so an earlier one can arrive after the
+// answer. Both times are the node's, so clock skew does not matter.
+func (f nightBedFence) builtAfterAnswer(o observation.Observation) bool {
+	if f.NodeAnswered.IsZero() {
+		return true
+	}
+	return o.ObservedAt != nil && o.ObservedAt.After(f.NodeAnswered)
+}
+
+// nightBedStepEffectFence is what a report must clear to describe row's
+// result. Without a node answer time it is the row's arrival time, or its
+// dispatch instant while unresolved.
+func nightBedStepEffectFence(row store.NightCueOutboxRecord) nightBedFence {
+	var f nightBedFence
 	switch {
 	case row.ResolvedAt != nil:
-		return *row.ResolvedAt
+		f.Received = *row.ResolvedAt
 	case row.DispatchedAt != nil:
-		return *row.DispatchedAt
+		f.Received = *row.DispatchedAt
 	}
-	return time.Time{}
+	if row.NodeRespondedAt != nil {
+		f.NodeAnswered = *row.NodeRespondedAt
+	}
+	return f
 }
 
 // nightBedNodeLostSession reports whether nodeID has lost a bed it once
@@ -369,7 +388,7 @@ func nightBedPeerPlaybackPoint(audio NodeAudioLister, now time.Time, sessionID s
 		if nodeID == exclude || nodeID == nightBedScheduleNodeID {
 			continue
 		}
-		state, ok := nightBackgroundAudioReportedSessionState(audio, now, time.Time{}, nodeID, sessionID)
+		state, ok := nightBackgroundAudioReportedSessionState(audio, now, nightBedFence{}, nodeID, sessionID)
 		if !ok || state != string(pkgaudio.StatePlaying) {
 			continue
 		}
@@ -701,7 +720,7 @@ func nightBedNodeDeliberatelySuspended(history []nightBackgroundAudioHistoryRow,
 func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID string, facts nightBedNotPlayingFacts) string {
 	reading := facts.Reading
 	switch {
-	case !nightBedNodeReportsAudioSince(audio, now, time.Time{}, nodeID):
+	case !nightBedNodeReportsAudioSince(audio, now, nightBedFence{}, nodeID):
 		return "This speaker is not reporting its audio, so whether the background music is playing on it is unknown. Check that the node is powered on and connected."
 	case reading.Stale:
 		return "This speaker was too busy to report the background music this time, so what it is doing now is unknown. It reports again on its next cycle."

@@ -429,6 +429,9 @@ type AudioDispatchInput struct {
 	// nanosecond-scale fields as json.Number so they are not rounded, so
 	// a reader must handle both (see alignedstart.go's own accessors).
 	OnEvidence func(map[string]any)
+
+	// OnResponded, when set, receives the node's own answer time (its clock).
+	OnResponded func(time.Time)
 }
 
 // executeAudioSessionDispatch records the command and its ADR-024
@@ -617,6 +620,8 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("await result: %w", err)
 	}
 
+	answeredAt := h.nowNotBefore(now)
+
 	env2, err := mqttproto.DecodeEnvelope(msg.Payload)
 	if err != nil {
 		markDispatched("dispatched", "collection_failed", "result payload did not decode", "{}")
@@ -634,9 +639,13 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		}
 	}
 
+	if in.OnResponded != nil && !res.RespondedAt.IsZero() {
+		in.OnResponded(res.RespondedAt)
+	}
+
 	outcome, reason := mapResultOutcome(res)
 	resultJSON, _ := json.Marshal(audioSessionResultPayload{Outcome: outcome, Reason: reason})
-	resolvedAt := now
+	resolvedAt := answeredAt
 	state := "resolved"
 	outcomeState := "current"
 	outcomeReason := reason
@@ -922,4 +931,13 @@ func (h *handlers) handleAudioOutputMute(w http.ResponseWriter, r *http.Request)
 }
 func (h *handlers) handleAudioOutputUnmute(w http.ResponseWriter, r *http.Request) {
 	h.dispatchAudioSessionCommand(w, r, "audio.output.unmute")
+}
+
+// nowNotBefore is the current time, never earlier than start: a step cannot
+// have finished before the tick that began it.
+func (h *handlers) nowNotBefore(start time.Time) time.Time {
+	if t := h.now(); t.After(start) {
+		return t
+	}
+	return start
 }

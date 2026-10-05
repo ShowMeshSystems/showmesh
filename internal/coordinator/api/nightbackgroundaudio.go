@@ -744,7 +744,7 @@ const audioSessionStateSignalID observation.SignalID = "audio_session.state"
 // [nightBackgroundAudioFadeSettled] already guards for its own signal.
 // Pass the zero time.Time for notBefore when there is no specific dispatch
 // instant to fence the read against.
-func nightBackgroundAudioReportedSessionState(audio NodeAudioLister, now, notBefore time.Time, nodeID, sessionID string) (state string, ok bool) {
+func nightBackgroundAudioReportedSessionState(audio NodeAudioLister, now time.Time, fence nightBedFence, nodeID, sessionID string) (state string, ok bool) {
 	for _, o := range audio.NodeAudioObservations(nodeID) {
 		if o.Signal != audioSessionStateSignalID || o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
 			continue
@@ -752,7 +752,7 @@ func nightBackgroundAudioReportedSessionState(audio NodeAudioLister, now, notBef
 		if o.StateAt(now) != observation.StateCurrent {
 			return "", false
 		}
-		if o.CollectedAt.Before(notBefore) {
+		if o.CollectedAt.Before(fence.Received) || !fence.builtAfterAnswer(o) {
 			return "", false
 		}
 		state, _ = o.Value.(string)
@@ -790,7 +790,7 @@ func nightBackgroundAudioReportedSessionState(audio NodeAudioLister, now, notBef
 // matter what value it carries. Pass the zero time.Time to disable the
 // fence for a caller with no dispatch instant to fence against.
 func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now, notBefore time.Time, nodeID, sessionID string) bool {
-	if state, ok := nightBackgroundAudioReportedSessionState(audio, now, notBefore, nodeID, sessionID); ok && state != string(pkgaudio.StatePlaying) {
+	if state, ok := nightBackgroundAudioReportedSessionState(audio, now, nightBedFence{Received: notBefore}, nodeID, sessionID); ok && state != string(pkgaudio.StatePlaying) {
 		return true
 	}
 	for _, o := range audio.NodeAudioObservations(nodeID) {
@@ -2061,7 +2061,7 @@ func (h *handlers) nightBedResumeGateClassifier(now time.Time, sessionID string)
 			return state, latest
 		}
 		latest, has := nightBackgroundAudioLatestStepForNode(history, nodeID)
-		var fence time.Time
+		var fence nightBedFence
 		if has {
 			fence = nightBedStepEffectFence(latest.Row)
 		}
@@ -2648,12 +2648,14 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 
 	issuer := nightBackgroundAudioIssuer(rec)
 	var evidence map[string]any
+	var nodeRespondedAt *time.Time
 	result, problem, derr := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: action, NodeID: nodeID, SessionID: sessionID, Params: params,
 		Revision: uint64(revision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
-		OnEvidence: func(v map[string]any) { evidence = v },
+		OnEvidence:  func(v map[string]any) { evidence = v },
+		OnResponded: func(t time.Time) { nodeRespondedAt = &t },
 	})
 
 	row, gerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
@@ -2680,7 +2682,7 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 		row.State = nightCueStateResolved
 		row.Outcome = nightCueOutcomeFailed
 		row.OutcomeReason = reason("this step could not be dispatched: " + derr.Error())
-		resolvedAt := now
+		resolvedAt := h.nowNotBefore(now)
 		row.ResolvedAt = &resolvedAt
 		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
 			return store.NightCueOutboxRecord{}, evidence, err
@@ -2690,7 +2692,7 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 		row.State = nightCueStateResolved
 		row.Outcome = nightCueOutcomeRefused
 		row.OutcomeReason = reason(problem.Detail)
-		resolvedAt := now
+		resolvedAt := h.nowNotBefore(now)
 		row.ResolvedAt = &resolvedAt
 		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
 			return store.NightCueOutboxRecord{}, evidence, err
@@ -2706,8 +2708,14 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 	row.State = nightCueStateResolved
 	row.Outcome = nightAudioCueOutcome(result.Outcome)
 	row.OutcomeReason = reason(result.Reason)
-	resolvedAt := now
+	resolvedAt := h.nowNotBefore(now)
+	if result.ResolvedAt != nil {
+		if t, perr := parseTime(*result.ResolvedAt); perr == nil {
+			resolvedAt = t
+		}
+	}
 	row.ResolvedAt = &resolvedAt
+	row.NodeRespondedAt = nodeRespondedAt
 	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
 		return store.NightCueOutboxRecord{}, evidence, err
 	}

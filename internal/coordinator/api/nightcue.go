@@ -128,6 +128,12 @@ type nightCueDispatchResult struct {
 	resolved     bool // true when outcome is final and should be persisted as nightCueStateResolved.
 	outcome      string
 	reason       string
+
+	// resolvedAt is when the answer reached this coordinator and
+	// nodeRespondedAt is when the node published it, on the node's clock.
+	// Nil means unknown, and the caller records its own tick instant.
+	resolvedAt      *time.Time
+	nodeRespondedAt *time.Time
 }
 
 // nightDispatchCueTarget dispatches target through its integration's own
@@ -314,11 +320,13 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	if len(target.AudioNodeIDs) > 0 {
 		nodeID = target.AudioNodeIDs[0]
 	}
+	var nodeRespondedAt *time.Time
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: target.AudioAction, NodeID: nodeID, SessionID: target.AudioSessionID,
 		Params: params, Revision: uint64(dispatchRevision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,
+		OnResponded: func(t time.Time) { nodeRespondedAt = &t },
 	})
 	if err != nil {
 		if errors.Is(err, broker.ErrResponseFailedBeforePublish) {
@@ -354,8 +362,15 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 			dispatchedAt = &t
 		}
 	}
+	var resolvedAt *time.Time
+	if result.ResolvedAt != nil {
+		if t, perr := parseTime(*result.ResolvedAt); perr == nil {
+			resolvedAt = &t
+		}
+	}
 	return nightCueDispatchResult{
 		dispatched: dispatchedAt != nil, dispatchedAt: dispatchedAt, resolved: true,
 		outcome: nightAudioCueOutcome(result.Outcome), reason: result.Reason,
+		resolvedAt: resolvedAt, nodeRespondedAt: nodeRespondedAt,
 	}
 }

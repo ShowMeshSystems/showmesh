@@ -181,7 +181,11 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 	}
 	row.OutcomeReason = nightCueReasonWith(result.reason, gain.note)
 	resolvedAt := now
+	if result.resolvedAt != nil {
+		resolvedAt = *result.resolvedAt
+	}
 	row.ResolvedAt = &resolvedAt
+	row.NodeRespondedAt = result.nodeRespondedAt
 	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
 		return store.NightCueOutboxRecord{}, err
 	}
