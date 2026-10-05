@@ -10455,6 +10455,86 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fallback-programs/{fppInstanceId}/fallback-state:
+    put:
+      operationId: putFallbackState
+      summary: A paired FPP plugin reports whether it is running the show from its fallback program (ADR-048, Track J's J5)
+      description: >-
+        Behind `fpp:fallback`, and only for the plugin paired as this FPP
+        instance. The plugin reports `normal`, `fallback` or `resting` on
+        start, on every change, and every 10 seconds while it can reach the
+        coordinator. While the latest report says `fallback` or `resting`
+        the coordinator starts no Cues for this player and does not advance
+        a night session that uses it. A member this coordinator does not
+        know is ignored. A report with the stored `bootId` and an equal or
+        lower `sequence` is answered `200` with `recorded` false. The wire
+        is FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 5.15.
+      parameters:
+        - name: fppInstanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The FPP instance UUID (`instanceUuid`, contracts section 1.2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FallbackStateReportRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackStateReportResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteFallbackState
+      summary: Clear what the coordinator stored about one FPP player's fallback state
+      description: >-
+        Behind `fpp:command`. An operator's way out when the coordinator
+        keeps holding a player that its plugin will not release, for
+        example a plugin that handed back and never confirmed its current
+        program. Idempotent and audited. A plugin that is still reporting
+        stores its state again with its next report, so this does not take
+        a show away from a plugin that is running it.
+      parameters:
+        - name: fppInstanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The FPP instance UUID (`instanceUuid`, contracts section 1.2).
+      responses:
+        "204":
+          description: No fallback state is stored for this FPP player.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -22642,6 +22722,8 @@ components:
         acknowledgedAt:
           type: string
           format: date-time
+        playerState:
+          $ref: "#/components/schemas/FallbackPlayerState"
     FallbackProgramListEntry:
       type: object
       description: One row of GET /fallback-programs - metadata only, never the signed payload.
@@ -22664,6 +22746,8 @@ components:
         compiledAt:
           type: string
           format: date-time
+        playerState:
+          $ref: "#/components/schemas/FallbackPlayerState"
     FallbackProgramListResponse:
       type: object
       description: The body of GET /fallback-programs.
@@ -22742,3 +22826,111 @@ components:
         acknowledgedAt:
           type: string
           format: date-time
+    FallbackPlayerState:
+      type: object
+      description: >-
+        What this FPP player's plugin last reported about running the show
+        from its fallback program, and what the coordinator does about it.
+        Absent when the plugin has never reported. playlistName, packageId,
+        packageRevision and cutoffAt are present only while state is
+        "fallback" or "resting".
+      additionalProperties: false
+      required: [state, since, reportedAt, pluginReporting, held]
+      properties:
+        state:
+          type: string
+          enum: [normal, fallback, resting]
+          description: >-
+            "fallback" while the plugin starts the show's Cues itself,
+            "resting" once its program reached its end time and it starts
+            nothing more, "normal" otherwise.
+        since:
+          type: string
+          format: date-time
+          description: When the plugin entered this state, on the plugin's clock.
+        playlistName:
+          type: string
+          description: The playlist that was playing when the plugin entered fallback.
+        packageId:
+          type: string
+        packageRevision:
+          type: string
+        cutoffAt:
+          type: string
+          description: When the plugin's program ends, as the plugin reported it. No new Cue starts from the plugin after this time.
+        reportedAt:
+          type: string
+          format: date-time
+          description: When the latest report arrived.
+        pluginReporting:
+          type: boolean
+          description: False when a plugin that reported before has sent no report for more than 45 seconds.
+        held:
+          type: boolean
+          description: True while the coordinator starts no Cues for this player and does not advance a night session that uses it.
+        holdReason:
+          type: string
+          enum: [running-from-fallback, waiting-for-acknowledgement, coordinator-starting]
+          description: Present only while held is true.
+        acknowledgementWaitSeconds:
+          type: integer
+          description: >-
+            Present only while holdReason is "waiting-for-acknowledgement":
+            how long the coordinator has waited for this player to confirm
+            its current program after handing the show back.
+        message:
+          type: string
+          description: One or two sentences for an operator. Absent when there is nothing to say.
+    FallbackStateReportRequest:
+      type: object
+      description: >-
+        The request body of PUT /fallback-programs/{fppInstanceId}/fallback-state
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 5.15). playlistName,
+        packageId, packageRevision and cutoffAt are required when state is
+        "fallback" or "resting" and must be absent when it is "normal". A
+        member not listed here is ignored.
+      required: [schemaVersion, bootId, sequence, state, since]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        bootId:
+          type: string
+          description: A UUID in its 36 character lowercase form that the plugin creates each time it starts.
+        sequence:
+          type: integer
+          minimum: 1
+          description: Greater than in every earlier report with this bootId.
+        state:
+          type: string
+          enum: [normal, fallback, resting]
+        since:
+          type: string
+          format: date-time
+        playlistName:
+          type: string
+        packageId:
+          type: string
+        packageRevision:
+          type: string
+        cutoffAt:
+          type: string
+          format: date-time
+    FallbackStateReportResponse:
+      type: object
+      description: The response body of PUT /fallback-programs/{fppInstanceId}/fallback-state.
+      additionalProperties: false
+      required: [serverTime, fppInstanceUuid, recorded, state]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        fppInstanceUuid:
+          type: string
+        recorded:
+          type: boolean
+          description: False when an equal or newer report from the same plugin start was already stored and kept.
+        state:
+          type: string
+          enum: [normal, fallback, resting]
+          description: The state the coordinator now holds for this player.

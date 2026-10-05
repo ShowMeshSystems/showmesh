@@ -817,6 +817,7 @@ func (w *handbackWorld) listedPlayerState() *v1.FallbackPlayerState {
 	if status != http.StatusOK {
 		w.t.Fatalf("list fallback programs: status %d, body %s", status, raw)
 	}
+	assertMatchesSchema(w.t, newOpenAPICompiler(w.t), "FallbackProgramListResponse", raw)
 	var resp v1.FallbackProgramListResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		w.t.Fatalf("decode fallback program list: %v", err)

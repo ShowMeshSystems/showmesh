@@ -62,6 +62,7 @@ func TestFallbackStateReportIsStoredAndAnsweredAndAuditedOnlyOnAChange(t *testin
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first report: status %d, body %s", resp.StatusCode, raw)
 	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "FallbackStateReportResponse", raw)
 	var out v1.FallbackStateReportResponse
 	if err := json.Unmarshal(raw, &out); err != nil || !out.Recorded || out.State != "normal" || out.FPPInstanceUUID != executorKeyTestInstanceUUID {
 		t.Fatalf("first report answer = %+v err %v, want recorded normal for this player", out, err)

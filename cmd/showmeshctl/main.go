@@ -94,6 +94,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdAssets(rest, stdout, stderr, clock)
 	case "cuecatalog":
 		return cmdCueCatalog(rest, stdout, stderr, clock)
+	case "fallback":
+		return cmdFallback(rest, stdout, stderr, clock)
 	case "principal":
 		return cmdPrincipal(rest, stdout, stderr, clock)
 	case "token":
@@ -387,6 +389,12 @@ Commands:
   cuecatalog deploy <nodeId>           resolve this coordinator's current Cue catalog for
                                         <nodeId> and push it to the node (write, requires the
                                         cuecatalog:deploy scope, admin only)
+  fallback list                        every FPP player's fallback program, and whether its
+                                        plugin is running the show from it
+  fallback show <fpp-instance-uuid>    one FPP player's fallback state in full
+  fallback clear --confirm <fpp-instance-uuid>
+                                        forget one player's stored fallback state (write,
+                                        requires fpp:command)
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
   render settings get                  show the active render.settings configuration (Track B,
