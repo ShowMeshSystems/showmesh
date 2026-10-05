@@ -496,6 +496,14 @@ export function ShowNight() {
           </span>
         }
       >
+        {session.fallbackHold !== undefined && (
+          <Notice
+            tone="warn"
+            live="status"
+            headline={<>The night is not advancing: FPP player <span className="sm-data">{session.fallbackHold.fppInstanceId}</span> is held.</>}
+            explanation={session.fallbackHold.message}
+          />
+        )}
         <ButtonRow>
           <Button variant="primary" size="gloved" disabled={resumeShow.disabled} title={resumeShow.title} onClick={resumeShow.onClick}>
             {resumeShow.busy ? 'Resuming…' : 'Resume'}

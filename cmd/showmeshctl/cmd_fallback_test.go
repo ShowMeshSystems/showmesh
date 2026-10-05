@@ -171,7 +171,7 @@ func TestCmdFallbackWithNoSubcommandPrintsUsage(t *testing.T) {
 
 func TestNightSessionPrintSaysWhichHeldPlayerTheNightWaitsOn(t *testing.T) {
 	var out bytes.Buffer
-	printNightSessionStateDetail(&out, nightSessionStateWire{State: "live", FallbackHold: &nightFallbackHold{
+	printNightSessionStateDetail(&out, nightSessionStateWire{ID: "sess-1", State: "live", FallbackHold: &nightFallbackHold{
 		FPPInstanceID: "fpp-main", FPPInstanceUUID: "u-fallback", Reason: "running-from-fallback",
 		Message: "This player is running the show from its fallback program. The coordinator starts no Cues for it until the playlist ends.",
 	}})
