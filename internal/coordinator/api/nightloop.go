@@ -432,9 +432,7 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
-	if nightLightsConfigured(payload) {
-		h.nightLightsRestore(ctx, now, rec, payload, "preshow")
-	}
+	h.nightLightsRestore(ctx, now, rec, payload, "preshow")
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.Playlist, true, 0, fppIfBusyRefuse)
 	if !changed {
 		return
@@ -695,7 +693,7 @@ func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec s
 		cur.DegradedReason = reason
 		return cur
 	})
-	h.nightLightsRestoreIfFading(ctx, now, rec, "degrade")
+	h.nightLightsRestoreFor(ctx, now, rec, "degrade")
 }
 
 func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {

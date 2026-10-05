@@ -42,6 +42,9 @@ type lightsNight struct {
 	noPosition    bool
 	failIf        func(f nightLightingFade, instance string) bool
 	hang          bool
+	delay         func(f nightLightingFade) time.Duration
+	reportedGain  *int64
+	fadeActive    bool
 }
 
 func (n *lightsNight) record(s string) {
@@ -53,7 +56,26 @@ func (n *lightsNight) record(s string) {
 func (n *lightsNight) events() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return append([]string(nil), n.log...)
+	var out []string
+	for _, e := range n.log {
+		if !strings.HasPrefix(e, "land:") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// landings lists the gains that reached the player, in the order they landed.
+func (n *lightsNight) landings() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []string
+	for _, e := range n.log {
+		if strings.HasPrefix(e, "land:") {
+			out = append(out, strings.TrimPrefix(e, "land:"))
+		}
+	}
+	return out
 }
 
 func (n *lightsNight) gainCount() int {
@@ -64,8 +86,32 @@ func (n *lightsNight) gainCount() int {
 
 // tick runs one controller tick and then lets the gain writes it started finish.
 func (n *lightsNight) tick() {
+	n.publishReportedGain()
 	n.h.nightTick(context.Background(), n.now)
 	n.h.nightLightsGain.wait()
+}
+
+// publishReportedGain adds the plugin's own gain report, as the brightness
+// collector would, to what the controller reads.
+func (n *lightsNight) publishReportedGain() {
+	n.mu.Lock()
+	gain, active := n.reportedGain, n.fadeActive
+	n.mu.Unlock()
+	if gain == nil {
+		return
+	}
+	kept := n.host.obs.obs[:0:0]
+	for _, o := range n.host.obs.obs {
+		if o.Signal != nightLightsSignalTransitionGain && o.Signal != nightLightsSignalFadeActive {
+			kept = append(kept, o)
+		}
+	}
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+	at := n.now
+	for sig, v := range map[observation.SignalID]any{nightLightsSignalTransitionGain: *gain, nightLightsSignalFadeActive: active} {
+		kept = append(kept, observation.Observation{Resource: res, Signal: sig, Value: v, ObservedAt: &at, CollectedAt: at, Source: "fpp-brightness", Quality: observation.QualityDirect, ValidFor: time.Minute})
+	}
+	n.host.obs.obs = kept
 }
 
 func (n *lightsNight) advance(d time.Duration)           { n.now = n.now.Add(d) }
@@ -201,9 +247,19 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 				<-ctx.Done()
 				return fppcommand.TransitionGainOutcome{}, ctx.Err()
 			}
+			if n.delay != nil {
+				if d := n.delay(fade); d > 0 {
+					select {
+					case <-time.After(d):
+					case <-ctx.Done():
+						return fppcommand.TransitionGainOutcome{}, ctx.Err()
+					}
+				}
+			}
 			if fail {
 				return fppcommand.TransitionGainOutcome{}, errors.New("the plugin did not answer")
 			}
+			n.record(fmt.Sprintf("land:%d", fade.TargetPercent))
 			return fppcommand.TransitionGainOutcome{Applied: true}, nil
 		},
 	}
@@ -284,7 +340,8 @@ func TestLightsFade_GainIsFullBeforeEveryShowPlaylistStarts(t *testing.T) {
 	n.openToFirstShow()
 
 	ev := n.events()
-	gain, start := eventIndex(ev, "gain:player-01:100:0s"), eventIndex(ev, "start:halloween-show")
+	pre := eventIndex(ev, "start:halloween-resting")
+	gain, start := eventIndex(ev[pre+1:], "gain:player-01:100:0s"), eventIndex(ev[pre+1:], "start:halloween-show")
 	if gain < 0 || start < 0 || gain > start {
 		t.Fatalf("the first show must be preceded by gain 100 at once; events: %v", ev)
 	}
@@ -297,7 +354,7 @@ func TestLightsFade_GainIsFullBeforeEveryShowPlaylistStarts(t *testing.T) {
 	n.tick()
 	n.mustState("second show launch", nightStateLive)
 
-	rest := n.events()[start+1:]
+	rest := n.events()[pre+1+start+1:]
 	second, secondGain := eventIndex(rest, "start:halloween-show"), eventIndex(rest, "gain:player-01:100:0s")
 	if second < 0 || secondGain < 0 || secondGain > second {
 		t.Fatalf("the second show must also be preceded by gain 100; events after the first launch: %v", rest)
@@ -447,7 +504,7 @@ func TestLightsFade_FadeInIsRetriedUntilItLands(t *testing.T) {
 	if ups != 3 {
 		t.Fatalf("expected two failed writes and one that lands, got %d: %v", ups, n.events())
 	}
-	if !n.h.nightLightsGain.stepDone(nightLightsKey(n.session(), nightLightsStepFadeIn)) {
+	if !n.h.nightLightsGain.stepDone(n.session(), nightLightsKey(n.session(), nightLightsStepFadeIn)) {
 		t.Fatal("the fade-in never landed")
 	}
 	failures := n.failedEvents()
@@ -510,23 +567,28 @@ func TestLightsFade_EndOfNightAndNextPreshowRestoreTheGain(t *testing.T) {
 	n.openToFirstShow()
 	n.endShowIntoResting()
 	end := n.restingEnd()
+	n.setFail(func(f nightLightingFade, _ string) bool { return f.TargetPercent == 0 })
 	n.advance(end.Add(-20 * time.Second).Sub(n.now))
 	n.host.setPlaying("halloween-resting", 0)
 	n.tick()
 	n.tick()
 	before := len(n.events())
+	if before == 0 || eventIndex(n.events(), "gain:player-01:0:20s") < 0 {
+		t.Fatalf("the fade-out should have been attempted: %v", n.events())
+	}
 
-	// An emergency stop writes nothing.
+	// An emergency stop writes nothing, even with a retry due.
 	if _, _ = n.h.nightEmergencyStopHold(context.Background(), n.now, identity.AuditEntry{PrincipalName: "operator-1"}); n.session().StopHold == nil {
 		t.Fatal("the emergency stop did not hold the night")
 	}
-	n.advance(time.Second)
+	n.advance(nightLightsRetryBackoff + time.Second)
 	n.tick()
 	if got := n.events()[before:]; len(got) != 0 {
-		t.Fatalf("a stop must not write the gain, got %v", got)
+		t.Fatalf("a stop must not write the gain, even with a retry due, got %v", got)
 	}
 
 	// The session ends inside the fade window: the gain comes back.
+	n.setFail(nil)
 	mustNightCommand(t, n.api, n.token, "end-session")
 	n.advance(time.Second)
 	n.tick()
@@ -534,6 +596,14 @@ func TestLightsFade_EndOfNightAndNextPreshowRestoreTheGain(t *testing.T) {
 	n.tick()
 	if got := joined(n.events()[before:]); got != "gain:player-01:100:0s" {
 		t.Fatalf("ending the night must restore the gain once, got %q", got)
+	}
+	rec := n.session()
+	n.h.nightLightsGain.mu.Lock()
+	sess := n.h.nightLightsGain.sessions[rec.ID]
+	pruned := sess != nil && sess.ended && len(sess.steps) == 0 && len(sess.fadeOut) == 0 && len(sess.reported) == 0
+	n.h.nightLightsGain.mu.Unlock()
+	if !pruned {
+		t.Fatal("a finished night's gain memory should be dropped")
 	}
 }
 
@@ -546,8 +616,8 @@ func TestLightsFade_PreshowStartsAtFullBrightnessWhenFadesAreConfigured(t *testi
 	}
 	plain := newLightsNight(t, "")
 	plain.prepareAndStartPreshow()
-	if len(plain.events()) != 1 || plain.events()[0] != "start:halloween-resting" {
-		t.Fatalf("a night with no fades writes no gain at pre-show: %v", plain.events())
+	if eventIndex(plain.events(), "gain:player-01:100:0s") < 0 {
+		t.Fatalf("every night starts pre-show at full brightness, whatever configured its fades: %v", plain.events())
 	}
 }
 
@@ -651,7 +721,7 @@ func TestLightsFade_AFailedGainWriteNeverBlocksTheShow(t *testing.T) {
 	n.setFail(nil)
 	n.advance(nightLightsRetryBackoff)
 	n.tick()
-	if !n.h.nightLightsGain.stepDone(nightLightsKey(n.session(), nightLightsStepShowGain)) {
+	if !n.h.nightLightsGain.stepDone(n.session(), nightLightsKey(n.session(), nightLightsStepShowGain)) {
 		t.Fatal("the show gain was not retried until it landed")
 	}
 }
@@ -748,4 +818,301 @@ func TestLightsFade_ReadinessNamesEachFadeAndWarnsWhenTheyDoNotFit(t *testing.T)
 	if got := n.h.nightCheckLightsFades(context.Background(), config.NightSessionPayload{}); len(got) != 0 {
 		t.Fatalf("no fade configured must add no check: %+v", got)
 	}
+}
+
+func (n *lightsNight) tickNoWait() {
+	n.publishReportedGain()
+	n.h.nightTick(context.Background(), n.now)
+}
+
+// settle runs ticks, letting each tick's writes finish first, until the
+// controller has had every chance to land its newest write.
+func (n *lightsNight) settle(ticks int) {
+	for i := 0; i < ticks; i++ {
+		n.h.nightLightsGain.wait()
+		n.advance(time.Second)
+		n.tick()
+	}
+}
+
+func lastLanding(t *testing.T, n *lightsNight) string {
+	t.Helper()
+	l := n.landings()
+	if len(l) == 0 {
+		t.Fatal("no gain write landed")
+	}
+	return l[len(l)-1]
+}
+
+// openInsideFadeOutWindow leaves the fade-out written and still in flight.
+func openInsideFadeOutWindow(n *lightsNight) time.Time {
+	n.awaitShowGain = false
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	end := n.restingEnd()
+	n.advance(end.Add(-20 * time.Second).Sub(n.now))
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.delay = func(f nightLightingFade) time.Duration {
+		if f.TargetPercent == 0 {
+			return 1200 * time.Millisecond
+		}
+		return 0
+	}
+	n.tickNoWait()
+	return end
+}
+
+// A fade-out still on its way to the player must not land after the write that
+// brings the lights back.
+func TestLightsFade_ADelayedFadeOutNeverLandsAfterTheShowGain(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	end := openInsideFadeOutWindow(n)
+
+	n.advance(end.Sub(n.now) + time.Second)
+	n.host.setIdle()
+	n.tickNoWait()
+	n.mustState("show launched while the fade-out is still in flight", nightStateLive)
+	n.settle(6)
+	if got := lastLanding(t, n); got != "100" {
+		t.Fatalf("the lights must end at 100, landings: %v", n.landings())
+	}
+	if !n.h.nightLightsGain.stepDone(n.session(), nightLightsKey(n.session(), nightLightsStepShowGain)) {
+		t.Fatal("the show gain never landed")
+	}
+}
+
+func TestLightsFade_ADelayedFadeOutNeverLandsAfterAnAbandonRestore(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	openInsideFadeOutWindow(n)
+	n.advance(time.Second)
+	n.host.setPlaying("something-else", 0)
+	n.tickNoWait()
+	n.mustState("transition abandoned", nightStateRestingIntershow)
+	n.host.setPlaying("halloween-resting", 0)
+	n.settle(3)
+	if n.session().Degraded {
+		t.Fatal("the test must not rely on a degrade restore")
+	}
+	if got := lastLanding(t, n); got != "100" {
+		t.Fatalf("the lights must end at 100, landings: %v", n.landings())
+	}
+}
+
+func TestLightsFade_ADelayedFadeOutNeverLandsAfterADegradeRestore(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	openInsideFadeOutWindow(n)
+	n.h.nightDegradeSession(context.Background(), n.now, n.session(), "test")
+	n.settle(6)
+	if got := lastLanding(t, n); got != "100" {
+		t.Fatalf("the lights must end at 100, landings: %v", n.landings())
+	}
+}
+
+// A dim to 0 that is slow must not land after the fade-in.
+func TestLightsFade_ASlowDimNeverLandsAfterTheFadeIn(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeInMs": 8000, `)
+	n.awaitRestGain = false
+	n.openToFirstShow()
+	n.delay = func(f nightLightingFade) time.Duration {
+		if f.TargetPercent == 0 {
+			return 400 * time.Millisecond
+		}
+		return 0
+	}
+	n.advance(30 * time.Second)
+	n.host.setIdle()
+	n.tickNoWait()
+	n.advance(time.Second)
+	n.tickNoWait()
+	n.settle(6)
+	l := n.landings()
+	if len(l) < 2 || l[len(l)-2] != "0" || l[len(l)-1] != "100" {
+		t.Fatalf("the dim must land before the fade-in, landings: %v", l)
+	}
+}
+
+// Only the newest desired gain is written once the player is free.
+func TestLightsFade_TheNewestDesiredGainWins(t *testing.T) {
+	n := newLightsNight(t, "")
+	n.delay = func(f nightLightingFade) time.Duration {
+		if f.TargetPercent == 0 {
+			return 300 * time.Millisecond
+		}
+		return 0
+	}
+	payload := config.NightSessionPayload{Resting: config.NightSessionResting{FPPInstanceID: "player-01"}}
+	rec := store.NightSessionRecord{ID: "sess-y", Cycle: 1}
+	ctx := context.Background()
+	n.h.nightLightsStart(ctx, n.now, rec, payload, nightLightsStep{step: "a", target: 0})
+	n.h.nightLightsStart(ctx, n.now, rec, payload, nightLightsStep{step: "b", target: 50})
+	n.h.nightLightsStart(ctx, n.now, rec, payload, nightLightsStep{step: "c", target: 100})
+	n.h.nightLightsGain.wait()
+	n.h.nightLightsAdvance(ctx, n.now, rec)
+	n.h.nightLightsGain.wait()
+	if got := joined(n.landings()); got != "0,100" {
+		t.Fatalf("the queued write must carry the newest desired gain, landings: %v", got)
+	}
+}
+
+// A request the coordinator gave up on that the player applies later is
+// closed by the gain the player reports.
+func TestLightsFade_AReportedGainBelowDesiredIsWrittenAgainOncePerInterval(t *testing.T) {
+	n := newLightsNight(t, "")
+	n.openToFirstShow()
+	full := func() int {
+		c := 0
+		for _, e := range n.events() {
+			if e == "gain:player-01:100:0s" {
+				c++
+			}
+		}
+		return c
+	}
+	base := full()
+
+	low := int64(20)
+	n.mu.Lock()
+	n.reportedGain = &low
+	n.fadeActive = true
+	n.mu.Unlock()
+	n.advance(4 * time.Second)
+	n.tick()
+	if full() != base {
+		t.Fatal("a fade the player reports as running must not be corrected")
+	}
+
+	n.mu.Lock()
+	n.fadeActive = false
+	n.mu.Unlock()
+	n.advance(time.Second)
+	n.tick()
+	if full() != base+1 {
+		t.Fatalf("a reported gain of 20 after the show gain must be written to 100 again: %v", n.events())
+	}
+	n.advance(time.Second)
+	n.tick()
+	if full() != base+1 {
+		t.Fatal("the correction is rate-limited")
+	}
+	n.advance(nightLightsReconcileInterval)
+	n.tick()
+	if full() != base+2 {
+		t.Fatal("a still-low gain is corrected again after the interval")
+	}
+	var seen bool
+	for _, e := range n.failedEvents() {
+		seen = seen || strings.Contains(e.Summary, "dimmer than expected")
+	}
+	if !seen {
+		t.Fatal("the correction must be reported")
+	}
+
+	n.mu.Lock()
+	full100 := int64(100)
+	n.reportedGain = &full100
+	n.mu.Unlock()
+	n.advance(nightLightsReconcileInterval + time.Second)
+	n.tick()
+	if full() != base+2 {
+		t.Fatal("a player reporting 100 needs no correction")
+	}
+}
+
+// The reviewer's sequence: a harmless report early must not hide a later
+// failure that leaves resting dark.
+func TestLightsFade_AFadeInFailureIsReportedEvenAfterAHarmlessOne(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, "lightsFadeInMs": 8000, `)
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	end := n.restingEnd()
+	n.setFail(func(f nightLightingFade, _ string) bool { return f.TargetPercent == 0 && f.FadeSeconds > 0 })
+	n.advance(end.Add(-20 * time.Second).Sub(n.now))
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.tick()
+	n.advance(end.Sub(n.now) + time.Second)
+	n.host.setIdle()
+	n.tick()
+	n.advance(time.Second)
+	n.tick()
+	n.mustState("second show", nightStateLive)
+
+	n.setFail(func(f nightLightingFade, _ string) bool { return f.TargetPercent == 100 && f.FadeSeconds == 8 })
+	n.endShowIntoResting()
+	var out, dark bool
+	for _, e := range n.failedEvents() {
+		out = out || strings.Contains(e.Summary, "did not fade out")
+		dark = dark || strings.Contains(e.Summary, "may be dark")
+	}
+	if !out || !dark {
+		t.Fatalf("both the harmless report and the may-be-dark report are expected: %+v", n.failedEvents())
+	}
+}
+
+// A write that brings the gain back to 100 keeps trying, slowly, after the
+// two-minute window.
+func TestLightsFade_ARestoreToFullKeepsRetryingSlowlyAfterTheWindow(t *testing.T) {
+	n := newLightsNight(t, "")
+	start := n.now
+	n.setFail(func(nightLightingFade, string) bool { return n.now.Before(start.Add(4 * time.Minute)) })
+	payload := config.NightSessionPayload{Resting: config.NightSessionResting{FPPInstanceID: "player-01"}}
+	rec := store.NightSessionRecord{ID: "sess-z", Cycle: 1}
+	ctx := context.Background()
+	n.h.nightLightsStart(ctx, n.now, rec, payload, nightLightsStep{step: nightLightsStepFadeIn, target: 100, seconds: 8})
+	n.h.nightLightsGain.wait()
+	for i := 0; i < 30 && !n.h.nightLightsGain.stepDone(rec, nightLightsKey(rec, nightLightsStepFadeIn)); i++ {
+		n.advance(10 * time.Second)
+		n.h.nightLightsAdvance(ctx, n.now, rec)
+		n.h.nightLightsGain.wait()
+	}
+	if !n.h.nightLightsGain.stepDone(rec, nightLightsKey(rec, nightLightsStepFadeIn)) {
+		t.Fatal("the write back to 100 stopped retrying")
+	}
+	ev := n.events()
+	if last := ev[len(ev)-1]; last != "gain:player-01:100:0s" {
+		t.Fatalf("a late retry restores at once, got %q", last)
+	}
+}
+
+func TestLightsFade_ACueOnlyFadeStillGetsTheRestoreAtDegradeEndAndPreshow(t *testing.T) {
+	cue := `{"name": "dim", "role": "lighting", "action": "lights-cue", "offsetMs": -20000, "fadeDurationMs": 3000}`
+	count := func(n *lightsNight) int {
+		c := 0
+		for _, e := range n.events() {
+			if e == "gain:player-01:100:0s" {
+				c++
+			}
+		}
+		return c
+	}
+	t.Run("pre-show", func(t *testing.T) {
+		n := newLightsNightWithCues(t, "", cue, "")
+		n.prepareAndStartPreshow()
+		if count(n) == 0 {
+			t.Fatalf("pre-show must restore the gain: %v", n.events())
+		}
+	})
+	t.Run("degrade", func(t *testing.T) {
+		n := newLightsNightWithCues(t, "", cue, "")
+		n.openToFirstShow()
+		base := count(n)
+		n.h.nightDegradeSession(context.Background(), n.now, n.session(), "test")
+		n.h.nightLightsGain.wait()
+		if count(n) != base+1 {
+			t.Fatalf("a degrade must restore the gain: %v", n.events())
+		}
+	})
+	t.Run("end of night", func(t *testing.T) {
+		n := newLightsNightWithCues(t, "", cue, "")
+		n.openToFirstShow()
+		base := count(n)
+		mustNightCommand(t, n.api, n.token, "end-session")
+		n.advance(time.Second)
+		n.tick()
+		n.tick()
+		if count(n) != base+1 {
+			t.Fatalf("the end of the night must restore the gain once: %v", n.events())
+		}
+	})
 }
