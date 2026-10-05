@@ -10,24 +10,17 @@ import (
 	"testing"
 )
 
-// realFileDirs are searched for real xLights-written .fseq artifacts.
-// ~/Documents and ~/Downloads are where RES-017 found the 198 files this
-// package cites as evidence; ~/showmesh-fseq-samples is a directory the
-// track orchestrator asked builders to also check, deliberately outside
-// every git worktree because this repository is public and show content
-// must never be committed to it. None of these paths exist on another
-// machine or in CI, so their absence is a clean skip, never a failure.
+// realFileDirs are searched for real xLights-written .fseq files. Only the
+// dedicated samples directory is read: it sits outside every git worktree
+// because show content must never be committed here, and a machine's other
+// folders hold work in progress these tests have no business judging.
 func realFileDirs(t *testing.T) []string {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skipf("cannot determine home directory to look for real .fseq files: %v", err)
 	}
-	return []string{
-		filepath.Join(home, "Documents"),
-		filepath.Join(home, "Downloads"),
-		filepath.Join(home, "showmesh-fseq-samples"),
-	}
+	return []string{filepath.Join(home, "showmesh-fseq-samples")}
 }
 
 func findRealFseqFiles(t *testing.T) []string {
@@ -152,7 +145,7 @@ var zstdMagic = [4]byte{0x28, 0xB5, 0x2F, 0xFD}
 func TestRealFiles_StructuralInvariants(t *testing.T) {
 	files := findRealFseqFiles(t)
 	if len(files) == 0 {
-		t.Skip("no real .fseq files found under ~/Documents, ~/Downloads or ~/showmesh-fseq-samples; skipping real-file verification (this is expected on a machine other than the one RES-017 was researched on)")
+		t.Skip("no real .fseq files found under ~/showmesh-fseq-samples; skipping real-file verification")
 	}
 	t.Logf("found %d real .fseq files", len(files))
 
