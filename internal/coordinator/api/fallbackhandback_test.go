@@ -384,6 +384,9 @@ func (p *handbackPlugin) probe() {
 	p.lossConfirmed = false
 	if recovered {
 		p.report()
+		if p.state == fallbackhold.StateNormal {
+			p.fetchProgram(true)
+		}
 	}
 }
 
@@ -398,13 +401,14 @@ func (p *handbackPlugin) periodic() {
 	}
 	p.report()
 	if p.state == fallbackhold.StateNormal && p.probeOK {
-		p.fetchProgram()
+		p.fetchProgram(false)
 	}
 }
 
 // fetchProgram is section 5.12: fetch, and when the copy differs, verify,
-// install and acknowledge it.
-func (p *handbackPlugin) fetchProgram() {
+// install and acknowledge it. alwaysAcknowledge is the fetch at a
+// hand-back, which acknowledges the copy held whether or not it changed.
+func (p *handbackPlugin) fetchProgram(alwaysAcknowledge bool) {
 	p.w.t.Helper()
 	status, raw, ok := p.w.request(http.MethodGet, "/api/v1/fallback-programs/"+handbackInstanceUUID, p.w.token, nil)
 	if !ok {
@@ -436,8 +440,9 @@ func (p *handbackPlugin) fetchProgram() {
 	if err := json.Unmarshal(resp.Program, &program); err != nil {
 		p.w.t.Fatalf("decode fetched program: %v", err)
 	}
-	if p.installed != nil && p.installed.PackageID == program.PackageID && p.installed.Revision == program.Revision &&
-		p.installed.ExpiresAt.Equal(program.ExpiresAt) {
+	unchanged := p.installed != nil && p.installed.PackageID == program.PackageID && p.installed.Revision == program.Revision &&
+		p.installed.ExpiresAt.Equal(program.ExpiresAt)
+	if unchanged && !alwaysAcknowledge {
 		return
 	}
 	p.installed = &program
@@ -528,7 +533,7 @@ func (p *handbackPlugin) stopPlaylist() {
 	p.enteredPlaylist = ""
 	p.setState(fallbackhold.StateNormal)
 	if p.probeOK {
-		p.fetchProgram()
+		p.fetchProgram(true)
 	}
 }
 
@@ -756,7 +761,7 @@ func TestHandbackWaitsForTheProgramAcknowledgementAndAnOperatorCanClearIt(t *tes
 		name    string
 		release func(w *handbackWorld)
 	}{
-		{"the plugin acknowledges", func(w *handbackWorld) { w.plugin.fetchProgram() }},
+		{"the plugin acknowledges", func(w *handbackWorld) { w.plugin.fetchProgram(true) }},
 		{"an operator clears the stored state", func(w *handbackWorld) {
 			status, raw, _ := w.request(http.MethodDelete, "/api/v1/fallback-programs/"+handbackInstanceUUID+"/fallback-state", w.operatorToken, nil)
 			if status != http.StatusNoContent {

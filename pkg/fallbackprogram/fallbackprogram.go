@@ -93,20 +93,17 @@ type EntryMapping struct {
 // needs an operator-configurable rule adds the field and the
 // configuration kind that backs it; this shape does not preclude that.
 type Rules struct {
-	// FallbackBoundary states ADR-048 decision 2's own constraint: the
-	// plugin may only act at a safe FPP playback boundary, never
-	// mid-entry. Fixed at "safe-playback-boundary".
+	// FallbackBoundary: the plugin acts only at an entry boundary, never
+	// inside an entry. Fixed at "safe-playback-boundary".
 	FallbackBoundary string `json:"fallbackBoundary"`
-	// RestHold is the declared behavior at the plugin's configured
-	// cutoff (ADR-048 decision 2, state 3: Resting). Fixed at "hold".
+	// RestHold: from the cutoff, which is ExpiresAt, the plugin sends no
+	// node anything and stops nothing. Fixed at "hold".
 	RestHold string `json:"restHold"`
-	// LocalShutdown is the declared local-shutdown behavior bundled with
-	// RestHold. Fixed at "local-shutdown".
+	// LocalShutdown: after the cutoff, stopping is left to FPP's schedule
+	// and to each output's own media end. Fixed at "local-shutdown".
 	LocalShutdown string `json:"localShutdown"`
-	// RecoveryBoundary is ADR-048 decision 4's own rule: the coordinator
-	// resumes normal Cue resolution only at the next normal
-	// scheduled-show boundary, never by a mid-show takeover. Fixed at
-	// "next-scheduled-show-boundary".
+	// RecoveryBoundary: the plugin hands back when FPP stops the playlist
+	// it entered fallback under. Fixed at "next-scheduled-show-boundary".
 	RecoveryBoundary string `json:"recoveryBoundary"`
 }
 
