@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -32,25 +33,15 @@ const (
 	// interval after the window, for as long as it is the newest write.
 	nightLightsSlowRetry = 30 * time.Second
 
-	// The reported gain is checked once a fade has had this long to finish,
-	// and a correction is written at most this often per player.
-	nightLightsReconcileMargin   = 3 * time.Second
-	nightLightsReconcileInterval = 30 * time.Second
-
-	nightLightsSignalTransitionGain = "fpp.brightness.transition_gain"
-	nightLightsSignalFadeActive     = "fpp.brightness.fade_active"
-
 	nightEventCategoryLightsGainFailed = "night.lights.gain_failed"
 )
 
 // nightLightsInstanceState is one FPP instance's progress through a step.
 type nightLightsInstanceState struct {
 	done        bool
+	yielded     bool
 	attempts    int
 	attemptedAt time.Time
-	doneAt      time.Time
-	requestN    int
-	immediate   bool
 }
 
 // nightLightsStep is one gain write across the covered instances, with what a
@@ -72,12 +63,11 @@ type nightLightsStep struct {
 
 // nightLightsSession is everything remembered about one night session.
 type nightLightsSession struct {
-	steps         map[string]*nightLightsStep
-	fadeOut       map[int64]bool
-	reported      map[string]bool
-	busy          map[string]bool
-	lastReconcile map[string]time.Time
-	ended         bool
+	steps    map[string]*nightLightsStep
+	fadeOut  map[int64]bool
+	reported map[string]bool
+	busy     map[string]bool
+	ended    bool
 }
 
 // nightLightsGainLog is the in-memory record of the night's gain writes. A
@@ -99,11 +89,27 @@ func (l *nightLightsGainLog) session(id string) *nightLightsSession {
 	if s == nil {
 		s = &nightLightsSession{
 			steps: map[string]*nightLightsStep{}, fadeOut: map[int64]bool{}, reported: map[string]bool{},
-			busy: map[string]bool{}, lastReconcile: map[string]time.Time{},
+			busy: map[string]bool{},
 		}
 		l.sessions[id] = s
 	}
 	return s
+}
+
+// nightLightsRegistry shares one lights memory between every *handlers built
+// over the same night store: the night loop and the operator's gain route are
+// separate handlers, and the route must make a pending lights write yield.
+var nightLightsRegistry sync.Map
+
+func (h *handlers) lights() *nightLightsGainLog {
+	if k := h.deps.NightSessions; k != nil && reflect.TypeOf(k).Comparable() {
+		v, _ := nightLightsRegistry.LoadOrStore(k, &nightLightsGainLog{})
+		return v.(*nightLightsGainLog)
+	}
+	if h.nightLightsLocal == nil {
+		h.nightLightsLocal = &nightLightsGainLog{}
+	}
+	return h.nightLightsLocal
 }
 
 func nightLightsKey(rec store.NightSessionRecord, step string) string {
@@ -191,7 +197,7 @@ func (h *handlers) nightLightsStart(ctx context.Context, now time.Time, rec stor
 		st.retryUntil = now.Add(nightLightsRetryWindow)
 	}
 
-	l := &h.nightLightsGain
+	l := h.lights()
 	l.mu.Lock()
 	sess := l.session(rec.ID)
 	if _, exists := sess.steps[st.key]; exists {
@@ -209,11 +215,10 @@ func (h *handlers) nightLightsStart(ctx context.Context, now time.Time, rec stor
 }
 
 // nightLightsAdvance runs on every tick for the current session, whatever its
-// state: it retries failed writes, corrects a gain the player reports below
-// the desired value, and restores the gain once a night is over.
+// state: it retries failed writes and restores the gain once a night is over.
 // While an emergency stop holds the night it writes nothing: a stop lights nothing.
 func (h *handlers) nightLightsAdvance(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
-	l := &h.nightLightsGain
+	l := h.lights()
 	l.mu.Lock()
 	for id := range l.sessions {
 		if id != rec.ID {
@@ -245,24 +250,26 @@ func (h *handlers) nightLightsAdvance(ctx context.Context, now time.Time, rec st
 	for _, st := range due {
 		h.nightLightsLaunchDue(ctx, now, st)
 	}
-	h.nightLightsReconcile(ctx, now, rec)
 }
 
 func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *nightLightsStep) {
-	l := &h.nightLightsGain
+	l := h.lights()
 	type launch struct {
 		instance string
 		seconds  int
 		request  string
 	}
 	var launches []launch
+	if h.nightLightsHeld(ctx, st.rec.ID) {
+		return
+	}
 	l.mu.Lock()
 	sess := l.session(st.rec.ID)
 	if !st.cancelled {
 		for _, id := range st.instances {
 			is := st.inst[id]
 			lane := st.rec.ID + "|" + id
-			if is.done || sess.busy[lane] {
+			if is.done || is.yielded || sess.busy[lane] {
 				continue
 			}
 			late := now.After(st.retryUntil)
@@ -286,15 +293,12 @@ func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *
 			switch {
 			case !st.endsAt.IsZero():
 				seconds = nightLightsFadeSeconds(st.endsAt.Sub(now))
-			case is.immediate || (late && st.target == 100):
+			case late && st.target == 100:
 				seconds = 0
 			}
 			sess.busy[lane] = true
 			is.attempts, is.attemptedAt = is.attempts+1, now
 			request := st.key + ":" + id
-			if is.requestN > 0 {
-				request = fmt.Sprintf("%s:r%d", request, is.requestN)
-			}
 			launches = append(launches, launch{id, seconds, request})
 		}
 	}
@@ -307,7 +311,7 @@ func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *
 }
 
 func (h *handlers) nightLightsWrite(ctx context.Context, st *nightLightsStep, instanceID string, seconds int, request string) {
-	l := &h.nightLightsGain
+	l := h.lights()
 	defer l.wg.Done()
 	write := h.nightGainWriter
 	if write == nil {
@@ -321,10 +325,15 @@ func (h *handlers) nightLightsWrite(ctx context.Context, st *nightLightsStep, in
 	l.mu.Lock()
 	is := st.inst[instanceID]
 	is.done = err == nil
+	sess := l.session(st.rec.ID)
+	delete(sess.busy, st.rec.ID+"|"+instanceID)
 	if err == nil {
-		is.doneAt = h.clock()
+		for k := range sess.reported {
+			if strings.HasPrefix(k, instanceID+"|") {
+				delete(sess.reported, k)
+			}
+		}
 	}
-	delete(l.session(st.rec.ID).busy, st.rec.ID+"|"+instanceID)
 	l.mu.Unlock()
 	if err != nil {
 		h.logWarn("night loop: lights fade write failed", "sessionId", st.rec.ID, "instanceId", instanceID, "step", st.step, "error", err)
@@ -338,21 +347,16 @@ func nightLightsStepSummary(step, instanceID string) string {
 		return fmt.Sprintf("The lights on %s did not fade out. Check the brightness on that player.", instanceID)
 	case nightLightsStepDark:
 		return fmt.Sprintf("The lights on %s did not dim before resting. Check the brightness on that player.", instanceID)
-	case nightLightsStepReconcile:
-		return fmt.Sprintf("The lights on %s were dimmer than expected, so they were set to full again. Check the brightness on that player if this repeats.", instanceID)
 	default:
 		return fmt.Sprintf("The lights on %s may be dark. Set the brightness on that player.", instanceID)
 	}
 }
 
-const nightLightsStepReconcile = "lights-reconcile"
-
-// nightReportLights records an event once per night session, player and
-// message, so a harmless report never hides a later one that says the lights
-// may be dark.
+// nightReportLights records an event once per failure episode: per night
+// session, player and message, until a write to that player lands again.
 func (h *handlers) nightReportLights(ctx context.Context, rec store.NightSessionRecord, step, instanceID, cause string) {
 	summary := nightLightsStepSummary(step, instanceID)
-	l := &h.nightLightsGain
+	l := h.lights()
 	l.mu.Lock()
 	sess := l.session(rec.ID)
 	already := sess.reported[instanceID+"|"+summary]
@@ -378,68 +382,6 @@ func (h *handlers) nightReportLights(ctx context.Context, rec store.NightSession
 	}
 }
 
-// nightLightsReconcile closes what the ordering guard cannot: a request the
-// coordinator gave up on that the player applied later. When the newest write
-// was meant to bring the gain to 100 and the player reports a lower gain once
-// that fade should have finished, it writes 100 again, at most once per
-// nightLightsReconcileInterval per player.
-func (h *handlers) nightLightsReconcile(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
-	if h.deps.Observations == nil {
-		return
-	}
-	l := &h.nightLightsGain
-	type check struct {
-		instance string
-		after    time.Time
-		st       *nightLightsStep
-	}
-	var checks []check
-	l.mu.Lock()
-	sess := l.session(rec.ID)
-	var newest *nightLightsStep
-	for _, st := range sess.steps {
-		if newest == nil || st.seq > newest.seq {
-			newest = st
-		}
-	}
-	if newest != nil && newest.target == 100 {
-		for _, id := range newest.instances {
-			is := newest.inst[id]
-			lane := rec.ID + "|" + id
-			if !is.done || sess.busy[lane] || now.Sub(sess.lastReconcile[lane]) < nightLightsReconcileInterval {
-				continue
-			}
-			after := is.doneAt.Add(time.Duration(newest.seconds)*time.Second + nightLightsReconcileMargin)
-			if now.Before(after) {
-				continue
-			}
-			checks = append(checks, check{id, after, newest})
-		}
-	}
-	l.mu.Unlock()
-
-	for _, c := range checks {
-		gain, _, current, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, c.instance, nightLightsSignalTransitionGain, c.after, now)
-		if !current || nightAsInt64(gain) >= 100 {
-			continue
-		}
-		if active, _, ok, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, c.instance, nightLightsSignalFadeActive, c.after, now); ok {
-			if running, _ := active.(bool); running {
-				continue
-			}
-		}
-		l.mu.Lock()
-		is := c.st.inst[c.instance]
-		sess.lastReconcile[rec.ID+"|"+c.instance] = now
-		is.done, is.attempts, is.immediate = false, 0, true
-		is.requestN++
-		l.mu.Unlock()
-		h.logWarn("night loop: lights read below full after a write to full; writing it again", "sessionId", rec.ID, "instanceId", c.instance, "reportedGain", nightAsInt64(gain))
-		h.nightReportLights(ctx, rec, nightLightsStepReconcile, c.instance, fmt.Sprintf("reported gain %d", nightAsInt64(gain)))
-		h.nightLightsLaunchDue(ctx, now, c.st)
-	}
-}
-
 // nightAdvanceLightsFadeOut starts the fade-out so it finishes as the resting
 // sequence ends at boundaryE. The first show after pre-show has no such end.
 func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, boundaryE time.Time) {
@@ -453,7 +395,7 @@ func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time,
 	if now.Before(boundaryE.Add(-fadeOut)) || !now.Before(boundaryE) {
 		return
 	}
-	h.nightLightsGain.markFadeOut(rec)
+	h.lights().markFadeOut(rec)
 	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepFadeOut, target: 0, endsAt: boundaryE})
 }
 
@@ -474,7 +416,7 @@ func (h *handlers) nightRestingStopped(ctx context.Context, now time.Time, paylo
 // After any fade-out it waits for the resting playlist to be seen stopped, or
 // for the start, so the resting look is never lit again.
 func (h *handlers) nightRestoreShowGain(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, afterStart bool) {
-	if !afterStart && h.nightLightsGain.fadeOutRan(rec) && !h.nightRestingStopped(ctx, now, payload) {
+	if !afterStart && h.lights().fadeOutRan(rec) && !h.nightRestingStopped(ctx, now, payload) {
 		return
 	}
 	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepShowGain, target: 100})
@@ -522,11 +464,11 @@ func (h *handlers) nightLightsRestoreFor(ctx context.Context, now time.Time, rec
 // the session's memory.
 func (h *handlers) nightLightsRestoreAtEnd(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	key := nightLightsKey(rec, nightLightsStepRestore+"-end")
-	if !h.nightLightsGain.stepDone(rec, key) {
+	if !h.lights().stepDone(rec, key) {
 		h.nightLightsRestoreFor(ctx, now, rec, "end")
 		return
 	}
-	l := &h.nightLightsGain
+	l := h.lights()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	sess := l.session(rec.ID)
@@ -535,7 +477,7 @@ func (h *handlers) nightLightsRestoreAtEnd(ctx context.Context, now time.Time, r
 	}
 	*sess = nightLightsSession{
 		steps: map[string]*nightLightsStep{}, fadeOut: map[int64]bool{}, reported: map[string]bool{},
-		busy: map[string]bool{}, lastReconcile: map[string]time.Time{}, ended: true,
+		busy: map[string]bool{}, ended: true,
 	}
 }
 
@@ -580,4 +522,33 @@ func (h *handlers) nightCheckLightsFades(ctx context.Context, p config.NightSess
 			nightLightsFadeSeconds(time.Duration(total)*time.Millisecond), nightLightsFadeSeconds(time.Duration(res.DurationMS)*time.Millisecond))})
 	}
 	return checks
+}
+
+// nightLightsHeld reports whether an emergency stop holds the session. While it
+// does the lights code launches nothing; a due write is kept and goes out once
+// the hold is lifted or the session ends.
+func (h *handlers) nightLightsHeld(ctx context.Context, sessionID string) bool {
+	if h.deps.NightSessions == nil {
+		return false
+	}
+	cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	return err == nil && ok && cur.ID == sessionID && nightStopHoldStands(cur)
+}
+
+// nightLightsYield makes every pending or retrying lights write to one player
+// in the session give way. An authored cue's gain and an operator's own gain
+// both win over it, and neither goes through the lights queue.
+func (h *handlers) nightLightsYield(sessionID, instanceID string) {
+	l := h.lights()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sess := l.sessions[sessionID]
+	if sess == nil {
+		return
+	}
+	for _, st := range sess.steps {
+		if is := st.inst[instanceID]; is != nil {
+			is.yielded = true
+		}
+	}
 }

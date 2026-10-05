@@ -155,6 +155,11 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if h.deps.NightSessions != nil {
+		if cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx); err == nil && ok {
+			h.nightLightsYield(cur.ID, instanceID)
+		}
+	}
 	write := h.fppGainWriter
 	if write == nil {
 		write = writeFPPTransitionGain

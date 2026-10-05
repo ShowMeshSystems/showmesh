@@ -141,8 +141,11 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		}
 	}
 
+	if fade != nil && target.Integration == config.ShowActionIntegrationFPP {
+		h.nightLightsYield(rec.ID, target.InstanceID)
+	}
 	if fade != nil && fade.TargetPercent == 0 {
-		h.nightLightsGain.markFadeOut(rec)
+		h.lights().markFadeOut(rec)
 	}
 	var gain nightGainResult
 	if fade != nil && fade.BeforeAction {

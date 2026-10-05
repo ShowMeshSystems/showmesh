@@ -711,7 +711,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
 			obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 			if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
-				if h.nightLightsGain.fadeOutRan(rec) || payload.LightsFadeOutMs != nil {
+				if h.lights().fadeOutRan(rec) || payload.LightsFadeOutMs != nil {
 					h.nightLightsRestore(ctx, now, rec, payload, "abandon")
 				}
 				h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
