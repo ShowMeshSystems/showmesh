@@ -72,6 +72,20 @@ check "the install log is root-only and holds this run's header and captured out
 log_has_no_secret='for f in /opt/showmesh/coordinator/.env /etc/showmesh/showmeshctl.env; do sed -n "s/^SHOWMESH_\(MQTT_PASSWORD\|CTL_TOKEN\)=//p" "$f"; done | grep . > /tmp/log-secrets
   [ -s /tmp/log-secrets ] && ! grep -qF -f /tmp/log-secrets /var/log/showmesh-install.log'
 check "the install log holds no broker password and no token" "in_box '$log_has_no_secret'"
+check "the install saved the built-in broker as the FPP event feed" "in_box 'grep -q \"ok: the built-in broker is saved as the FPP event feed\" /tmp/install-0.0.0-bench1.log'"
+# shellcheck disable=SC2016
+feed_saved='showmeshctl fpp-mqtt get --output json > /tmp/feed.json &&
+  [ "$(jq -r "[.payload.brokerURL, .payload.username, .payload.passwordSet] | @tsv" /tmp/feed.json)" = "$(printf "tcp://mosquitto:1883\tcoordinator\ttrue")" ]'
+check "the saved FPP event feed names the built-in broker and the coordinator's login" "in_box '$feed_saved'"
+# shellcheck disable=SC2016
+feed_idle='. /etc/showmesh/showmeshctl.env
+  for _ in $(seq 1 15); do
+    curl -fsS -H "Authorization: Bearer $SHOWMESH_CTL_TOKEN" http://127.0.0.1:8080/api/v1/snapshot |
+      jq -e ".collectors[] | select(.id == \"fpp-mqtt\") | .state == \"not_configured\" and (.reason | test(\"no FPP player\"))" >/dev/null && exit 0
+    sleep 2
+  done
+  curl -sS -H "Authorization: Bearer $SHOWMESH_CTL_TOKEN" http://127.0.0.1:8080/api/v1/snapshot | jq -c .collectors; exit 1'
+check "the feed reports that it has a broker and no FPP player yet" "in_box '$feed_idle'"
 pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')"
 
 VOL=/var/lib/docker/volumes/showmesh_showmesh-data/_data
@@ -103,6 +117,7 @@ check "upgrade keeps the administrator token" "in_box 'grep -q \"showmeshctl alr
 check "upgrade keeps the broker login" "[ \"\$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')\" = \"$pw_before\" ]"
 check "the address given on the first install survives a rerun without it" "in_box 'grep -qx SHOWMESH_PUBLIC_URL=http://192.0.2.44:8080 /opt/showmesh/coordinator/.env'"
 check "no world-readable secret after the upgrade either" "in_box '$no_readable_secret'"
+check "upgrade leaves a saved FPP event feed as it is" "in_box 'grep -q \"ok: the FPP event feed is already set up and was left as it is\" /tmp/install-0.0.0-bench2.log'"
 check "upgrade saw the broker accept the login again" "in_box 'grep -q \"ok: the broker accepts the coordinator.s login\" /tmp/install-0.0.0-bench2.log'"
 
 check "the upgrade made a dated backup named for the old version" "in_box 'ls -d /var/backups/showmesh/*-0.0.0-bench1 | grep -q .'"

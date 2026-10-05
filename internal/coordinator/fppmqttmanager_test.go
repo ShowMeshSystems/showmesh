@@ -14,9 +14,11 @@ package coordinator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -355,6 +357,35 @@ func TestFPPMQTTManagerCollectorStatusesConfiguredWithZeroHostsStillEmitsOneRow(
 	}
 	if statuses[0].Reason == nil || *statuses[0].Reason == "" {
 		t.Errorf("Reason = %v, want it set naming the odd zero-hosts state", statuses[0].Reason)
+	}
+}
+
+func TestFPPMQTTManagerBrokerWithoutHostsRunsNoCollectorAndSaysWhy(t *testing.T) {
+	mgr, _ := newTestFPPMQTTManager(t)
+
+	mgr.reconcile(context.Background(), config.FPPMQTTConfig{BrokerURL: "tcp://127.0.0.1:1"}, "")
+
+	mgr.mu.Lock()
+	bundle := mgr.bundle
+	mgr.mu.Unlock()
+	if bundle != nil {
+		t.Fatalf("a broker with no FPP player mapped started a collector")
+	}
+	statuses, err := mgr.CollectorStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("CollectorStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].State != string(api.CollectorNotConfigured) {
+		t.Fatalf("statuses = %+v, want one not_configured row", statuses)
+	}
+	if statuses[0].Reason == nil || !strings.Contains(*statuses[0].Reason, "no FPP player") {
+		t.Errorf("Reason = %v, want it to say no FPP player is mapped", statuses[0].Reason)
+	}
+
+	mgr.reconcile(context.Background(), config.FPPMQTTConfig{}, "")
+	statuses, _ = mgr.CollectorStatuses(context.Background())
+	if statuses[0].Reason == nil || *statuses[0].Reason != "no FPP MQTT broker configured" {
+		t.Errorf("Reason after the broker is cleared = %v, want the no-broker reason", statuses[0].Reason)
 	}
 }
 
