@@ -16,6 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 const fallbackStateTestBootID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -216,7 +217,13 @@ func TestFallbackStateClearNeedsAnOperatorAndForgetsTheReport(t *testing.T) {
 // the next tick would stop, on an FPP player whose plugin can report.
 func nightFallbackHoldFixture(t *testing.T) (*handlers, *store.Store, *fakeAudioPublisher, *fallbackhold.Service, store.NightSessionRecord) {
 	t.Helper()
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	h, st, pub, _, holds, rec := nightFallbackHoldFixtureWithObservations(t)
+	return h, st, pub, holds, rec
+}
+
+func nightFallbackHoldFixtureWithObservations(t *testing.T) (*handlers, *store.Store, *fakeAudioPublisher, *dynamicObservationLister, *fallbackhold.Service, store.NightSessionRecord) {
+	t.Helper()
+	h, st, pub, obs := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
 	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
@@ -224,6 +231,7 @@ func nightFallbackHoldFixture(t *testing.T) (*handlers, *store.Store, *fakeAudio
 	playThroughApplyGainStart(t, h, pub, rec)
 
 	rec.State = nightStateLive
+	rec.ContentAnchorJSON = encodeNightContentAnchor(liveSessionAnchor("fpp-main", "halloween-show", "halloween-show.fseq", testNow.Add(-time.Minute)))
 	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
 		t.Fatalf("UpdateNightSession: %v", err)
 	}
@@ -234,7 +242,7 @@ func nightFallbackHoldFixture(t *testing.T) (*handlers, *store.Store, *fakeAudio
 	h.deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{
 		InstanceID: "fpp-main", InstanceUUID: &store.FPPInstanceUUIDRecord{UUID: executorKeyTestInstanceUUID},
 	}}}
-	return h, st, pub, holds, rec
+	return h, st, pub, obs, holds, rec
 }
 
 func recordHoldReport(t *testing.T, holds *fallbackhold.Service, state string, sequence int64, at time.Time) {
@@ -309,13 +317,16 @@ func TestNightFallbackHoldDoesNotApplyToASessionThatIsFadingOutOrStopped(t *test
 	}
 }
 
-func TestCueCatalogAutoDeployWaitsWhileAPlayerRunsFromItsFallbackProgram(t *testing.T) {
+func TestCueCatalogAutoDeployWaitsWhileAConfiguredPlayerRunsFromItsFallbackProgram(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	holds := fallbackhold.NewService(setup.st, testNow.Add(-time.Hour), testLogger())
 	deps := setup.deps()
 	deps.FallbackHolds = holds
 	runs := &countingCurrentRuns{}
 	deps.CurrentRuns = runs
+	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{
+		InstanceID: "fpp-main", InstanceUUID: &store.FPPInstanceUUIDRecord{UUID: executorKeyTestInstanceUUID},
+	}}}
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 
 	recordHoldReport(t, holds, fallbackhold.StateResting, 1, testNow)
@@ -329,6 +340,129 @@ func TestCueCatalogAutoDeployWaitsWhileAPlayerRunsFromItsFallbackProgram(t *test
 	if runs.calls != 1 {
 		t.Fatalf("after the hand-back the deploy read playback %d times, want once", runs.calls)
 	}
+}
+
+// A stored state for an instance UUID no configured player has, a player
+// that was replaced for example, must not stop deploys for every node.
+func TestCueCatalogAutoDeployIgnoresAHeldStateNoConfiguredPlayerHas(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	holds := fallbackhold.NewService(setup.st, testNow.Add(-time.Hour), testLogger())
+	deps := setup.deps()
+	deps.FallbackHolds = holds
+	runs := &countingCurrentRuns{}
+	deps.CurrentRuns = runs
+	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{
+		InstanceID: "fpp-main", InstanceUUID: &store.FPPInstanceUUIDRecord{UUID: "99999999-9999-4999-8999-999999999999"},
+	}}}
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
+
+	recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow.Add(-7*24*time.Hour))
+	h.AutoDeployCueCatalog(context.Background(), testNow, "node-a")
+	if runs.calls != 1 {
+		t.Fatalf("a week-old held state under an unused instance stopped the deploy (%d playback reads, want 1)", runs.calls)
+	}
+}
+
+// Such a state has no program row. The listing still shows it, so an
+// operator can see it and clear it.
+func TestFallbackListingShowsAStoredStateThatHasNoProgram(t *testing.T) {
+	api, setup, _, token := fallbackStateAPI(t)
+	if resp, raw := sendFallbackState(t, api, http.MethodPut, executorKeyTestInstanceUUID, token, strings.Replace(fallbackStateReport, `"sequence":2`, `"sequence":1`, 1)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("report: status %d, body %s", resp.StatusCode, raw)
+	}
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/fallback-programs", nil)
+	req.Header.Set("Authorization", "Bearer "+mustIssueToken(t, setup.svc, admin.ID))
+	resp, raw := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list: status %d, body %s", resp.StatusCode, raw)
+	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "FallbackProgramListResponse", raw)
+	var out v1.FallbackProgramListResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(out.Programs) != 0 || len(out.PlayerStatesWithoutProgram) != 1 ||
+		out.PlayerStatesWithoutProgram[0].FPPInstanceUUID != executorKeyTestInstanceUUID ||
+		out.PlayerStatesWithoutProgram[0].PlayerState.State != "fallback" || !out.PlayerStatesWithoutProgram[0].PlayerState.Held {
+		t.Fatalf("listing = %+v, want the one stored state, held, with no program", out)
+	}
+}
+
+// Review item 2: an operator's shutdown always takes effect during a
+// hold, whether the plugin really runs the show or the hold lingers after
+// a plugin that went quiet.
+func TestNightShutdownCommandsTakeEffectOnAHeldLiveSession(t *testing.T) {
+	holdsAt := map[string]time.Time{
+		"a real hold":      testNow.Add(-5 * time.Second),
+		"a lingering hold": testNow.Add(-3 * time.Hour),
+	}
+	commands := map[string]func(h *handlers, rec store.NightSessionRecord) store.NightSessionRecord{
+		"fade-out-night": func(_ *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
+			next, _ := applyNightShutdownEffect(testNow, rec, "fade-out", nightShutdownOrdinary)
+			return next
+		},
+		"power-down-presentation": func(_ *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
+			next, _ := applyNightShutdownEffect(testNow, rec, "power-down", nightShutdownOrdinary)
+			return next
+		},
+		"end-session": func(h *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
+			return h.nightEndSessionDecide(testNow, &rec).result
+		},
+	}
+	for holdName, reportedAt := range holdsAt {
+		for command, apply := range commands {
+			t.Run(command+" during "+holdName, func(t *testing.T) {
+				h, st, pub, obs, holds, _ := nightFallbackHoldFixtureWithObservations(t)
+				recordHoldReport(t, holds, fallbackhold.StateFallback, 1, reportedAt)
+				// FPP has finished the show playlist.
+				obs.obs = []observation.Observation{
+					statusObservation("fpp-main", fppStatusValueIdle, testNow),
+					playlistNameObservation("fpp-main", "", testNow),
+				}
+				before := pub.count()
+				h.nightTick(context.Background(), testNow)
+				if got := mustGetCurrentSession(t, st); got.State != nightStateLive || pub.count() != before {
+					t.Fatalf("before the command the held session moved to %q and sent %d commands; the fixture holds nothing", got.State, pub.count()-before)
+				}
+
+				next := apply(h, mustGetCurrentSession(t, st))
+				if err := st.UpdateNightSession(context.Background(), next, testNow); err != nil {
+					t.Fatalf("UpdateNightSession: %v", err)
+				}
+				h.nightTick(context.Background(), testNow)
+				got := mustGetCurrentSession(t, st)
+				if got.State == nightStateLive && pub.count() == before {
+					t.Fatalf("after %s the session is still live and the night loop did nothing: the command was held", command)
+				}
+				if h.nightHeldForFallback(context.Background(), testNow, got) {
+					t.Fatalf("after %s the session still counts as held", command)
+				}
+			})
+		}
+	}
+}
+
+// The session read says which player holds the night up, and why.
+func TestNightSessionStateCarriesTheFallbackHold(t *testing.T) {
+	h, st, _, holds, rec := nightFallbackHoldFixture(t)
+	if got := mapNightSessionState(context.Background(), h.deps, rec, testNow, time.Hour, true); got.FallbackHold != nil {
+		t.Fatalf("with no hold the session carries %+v", got.FallbackHold)
+	}
+	recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow.Add(-3*time.Hour))
+	got := mapNightSessionState(context.Background(), h.deps, mustGetCurrentSession(t, st), testNow, time.Hour, true)
+	if got.FallbackHold == nil || got.FallbackHold.FPPInstanceID != "fpp-main" || got.FallbackHold.FPPInstanceUUID != executorKeyTestInstanceUUID ||
+		got.FallbackHold.Reason != string(fallbackhold.ReasonExecutor) {
+		t.Fatalf("held session carries %+v, want the held player named", got.FallbackHold)
+	}
+	if !strings.HasPrefix(got.FallbackHold.Message, "This player's plugin has stopped reporting") || !strings.Contains(got.FallbackHold.Message, "clear") {
+		t.Fatalf("the message for a held player with a quiet plugin is %q", got.FallbackHold.Message)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "NightSessionState", raw)
 }
 
 // countingCurrentRuns counts playback reads and reports a read failure, so

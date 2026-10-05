@@ -21428,6 +21428,8 @@ components:
           type: boolean
         degradedReason:
           type: string
+        fallbackHold:
+          $ref: "#/components/schemas/NightFallbackHold"
         attributionDegraded:
           type: boolean
           description: >-
@@ -22761,6 +22763,44 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FallbackProgramListEntry"
+        playerStatesWithoutProgram:
+          type: array
+          description: >-
+            Every stored plugin report for an FPP instance that has no
+            published program, for example a player that was replaced.
+            Absent when there is none.
+          items:
+            $ref: "#/components/schemas/FallbackPlayerStateEntry"
+    FallbackPlayerStateEntry:
+      type: object
+      description: One FPP instance's reported fallback state.
+      additionalProperties: false
+      required: [fppInstanceUuid, playerState]
+      properties:
+        fppInstanceUuid:
+          type: string
+        playerState:
+          $ref: "#/components/schemas/FallbackPlayerState"
+    NightFallbackHold:
+      type: object
+      description: >-
+        Present on the current night session while it does not advance
+        because an FPP player it uses is held for its fallback program. A
+        shutdown that was asked for is never held.
+      additionalProperties: false
+      required: [fppInstanceId, fppInstanceUuid, reason, message]
+      properties:
+        fppInstanceId:
+          type: string
+          description: The configured id of the held FPP player.
+        fppInstanceUuid:
+          type: string
+        reason:
+          type: string
+          enum: [running-from-fallback, waiting-for-acknowledgement, coordinator-starting]
+        message:
+          type: string
+          description: One or two sentences for an operator, saying why the night waits and what ends the wait.
     FallbackProgramAcknowledgeRequest:
       type: object
       description: >-

@@ -153,6 +153,15 @@ type FallbackProgramListEntry struct {
 type FallbackProgramListResponse struct {
 	ServerTime string                     `json:"serverTime"`
 	Programs   []FallbackProgramListEntry `json:"programs"`
+	// PlayerStatesWithoutProgram is every stored plugin report for an FPP
+	// instance that has no published program, so none goes unlisted.
+	PlayerStatesWithoutProgram []FallbackPlayerStateEntry `json:"playerStatesWithoutProgram,omitempty"`
+}
+
+// FallbackPlayerStateEntry is one FPP instance's reported state.
+type FallbackPlayerStateEntry struct {
+	FPPInstanceUUID string              `json:"fppInstanceUuid"`
+	PlayerState     FallbackPlayerState `json:"playerState"`
 }
 
 // FallbackProgramAcknowledgeRequest is POST

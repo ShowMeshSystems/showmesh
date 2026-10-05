@@ -31,12 +31,14 @@ func Message(v Verdict) string {
 	switch {
 	case !v.Reported:
 		return ""
+	case v.Held && v.Reason == ReasonExecutor && !v.PluginReporting:
+		return "This player's plugin has stopped reporting while it was running the show from its fallback program. The coordinator starts no Cues for this player until the plugin reports again or you clear its fallback state."
 	case v.Held && v.Reason == ReasonExecutor && v.Record.State == StateResting:
 		return "This player's fallback program reached its end time. Cues already started keep playing, and no new Cue starts until the playlist ends."
 	case v.Held && v.Reason == ReasonExecutor:
 		return "This player is running the show from its fallback program. The coordinator starts no Cues for it until the playlist ends."
 	case v.Held && v.Reason == ReasonAwaitingAcknowledgement:
-		return "This player has finished running from its fallback program and has not confirmed its current program yet. The coordinator starts no Cues for it until it does."
+		return "This player has finished running from its fallback program and has not confirmed its current program yet. The coordinator starts no Cues for it until it does, or until you clear its fallback state."
 	case v.Held && v.Reason == ReasonCoordinatorStarting:
 		return "The coordinator has just started and has not heard from this player's plugin yet. It starts no Cues for this player until the plugin reports, for up to 45 seconds."
 	case !v.PluginReporting:
@@ -44,6 +46,10 @@ func Message(v Verdict) string {
 	}
 	return ""
 }
+
+// EventHoldEndedWithoutPlugin is the event kind written when a hold ends
+// because the coordinator itself saw the playlist stop.
+const EventHoldEndedWithoutPlugin = "fallback.hold_ended_without_plugin"
 
 // Run rewrites every reporting player's signals until ctx is done.
 func (s *Service) Run(ctx context.Context) {

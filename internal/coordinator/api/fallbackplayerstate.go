@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,7 +169,8 @@ func (h *handlers) handlePutFallbackState(w http.ResponseWriter, r *http.Request
 // handleDeleteFallbackState serves
 // DELETE /api/v1/fallback-programs/{fppInstanceId}/fallback-state: an
 // operator's way out of a hold the plugin will not end. A plugin that is
-// still reporting stores its state again with its next report.
+// still reporting stores its state again with its next report. Nothing
+// observed before the clear is acted on afterwards.
 func (h *handlers) handleDeleteFallbackState(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -177,10 +179,11 @@ func (h *handlers) handleDeleteFallbackState(w http.ResponseWriter, r *http.Requ
 
 	var deleted bool
 	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
-		var err error
-		deleted, err = tx.DeleteFallbackPlayerState(ctx, instanceUUID)
-		if err != nil {
-			return identity.AuditEntry{}, err
+		if h.deps.FallbackHolds != nil {
+			var err error
+			if deleted, err = h.deps.FallbackHolds.Clear(ctx, tx, instanceUUID, now); err != nil {
+				return identity.AuditEntry{}, err
+			}
 		}
 		return identity.AuditEntry{
 			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
@@ -252,16 +255,28 @@ func (h *handlers) cueActivationHeldForFallback(ctx context.Context, now time.Ti
 	return v.IgnoresObservation(obs.ReceivedAt)
 }
 
-// nightHeldForFallback says whether a plugin is, or may be, running the
-// show on an FPP player this session uses.
-func (h *handlers) nightHeldForFallback(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
-	if h.deps.FallbackHolds == nil {
-		return false
+// nightFallbackHold is the hold standing on an FPP player a night session
+// uses, if any.
+type nightFallbackHold struct {
+	InstanceID   string
+	InstanceUUID string
+	Verdict      fallbackhold.Verdict
+}
+
+// resolveNightFallbackHold finds the first held player among the ones rec
+// uses. found is false when none is held or the session cannot be read.
+func resolveNightFallbackHold(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time) (hold nightFallbackHold, found bool, err error) {
+	if deps.FallbackHolds == nil {
+		return nightFallbackHold{}, false, nil
 	}
-	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
-	if err != nil {
+	payload, perr := nightPinnedNightSessionPayload(ctx, deps, rec)
+	if perr != nil {
 		// The state's own advance reports an unreadable session payload.
-		return false
+		return nightFallbackHold{}, false, nil
+	}
+	views, err := deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nightFallbackHold{}, false, err
 	}
 	seen := make(map[string]bool, 2)
 	for _, instanceID := range []string{payload.ShowPlaylist.FPPInstanceID, payload.Resting.FPPInstanceID} {
@@ -269,21 +284,137 @@ func (h *handlers) nightHeldForFallback(ctx context.Context, now time.Time, rec 
 			continue
 		}
 		seen[instanceID] = true
-		instanceUUID, ok, err := h.nightResolveInstanceUUID(ctx, instanceID)
-		if err != nil || !ok {
-			continue
-		}
-		v, err := h.fallbackVerdict(ctx, instanceUUID, now)
-		if err != nil {
-			h.logWarn("night loop: failed to read the player's fallback state; holding this tick as a precaution",
-				"sessionId", rec.ID, "instanceId", instanceID, "error", err)
-			return true
-		}
-		if v.Held {
-			h.logDebug("night loop: holding while this player's plugin runs the show from its fallback program",
-				"sessionId", rec.ID, "instanceId", instanceID, "reason", string(v.Reason))
-			return true
+		for _, view := range views {
+			if view.InstanceID != instanceID || view.InstanceUUID == nil {
+				continue
+			}
+			v, err := deps.FallbackHolds.Evaluate(ctx, view.InstanceUUID.UUID, now)
+			if err != nil {
+				return nightFallbackHold{}, false, err
+			}
+			if v.Held {
+				return nightFallbackHold{InstanceID: instanceID, InstanceUUID: view.InstanceUUID.UUID, Verdict: v}, true, nil
+			}
 		}
 	}
-	return false
+	return nightFallbackHold{}, false, nil
+}
+
+// mapNightFallbackHold renders the hold on rec's player for the session
+// read, nil when there is none.
+func mapNightFallbackHold(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time) *v1.NightFallbackHold {
+	hold, found, err := resolveNightFallbackHold(ctx, deps, rec, now)
+	if err != nil || !found {
+		return nil
+	}
+	return &v1.NightFallbackHold{
+		FPPInstanceID: hold.InstanceID, FPPInstanceUUID: hold.InstanceUUID,
+		Reason: string(hold.Verdict.Reason), Message: fallbackhold.Message(hold.Verdict),
+	}
+}
+
+// fallbackHoldLog remembers which hold each loop last announced, so a hold
+// is logged when it begins and when it ends and not on every pass.
+type fallbackHoldLog struct {
+	mu    sync.Mutex
+	night string
+	auto  string
+}
+
+// changed records key under slot and reports the key it replaced when the
+// two differ.
+func (l *fallbackHoldLog) changed(slot *string, key string) (previous string, differs bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	previous = *slot
+	*slot = key
+	return previous, previous != key
+}
+
+func (h *handlers) logInfo(msg string, args ...any) {
+	if h.logger != nil {
+		h.logger.Info("api: "+msg, args...)
+	}
+}
+
+// nightHeldForFallback says whether a plugin is, or may be, running the
+// show on an FPP player this session uses. A session with a shutdown asked
+// for is never held: the operator, or FPP's schedule, wins over the hold.
+func (h *handlers) nightHeldForFallback(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
+	if rec.State == nightStateFadingOut || rec.State == nightStateStopped || rec.ShutdownIntent != "" {
+		h.noteNightFallbackHold(rec, "")
+		return false
+	}
+	hold, found, err := resolveNightFallbackHold(ctx, h.deps, rec, now)
+	if err != nil {
+		h.logWarn("night loop: failed to read the player's fallback state; holding this tick as a precaution",
+			"sessionId", rec.ID, "error", err)
+		return true
+	}
+	if !found {
+		h.noteNightFallbackHold(rec, "")
+		return false
+	}
+	h.noteNightFallbackHold(rec, hold.InstanceID+" "+string(hold.Verdict.Reason))
+	return true
+}
+
+func (h *handlers) noteNightFallbackHold(rec store.NightSessionRecord, key string) {
+	previous, differs := h.fallbackHoldLog.changed(&h.fallbackHoldLog.night, key)
+	if !differs {
+		return
+	}
+	if key == "" {
+		h.logInfo("night loop: the hold for a player's fallback program has ended; the session advances again",
+			"sessionId", rec.ID, "was", previous)
+		return
+	}
+	h.logInfo("night loop: not advancing this session while a player is held for its fallback program",
+		"sessionId", rec.ID, "hold", key)
+}
+
+// configuredFPPInstanceUUIDs is the current instance UUID of every
+// configured FPP player that has one.
+func (h *handlers) configuredFPPInstanceUUIDs(ctx context.Context) ([]string, error) {
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, view := range views {
+		if view.InstanceUUID != nil && view.InstanceUUID.UUID != "" {
+			out = append(out, view.InstanceUUID.UUID)
+		}
+	}
+	return out, nil
+}
+
+// autoDeployHeldForFallback says whether a configured player is held. A
+// stored state for an instance no configured player has does not count.
+func (h *handlers) autoDeployHeldForFallback(ctx context.Context, now time.Time) bool {
+	if h.deps.FallbackHolds == nil {
+		return false
+	}
+	ids, err := h.configuredFPPInstanceUUIDs(ctx)
+	var held string
+	var v fallbackhold.Verdict
+	if err == nil {
+		held, v, err = h.deps.FallbackHolds.FirstHeld(ctx, ids, now)
+	}
+	if err != nil {
+		h.logWarn("cue catalog auto-deploy: failed to read the players' fallback state; not deploying this pass", "error", err)
+		return true
+	}
+	key := ""
+	if held != "" {
+		key = held + " " + string(v.Reason)
+	}
+	if previous, differs := h.fallbackHoldLog.changed(&h.fallbackHoldLog.auto, key); differs {
+		if key == "" {
+			h.logInfo("cue catalog auto-deploy: no player is held for its fallback program any more; deploying again", "was", previous)
+		} else {
+			h.logInfo("cue catalog auto-deploy: waiting while a player is held for its fallback program", "hold", key)
+		}
+	}
+	return held != ""
 }

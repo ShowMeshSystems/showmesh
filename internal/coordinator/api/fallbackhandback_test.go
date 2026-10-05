@@ -477,10 +477,10 @@ func (p *handbackPlugin) mapped(entryKey string) (string, bool) {
 func (p *handbackPlugin) startPlaylist() { p.pass++ }
 
 // entry is an entry boundary: FPP's playing callback for a new occurrence
-// of the entry at position.
+// of the entry at position. It acts on what the plugin's last probe said
+// and does not probe or report first.
 func (p *handbackPlugin) entry(position int) {
 	p.w.t.Helper()
-	p.probe()
 	entryKey := p.w.entryKeys[position]
 	switch p.state {
 	case fallbackhold.StateNormal:
@@ -526,7 +526,6 @@ func (p *handbackPlugin) observe(position int) {
 // hand-back steps of section 5.13 follow, in order.
 func (p *handbackPlugin) stopPlaylist() {
 	p.w.t.Helper()
-	p.probe()
 	if p.state == fallbackhold.StateNormal {
 		return
 	}
@@ -730,6 +729,75 @@ func TestHandbackASecondOutageIsCoveredAgainAndNothingStartsTwice(t *testing.T) 
 	w.playEntry(0)
 	w.wantStarts("cue-1 by coordinator", "cue-2 by plugin", "cue-3 by plugin", "cue-1 by coordinator",
 		"cue-2 by plugin", "cue-3 by plugin", "cue-1 by plugin", "cue-2 by plugin", "cue-1 by coordinator")
+}
+
+// The coordinator is back after five seconds, too short for the plugin to
+// call it lost. The next entry begins before the plugin's next report, so
+// its observation arrives while the player is still held as starting. That
+// Cue must start as soon as the plugin's report says normal.
+func TestHandbackAShortCoordinatorRestartDoesNotDropTheNextCue(t *testing.T) {
+	w := newHandbackWorld(t)
+	w.settle(10 * time.Second)
+	w.plugin.startPlaylist()
+	w.playEntry(0)
+
+	w.stopCoordinator()
+	w.advance(5 * time.Second)
+	w.startCoordinator()
+	w.advance(2 * time.Second)
+	w.reportInventory()
+	w.plugin.observe(1)
+	w.tick()
+	if v := w.verdict(); !v.Held || v.Reason != fallbackhold.ReasonCoordinatorStarting {
+		t.Fatalf("before the plugin's first report of this run: held %v reason %q, want held while starting", v.Held, v.Reason)
+	}
+	w.wantStarts("cue-1 by coordinator")
+
+	w.settle(10 * time.Second)
+	if v := w.verdict(); v.Held {
+		t.Fatalf("after the plugin reported normal the player is still held as %q", v.Reason)
+	}
+	w.wantStarts("cue-1 by coordinator", "cue-2 by coordinator")
+	w.settle(2 * time.Minute)
+	w.wantStarts("cue-1 by coordinator", "cue-2 by coordinator")
+}
+
+// An operator clears a player's stored state while its plugin really is
+// running the show. Until the plugin's next report the coordinator must
+// not act on the entry it observed before the outage.
+func TestHandbackAClearDuringARealFallbackStartsNothingBeforeThePluginReportsAgain(t *testing.T) {
+	w := newHandbackWorld(t)
+	w.settle(10 * time.Second)
+	w.plugin.startPlaylist()
+	w.playEntry(0)
+	w.reachable = false
+	w.settle(20 * time.Second)
+	w.playEntry(1)
+	w.reachable = true
+	w.settle(10 * time.Second)
+	w.editCue("cue-1")
+
+	// The operator's request is not the plugin's, so it does not go
+	// through the plugin's link.
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/fallback-programs/"+handbackInstanceUUID+"/fallback-state", nil)
+	req.Header.Set("Authorization", "Bearer "+w.operatorToken)
+	if resp, raw := doRawRequest(t, w.api.Handler, req); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("clear: status %d, body %s", resp.StatusCode, raw)
+	}
+	// The gap before the plugin's next report: checked without the
+	// two-owner guard in tick, which is exactly what must not trip.
+	before := len(w.setup.audioPub.dispatched)
+	w.loop.cueActivationTick(context.Background(), w.now, nil, w.held)
+	w.loop.cueActivationFailToBlackWG.Wait()
+	if sent := len(w.setup.audioPub.dispatched) - before; sent != 0 {
+		t.Fatalf("in the gap after a clear the coordinator sent the node %d commands, want none", sent)
+	}
+	w.settle(10 * time.Second)
+	if v := w.verdict(); !v.Held {
+		t.Fatal("the plugin's next fallback report did not hold the player again")
+	}
+	w.playEntry(2)
+	w.wantStarts("cue-1 by coordinator", "cue-2 by plugin", "cue-3 by plugin")
 }
 
 // A plugin that restarts mid-playlist resumes fallback from its own file

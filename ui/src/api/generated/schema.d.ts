@@ -7525,6 +7525,7 @@ export interface components {
             stopHold?: components["schemas"]["NightStopHold"];
             degraded: boolean;
             degradedReason?: string;
+            fallbackHold?: components["schemas"]["NightFallbackHold"];
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
             attributionDegraded: boolean;
             authorization: components["schemas"]["NightAuthorization"];
@@ -8069,6 +8070,23 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             programs: components["schemas"]["FallbackProgramListEntry"][];
+            /** @description Every stored plugin report for an FPP instance that has no published program, for example a player that was replaced. Absent when there is none. */
+            playerStatesWithoutProgram?: components["schemas"]["FallbackPlayerStateEntry"][];
+        };
+        /** @description One FPP instance's reported fallback state. */
+        FallbackPlayerStateEntry: {
+            fppInstanceUuid: string;
+            playerState: components["schemas"]["FallbackPlayerState"];
+        };
+        /** @description Present on the current night session while it does not advance because an FPP player it uses is held for its fallback program. A shutdown that was asked for is never held. */
+        NightFallbackHold: {
+            /** @description The configured id of the held FPP player. */
+            fppInstanceId: string;
+            fppInstanceUuid: string;
+            /** @enum {string} */
+            reason: "running-from-fallback" | "waiting-for-acknowledgement" | "coordinator-starting";
+            /** @description One or two sentences for an operator, saying why the night waits and what ends the wait. */
+            message: string;
         };
         /** @description The body of POST /fallback-programs/{fppInstanceId}/acknowledge (ADR-048 decision 1). age is not a field: it is derived from installedAt at read time. */
         FallbackProgramAcknowledgeRequest: {

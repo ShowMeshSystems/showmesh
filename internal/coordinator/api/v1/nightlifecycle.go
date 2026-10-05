@@ -265,6 +265,10 @@ type NightSessionState struct {
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`
 
+	// FallbackHold is set while the session does not advance because an
+	// FPP player it uses is held for its fallback program.
+	FallbackHold *NightFallbackHold `json:"fallbackHold,omitempty"`
+
 	// AttributionDegraded is true when this session's most recent command
 	// applied despite its audit entry failing to write (ADR-024 decision
 	// 11's exemption), or when an autonomous dispatch ran with no
@@ -312,6 +316,15 @@ type NightAuthorization struct {
 
 // NightSessionResponse is the body of GET /api/v1/night/session and
 // GET /api/v1/night/sessions/{id}.
+// NightFallbackHold names the held FPP player and says, for an operator,
+// why the session waits and what ends the wait.
+type NightFallbackHold struct {
+	FPPInstanceID   string `json:"fppInstanceId"`
+	FPPInstanceUUID string `json:"fppInstanceUuid"`
+	Reason          string `json:"reason"`
+	Message         string `json:"message"`
+}
+
 type NightSessionResponse struct {
 	ServerTime string            `json:"serverTime"`
 	Session    NightSessionState `json:"session"`

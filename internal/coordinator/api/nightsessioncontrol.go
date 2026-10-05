@@ -1978,6 +1978,9 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 		out.UpdatedAt = formatTime(now)
 	}
 
+	if current {
+		out.FallbackHold = mapNightFallbackHold(ctx, deps, rec, now)
+	}
 	out.Authorization = mapNightAuthorization(rec)
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)

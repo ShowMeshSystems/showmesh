@@ -74,7 +74,25 @@ func (h *handlers) handleListFallbackPrograms(w http.ResponseWriter, r *http.Req
 			PlayerState: h.fallbackPlayerStateFor(ctx, rec.FPPInstanceUUID, now),
 		})
 	}
-	jsonWrite(w, v1.FallbackProgramListResponse{ServerTime: formatTime(now), Programs: entries})
+	resp := v1.FallbackProgramListResponse{ServerTime: formatTime(now), Programs: entries}
+	if h.deps.FallbackHolds != nil {
+		all, err := h.deps.FallbackHolds.All(ctx, now)
+		if err != nil {
+			h.writeInternalError(w, now, "list fallback player states", err)
+			return
+		}
+		published := make(map[string]bool, len(recs))
+		for _, rec := range recs {
+			published[rec.FPPInstanceUUID] = true
+		}
+		for _, v := range all {
+			if state := mapFallbackPlayerState(v, now); state != nil && !published[v.Record.FPPInstanceUUID] {
+				resp.PlayerStatesWithoutProgram = append(resp.PlayerStatesWithoutProgram,
+					v1.FallbackPlayerStateEntry{FPPInstanceUUID: v.Record.FPPInstanceUUID, PlayerState: *state})
+			}
+		}
+	}
+	jsonWrite(w, resp)
 }
 
 // --- GET /fallback-programs/{fppInstanceId} ---

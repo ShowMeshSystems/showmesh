@@ -55,6 +55,8 @@ type handlers struct {
 	clock  func() time.Time
 	logger *slog.Logger
 
+	fallbackHoldLog fallbackHoldLog
+
 	// closeReads, secureCookie, trustClientAddr, and loginLimiter back
 	// ADR-024 (auth.go, session.go, audit.go, loginlimiter.go) — see
 	// [Options.CloseReads]/[Options.SecureCookie]/[Options.TrustClientAddr]'s

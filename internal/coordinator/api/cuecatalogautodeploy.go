@@ -52,13 +52,8 @@ const fppRunStatusUnavailable = "unavailable"
 func (h *handlers) AutoDeployCueCatalog(ctx context.Context, now time.Time, nodeID string) {
 	// A new catalog would make a node refuse the activations a plugin
 	// sends it from its fallback program (ADR-048 decision 4).
-	if h.deps.FallbackHolds != nil {
-		held, instanceUUID, err := h.deps.FallbackHolds.AnyHeld(ctx, now)
-		if err != nil || held {
-			h.logDebug("cue catalog auto-deploy: held while an FPP player's fallback state is not normal",
-				"node", nodeID, "fppInstanceUuid", instanceUUID, "error", err)
-			return
-		}
+	if h.autoDeployHeldForFallback(ctx, now) {
+		return
 	}
 	hold := h.cueCatalogAutoDeployHold(ctx, now, nodeID)
 	if hold.Hold {

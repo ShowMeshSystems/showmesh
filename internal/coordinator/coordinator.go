@@ -1477,6 +1477,9 @@ func Run() int {
 		runWeatherDelay(ctx, st, weatherDelayState, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
 	})
 
+	// The loops above are running and the listener starts now, so this is
+	// when a plugin can first reach this run of the coordinator.
+	fallbackHolds.MarkStarted(time.Now())
 	serveErrCh := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", "addr", cfg.HTTPAddr)
