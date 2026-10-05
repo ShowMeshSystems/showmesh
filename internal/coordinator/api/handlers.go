@@ -138,6 +138,10 @@ type handlers struct {
 	// in production; only a test ever sets it.
 	nightGainWriter nightTransitionGainWriter
 
+	// nightLightsGain remembers the night's own light fade writes - see
+	// nightlightsfade.go.
+	nightLightsGain nightLightsGainLog
+
 	// fppGainWriter substitutes the operator transition-gain write - see
 	// [fppTransitionGainWriter] (fpptransitiongain.go). Nil in production;
 	// only a test ever sets it.

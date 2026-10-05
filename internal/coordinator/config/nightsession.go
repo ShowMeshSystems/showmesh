@@ -161,6 +161,7 @@ var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
 	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
 	"siteControl": true, "interlocks": true,
+	"lightsFadeOutMs": true, "lightsFadeInMs": true,
 }
 
 var (
@@ -198,6 +199,12 @@ type NightSessionPayload struct {
 	// unchanged in that case (RESTING-MODE.md §10's own opening line).
 	SiteControl *NightSiteControl    `json:"siteControl,omitempty"`
 	Interlocks  []NightInterlockRule `json:"interlocks,omitempty"`
+
+	// LightsFadeOutMs finishes as the resting sequence ends before a show;
+	// LightsFadeInMs starts when the resting playlist starts after one.
+	// Nil means no fade in that direction.
+	LightsFadeOutMs *int `json:"lightsFadeOutMs,omitempty"`
+	LightsFadeInMs  *int `json:"lightsFadeInMs,omitempty"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -637,12 +644,23 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	lightsFadeOutMs, verr := decodeOptionalLightsFadeMs(top, "lightsFadeOutMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	lightsFadeInMs, verr := decodeOptionalLightsFadeMs(top, "lightsFadeInMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting,
 		AnnouncementDefaultPolicy: announcementDefaultPolicy,
 		SiteControl:               siteControl,
 		Interlocks:                interlocks,
+		LightsFadeOutMs:           lightsFadeOutMs,
+		LightsFadeInMs:            lightsFadeInMs,
 	}, nil
 }
 
@@ -1288,6 +1306,36 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 		}
 	}
 	return &v, &v2, nil
+}
+
+// nightLightsFadeMaxMs is the longest fade the FPP plugin's transition gain
+// accepts: 86400 seconds.
+const nightLightsFadeMaxMs = 86400 * 1000
+
+// decodeOptionalLightsFadeMs reads an optional lights fade duration: absent
+// means no fade, and a present value must be a positive whole number of
+// milliseconds the plugin can honour.
+func decodeOptionalLightsFadeMs(top map[string]json.RawMessage, key string) (*int, *ValidationError) {
+	if _, present := top[key]; !present {
+		return nil, nil
+	}
+	v, verr := decodeRequiredNonNegativeInt(top, key, key)
+	if verr != nil {
+		return nil, verr
+	}
+	if v == 0 {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: key,
+			Detail: fmt.Sprintf("%s must be greater than 0. Leave it out for no fade.", key),
+		}
+	}
+	if v > nightLightsFadeMaxMs {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: key,
+			Detail: fmt.Sprintf("%s must be at most %d. Use a shorter fade.", key, nightLightsFadeMaxMs),
+		}
+	}
+	return &v, nil
 }
 
 // --- night.session-local decode helpers not already in showaction.go. ---

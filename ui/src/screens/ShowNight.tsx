@@ -944,6 +944,8 @@ type DefinitionDraft = {
   interlocks: InterlockDraft[]
   blackoutHoldMs: string
   blackoutAfterShowMs: string
+  lightsFadeOutMs: string
+  lightsFadeInMs: string
   enterShow: CueDraft[]
   enterResting: CueDraft[]
   base: ConfigNightSessionWrite | null
@@ -991,7 +993,7 @@ const blankDefinition = (show = ''): DefinitionDraft => ({
   id: '', show, label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '',
   timelineShow: show, timelineSequence: '', timelineTarget: '', endOfNightPlaylist: '', endOfNightRepeat: false,
   announcementDefaultPolicy: 'duck', backgroundAudio: blankBackgroundAudio(), siteControl: blankSiteControl(), interlocks: [],
-  blackoutHoldMs: '0', blackoutAfterShowMs: '0',
+  blackoutHoldMs: '0', blackoutAfterShowMs: '0', lightsFadeOutMs: '', lightsFadeInMs: '',
   enterShow: [], enterResting: [], base: null,
 })
 
@@ -1056,6 +1058,8 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     timelineShow: payload.resting.timelineAsset.show, timelineSequence: payload.resting.timelineAsset.sequence, timelineTarget: payload.resting.timelineAsset.target,
     announcementDefaultPolicy: payload.announcementDefaultPolicy, backgroundAudio, siteControl, interlocks,
     blackoutHoldMs: String(payload.enterShow.blackoutHoldMs), blackoutAfterShowMs: String(payload.enterResting.blackoutAfterShowMs),
+    lightsFadeOutMs: payload.lightsFadeOutMs === undefined ? '' : String(payload.lightsFadeOutMs),
+    lightsFadeInMs: payload.lightsFadeInMs === undefined ? '' : String(payload.lightsFadeInMs),
     enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), base: payload,
   }
 }
@@ -1227,6 +1231,11 @@ function definitionPayload(
   const blackoutAfterShowMs = Number(draft.blackoutAfterShowMs)
   if (!Number.isInteger(blackoutAfterShowMs) || blackoutAfterShowMs < 0) return { error: 'Enter-resting blackout-after-show must be a whole, non-negative number of milliseconds.' }
 
+  const lightsFadeOutMs = parseLightsFadeMs(draft.lightsFadeOutMs, 'Lights fade-out')
+  if (typeof lightsFadeOutMs === 'string') return { error: lightsFadeOutMs }
+  const lightsFadeInMs = parseLightsFadeMs(draft.lightsFadeInMs, 'Lights fade-in')
+  if (typeof lightsFadeInMs === 'string') return { error: lightsFadeInMs }
+
   const base = draft.base
   const resting: ConfigNightSessionWrite['resting'] = {
     ...(base?.resting ?? {}), fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(),
@@ -1246,11 +1255,24 @@ function definitionPayload(
     enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs, cues: enteringResting.cues },
     announcementDefaultPolicy: draft.announcementDefaultPolicy,
   }
+  if (lightsFadeOutMs === null) delete result.lightsFadeOutMs
+  else result.lightsFadeOutMs = lightsFadeOutMs
+  if (lightsFadeInMs === null) delete result.lightsFadeInMs
+  else result.lightsFadeInMs = lightsFadeInMs
   if (siteControl.value === undefined) delete result.siteControl
   else result.siteControl = siteControl.value
   if (interlocks.value === undefined) delete result.interlocks
   else result.interlocks = interlocks.value
   return result
+}
+
+/** Empty means no fade; otherwise a whole number of milliseconds the lights can fade over. Returns the problem as a string. */
+function parseLightsFadeMs(text: string, label: string): number | null | string {
+  const trimmed = text.trim()
+  if (trimmed === '') return null
+  const ms = Number(trimmed)
+  if (!Number.isInteger(ms) || ms < 1 || ms > 86_400_000) return `${label} must be a whole number of milliseconds from 1 to 86400000, or empty for no fade.`
+  return ms
 }
 
 type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
@@ -1422,7 +1444,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="This file's own duration is how long the resting cycle runs; nothing else sets that length.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resting target">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a target…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
-          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
           <TransitionStepEditor title="Enter show" offsetHelp="Milliseconds from the end of the resting sequence; a negative value fires before it." steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the show's observed completion; a negative value fires before it." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
           <div className="sm-inspector__group">

@@ -7250,6 +7250,10 @@ export interface components {
             announcementDefaultPolicy?: "duck" | "mix" | "interrupt";
             siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
+            /** @description Optional. How long the lights take to fade out, finishing as the resting sequence ends before a show. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
+            lightsFadeOutMs?: number;
+            /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
+            lightsFadeInMs?: number;
         };
         /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} - never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) - this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteControl action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
@@ -7263,6 +7267,10 @@ export interface components {
             announcementDefaultPolicy: "duck" | "mix" | "interrupt";
             siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
+            /** @description Optional. How long the lights take to fade out, finishing as the resting sequence ends before a show. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
+            lightsFadeOutMs?: number;
+            /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
+            lightsFadeInMs?: number;
         };
         /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
         NightSessionConfigResponse: {

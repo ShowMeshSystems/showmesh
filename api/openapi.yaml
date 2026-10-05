@@ -20655,6 +20655,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ConfigNightSessionInterlock"
+        lightsFadeOutMs:
+          type: integer
+          minimum: 1
+          maximum: 86400000
+          description: >-
+            Optional. How long the lights take to fade out, finishing as
+            the resting sequence ends before a show. Left out means no
+            fade. Needs no cue or action: the coordinator writes the
+            transition gain on the resting and show FPP instances.
+        lightsFadeInMs:
+          type: integer
+          minimum: 1
+          maximum: 86400000
+          description: >-
+            Optional. How long the lights take to fade in, starting when
+            the resting playlist starts after a show. Left out means no
+            fade.
     ConfigNightSession:
       type: object
       description: >-
@@ -20706,6 +20723,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ConfigNightSessionInterlock"
+        lightsFadeOutMs:
+          type: integer
+          minimum: 1
+          maximum: 86400000
+          description: >-
+            Optional. How long the lights take to fade out, finishing as
+            the resting sequence ends before a show. Left out means no
+            fade. Needs no cue or action: the coordinator writes the
+            transition gain on the resting and show FPP instances.
+        lightsFadeInMs:
+          type: integer
+          minimum: 1
+          maximum: 86400000
+          description: >-
+            Optional. How long the lights take to fade in, starting when
+            the resting playlist starts after a show. Left out means no
+            fade.
     NightSessionConfigResponse:
       type: object
       description: >-

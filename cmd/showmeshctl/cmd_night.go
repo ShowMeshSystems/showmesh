@@ -228,7 +228,7 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "top of a required one. Validated before activation: a calendar field, a")
 		_, _ = fmt.Fprintln(stderr, "hand-entered rest duration, a siteControl/interlocks block, a dangling or")
 		_, _ = fmt.Fprintln(stderr, "cross-show asset/action reference, or a negative duration field")
-		_, _ = fmt.Fprintln(stderr, "(blackoutHoldMs, blackoutAfterShowMs, fadeDurationMs, crossfadeMs) is")
+		_, _ = fmt.Fprintln(stderr, "(blackoutHoldMs, blackoutAfterShowMs, fadeDurationMs, crossfadeMs, lightsFadeOutMs, lightsFadeInMs) is")
 		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision. A cue's own offsetMs is NOT")
 		_, _ = fmt.Fprintln(stderr, "bounded here: checking it against the resting FSEQ's actual length needs")
 		_, _ = fmt.Fprintln(stderr, "a live FPP read and is readiness work, not this write-time check.")

@@ -367,6 +367,8 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
 		SiteControl:               mapConfigNightSessionSiteControl(p.SiteControl),
 		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),
+		LightsFadeOutMs:           p.LightsFadeOutMs,
+		LightsFadeInMs:            p.LightsFadeInMs,
 	}
 }
 
