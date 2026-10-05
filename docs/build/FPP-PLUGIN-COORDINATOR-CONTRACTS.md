@@ -1211,10 +1211,13 @@ before the plugin ever sees it.
 
 ## 5. Fallback activation
 
-**Status: coordinator NOT BUILT, node NOT BUILT, plugin NOT BUILT.** This
-section is the frozen shape for [Track J](TRACK-J-fpp-fallback.md) step J3 and
-the wire the plugin's step J4 builds against. Nothing here has run against a
-real FPP host or a real node.
+**Status: coordinator BUILT, node BUILT, plugin NOT BUILT, NOT PROVEN ON
+HARDWARE.** This section is the frozen shape for
+[Track J](TRACK-J-fpp-fallback.md) step J3 and the wire the plugin's step J4
+builds against. The evidence on the coordinator and node side is unit tests,
+the shared fixtures in §5.10, and an integration test against a real agent
+process and broker in which the test itself signs as the coordinator and as
+the plugin. Nothing here has run against a real FPP host or a real node.
 
 Coordinator anchor: `handlePutFallbackExecutorKey`. Node anchor:
 `handleFallbackActivation`. The plugin's half is that repository's own
@@ -1271,10 +1274,14 @@ Content-Type: application/json
 `GET /api/v1/fallback-programs/{fppInstanceId}`.
 
 **Authorization.** The token must carry `fpp:fallback`, which the pairing
-token already does, and the caller must be the plugin principal the pairing
-for that same `fppInstanceId` created. Any other caller, including an
-administrator and a plugin paired as a different FPP host, is refused with
-`403`. An unauthenticated caller gets `401`.
+token already does, and the caller must be the plugin paired as the FPP player
+whose instance UUID is `fppInstanceId`. The coordinator knows that link from
+its own reads of the player: pairing names the plugin by the player's
+configured id, and the coordinator records the instance UUID it reads from
+that player. Any other caller, including an administrator and a plugin paired
+as a different player, is refused with `403`. So is the right plugin when the
+coordinator has not yet read an instance UUID from its player. An
+unauthenticated caller gets `401`.
 
 **Body.** At most 4 KiB. Unknown members are refused.
 
@@ -1289,7 +1296,7 @@ administrator and a plugin paired as a different FPP host, is refused with
 | `200` | The key is stored, or was already stored | See below |
 | `400` | The body is malformed, has an unknown member, or `publicKey` is not 32 bytes of standard base64 | Problem document, `invalid-parameter` |
 | `401` | No valid token | Problem document |
-| `403` | The token lacks `fpp:fallback`, or the caller is not the paired plugin for this FPP host | Problem document |
+| `403` | The token lacks `fpp:fallback`, or the caller is not the paired plugin for this FPP host, or the coordinator has not yet read this player's instance UUID | Problem document |
 
 The `200` body:
 
@@ -1311,7 +1318,9 @@ and republish that host's program at once, because the key is program content
 
 **What the plugin does.** It creates the key pair once, when it holds a
 pairing token and no key pair. It registers on every start and after every
-pairing, because the call is idempotent. A plugin that was paired before this
+pairing, because the call is idempotent. On a `403` it tries again each time
+it next fetches its program, because the coordinator may not have read the
+player's instance UUID yet. A plugin that was paired before this
 contract existed registers on its next start and is not paired again. It
 treats its executor key as usable only when the installed program's
 `executorPublicKey` equals its own public key. Until then it does not send an
@@ -1427,7 +1436,7 @@ required, and an unknown member is refused:
 | Member | Type | Meaning |
 |---|---|---|
 | `schemaVersion` | integer | `1` |
-| `executionId` | string | A lowercase UUID, unique per entry occurrence and target node (§5.8) |
+| `executionId` | string | A UUID in its 36 character form with lowercase hex digits, unique per entry occurrence and target node (§5.8) |
 | `fppInstanceUuid` | string | The FPP host sending the request |
 | `packageId` | string | `program.packageId` of the plugin's installed program |
 | `packageRevision` | string | `program.revision` of that program |
@@ -1472,7 +1481,9 @@ order. The first failing step decides the outcome.
 | 15 | `executionId` has not been processed | `replayed-execution` |
 
 A request that passes step 15 is recorded in the node's replay fence and then
-handed to the same Cue activation the coordinator's normal dispatch uses. That
+handed to the same Cue activation the coordinator's normal dispatch uses. If
+the node cannot write the id to disk it answers `storage-unavailable` and
+applies nothing. That
 step checks the node's own held catalog against the request (show,
 generation, catalog revision, Cue, Cue revision, and the files on disk) and
 applies the Cue's outputs. Its result is the response's `outcome`:
@@ -1493,6 +1504,8 @@ that program carries a different executor key.
 | `too-large` | 413 | both | The body is over the route's size limit |
 | `rate-limited` | 429 | both | Too many requests from this address |
 | `no-coordinator-key` | 503 | both | The node has no pinned coordinator key and cannot verify a program |
+| `storage-unavailable` | 503 | both | The node could not write the program or the execution id to its disk, so it did nothing |
+| `not-ready` | 503 | activation | The node is still starting |
 | `program-signature-invalid` | 403 | program | The coordinator signature does not verify |
 | `program-unsupported` | 409 | program | `schemaVersion` is not 1 |
 | `wrong-fpp-host` | 403 | program | The program is for a different FPP host than the path names |
@@ -1507,7 +1520,7 @@ that program carries a different executor key.
 | `cue-not-authorized` | 403 | activation | The entry maps to a different Cue or Cue revision |
 | `stale-generation` | 409 | activation | The generation differs from the program's, or from the node's held catalog |
 | `stale-catalog` | 409 | activation | The catalog revision differs from the program's, or from the node's held catalog |
-| `replayed-execution` | 409 | activation | This `executionId` was already processed. The response also carries `firstOutcome` |
+| `replayed-execution` | 409 | activation | This `executionId` was already processed. The response also carries `firstOutcome`, which is `unknown` when the node restarted before it recorded the first answer |
 | `cross-show`, `unknown-generation`, `unknown-cue`, `stale-cue`, `asset-missing` | 409 | activation | The normal Cue activation refused, with the meaning it has on a normal dispatch |
 | `weather-delay-active` | 409 | activation | The node is holding a weather delay and starts no Cue |
 | `apply-failed` | 409 | activation | The Cue was authorized and an output could not be applied. The response also carries `reasons`, an array of sentences |
@@ -1516,9 +1529,15 @@ An activation response also carries `executionId` whenever the request got
 far enough to read one.
 
 The node records every decision on both routes, accepted or refused, in its
-own log and in its fallback report to the coordinator. A run of `rate-limited`
-refusals is reported once per limit window with a count, so the report cannot
-itself be used to flood the broker.
+own log and in its fallback report: a retained message on
+`showmesh/nodes/<id>/observed/fallback`, schema `showmesh.node.fallback/v1`,
+carrying the programs the node holds, a count of every answer since the agent
+started, and its 50 most recent answers. The coordinator turns the report into
+`node.fallback.*` signals on the node. A run of `rate-limited` refusals on one
+route within a minute is one entry with a count, and the node publishes at
+most one report a second, so the report cannot itself be used to flood the
+broker. The broker is usually unreachable during the outage this path exists
+for, so the report reaches the coordinator when the node reconnects.
 
 ### 5.8 Execution ids, retries, and rate limits
 
@@ -1532,14 +1551,15 @@ itself be used to flood the broker.
   apply the same request twice.
 - A refusal at steps 1 through 14 consumes nothing. The same `executionId` may
   be sent again after the cause is fixed.
-- The node forgets an `executionId` after the program copy it was sent under
-  has expired. Step 8 or step 9 refuses the request from then on.
+- The node forgets an `executionId` 24 hours after the program copy it was
+  sent under has expired. Step 8 or step 9 refuses the request from the
+  moment of expiry, so the id is no longer needed by then.
 
 What the plugin does with each answer:
 
 | Answer | Plugin action |
 |---|---|
-| No response, a transport error, or a `5xx` other than `no-coordinator-key` | Retry the same body, at most 3 attempts in total, at least 250 ms apart |
+| No response, a transport error, `storage-unavailable`, `not-ready`, or any other `5xx` except `no-coordinator-key` | Retry the same body, at most 3 attempts in total, at least 250 ms apart |
 | `rate-limited` | Retry the same body once after 1 second |
 | `program-not-installed`, `program-not-current` | Send the installed program (§5.5), then retry the same body once |
 | `replayed-execution` | Final. Take `firstOutcome` as the result of this execution |
@@ -1570,16 +1590,30 @@ Checked against the plugin repository at its `v0.2.0` tag
   member.
 
 So a program that carries `executorPublicKey` and `targets[].address`
-verifies and installs on 0.2.0. This is a source reading at one commit. The
-built status of this finding is on the §5 heading and is updated when a 0.2.0
-verifier has been run against a program that carries the new members.
+verifies and installs on 0.2.0 by source reading.
+
+It was also run. A throwaway program compiled the plugin's unmodified
+`fallback_program_verifier.h`, `fallback_activation_resolver.h`, and
+`native/src/json.cpp` at that tag and linked the host's OpenSSL 3 `libcrypto`.
+Against `test/fixtures/fallback-activation/program.json`, which carries both
+new members, `VerifyFallbackProgram` accepted the document and
+`ResolveActivationFromDocument` returned `kMatch` for `entry-0`. Against
+`program-wrong-signer.json` it refused with "signature does not verify". The
+build host had no OpenSSL development headers, so the six `EVP_*`
+declarations the verifier uses were written out by hand to match OpenSSL 3;
+the library that did the verifying was the real one. This is a build-host
+run of the verifier and resolver functions, not a run of the installed
+plugin on an FPP host.
 
 ### 5.10 Fixtures
 
 `test/fixtures/fallback-activation/` holds JSON data files on the §4 pattern:
-a signed program that carries the new members, the executor and coordinator
-test keys, one valid activation request with its canonical bytes and its
-signature, and one request per refusal. The key pairs are the published
+signed programs that carry the new members, the executor and coordinator test
+keys, one valid activation request with its canonical bytes and its signature,
+and one request per refusal. `cases.json` states, for each case, which program
+files the node holds, the node's clock, the request body, and the expected
+status and outcome. `fixtures_test.go` regenerates every file from the Go
+implementation and fails when one has drifted. The key pairs are the published
 RFC 8032 section 7.1 test vectors, never a real key. Ed25519 signatures are
 deterministic, so a plugin signer that produces a different signature for the
 valid request's canonical bytes has a defect.

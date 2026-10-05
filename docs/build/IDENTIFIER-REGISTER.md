@@ -633,6 +633,7 @@ register entry comes from the code and never from a plan.
 | `fallback.program.publish` | shipped | Track J seam J1: the coordinator building and signing a new fallback-program revision |
 | `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
 | `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
+| `fallback.executor_key.register` | shipped | Track J seam J3: a paired FPP plugin registering or replacing the public key it signs fallback activations with |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
@@ -697,6 +698,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
 | `fallback_program` | `fallback_program.*` | shipped | Track J seam J1 |
+| `node` | `node.fallback.*` | shipped | Track J seam J3 (what a node holds and answered on its fallback routes) |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -1335,6 +1337,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
+| `showmesh/nodes/<id>/observed/fallback` (retained) | shipped | Track J seam J3. The existing `observed/#` write grant for each node and read grant for the coordinator cover it, so the generated ACL is unchanged |
 | `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
@@ -1453,8 +1456,8 @@ The store schema version, bumped by migrations in
 | v44 | shipped | ADR-054 level 1 stop hold (`migration_v44.go`): `night_sessions` gains `stop_hold_reason`, `stop_hold_at`, `stop_hold_principal` |
 | v45 | shipped | ADR-055 (`migrations.go` schemaV45): the `node_enrollment_codes` table (hashed code, node ID, re-enrollment flag, minting principal, expiry, redemption time) |
 | v46 | shipped | `night_cue_outbox` gains nullable `node_responded_at` (`migration_v46.go`): when the node published a bed step's answer, on the node's clock, so a node report built before the answer is not read as the step's result |
-| v47 | reserved | FPP fallback executor public key: storage for the public key a paired FPP plugin registers, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
-| v47+ | unallocated | free |
+| v47 | shipped | `fallback_executor_keys`: the public key a paired FPP plugin registers, one per FPP instance, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
+| v48+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1657,6 +1660,17 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Track J seam J3 adds one path under that prefix and two on the node's
+inbound listener**, on the `/api/v1/fallback-programs` precedent.
+`PUT /api/v1/fallback-programs/{fppInstanceId}/executor-key` is in
+`api/openapi.yaml`, behind `fpp:fallback`, and answers only the plugin paired
+as that FPP instance. `PUT /showmesh/v1/fallback/programs/{fppInstanceUuid}`
+and `POST /showmesh/v1/fallback/activations` are served by the node agent,
+accept only coordinator-signed and executor-signed bodies, and stay out of
+`api/openapi.yaml` like the weather delay start beside them. Their wire shape
+is section 5 of
+[FPP-PLUGIN-COORDINATOR-CONTRACTS.md](FPP-PLUGIN-COORDINATOR-CONTRACTS.md).
 
 **Node-reported audio routing choices (2026-09-28) own `/api/v1/nodes/{nodeId}/audio/routing-choices`** and the `showmeshctl audio node choices` subcommand. The agent reports the evidence as `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes on the existing `audio.output.local` capability; no new capability id.
 

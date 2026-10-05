@@ -21,10 +21,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// The fallback ingress (ADR-048 decision 3): two routes on this node's
-// inbound listener. One takes a coordinator-signed fallback program, the
-// other takes an activation signed by the FPP player that program names.
-// Neither accepts a Cue, action, file or command the program did not list.
+// The fallback ingress (ADR-048 decision 3): one route takes a
+// coordinator-signed fallback program, the other an activation signed by
+// the FPP player that program names. Neither accepts anything else.
 
 const (
 	fallbackActivationsPerMinute = 120
@@ -414,10 +413,9 @@ func fallbackEntryTargets(entry fallbackprogram.EntryMapping, nodeID string) boo
 	return false
 }
 
-// runCueActivation hands the request to this node's own "cue.activate",
-// built as the same envelope a coordinator dispatch carries. Nothing about
-// what the Cue does comes from the request: the operation reads it from
-// the catalog this node holds.
+// runCueActivation hands the request to this node's own "cue.activate" as
+// the envelope a coordinator dispatch carries. What the Cue does is read
+// from the catalog this node holds, never from the request.
 func (g *fallbackIngress) runCueActivation(ctx context.Context, activate OperationFunc, req fallbackactivation.Request, show string, now time.Time) (fallbackactivation.Outcome, []string) {
 	act := cueactivation.Activation{
 		Runner: fallbackactivation.Runner, RunnerInstance: req.FPPInstanceUUID, ActivationID: req.ExecutionID,

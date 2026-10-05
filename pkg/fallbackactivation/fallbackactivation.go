@@ -1,8 +1,6 @@
 // Package fallbackactivation is the wire shape of ADR-048 decision 3's
-// fallback activation: the request an FPP host signs with its executor
-// key, the outcome vocabulary a node answers with, and the one function
-// both sides derive the signed bytes with. See section 5 of
-// docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md.
+// fallback activation: the request an FPP host signs and the words a node
+// answers with. See docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 5.
 package fallbackactivation
 
 import (

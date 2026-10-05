@@ -1,7 +1,6 @@
 // Package fallbackactivationfixtures generates and checks the JSON files
-// beside it. Run `go test ./test/fixtures/fallback-activation -update` to
-// rewrite them; a plain run fails when a file no longer matches what the
-// Go implementation produces.
+// beside it. `go test ./test/fixtures/fallback-activation -update` rewrites
+// them; a plain run fails when one no longer matches the implementation.
 package fallbackactivationfixtures
 
 import (
