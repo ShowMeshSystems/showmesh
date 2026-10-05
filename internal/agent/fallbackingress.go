@@ -265,10 +265,11 @@ func (g *fallbackIngress) decideProgram(r *http.Request, fppInstanceUUID string)
 	case !now.Before(program.ExpiresAt):
 		return withHost(g.answer(fallbackactivation.OutcomeProgramExpired))
 	}
-	if held, ok := g.programs.get(fppInstanceUUID); ok && program.CompiledAt.Before(held.program.CompiledAt) {
+	err = g.programs.install(program, document, now)
+	if errors.Is(err, errFallbackProgramSuperseded) {
 		return withHost(g.answer(fallbackactivation.OutcomeProgramSuperseded))
 	}
-	if err := g.programs.install(program, document, now); err != nil {
+	if err != nil {
 		g.logger.Warn("could not store a verified fallback program", "fpp_instance_uuid", fppInstanceUUID, "error", err)
 		return withHost(g.answer(fallbackactivation.OutcomeStorageUnavailable))
 	}

@@ -82,6 +82,7 @@ func TestExecutorKeyFirstRegistrationStoresAndRepublishes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
 	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "FallbackExecutorKeyResponse", body)
 	got := decodeExecutorKeyResponse(t, body)
 	if !got.Changed || got.PublicKey != key || got.FPPInstanceUUID != executorKeyTestInstanceUUID {
 		t.Fatalf("response = %+v, want changed with the registered key", got)

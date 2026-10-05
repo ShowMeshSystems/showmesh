@@ -22502,6 +22502,12 @@ components:
       properties:
         nodeId:
           type: string
+        address:
+          type: string
+          description: >-
+            The `host:port` of this node's inbound listener, where the FPP
+            host delivers this target's activation. Absent when the
+            coordinator has no reported address for the node.
         render:
           $ref: "#/components/schemas/FallbackProgramRenderActivation"
         audio:
@@ -22571,6 +22577,13 @@ components:
           format: date-time
         fppInstanceUuid:
           type: string
+        executorPublicKey:
+          type: string
+          description: >-
+            The Ed25519 public key this FPP instance's plugin registered,
+            in standard base64. A node accepts a fallback activation only
+            when it is signed by this key. Absent when no key is
+            registered.
         show:
           type: string
         generation:

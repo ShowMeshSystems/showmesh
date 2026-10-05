@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -98,10 +99,18 @@ func (s *fallbackProgramStore) get(fppInstanceUUID string) (heldFallbackProgram,
 	return held, ok
 }
 
-// install persists an already verified program and makes it the held one.
-// The file name is a hash of the FPP instance UUID, so no caller-chosen
-// text ever reaches the file system.
+// errFallbackProgramSuperseded means a newer copy is already held.
+var errFallbackProgramSuperseded = errors.New("a newer fallback program is already held")
+
+// install persists an already verified program and makes it the held one,
+// unless a newer copy is held. The file name is a hash of the FPP instance
+// UUID, so no caller-chosen text ever reaches the file system.
 func (s *fallbackProgramStore) install(program fallbackprogram.Program, document []byte, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if held, ok := s.held[program.FPPInstanceUUID]; ok && program.CompiledAt.Before(held.program.CompiledAt) {
+		return errFallbackProgramSuperseded
+	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("create fallback program directory: %w", err)
 	}
@@ -117,9 +126,7 @@ func (s *fallbackProgramStore) install(program fallbackprogram.Program, document
 	if err := os.Rename(target+".tmp", target); err != nil {
 		return fmt.Errorf("commit fallback program: %w", err)
 	}
-	s.mu.Lock()
 	s.held[program.FPPInstanceUUID] = newHeldFallbackProgram(program, now)
-	s.mu.Unlock()
 	return nil
 }
 

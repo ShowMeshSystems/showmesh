@@ -7968,6 +7968,8 @@ export interface components {
         /** @description One named node target and the exact output activation it may perform (ADR-048 decision 1). At least one of render/audio is always present. */
         FallbackProgramTarget: {
             nodeId: string;
+            /** @description The `host:port` of this node's inbound listener, where the FPP host delivers this target's activation. Absent when the coordinator has no reported address for the node. */
+            address?: string;
             render?: components["schemas"]["FallbackProgramRenderActivation"];
             audio?: components["schemas"]["FallbackProgramAudioActivation"];
         };
@@ -7995,6 +7997,8 @@ export interface components {
             /** Format: date-time */
             compiledAt: string;
             fppInstanceUuid: string;
+            /** @description The Ed25519 public key this FPP instance's plugin registered, in standard base64. A node accepts a fallback activation only when it is signed by this key. Absent when no key is registered. */
+            executorPublicKey?: string;
             show: string;
             generation: number;
             /** @description Every fpp-runner show.playlist object id this program drew entries from, mapped to its compiled config revision. */
