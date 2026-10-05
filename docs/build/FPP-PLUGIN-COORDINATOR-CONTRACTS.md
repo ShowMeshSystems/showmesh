@@ -8,6 +8,13 @@
 > coordinator loss.  Its schema is frozen by J1 before plugin or node work
 > begins; it does not widen any existing observation route into a command route.
 
+> **2026-10-05 amendment, fallback activation.** §5 is new. It fixes the wire
+> shapes for [Track J](TRACK-J-fpp-fallback.md) step J3: the plugin registers
+> an executor public key with the coordinator, the signed fallback program
+> carries that key and each target node's address, and a node accepts a
+> fallback activation only when it is signed by that key. §1 through §4 are
+> unchanged.
+
 > **2026-09-29 amendment, brightness state read.** §2 gains §2.6, the
 > plugin's read-only brightness state route, which the coordinator's
 > `fppbrightness` collector polls and which no earlier revision of this file
@@ -1201,3 +1208,387 @@ See [`test/fixtures/fpp/README.md`](../../test/fixtures/fpp/README.md) for the
 file format and the case list. The coordinator's own tests consume the same
 files, so a fixture that drifts from the implementation fails on this side
 before the plugin ever sees it.
+
+## 5. Fallback activation
+
+**Status: coordinator NOT BUILT, node NOT BUILT, plugin NOT BUILT.** This
+section is the frozen shape for [Track J](TRACK-J-fpp-fallback.md) step J3 and
+the wire the plugin's step J4 builds against. Nothing here has run against a
+real FPP host or a real node.
+
+Coordinator anchor: `handlePutFallbackExecutorKey`. Node anchor:
+`handleFallbackActivation`. The plugin's half is that repository's own
+assertion and is not verified from here.
+
+[ADR-048](../decisions/ADR-048-signed-fpp-fallback-program.md) decision 3
+gives a node a narrow route that accepts one thing: an activation that a
+coordinator-signed fallback program already authorized, delivered by the FPP
+host that program was built for. Per owner ruling (2026-10-05) pairing is the
+enrollment. There is no separate authorize step and no secret is ever sent to
+a node:
+
+1. A paired plugin creates an Ed25519 key pair and registers the public key
+   with the coordinator over its paired connection (§5.2).
+2. The coordinator puts that public key in the signed fallback program it
+   publishes for that FPP host (§5.3).
+3. The plugin hands its installed program to each node the program names
+   (§5.5). The node verifies it with the coordinator key it pinned at
+   enrollment and keeps it.
+4. During confirmed coordinator loss the plugin signs one activation request
+   per matched entry and target node (§5.6). The node accepts it only when the
+   signature verifies against the key inside the program it holds.
+
+### 5.1 Key algorithm and encodings
+
+One algorithm and one construction, the same ones §4's fixtures and the
+program signature already use, so the plugin needs no new primitive beyond
+signing:
+
+| Item | Value |
+|---|---|
+| Algorithm | Ed25519 (RFC 8032), pure, no prehash and no context |
+| Public key | The raw 32 bytes, RFC 4648 standard base64 with padding (44 characters) |
+| Signature | The raw 64 bytes, RFC 4648 standard base64 with padding (88 characters) |
+| Signed bytes | The RFC 8785 (JCS) canonical UTF-8 bytes of one JSON object, named per route below |
+
+The verifier canonicalizes the JSON object it received and checks the
+signature over those bytes. It never re-serializes from its own types first.
+A signer therefore signs the canonical bytes of exactly the object it sends,
+and any member order or whitespace on the wire is acceptable.
+
+The private key never leaves the FPP host. The plugin stores it beside its
+pairing token with the same file permissions and never sends it anywhere.
+
+### 5.2 Executor key registration
+
+```
+PUT /api/v1/fallback-programs/{fppInstanceId}/executor-key
+Authorization: Bearer <pairing token>
+Content-Type: application/json
+```
+
+`fppInstanceId` is the FPP instance UUID the plugin already uses on
+`GET /api/v1/fallback-programs/{fppInstanceId}`.
+
+**Authorization.** The token must carry `fpp:fallback`, which the pairing
+token already does, and the caller must be the plugin principal the pairing
+for that same `fppInstanceId` created. Any other caller, including an
+administrator and a plugin paired as a different FPP host, is refused with
+`403`. An unauthenticated caller gets `401`.
+
+**Body.** At most 4 KiB. Unknown members are refused.
+
+| Member | Type | Meaning |
+|---|---|---|
+| `publicKey` | string, required | The executor public key, encoded per §5.1 |
+
+**Responses.**
+
+| Status | When | Body |
+|---|---|---|
+| `200` | The key is stored, or was already stored | See below |
+| `400` | The body is malformed, has an unknown member, or `publicKey` is not 32 bytes of standard base64 | Problem document, `invalid-parameter` |
+| `401` | No valid token | Problem document |
+| `403` | The token lacks `fpp:fallback`, or the caller is not the paired plugin for this FPP host | Problem document |
+
+The `200` body:
+
+| Member | Type | Meaning |
+|---|---|---|
+| `serverTime` | string | RFC 3339 |
+| `fppInstanceUuid` | string | The path value |
+| `publicKey` | string | The key now stored |
+| `registeredAt` | string | RFC 3339, when this key was first stored |
+| `changed` | boolean | `true` when this call stored a first key or replaced a different one |
+
+**Behavior.** The route is idempotent. Registering the stored key again
+changes nothing and answers `changed: false`. Registering a different key
+replaces the stored one: there is one executor key per FPP host, and rotation
+is a second registration. A first or changed key makes the coordinator rebuild
+and republish that host's program at once, because the key is program content
+(§5.3). The coordinator writes one audit entry, action
+`fallback.executor_key.register`, for a first or changed key.
+
+**What the plugin does.** It creates the key pair once, when it holds a
+pairing token and no key pair. It registers on every start and after every
+pairing, because the call is idempotent. A plugin that was paired before this
+contract existed registers on its next start and is not paired again. It
+treats its executor key as usable only when the installed program's
+`executorPublicKey` equals its own public key. Until then it does not send an
+activation.
+
+### 5.3 What the signed program gains
+
+The program stays `schemaVersion` 1 and gains two optional members. Both are
+covered by the program's `revision`, so a change to either publishes a new
+revision with a new `packageId`.
+
+| Member | Type | Meaning |
+|---|---|---|
+| `program.executorPublicKey` | string | The executor public key registered for this FPP host, encoded per §5.1. Absent when no key is registered |
+| `program.entries[].targets[].address` | string | `host:port` of that node's inbound listener, as the node last reported it. Absent when the coordinator has no reported address for the node |
+
+A program with no `executorPublicKey` is still published, so a plugin that
+never registers keeps reporting an installed, verified program exactly as it
+does today. A node refuses every activation under such a program (§5.7,
+`executor-not-enrolled`).
+
+A target with no `address` cannot be reached by the plugin. The plugin records
+that it had no address for the target and sends nothing. It never guesses an
+address and never takes one from anywhere but the installed program.
+
+**A plugin built before this change still verifies and installs a program that
+carries these members.** Plugin 0.2.0 verifies the signature over the JCS
+bytes of the `program` object as it parsed it, looks members up by name, has
+no list of permitted members, and does not read `schemaVersion`. See the
+finding recorded in §5.9.
+
+### 5.4 The node ingress
+
+The two routes below are served by the node's one inbound HTTP listener, the
+address in `targets[].address`. The listener's default port is 80. They are
+not xLights routes, they are not part of the coordinator API, and they stay
+out of `api/openapi.yaml`. They are answered whether or not the node's FPP
+Connect upload surface is enabled, and they add no other route.
+
+Every response from either route is a JSON object with at least these members:
+
+| Member | Type | Meaning |
+|---|---|---|
+| `accepted` | boolean | `true` only when the node did what was asked |
+| `outcome` | string | One word from the vocabulary in §5.7 |
+| `reason` | string | One plain sentence for a log or an operator. Never parsed |
+
+A caller decides on `outcome`, never on the HTTP status and never on `reason`.
+
+A node that holds no pinned coordinator key refuses both routes with `503`
+and `no-coordinator-key`. That node cannot verify any program, so it has no
+fallback path, and the refusal says so.
+
+### 5.5 Handing a node its program
+
+```
+PUT /showmesh/v1/fallback/programs/{fppInstanceUuid}
+Content-Type: application/json
+```
+
+No credential. The body is self-authenticating: it is the signed program
+document exactly as the plugin installed it, at most 1 MiB.
+
+```json
+{"program": { ... }, "signature": "<base64>"}
+```
+
+The signed bytes are the JCS bytes of the `program` object and the signature
+is the coordinator's, as in `pkg/fallbackprogram`.
+
+The node installs the program for that FPP host when all of these hold, and
+checks them in this order:
+
+1. the signature verifies against the node's pinned coordinator key;
+2. `program.schemaVersion` is 1;
+3. `program.fppInstanceUuid` equals the path value;
+4. the node's own id appears in at least one entry's `targets`;
+5. `program.expiresAt` is in the future; and
+6. `program.compiledAt` is not earlier than the `compiledAt` of the program
+   the node already holds for that FPP host.
+
+The node keeps one program per FPP host, on disk, and a restart keeps it. Rule
+6 is what makes the held program the current one: a node never goes back to an
+older copy. Sending the copy the node already holds is accepted again and
+changes nothing.
+
+On success the response is `200` with `accepted: true`, `outcome:
+"installed"`, and `packageId`, `revision`, and `expiresAt` of the held program.
+
+**What the plugin does.** After it installs a program, and after every later
+refresh, it sends that program to every distinct `address` the program names.
+It also sends it when a node answers `program-not-installed` or
+`program-not-current` (§5.8). It sends nothing to a node the program does not
+name.
+
+### 5.6 The activation request
+
+```
+POST /showmesh/v1/fallback/activations
+Content-Type: application/json
+```
+
+The body is at most 4 KiB:
+
+```json
+{"request": { ... }, "signature": "<base64>"}
+```
+
+The signed bytes are the JCS bytes of the `request` object and the signature
+is the executor key's. `request` has exactly these members. Every one is
+required, and an unknown member is refused:
+
+| Member | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | integer | `1` |
+| `executionId` | string | A lowercase UUID, unique per entry occurrence and target node (§5.8) |
+| `fppInstanceUuid` | string | The FPP host sending the request |
+| `packageId` | string | `program.packageId` of the plugin's installed program |
+| `packageRevision` | string | `program.revision` of that program |
+| `programExpiresAt` | string | `program.expiresAt` of that program, copied as written |
+| `generation` | integer | `program.generation` |
+| `catalogRevision` | string | `program.catalogRevisions[nodeId]` |
+| `entryKey` | string | The playing entry's key, as §1.3 derives it |
+| `cueId` | string | `cueId` of the program entry with that `entryKey` |
+| `cueRevision` | integer | `cueRevision` of that entry |
+| `nodeId` | string | `nodeId` of the target this request is sent to |
+
+The request names a program entry and nothing else. It carries no action, no
+macro, no file name, no offset, and no command name. What the node does comes
+from the Cue catalog the node already holds, never from the request.
+
+`programExpiresAt` ties the request to one published copy of the program. The
+coordinator refreshes an unchanged program with a later `expiresAt` under the
+same `packageId` and `revision`, so those two alone would leave a captured
+request acceptable for as long as the show does not change. With the expiry in
+the signed request, a request stops being acceptable when its copy of the
+program expires or is replaced on the node.
+
+The node accepts the request only when every step below passes, in this
+order. The first failing step decides the outcome.
+
+| Step | Check | Outcome when it fails |
+|---|---|---|
+| 1 | The caller's address is under the route's rate limit | `rate-limited` |
+| 2 | The body is within size, is valid JSON, has exactly `request` and `signature`, every `request` member is present with the right type, there is no unknown member, and `schemaVersion` is 1 | `malformed-request` |
+| 3 | `request.nodeId` is this node's id | `wrong-target` |
+| 4 | The node holds a pinned coordinator key | `no-coordinator-key` |
+| 5 | The node holds a program for `request.fppInstanceUuid` | `program-not-installed` |
+| 6 | That program carries an `executorPublicKey` | `executor-not-enrolled` |
+| 7 | The signature verifies against that key | `signature-invalid` |
+| 8 | `packageId`, `packageRevision`, and `programExpiresAt` equal the held program's | `program-not-current` |
+| 9 | The held program has not expired | `program-expired` |
+| 10 | The held program has an entry with `request.entryKey` | `unknown-entry` |
+| 11 | `cueId` and `cueRevision` equal that entry's | `cue-not-authorized` |
+| 12 | This node is one of that entry's `targets` | `wrong-target` |
+| 13 | `generation` equals the program's | `stale-generation` |
+| 14 | `catalogRevision` equals the program's value for this node | `stale-catalog` |
+| 15 | `executionId` has not been processed | `replayed-execution` |
+
+A request that passes step 15 is recorded in the node's replay fence and then
+handed to the same Cue activation the coordinator's normal dispatch uses. That
+step checks the node's own held catalog against the request (show,
+generation, catalog revision, Cue, Cue revision, and the files on disk) and
+applies the Cue's outputs. Its result is the response's `outcome`:
+`authorized` with `accepted: true`, or one of the normal activation refusals
+in §5.7 with `accepted: false`.
+
+A request for another FPP host has no distinct outcome. It fails step 5 when
+the node holds no program for the named host, and step 7 when it does, because
+that program carries a different executor key.
+
+### 5.7 Outcome vocabulary
+
+| `outcome` | Status | Route | Meaning |
+|---|---|---|---|
+| `installed` | 200 | program | The node holds this program for this FPP host |
+| `authorized` | 200 | activation | The Cue's outputs were applied |
+| `malformed-request` | 400 | both | The body is not the shape this section fixes |
+| `too-large` | 413 | both | The body is over the route's size limit |
+| `rate-limited` | 429 | both | Too many requests from this address |
+| `no-coordinator-key` | 503 | both | The node has no pinned coordinator key and cannot verify a program |
+| `program-signature-invalid` | 403 | program | The coordinator signature does not verify |
+| `program-unsupported` | 409 | program | `schemaVersion` is not 1 |
+| `wrong-fpp-host` | 403 | program | The program is for a different FPP host than the path names |
+| `wrong-target` | 403 | both | This node is not a target of the program, the entry, or the request |
+| `program-expired` | 409 | both | The program is past `expiresAt` |
+| `program-superseded` | 409 | program | The node already holds a newer copy for this FPP host |
+| `program-not-installed` | 409 | activation | The node holds no program for this FPP host |
+| `program-not-current` | 409 | activation | The request names a different copy than the node holds |
+| `executor-not-enrolled` | 403 | activation | The held program carries no executor key |
+| `signature-invalid` | 403 | activation | The request signature does not verify against the program's executor key |
+| `unknown-entry` | 409 | activation | The program has no entry with this key |
+| `cue-not-authorized` | 403 | activation | The entry maps to a different Cue or Cue revision |
+| `stale-generation` | 409 | activation | The generation differs from the program's, or from the node's held catalog |
+| `stale-catalog` | 409 | activation | The catalog revision differs from the program's, or from the node's held catalog |
+| `replayed-execution` | 409 | activation | This `executionId` was already processed. The response also carries `firstOutcome` |
+| `cross-show`, `unknown-generation`, `unknown-cue`, `stale-cue`, `asset-missing` | 409 | activation | The normal Cue activation refused, with the meaning it has on a normal dispatch |
+| `weather-delay-active` | 409 | activation | The node is holding a weather delay and starts no Cue |
+| `apply-failed` | 409 | activation | The Cue was authorized and an output could not be applied. The response also carries `reasons`, an array of sentences |
+
+An activation response also carries `executionId` whenever the request got
+far enough to read one.
+
+The node records every decision on both routes, accepted or refused, in its
+own log and in its fallback report to the coordinator. A run of `rate-limited`
+refusals is reported once per limit window with a count, so the report cannot
+itself be used to flood the broker.
+
+### 5.8 Execution ids, retries, and rate limits
+
+- The plugin creates one `executionId` per entry occurrence and target node.
+  Two nodes targeted by the same entry get two ids. A loop back into the same
+  entry is a new occurrence and gets new ids.
+- A retry carries the same `executionId` and the same signed body.
+- The node processes an `executionId` at most once. The id is consumed when
+  the request passes step 15, whatever the Cue activation then answers. The
+  node persists the id before it applies anything, so a restart cannot make it
+  apply the same request twice.
+- A refusal at steps 1 through 14 consumes nothing. The same `executionId` may
+  be sent again after the cause is fixed.
+- The node forgets an `executionId` after the program copy it was sent under
+  has expired. Step 8 or step 9 refuses the request from then on.
+
+What the plugin does with each answer:
+
+| Answer | Plugin action |
+|---|---|
+| No response, a transport error, or a `5xx` other than `no-coordinator-key` | Retry the same body, at most 3 attempts in total, at least 250 ms apart |
+| `rate-limited` | Retry the same body once after 1 second |
+| `program-not-installed`, `program-not-current` | Send the installed program (§5.5), then retry the same body once |
+| `replayed-execution` | Final. Take `firstOutcome` as the result of this execution |
+| `authorized` | Final |
+| Anything else | Final. Record the outcome and do nothing else for this target. Never send a different Cue, entry, or program in its place |
+
+Rate limits are per caller address over a rolling minute: 120 activation
+requests and 30 program deliveries. One FPP host driving one node needs one
+activation per entry change, so the limit only bounds a caller that is
+misbehaving.
+
+### 5.9 Finding: plugin 0.2.0 and the new program members
+
+Checked against the plugin repository at its `v0.2.0` tag
+(`faefea4c284a7f310e36ccb01b3fe86aaa8aa1b7`) by reading
+`native/adapters/shared/fallback_program_verifier.h`:
+
+- `VerifyFallbackProgram` parses the document, canonicalizes the parsed
+  `program` object with the plugin's own JCS implementation, and verifies the
+  signature over those bytes. An added member is part of what it canonicalizes,
+  exactly as it is part of what the coordinator signed.
+- After verifying, it reads `packageId`, `revision`, `fppInstanceUuid`, and
+  `expiresAt` by name. It has no allow-list of members and does not read
+  `schemaVersion`.
+- `fallback_program_fetch.h` and `fallback_activation_resolver.h` read
+  `program`, `entries`, `entryKey`, `cueId`, `cueRevision`, `targets`,
+  `nodeId`, `render`, and `audio` by name in the same way and ignore any other
+  member.
+
+So a program that carries `executorPublicKey` and `targets[].address`
+verifies and installs on 0.2.0. This is a source reading at one commit. The
+built status of this finding is on the §5 heading and is updated when a 0.2.0
+verifier has been run against a program that carries the new members.
+
+### 5.10 Fixtures
+
+`test/fixtures/fallback-activation/` holds JSON data files on the §4 pattern:
+a signed program that carries the new members, the executor and coordinator
+test keys, one valid activation request with its canonical bytes and its
+signature, and one request per refusal. The key pairs are the published
+RFC 8032 section 7.1 test vectors, never a real key. Ed25519 signatures are
+deterministic, so a plugin signer that produces a different signature for the
+valid request's canonical bytes has a defect.
+
+### 5.11 What this section does not do
+
+- It does not decide when the plugin declares the coordinator lost, the cutoff,
+  the rest or hold behavior, or the hand-back at the next scheduled-show
+  boundary. Those are later Track J steps.
+- It does not let a node fetch a program from the coordinator, and it gives the
+  coordinator no way to push one.
+- It adds no route to the xLights compatibility surface and changes none.
