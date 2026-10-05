@@ -56,6 +56,39 @@ func TestRefusalIsVisibleAsTheLastRefusal(t *testing.T) {
 	if got[SignalProgramCount].Value != int64(1) {
 		t.Fatalf("program count = %v, want 1", got[SignalProgramCount].Value)
 	}
+	if got[SignalEnrolledProgramCount].Value != int64(1) || got[SignalUnenrolledFPP].Value != "" {
+		t.Fatalf("enrolled = %v, unenrolled = %q, want 1 and none", got[SignalEnrolledProgramCount].Value, got[SignalUnenrolledFPP].Value)
+	}
+	if got[SignalExecutionRecordProblem].Value != "" {
+		t.Fatalf("execution record problem = %q, want none", got[SignalExecutionRecordProblem].Value)
+	}
+}
+
+// A node holding a program with no executor key will refuse every
+// activation under it, and nothing else about that program looks wrong.
+func TestHeldProgramWithNoExecutorKeyIsNamed(t *testing.T) {
+	at := time.Date(2026, 10, 5, 12, 5, 0, 0, time.UTC)
+	store := NewStore()
+	store.Put("node-a", mqttproto.FallbackPayload{
+		ObservedAt: &at, CoordinatorKeyLoaded: true,
+		ExecutionRecordProblem: "This node's record of handled fallback requests is damaged.",
+		Programs: []mqttproto.FallbackHeldProgram{
+			{FPPInstanceUUID: "fpp-2", PackageID: "pkg-2", ExpiresAt: at, InstalledAt: at},
+			{FPPInstanceUUID: "fpp-1", PackageID: "pkg-1", ExpiresAt: at, InstalledAt: at, ExecutorEnrolled: true},
+			{FPPInstanceUUID: "fpp-0", PackageID: "pkg-0", ExpiresAt: at, InstalledAt: at},
+		},
+	}, at)
+
+	got := pollBySignal(t, store)
+	if got[SignalProgramCount].Value != int64(3) || got[SignalEnrolledProgramCount].Value != int64(1) {
+		t.Fatalf("programs = %v, enrolled = %v, want 3 and 1", got[SignalProgramCount].Value, got[SignalEnrolledProgramCount].Value)
+	}
+	if got[SignalUnenrolledFPP].Value != "fpp-0,fpp-2" {
+		t.Fatalf("unenrolled = %q, want fpp-0,fpp-2", got[SignalUnenrolledFPP].Value)
+	}
+	if got[SignalExecutionRecordProblem].Value != "This node's record of handled fallback requests is damaged." {
+		t.Fatalf("execution record problem = %q, want the node's own sentence", got[SignalExecutionRecordProblem].Value)
+	}
 }
 
 func TestNodeWithNoAnswersReportsThatNothingWasCollected(t *testing.T) {

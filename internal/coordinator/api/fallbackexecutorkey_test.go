@@ -172,7 +172,7 @@ func TestExecutorKeyRefusesEveryCallerButThePairedPlugin(t *testing.T) {
 		{"an administrator", mustIssueToken(t, setup.svc, admin.ID), http.StatusForbidden},
 		{"a viewer", mustIssueToken(t, setup.svc, viewer.ID), http.StatusForbidden},
 		{"a plugin paired as another player", mustIssueToken(t, setup.svc, otherPlugin.ID), http.StatusForbidden},
-		{"a plugin whose player has reported no identity", mustIssueToken(t, setup.svc, unseenPlugin.ID), http.StatusForbidden},
+		{"a plugin whose player has reported no identity", mustIssueToken(t, setup.svc, unseenPlugin.ID), http.StatusConflict},
 	}
 	for _, tc := range cases {
 		resp, raw := putExecutorKey(t, api, executorKeyTestInstanceUUID, tc.token, body)
@@ -217,4 +217,39 @@ func countAuditActions(t *testing.T, setup *fppCommandTestSetup, action string) 
 		}
 	}
 	return n
+}
+
+// A correctly paired plugin whose player has no recorded identity is told
+// the real reason, and the refusal is left where an operator can find it.
+func TestExecutorKeyPairedPluginWithUnreadPlayerIdentityIsToldWhyAndAudited(t *testing.T) {
+	api, setup, nudger, _ := executorKeyAPI(t)
+	plugin, err := setup.svc.CreatePrincipal(t.Context(), fppPairingPrincipalPrefix+"unseen-fpp", identity.KindMachine, identity.RoleScheduler, "")
+	if err != nil {
+		t.Fatalf("create plugin principal: %v", err)
+	}
+
+	resp, raw := putExecutorKey(t, api, "55555555-5555-4555-8555-555555555555", mustIssueToken(t, setup.svc, plugin.ID), `{"publicKey":"`+executorKeyFor(1)+`"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, raw)
+	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "Problem", raw)
+	if !strings.Contains(string(raw), "has not read this FPP player's identity yet") || strings.Contains(string(raw), "Pair the plugin") {
+		t.Fatalf("the refusal does not state the real reason, or tells the operator to pair again: %s", raw)
+	}
+	entries, err := setup.svc.ListAudit(t.Context(), 0, 500)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == auditActionFallbackExecutorKeyRegister && e.Kind == identity.AuditOutcome && strings.HasPrefix(e.OutcomeReason, "refused:") && e.Params["fppId"] == "unseen-fpp" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no audit entry records the refused registration for unseen-fpp: %+v", entries)
+	}
+	if nudger.nudges != 0 {
+		t.Fatalf("a refused registration asked for %d rebuilds", nudger.nudges)
+	}
 }

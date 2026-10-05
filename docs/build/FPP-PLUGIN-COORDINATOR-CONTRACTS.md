@@ -1279,9 +1279,11 @@ whose instance UUID is `fppInstanceId`. The coordinator knows that link from
 its own reads of the player: pairing names the plugin by the player's
 configured id, and the coordinator records the instance UUID it reads from
 that player. Any other caller, including an administrator and a plugin paired
-as a different player, is refused with `403`. So is the right plugin when the
-coordinator has not yet read an instance UUID from its player. An
-unauthenticated caller gets `401`.
+as a different player, is refused with `403`. A plugin whose player the
+coordinator has not yet read an instance UUID from is refused with `409`:
+it may be the right plugin, pairing again would not help, and the cause is
+that the coordinator has not reached the player. An unauthenticated caller
+gets `401`.
 
 **Body.** At most 4 KiB. Unknown members are refused.
 
@@ -1296,7 +1298,8 @@ unauthenticated caller gets `401`.
 | `200` | The key is stored, or was already stored | See below |
 | `400` | The body is malformed, has an unknown member, or `publicKey` is not 32 bytes of standard base64 | Problem document, `invalid-parameter` |
 | `401` | No valid token | Problem document |
-| `403` | The token lacks `fpp:fallback`, or the caller is not the paired plugin for this FPP host, or the coordinator has not yet read this player's instance UUID | Problem document |
+| `403` | The token lacks `fpp:fallback`, or the caller is not the plugin paired as the player with this instance UUID | Problem document, `forbidden` |
+| `409` | The caller is a paired plugin, and the coordinator has not yet read an instance UUID from its player | Problem document, `conflict`. Detail: "The coordinator has not read this FPP player's identity yet, so it cannot accept the plugin's key. Check that the coordinator can reach the player." |
 
 The `200` body:
 
@@ -1314,13 +1317,16 @@ replaces the stored one: there is one executor key per FPP host, and rotation
 is a second registration. A first or changed key makes the coordinator rebuild
 and republish that host's program at once, because the key is program content
 (§5.3). The coordinator writes one audit entry, action
-`fallback.executor_key.register`, for a first or changed key.
+`fallback.executor_key.register`, for a first or changed key. A `409`
+refusal also leaves a trace on the coordinator: a warning in its log naming
+the player's configured id, and an audit entry under the same action whose
+outcome reason starts with `refused:`.
 
 **What the plugin does.** It creates the key pair once, when it holds a
 pairing token and no key pair. It registers on every start and after every
-pairing, because the call is idempotent. On a `403` it tries again each time
-it next fetches its program, because the coordinator may not have read the
-player's instance UUID yet. A plugin that was paired before this
+pairing, because the call is idempotent. On a `409` it tries again each time
+it next fetches its program, because the coordinator will accept the key once
+it has read the player's instance UUID. A `403` does not clear by waiting. A plugin that was paired before this
 contract existed registers on its next start and is not paired again. It
 treats its executor key as usable only when the installed program's
 `executorPublicKey` equals its own public key. Until then it does not send an
@@ -1340,17 +1346,22 @@ revision with a new `packageId`.
 A program with no `executorPublicKey` is still published, so a plugin that
 never registers keeps reporting an installed, verified program exactly as it
 does today. A node refuses every activation under such a program (§5.7,
-`executor-not-enrolled`).
+`executor-not-enrolled`). Nothing else about that program looks wrong, so
+two signals say it for an operator: `fallback_program.executor_key_present`
+on the coordinator, per FPP player, and
+`node.fallback.unenrolled_fpp_instance_uuids` on each node that holds such a
+program. Night readiness does not check either.
 
 A target with no `address` cannot be reached by the plugin. The plugin records
 that it had no address for the target and sends nothing. It never guesses an
 address and never takes one from anywhere but the installed program.
 
-**A plugin built before this change still verifies and installs a program that
-carries these members.** Plugin 0.2.0 verifies the signature over the JCS
-bytes of the `program` object as it parsed it, looks members up by name, has
-no list of permitted members, and does not read `schemaVersion`. See the
-finding recorded in §5.9.
+**Plugin 0.2.0's verifier accepts a program that carries these members, and
+its resolver matches an entry in one.** That is what was run (§5.9). The
+0.2.0 fetch and install path was read, not run: by that reading it looks
+members up by name, has no list of permitted members, and does not read
+`schemaVersion`, so it should install such a program, and nothing here has
+observed it do so.
 
 ### 5.4 The node ingress
 
@@ -1478,17 +1489,28 @@ order. The first failing step decides the outcome.
 | 12 | This node is one of that entry's `targets` | `wrong-target` |
 | 13 | `generation` equals the program's | `stale-generation` |
 | 14 | `catalogRevision` equals the program's value for this node | `stale-catalog` |
+| 14a | The node's Cue activation is available | `not-ready` |
+| 14b | The node's record of handled execution ids opened without damage | `storage-unavailable` |
 | 15 | `executionId` has not been processed | `replayed-execution` |
+| 15a | The node wrote `executionId` to disk | `storage-unavailable` |
 
-A request that passes step 15 is recorded in the node's replay fence and then
-handed to the same Cue activation the coordinator's normal dispatch uses. If
-the node cannot write the id to disk it answers `storage-unavailable` and
-applies nothing. That
+Steps 14a, 14b and 15a are about the node, not the request. `not-ready` is
+what a node answers in the moment between starting to listen and finishing
+its start, and also what a node that cannot run Cues at all answers every
+time; `reason` says which. A node whose record of handled ids is damaged
+answers `storage-unavailable` to every activation until an operator repairs
+it, because a damaged record cannot say which requests already ran.
+
+A request that passes step 15a is recorded in the node's replay fence and
+then handed to the same Cue activation the coordinator's normal dispatch
+uses. That
 step checks the node's own held catalog against the request (show,
 generation, catalog revision, Cue, Cue revision, and the files on disk) and
 applies the Cue's outputs. Its result is the response's `outcome`:
 `authorized` with `accepted: true`, or one of the normal activation refusals
-in §5.7 with `accepted: false`.
+in §5.7 with `accepted: false`. When the node cannot make that check at all,
+for example because its held catalog cannot be read, the outcome is
+`cue-check-failed`: the Cue was never allowed and nothing was started.
 
 A request for another FPP host has no distinct outcome. It fails step 5 when
 the node holds no program for the named host, and step 7 when it does, because
@@ -1504,8 +1526,8 @@ that program carries a different executor key.
 | `too-large` | 413 | both | The body is over the route's size limit |
 | `rate-limited` | 429 | both | Too many requests from this address |
 | `no-coordinator-key` | 503 | both | The node has no pinned coordinator key and cannot verify a program |
-| `storage-unavailable` | 503 | both | The node could not write the program or the execution id to its disk, so it did nothing |
-| `not-ready` | 503 | activation | The node is still starting |
+| `storage-unavailable` | 503 | both | The node could not write the program or the execution id to its disk, or its record of handled execution ids is damaged, so it did nothing |
+| `not-ready` | 503 | activation | The node is still starting, or it cannot run Cues at all. `reason` says which |
 | `program-signature-invalid` | 403 | program | The coordinator signature does not verify |
 | `program-unsupported` | 409 | program | `schemaVersion` is not 1 |
 | `wrong-fpp-host` | 403 | program | The program is for a different FPP host than the path names |
@@ -1524,6 +1546,7 @@ that program carries a different executor key.
 | `cross-show`, `unknown-generation`, `unknown-cue`, `stale-cue`, `asset-missing` | 409 | activation | The normal Cue activation refused, with the meaning it has on a normal dispatch |
 | `weather-delay-active` | 409 | activation | The node is holding a weather delay and starts no Cue |
 | `apply-failed` | 409 | activation | The Cue was authorized and an output could not be applied. The response also carries `reasons`, an array of sentences |
+| `cue-check-failed` | 409 | activation | The node could not check the Cue against its own held catalog. The Cue was never authorized and nothing was started. The `executionId` is consumed |
 
 An activation response also carries `executionId` whenever the request got
 far enough to read one.
@@ -1531,8 +1554,10 @@ far enough to read one.
 The node records every decision on both routes, accepted or refused, in its
 own log and in its fallback report: a retained message on
 `showmesh/nodes/<id>/observed/fallback`, schema `showmesh.node.fallback/v1`,
-carrying the programs the node holds, a count of every answer since the agent
-started, and its 50 most recent answers. The coordinator turns the report into
+carrying the programs the node holds and whether each carries an executor key,
+a count of every answer since the agent started, its 50 most recent answers,
+and, while the node cannot record handled execution ids, a sentence saying
+why. The coordinator turns the report into
 `node.fallback.*` signals on the node. A run of `rate-limited` refusals on one
 route within a minute is one entry with a count, and the node publishes at
 most one report a second, so the report cannot itself be used to flood the
@@ -1546,10 +1571,11 @@ for, so the report reaches the coordinator when the node reconnects.
   entry is a new occurrence and gets new ids.
 - A retry carries the same `executionId` and the same signed body.
 - The node processes an `executionId` at most once. The id is consumed when
-  the request passes step 15, whatever the Cue activation then answers. The
+  the request passes step 15a, whatever the Cue activation then answers,
+  `cue-check-failed` included. The
   node persists the id before it applies anything, so a restart cannot make it
   apply the same request twice.
-- A refusal at steps 1 through 14 consumes nothing. The same `executionId` may
+- A refusal at any step up to and including 15a consumes nothing. The same `executionId` may
   be sent again after the cause is fixed.
 - The node forgets an `executionId` 24 hours after the program copy it was
   sent under has expired. Step 8 or step 9 refuses the request from the

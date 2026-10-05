@@ -30,9 +30,10 @@ type FallbackProgramAudioActivation struct {
 // FallbackProgramTarget mirrors
 // [github.com/showmeshsystems/showmesh/pkg/fallbackprogram.NodeTarget].
 type FallbackProgramTarget struct {
-	NodeID string                           `json:"nodeId"`
-	Render *FallbackProgramRenderActivation `json:"render,omitempty"`
-	Audio  *FallbackProgramAudioActivation  `json:"audio,omitempty"`
+	NodeID  string                           `json:"nodeId"`
+	Address string                           `json:"address,omitempty"`
+	Render  *FallbackProgramRenderActivation `json:"render,omitempty"`
+	Audio   *FallbackProgramAudioActivation  `json:"audio,omitempty"`
 }
 
 // FallbackProgramEntry mirrors
@@ -80,9 +81,10 @@ type FallbackProgramBody struct {
 	ExpiresAt     string `json:"expiresAt"`
 	CompiledAt    string `json:"compiledAt"`
 
-	FPPInstanceUUID string `json:"fppInstanceUuid"`
-	Show            string `json:"show"`
-	Generation      int64  `json:"generation"`
+	FPPInstanceUUID   string `json:"fppInstanceUuid"`
+	ExecutorPublicKey string `json:"executorPublicKey,omitempty"`
+	Show              string `json:"show"`
+	Generation        int64  `json:"generation"`
 
 	PlaylistRevisions map[string]int64       `json:"playlistRevisions"`
 	CatalogRevisions  map[string]string      `json:"catalogRevisions"`

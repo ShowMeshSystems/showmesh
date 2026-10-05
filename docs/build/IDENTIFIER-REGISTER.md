@@ -514,6 +514,8 @@ the wrong device, because every collector shares one
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 | `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
 | `node-clock` | reserved | Track I seam I1 (`collector/nodeclock`) |
+| `node-fallback` | shipped | Track J seam J3 (`collector/nodefallback`) |
+| `fallback-reconcile` | shipped | Track J seam J3 (`fallbackreconcile`). A direct source written by the fallback reconciler on each pass, not a `collector.Runner` entry |
 | `fpp-brightness` | shipped | `collector/fppbrightness`, the plugin's own brightness route. Its `collector.Runner` key is `fpp-brightness:<instanceId>`, never the bare instance id the FPP REST collector already holds on the same Runner |
 
 **Instance ids share this namespace.** A Resolume instance id must not
@@ -697,8 +699,8 @@ dotted `SignalID` namespace that hangs off each one.
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
-| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1 |
-| `node` | `node.fallback.*` | shipped | Track J seam J3 (what a node holds and answered on its fallback routes) |
+| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1. Track J seam J3 writes the first signal in it: `fallback_program.executor_key_present` |
+| `node` | `node.fallback.*` | shipped | Track J seam J3 (what a node holds and answered on its fallback routes): `coordinator_key_loaded`, `program_count`, `enrolled_program_count`, `unenrolled_fpp_instance_uuids`, `execution_record_problem`, `accepted_count`, `refused_count`, `last_outcome`, `last_reason`, `last_at`, `last_refusal_outcome`, `last_refusal_reason`, `last_refusal_at`, `last_refusal_fpp_instance_uuid` |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id

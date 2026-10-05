@@ -46,22 +46,45 @@ func fallbackExecutorKeyNotPairedProblem() v1.Problem {
 	}
 }
 
-// callerIsPairedPluginFor reports whether p is the pairing principal of
-// the FPP player whose recorded instance UUID is instanceUUID. A player
-// the coordinator has not yet read a UUID from matches nothing.
-func (h *handlers) callerIsPairedPluginFor(ctx context.Context, p identity.Principal, instanceUUID string) (bool, error) {
+// fallbackExecutorKeyIdentityUnknownProblem refuses a paired plugin whose
+// player the coordinator has not read an instance UUID from yet. Pairing
+// again would not help, so it is not the 403 above.
+func fallbackExecutorKeyIdentityUnknownProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "FPP player identity not read yet",
+		Status: http.StatusConflict,
+		Detail: "The coordinator has not read this FPP player's identity yet, so it cannot accept the plugin's key. Check that the coordinator can reach the player.",
+	}
+}
+
+type fallbackExecutorKeyCaller int
+
+const (
+	fallbackExecutorKeyCallerOther fallbackExecutorKeyCaller = iota
+	fallbackExecutorKeyCallerIdentityUnknown
+	fallbackExecutorKeyCallerPaired
+)
+
+// classifyFallbackExecutorKeyCaller says whether p is the pairing
+// principal of the FPP player whose recorded instance UUID is
+// instanceUUID, and returns that player's configured id when p is a plugin.
+func (h *handlers) classifyFallbackExecutorKeyCaller(ctx context.Context, p identity.Principal, instanceUUID string) (fallbackExecutorKeyCaller, string, error) {
 	endpointID, isPlugin := strings.CutPrefix(p.Name, fppPairingPrincipalPrefix)
 	if p.Kind != identity.KindMachine || !isPlugin || endpointID == "" {
-		return false, nil
+		return fallbackExecutorKeyCallerOther, "", nil
 	}
 	rec, err := h.deps.FallbackPrograms.GetFPPInstanceUUID(ctx, endpointID)
 	if errors.Is(err, store.ErrFPPInstanceUUIDNotFound) {
-		return false, nil
+		return fallbackExecutorKeyCallerIdentityUnknown, endpointID, nil
 	}
 	if err != nil {
-		return false, err
+		return fallbackExecutorKeyCallerOther, endpointID, err
 	}
-	return rec.UUID == instanceUUID, nil
+	if rec.UUID != instanceUUID {
+		return fallbackExecutorKeyCallerOther, endpointID, nil
+	}
+	return fallbackExecutorKeyCallerPaired, endpointID, nil
 }
 
 // handlePutFallbackExecutorKey serves
@@ -91,12 +114,19 @@ func (h *handlers) handlePutFallbackExecutorKey(w http.ResponseWriter, r *http.R
 		h.writeInternalError(w, now, "register fallback executor key", errFallbackProgramStoreNotWired)
 		return
 	}
-	paired, err := h.callerIsPairedPluginFor(ctx, ac.result.Principal, instanceUUID)
+	caller, endpointID, err := h.classifyFallbackExecutorKeyCaller(ctx, ac.result.Principal, instanceUUID)
 	if err != nil {
 		h.writeInternalError(w, now, "resolve the caller's FPP player", err)
 		return
 	}
-	if !paired {
+	switch caller {
+	case fallbackExecutorKeyCallerIdentityUnknown:
+		h.logWarn("refused a fallback executor key: the coordinator has not read this FPP player's identity yet",
+			"fppId", endpointID, "fppInstanceUuid", instanceUUID)
+		h.auditFallbackExecutorKeyRefusal(ctx, r, now, instanceUUID, endpointID)
+		writeProblem(w, h.logger, now, fallbackExecutorKeyIdentityUnknownProblem())
+		return
+	case fallbackExecutorKeyCallerOther:
 		writeProblem(w, h.logger, now, fallbackExecutorKeyNotPairedProblem())
 		return
 	}
@@ -141,6 +171,25 @@ func (h *handlers) handlePutFallbackExecutorKey(w http.ResponseWriter, r *http.R
 		}
 	}
 	jsonWrite(w, fallbackExecutorKeyResponse(now, stored, changed))
+}
+
+// auditFallbackExecutorKeyRefusal leaves an operator a record that a
+// paired plugin tried to register and why it could not.
+func (h *handlers) auditFallbackExecutorKeyRefusal(ctx context.Context, r *http.Request, now time.Time, instanceUUID, endpointID string) {
+	if h.deps.Identity == nil {
+		return
+	}
+	ac := authFromContext(ctx)
+	if err := h.deps.Identity.WriteAudit(ctx, identity.AuditEntry{
+		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+		Action: auditActionFallbackExecutorKeyRegister, Target: instanceUUID,
+		Kind: identity.AuditOutcome, CommandID: uuid.NewString(),
+		Params:        map[string]any{"fppId": endpointID},
+		OutcomeReason: "refused: the coordinator has not read this FPP player's identity yet",
+	}); err != nil {
+		h.logWarn("fallback executor key refusal audit write failed", "fppId", endpointID, "error", err)
+	}
 }
 
 func fallbackExecutorKeyResponse(now time.Time, rec store.FallbackExecutorKeyRecord, changed bool) v1.FallbackExecutorKeyResponse {

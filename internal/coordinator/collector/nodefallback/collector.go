@@ -6,6 +6,8 @@ package nodefallback
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,20 +24,29 @@ const SourceName = "node-fallback"
 const (
 	SignalCoordinatorKeyLoaded observation.SignalID = "node.fallback.coordinator_key_loaded"
 	SignalProgramCount         observation.SignalID = "node.fallback.program_count"
-	SignalAcceptedCount        observation.SignalID = "node.fallback.accepted_count"
-	SignalRefusedCount         observation.SignalID = "node.fallback.refused_count"
-	SignalLastOutcome          observation.SignalID = "node.fallback.last_outcome"
-	SignalLastReason           observation.SignalID = "node.fallback.last_reason"
-	SignalLastAt               observation.SignalID = "node.fallback.last_at"
-	SignalLastRefusalOutcome   observation.SignalID = "node.fallback.last_refusal_outcome"
-	SignalLastRefusalReason    observation.SignalID = "node.fallback.last_refusal_reason"
-	SignalLastRefusalAt        observation.SignalID = "node.fallback.last_refusal_at"
-	SignalLastRefusalFPP       observation.SignalID = "node.fallback.last_refusal_fpp_instance_uuid"
+	// SignalEnrolledProgramCount counts held programs that carry an
+	// executor key. SignalUnenrolledFPP lists the FPP instance UUIDs of
+	// the ones that do not, comma separated, empty when there are none.
+	SignalEnrolledProgramCount observation.SignalID = "node.fallback.enrolled_program_count"
+	SignalUnenrolledFPP        observation.SignalID = "node.fallback.unenrolled_fpp_instance_uuids"
+	// SignalExecutionRecordProblem is the node's own sentence for why it
+	// cannot record handled requests, empty when it can.
+	SignalExecutionRecordProblem observation.SignalID = "node.fallback.execution_record_problem"
+	SignalAcceptedCount          observation.SignalID = "node.fallback.accepted_count"
+	SignalRefusedCount           observation.SignalID = "node.fallback.refused_count"
+	SignalLastOutcome            observation.SignalID = "node.fallback.last_outcome"
+	SignalLastReason             observation.SignalID = "node.fallback.last_reason"
+	SignalLastAt                 observation.SignalID = "node.fallback.last_at"
+	SignalLastRefusalOutcome     observation.SignalID = "node.fallback.last_refusal_outcome"
+	SignalLastRefusalReason      observation.SignalID = "node.fallback.last_refusal_reason"
+	SignalLastRefusalAt          observation.SignalID = "node.fallback.last_refusal_at"
+	SignalLastRefusalFPP         observation.SignalID = "node.fallback.last_refusal_fpp_instance_uuid"
 )
 
 // AllSignalIDs is every signal this collector emits for a node.
 var AllSignalIDs = []observation.SignalID{
-	SignalCoordinatorKeyLoaded, SignalProgramCount, SignalAcceptedCount, SignalRefusedCount,
+	SignalCoordinatorKeyLoaded, SignalProgramCount, SignalEnrolledProgramCount, SignalUnenrolledFPP,
+	SignalExecutionRecordProblem, SignalAcceptedCount, SignalRefusedCount,
 	SignalLastOutcome, SignalLastReason, SignalLastAt,
 	SignalLastRefusalOutcome, SignalLastRefusalReason, SignalLastRefusalAt, SignalLastRefusalFPP,
 }
@@ -104,9 +115,22 @@ func nodeObservations(nodeID string, rep report) []observation.Observation {
 	measured := func(sig observation.SignalID, value any) observation.Observation {
 		return buildValue(nodeID, sig, value, p.ObservedAt, rep)
 	}
+	var enrolled int64
+	var unenrolled []string
+	for _, program := range p.Programs {
+		if program.ExecutorEnrolled {
+			enrolled++
+		} else {
+			unenrolled = append(unenrolled, program.FPPInstanceUUID)
+		}
+	}
+	sort.Strings(unenrolled)
 	obs := []observation.Observation{
 		measured(SignalCoordinatorKeyLoaded, p.CoordinatorKeyLoaded),
 		measured(SignalProgramCount, int64(len(p.Programs))),
+		measured(SignalEnrolledProgramCount, enrolled),
+		measured(SignalUnenrolledFPP, strings.Join(unenrolled, ",")),
+		measured(SignalExecutionRecordProblem, p.ExecutionRecordProblem),
 		measured(SignalAcceptedCount, p.Accepted),
 		measured(SignalRefusedCount, p.Refused),
 	}

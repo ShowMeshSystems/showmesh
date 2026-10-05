@@ -3529,7 +3529,7 @@ export interface paths {
         get?: never;
         /**
          * A paired FPP plugin registers the public key it signs fallback activations with (ADR-048, Track J's J3)
-         * @description Behind `fpp:fallback`, and only for the plugin paired as this FPP instance. The key is the plugin's Ed25519 public key, never a secret. The coordinator carries it in this FPP instance's signed fallback program, and a node accepts a fallback activation only when it is signed by that key. Registering the stored key again changes nothing; registering a different key replaces it and republishes the program.
+         * @description Behind `fpp:fallback`, and only for the plugin paired as this FPP instance. The key is the plugin's Ed25519 public key, never a secret. The coordinator carries it in this FPP instance's signed fallback program, and a node accepts a fallback activation only when it is signed by that key. Registering the stored key again changes nothing; registering a different key replaces it and republishes the program. A paired plugin gets `409` while the coordinator has not yet read its player's instance UUID.
          */
         put: operations["putFallbackExecutorKey"];
         post?: never;
@@ -15302,6 +15302,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

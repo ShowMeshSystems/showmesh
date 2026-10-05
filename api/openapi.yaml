@@ -10418,7 +10418,8 @@ paths:
         fallback program, and a node accepts a fallback activation only
         when it is signed by that key. Registering the stored key again
         changes nothing; registering a different key replaces it and
-        republishes the program.
+        republishes the program. A paired plugin gets `409` while the
+        coordinator has not yet read its player's instance UUID.
       parameters:
         - name: fppInstanceId
           in: path
@@ -10448,6 +10449,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
