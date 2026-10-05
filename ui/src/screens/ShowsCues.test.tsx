@@ -913,6 +913,26 @@ describe('Shows · Cues tab', () => {
       expect(payload.outputs.announcement?.targets).toEqual(['node-b'])
     })
 
+    it('warns which nodes will not duck, clears when they join the announcement list, and never blocks saving', async () => {
+      const cue = cueResponse(
+        cuePayload({
+          outputs: {
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, targets: ['node-a', 'node-b'] },
+            announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, targets: ['node-b'] },
+          },
+        }),
+      )
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      expect(await screen.findByText("node-a will play this cue's audio at full level during the announcement.")).toBeInTheDocument()
+      expect(screen.getByText('Add them to the announcement nodes to lower it.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save cue' })).toBeEnabled()
+
+      const announcementGroup = await screen.findByRole('group', { name: 'Announcement target nodes' })
+      fireEvent.click(within(announcementGroup).getByRole('checkbox', { name: 'node-a Node A' }))
+      await waitFor(() => expect(screen.queryByText(/at full level during the announcement/)).not.toBeInTheDocument())
+    })
+
     it('an LTC target naming an undeclared node names the same save refusal the audio/announcement groups do', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 }, ltc: { startOffsetMillis: 0, target: 'node-x' } } }))
       setupWithTargets(cue)

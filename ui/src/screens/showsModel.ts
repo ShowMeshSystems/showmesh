@@ -640,6 +640,13 @@ export function resolveAudioNodes(params: {
   return { nodes: params.defaultNodeId === null ? [] : [params.defaultNodeId], from: 'default' }
 }
 
+/** Nodes that play a cue's audio but not its announcement, where the announcement cannot lower that audio. Empty when the cue has no announcement. */
+export function nodesWithoutDucking(params: { hasAnnouncement: boolean; audioNodes: readonly string[]; announcementNodes: readonly string[] }): string[] {
+  if (!params.hasAnnouncement) return []
+  const announced = new Set(params.announcementNodes)
+  return params.audioNodes.filter((id) => !announced.has(id))
+}
+
 /** The resolved-nodes line every audio-bearing shape shows: which nodes, and where the list came from. `ownLabel` names the object, e.g. "this cue". */
 export function resolvedNodesFact(resolved: ResolvedAudioNodes, ownLabel: string): string {
   const source = resolved.from === 'explicit' ? `${ownLabel}'s own list` : resolved.from === 'show' ? 'from the show' : 'installation default'

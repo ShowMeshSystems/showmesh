@@ -18,6 +18,7 @@ import {
   resolvedNodesFact,
   surfaceRenderStatus,
   type CueActivationDraft,
+  nodesWithoutDucking,
 } from './showsModel'
 
 describe('the safety-class derivation tables', () => {
@@ -337,5 +338,26 @@ describe('channelSpans', () => {
   it('does not flag ranges that touch without sharing a channel', () => {
     const { overlapping } = channelSpans([surf('one', 'a', 1, 100), surf('two', 'a', 101, 100)])
     expect(overlapping.size).toBe(0)
+  })
+})
+
+describe('nodesWithoutDucking', () => {
+  it('is empty when both lists are equal', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: true, audioNodes: ['a', 'b'], announcementNodes: ['b', 'a'] })).toEqual([])
+  })
+  it('names the audio nodes missing from the announcement list', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: true, audioNodes: ['a', 'b', 'c'], announcementNodes: ['a'] })).toEqual(['b', 'c'])
+  })
+  it('names the extra audio node when the announcement resolves to the default node alone', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: true, audioNodes: ['main', 'second'], announcementNodes: ['main'] })).toEqual(['second'])
+  })
+  it('is empty when the cue has no announcement', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: false, audioNodes: ['a', 'b'], announcementNodes: [] })).toEqual([])
+  })
+  it('is empty when there are no audio nodes', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: true, audioNodes: [], announcementNodes: ['a'] })).toEqual([])
+  })
+  it('ignores announcement nodes that are not audio nodes', () => {
+    expect(nodesWithoutDucking({ hasAnnouncement: true, audioNodes: ['a'], announcementNodes: ['a', 'z'] })).toEqual([])
   })
 })

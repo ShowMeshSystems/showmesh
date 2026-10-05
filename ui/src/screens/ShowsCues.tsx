@@ -14,7 +14,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, DeletePanel, Field, Input, Notice, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -32,6 +32,9 @@ import {
   cueActivationSummary,
   cueRows,
   formatBytes,
+  installationDefaultAudioNode,
+  nodesWithoutDucking,
+  resolveAudioNodes,
   slugify,
 } from './showsModel'
 
@@ -592,6 +595,13 @@ function CueEditor({
       (announcementTargets.length === 0 ? excludeNodesError(showAudioNodes, announcementExcludeNodes) : null)
   }
 
+  const defaultNodeId = audioNodes.kind === 'loaded' ? installationDefaultAudioNode(audioNodes.nodes) : null
+  const noDuckingNodes = nodesWithoutDucking({
+    hasAnnouncement: kinds.has('announcement'),
+    audioNodes: resolveAudioNodes({ explicitList: audioTargets, showAudioNodes, excludeNodes: audioExcludeNodes, defaultNodeId }).nodes,
+    announcementNodes: resolveAudioNodes({ explicitList: announcementTargets, showAudioNodes, excludeNodes: announcementExcludeNodes, defaultNodeId }).nodes,
+  })
+
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
     audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, targets: audioTargets } : null,
@@ -792,6 +802,7 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
+          <p className="sm-field__help">Nodes that play this cue's audio. An announcement lowers it only on nodes that are also announcement nodes.</p>
         </div>
       )}
 
@@ -845,6 +856,17 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
+          <p className="sm-field__help">
+            Nodes that play the announcement. An announcement lowers the program audio only on nodes that are in both lists. With none ticked, it plays on the show's nodes, or on the main node when the show has none.
+          </p>
+          {noDuckingNodes.length > 0 && (
+            <Notice
+              tone="warn"
+              live="status"
+              headline={`${noDuckingNodes.join(', ')} will play this cue's audio at full level during the announcement.`}
+              explanation="Add them to the announcement nodes to lower it."
+            />
+          )}
         </div>
       )}
 
