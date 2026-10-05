@@ -5,7 +5,9 @@ import type { Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { MonitorSignals } from './MonitorSignals'
-import { signalRows, signalSummary } from './monitorModel'
+import { countSignals, signalGroups, signalTally } from '../domain/evidence'
+import { signalRows, signalSummary, facetCounts } from './monitorModel'
+import { fleetCounts } from './dashboardModel'
 
 const observation = (signal: string, state = 'current', value: string | null = 'x') =>
   ({
@@ -95,5 +97,25 @@ describe('Monitor · Signals', () => {
     const rows = signalRows({ ...initialModel(), nodes: [node('a', [observation('surface.frames.rate', 'stale')])] }, '2026-08-28T21:07:00Z')
     expect(rows[0]?.state).toBe('Stale')
     expect(rows[0]?.tone).toBe('warn')
+  })
+
+  it('counts the same signals from the tile path and the footer path, for every state', () => {
+    const states = ['current', 'stale', 'not_collected', 'collection_failed', 'unsupported', 'unknown_age', 'not_applicable']
+    const base = node('a', states.map((state) => observation(`surface.${state}`, state, state === 'not_applicable' ? null : 'x')))
+    const clock = [
+      observation('node.audio.clock.alignment.state', 'current', 'within_threshold'),
+      observation('node.clock.offset', 'collection_failed', null),
+      observation('node.clock.skew', 'stale'),
+    ]
+    const model = { ...initialModel(), nodes: [{ ...base, clock } as Node] }
+    const rows = signalRows(model, '2026-08-28T21:07:00Z')
+    expect(rows.find((row) => row.signal === 'node.audio.clock.alignment.state')?.state).toBe('within threshold')
+
+    const tile = fleetCounts(model).signals
+    expect(tile).toMatchObject({ total: 10, current: 2, stale: 2, unobserved: 1, failed: 2, unavailable: 2, notApplicable: 1 })
+    expect(facetCounts(model).signals).toBe(tile.total)
+    expect(signalSummary(rows)).toBe('10 signals · 2 current, 2 stale, 1 unobserved, 2 failed, 2 unavailable, 1 N/A.')
+    const footer = signalTally(countSignals(signalGroups(model)))
+    expect(footer.map((entry) => entry.count)).toEqual([2, 2, 1, 2, 2, 1])
   })
 })

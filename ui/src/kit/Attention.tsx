@@ -32,18 +32,16 @@ type TileProps = {
   /** Tabular numerals: "3 / 4". */
   value: ReactNode
   detail: ReactNode
-  /** `bad` colours the detail line when it carries a failure. */
-  detailTone?: 'bad' | undefined
   to?: string
 }
 
 /** A counted fact that links to the screen that explains it. */
-export function StatTile({ label, value, detail, detailTone, to }: TileProps) {
+export function StatTile({ label, value, detail, to }: TileProps) {
   const body = (
     <>
       <p className="sm-tile__label">{label}</p>
       <p className="sm-tile__value">{value}</p>
-      <p className={detailTone === undefined ? 'sm-tile__detail' : `sm-tile__detail sm-tile__detail--${detailTone}`}>{detail}</p>
+      <p className="sm-tile__detail">{detail}</p>
     </>
   )
   if (to === undefined) return <div className="sm-tile">{body}</div>
@@ -52,6 +50,11 @@ export function StatTile({ label, value, detail, detailTone, to }: TileProps) {
       {body}
     </Link>
   )
+}
+
+/** One count inside a tile's detail line. `bad` is the failure tone, for a failed count only. */
+export function TileCount({ tone, children }: { tone?: 'bad' | undefined; children: ReactNode }) {
+  return <span className={tone === 'bad' ? 'sm-tile__count--bad' : undefined}>{children}</span>
 }
 
 export function Tiles({ children }: { children: ReactNode }) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Evidence, EvidenceState } from '../api'
-import { countLabels, countSignals, EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE, signalTally, signalTileDetail } from './evidence'
+import { countSignals, EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE, signalTally, signalTileParts } from './evidence'
 
 const evidence = (state: EvidenceState) => ({ state }) as unknown as Evidence
 
@@ -33,13 +33,17 @@ describe('signal tally', () => {
     expect(counts).toMatchObject({ total: 10, current: 2, stale: 1, unobserved: 1, failed: 2, unavailable: 3, notApplicable: 1 })
   })
 
-  it('counts the same from state words as from the wire states', () => {
-    expect(countLabels(mixed.map((state) => EVIDENCE_LABEL[state]))).toEqual(countSignals([mixed.map(evidence)]))
+  it('makes the counted states sum to measurable minus current, with N/A named as outside', () => {
+    const counts = countSignals([mixed.map(evidence)])
+    const parts = signalTileParts(counts)
+    expect(parts.map((part) => part.text)).toEqual(['1 stale', '1 unobserved', '2 failed', '3 unavailable', '1 N/A not counted'])
+    expect(counts.measurable - counts.current).toBe(1 + 1 + 2 + 3)
+    expect(parts.filter((part) => part.failed).map((part) => part.text)).toEqual(['2 failed'])
   })
 
-  it('lists failed and N/A on the tile line and omits states with none', () => {
-    expect(signalTileDetail(countSignals([mixed.map(evidence)]))).toBe('1 stale · 1 unobserved · 2 failed · 3 unavailable · 1 N/A')
-    expect(signalTileDetail(countSignals([[evidence('current'), evidence('stale')]]))).toBe('1 stale')
-    expect(signalTileDetail(countSignals([[evidence('current')]]))).toBe('')
+  it('says All current rather than render nothing, and omits states with none', () => {
+    expect(signalTileParts(countSignals([[evidence('current')]])).map((part) => part.text)).toEqual(['All current'])
+    expect(signalTileParts(countSignals([[evidence('current'), evidence('stale')]])).map((part) => part.text)).toEqual(['1 stale'])
+    expect(signalTileParts(countSignals([[evidence('not_applicable')]])).map((part) => part.text)).toEqual(['1 N/A not counted'])
   })
 })

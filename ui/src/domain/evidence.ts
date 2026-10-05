@@ -1,4 +1,4 @@
-import type { Evidence, EvidenceState } from '../api'
+import type { Evidence, EvidenceState, Model } from '../api'
 import type { Absence, Tone } from '../kit'
 
 /**
@@ -73,13 +73,6 @@ export function countSignals(groups: readonly (readonly Evidence[])[]): SignalCo
   return countStates(groups.flatMap((group) => group.map((evidence) => evidence.state)))
 }
 
-const STATE_OF_LABEL = new Map(Object.entries(EVIDENCE_LABEL).map(([state, label]) => [label, state as EvidenceState]))
-
-/** Counts from the state words a signal row shows. A word that is no state counts as unavailable. */
-export function countLabels(labels: readonly string[]): SignalCounts {
-  return countStates(labels.map((label) => STATE_OF_LABEL.get(label) ?? 'unsupported'))
-}
-
 export type SignalTally = { key: keyof SignalCounts; word: string; count: number }
 
 /** Every state a signal can be in, in reading order. The counts always sum to `total`. */
@@ -94,10 +87,23 @@ export function signalTally(counts: SignalCounts): SignalTally[] {
   ]
 }
 
-/** The tile line: current is the tile value, so it is left out; states with no signals are omitted. */
-export function signalTileDetail(counts: SignalCounts): string {
-  return signalTally(counts)
-    .filter((entry) => entry.key !== 'current' && entry.count > 0)
-    .map((entry) => `${entry.count} ${entry.word}`)
-    .join(' · ')
+export type TilePart = { text: string; failed: boolean }
+
+/** The tile line as parts: counted states sum to measurable minus current, N/A is named as outside that total. */
+export function signalTileParts(counts: SignalCounts): TilePart[] {
+  const parts: TilePart[] = signalTally(counts)
+    .filter((entry) => entry.key !== 'current' && entry.key !== 'notApplicable' && entry.count > 0)
+    .map((entry) => ({ text: `${entry.count} ${entry.word}`, failed: entry.key === 'failed' }))
+  if (parts.length === 0 && counts.current > 0) parts.push({ text: 'All current', failed: false })
+  if (counts.notApplicable > 0) parts.push({ text: `${counts.notApplicable} N/A not counted`, failed: false })
+  return parts
+}
+
+/** Every evidence group a signal count covers, so the tile, the tab count and the footer read the same signals. */
+export function signalGroups(model: Model): Evidence[][] {
+  return [
+    ...model.nodes.flatMap((node) => [node.render, node.audio, node.clock, node.fppConnect]),
+    ...model.fpp.map((instance) => instance.observations),
+    ...model.resolume.map((instance) => instance.observations),
+  ]
 }

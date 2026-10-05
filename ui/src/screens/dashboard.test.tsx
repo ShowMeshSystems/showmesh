@@ -283,8 +283,11 @@ describe('Dashboard', () => {
       nodes: [node('a', 'online', ['current', 'stale', 'not_collected', 'collection_failed', 'unsupported', 'not_applicable'])],
     })
     expect(screen.getByText('1 / 5')).toBeInTheDocument()
-    const detail = screen.getByText('1 stale · 1 unobserved · 1 failed · 1 unavailable · 1 N/A')
-    expect(detail).toHaveClass('sm-tile__detail--bad')
+    const failed = screen.getByText('1 failed')
+    expect(failed).toHaveClass('sm-tile__count--bad')
+    expect(screen.getByText('1 stale')).not.toHaveClass('sm-tile__count--bad')
+    expect(screen.getByText('1 N/A not counted')).not.toHaveClass('sm-tile__count--bad')
+    expect(failed.closest('p')?.textContent).toBe('1 stale · 1 unobserved · 1 failed · 1 unavailable · 1 N/A not counted')
   })
 
   it('counts a signal with nothing to measure apart from unobserved, and out of the measurable total', () => {
@@ -347,4 +350,9 @@ describe('Dashboard', () => {
     expect(verdict?.state).toBe('Readiness unknown')
   })
 
+
+  it('says All current on the tile when every signal is current', () => {
+    renderDashboard({ nodes: [node('a', 'online', ['current', 'current'])] })
+    expect(screen.getByText('All current')).toBeInTheDocument()
+  })
 })

@@ -39,8 +39,11 @@ import {
   Segmented,
   Select,
   Slider,
+  StatTile,
   StatusPair,
   Table,
+  TileCount,
+  Tiles,
   TableWrap,
   Workbench,
 } from './index'
@@ -796,6 +799,26 @@ export function Specimen() {
             }
             onDismiss={() => {}}
           />
+        </SpecSection>
+
+        <SpecSection
+          number="16 · Stat tile"
+          id="specimen-stat-tile"
+          title="A counted fact, with the failure tone on the failed count alone"
+          detail="The detail line may carry several counts. Only a failed count takes the failure tone; stale, unobserved, unavailable and N/A keep the muted colour."
+        >
+          <Tiles>
+            <StatTile label="Resolume" value="1 / 1" detail="healthy" />
+            <StatTile
+              label="Signals current"
+              value="137 / 300"
+              detail={
+                <>
+                  83 stale · <TileCount tone="bad">2 failed</TileCount> · 4 unavailable · 2 N/A not counted
+                </>
+              }
+            />
+          </Tiles>
         </SpecSection>
       </div>
     </div>

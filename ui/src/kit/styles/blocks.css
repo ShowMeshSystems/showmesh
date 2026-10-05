@@ -337,7 +337,7 @@ a.sm-tile:hover {
   color: var(--text-muted);
 }
 
-.sm-tile__detail--bad {
+.sm-tile__count--bad {
   color: var(--bad-fg);
 }
 
