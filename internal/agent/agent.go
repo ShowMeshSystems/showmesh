@@ -446,9 +446,13 @@ func Run() int {
 		ops:       weatherDelayOps,
 		publicKey: weatherDelayPublicKey,
 	}
+	// fallbackIngress is ADR-048 decision 3's two routes. It verifies with
+	// the same pinned coordinator key the signed weather delay start uses,
+	// and with no key it refuses every request and says why.
+	fallbackIngress := newFallbackIngress(cfg.NodeID, cfg.AssetDir, weatherDelayPublicKey, time.Now, logger)
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, weatherDelayHTTP, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, weatherDelayHTTP, fallbackIngress, logger)
 	}()
 
 	// clockMgr is Track I seam I1's PTP media clock: unconfigured until a
@@ -491,6 +495,10 @@ func Run() int {
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioReportTrigger, audioBind, catalogStore, clockBind, fppConnect, weatherDelay, time.Now, logger)
+
+	if cueActivate, ok := cmdHandler.operation("cue.activate"); ok {
+		fallbackIngress.setActivate(cueActivate)
+	}
 
 	// connectAndInstallCapabilityRepublish is the single call site for
 	// both constructing this node's MQTT connection and wiring
@@ -567,6 +575,16 @@ func Run() int {
 		runClockReport(sigCtx, conn, cfg.NodeID, clockMgr, time.Now, ticker.C, logger)
 	}()
 
+	// Fallback report: what this node holds and every answer it gave on
+	// the fallback routes, see fallbackreport.go.
+	fallbackReportDone := make(chan struct{})
+	go func() {
+		defer close(fallbackReportDone)
+		ticker := time.NewTicker(fallbackReportInterval)
+		defer ticker.Stop()
+		runFallbackReport(sigCtx, conn, cfg.NodeID, fallbackIngress, ticker.C, logger)
+	}()
+
 	// runShowModeWatch is the observability half of ADR-033 decision 5: it
 	// logs when this node's mode stops being confirmed and starts being
 	// held. It publishes nothing, so it cannot race the final offline
@@ -600,6 +618,7 @@ func Run() int {
 	<-audioReportTickerDone
 	<-audioReportDone
 	<-clockReportDone
+	<-fallbackReportDone
 	<-audioWatchDone
 	<-audioRestoreRetryDone
 	<-multiSyncDone
