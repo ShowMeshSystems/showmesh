@@ -83,6 +83,7 @@ import {
   runOfShow,
   type RailStep,
 } from './showNightModel'
+import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
 
 function useNightSession(): { session: NightSessionState | null; error: string | null } {
   const model = useModelContext()
@@ -159,13 +160,20 @@ export function ShowNight() {
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [stopFppPlayback, setStopFppPlayback] = useState(false)
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
   const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
-    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
+    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[], stopOverride?: boolean) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
-      dispatchNightCommand(command, idempotencyKey, interlockOverrides, command === 'start-night' ? skipEnterShowLead : undefined)
+      dispatchNightCommand(
+        command,
+        idempotencyKey,
+        interlockOverrides,
+        command === 'start-night' ? skipEnterShowLead : undefined,
+        command === 'prepare-site' ? (stopOverride ?? stopFppPlayback) : undefined,
+      )
         .then((response) => {
           setWithheld(null)
           setOverrideRule('')
@@ -186,6 +194,7 @@ export function ShowNight() {
           setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No-op', detail: parts.join(' ') })
         })
         .catch((err: unknown) => {
+          if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
           if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady) {
             setWithheld({ command, detail: err.message })
             setOutcome({ tone: 'bad', label: 'Withheld', detail: err.message })
@@ -219,8 +228,13 @@ export function ShowNight() {
           setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` })
         })
     },
-    [prepareSiteKey, skipEnterShowLead],
+    [prepareSiteKey, skipEnterShowLead, stopFppPlayback],
   )
+
+  const prepareSite = usePrepareSiteConfirm((stop) => {
+    setStopFppPlayback(stop)
+    send('prepare-site', undefined, stop)
+  })
 
   const submitOverride = useCallback(() => {
     if (withheld === null) return
@@ -515,12 +529,15 @@ export function ShowNight() {
           groups={[
             {
               id: 'sn-lifecycle',
-              commands: nightLifecycleGroups(gate, (command) =>
-                command === 'start-night' ? setStartNightConfirmOpen(true) : send(command),
-              ).flatMap((group) => group.commands),
+              commands: nightLifecycleGroups(gate, (command) => {
+                if (command === 'start-night') setStartNightConfirmOpen(true)
+                else if (command === 'prepare-site') prepareSite.start()
+                else send(command)
+              }).flatMap((group) => group.commands),
             },
           ]}
         />
+        {prepareSite.dialog}
         <ConfirmDialog
           open={startNightConfirmOpen}
           title="Start the night and its first cycle?"

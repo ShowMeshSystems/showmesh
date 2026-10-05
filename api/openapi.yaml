@@ -21487,6 +21487,17 @@ components:
         night without waiting out the enterShow lead (RESTING-MODE.md
         section 7.1) before the show itself launches; an enterShow
         announcement still dispatches. Every other command ignores it.
+        `stopFppPlayback` is honored only by `prepare-site`: when true
+        and that call actually prepares the night (outcome `applied`),
+        prepare-site also stops whatever each of the night's FPP
+        instances is playing, all at once, and reports the result in the
+        response's `command.reason`. The response can take up to the FPP
+        confirmation deadline longer, so a client needs a longer request
+        budget when it sends this. A stop FPP refuses or does not confirm
+        is reported there and does not fail prepare-site. When the night
+        is already prepared (outcome `idempotent_no_op`) nothing is sent
+        to FPP and the reason says so. Absent or false leaves FPP
+        playing. Every other command ignores it.
       properties:
         idempotencyKey:
           type: string
@@ -21495,6 +21506,8 @@ components:
           items:
             $ref: "#/components/schemas/NightInterlockOverride"
         skipEnterShowLead:
+          type: boolean
+        stopFppPlayback:
           type: boolean
     NightCommandResult:
       type: object

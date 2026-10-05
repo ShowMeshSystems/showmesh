@@ -1123,8 +1123,9 @@ export function dispatchNightCommand(
   idempotencyKey?: string,
   interlockOverrides?: readonly NightInterlockOverride[],
   skipEnterShowLead?: boolean,
+  stopFppPlayback?: boolean,
 ): Promise<NightCommandResponse> {
-  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides, skipEnterShowLead)
+  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides, skipEnterShowLead, stopFppPlayback)
 }
 
 export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {

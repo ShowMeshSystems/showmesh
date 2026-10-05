@@ -3550,6 +3550,43 @@ describe('ApiStore: dispatchNightCommand skipEnterShowLead (RESTING-MODE.md §7.
   })
 })
 
+describe('ApiStore: dispatchNightCommand stopFppPlayback', () => {
+  async function sentBody(command: string, stop: boolean | undefined): Promise<Record<string, unknown>> {
+    let gotBody: Record<string, unknown> = {}
+    const s = await server((req, res) => {
+      if (req.url === `/night/commands/${command}` && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, {
+            serverTime: '2026-08-12T22:00:00Z',
+            command: { command, outcome: 'applied', attributionDegraded: false },
+            session: {},
+          })
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+    await makeStore(s.baseUrl).dispatchNightCommand(command as 'prepare-site', undefined, undefined, undefined, stop)
+    return gotBody
+  }
+
+  it('sends stopFppPlayback: true on prepare-site when requested', async () => {
+    expect((await sentBody('prepare-site', true)).stopFppPlayback).toBe(true)
+  })
+
+  it('sends no stopFppPlayback field on prepare-site when false or absent', async () => {
+    expect('stopFppPlayback' in (await sentBody('prepare-site', false))).toBe(false)
+    expect('stopFppPlayback' in (await sentBody('prepare-site', undefined))).toBe(false)
+  })
+
+  it('never sends stopFppPlayback for a command other than prepare-site, even when true', async () => {
+    expect('stopFppPlayback' in (await sentBody('end-session', true))).toBe(false)
+  })
+})
+
 // Step 8, ADR-015: FPPCommandRequest.params used to be generated as
 // Record<string, never> (api/openapi.yaml declared it as a bare object
 // with no JSON Schema `properties`), a type no non-empty object

@@ -106,6 +106,16 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 export const FPP_COMMAND_REQUEST_TIMEOUT_MS = 35_000
 
 /**
+ * The request budget for `POST /night/commands/prepare-site` carrying
+ * `stopFppPlayback`: the coordinator waits one FPP confirmation deadline
+ * for the stop (instances are stopped together), after the announcement
+ * reset pass prepare-site also runs, so the default 15s would abort before
+ * the coordinator can report an unconfirmed stop. Derived from
+ * [FPP_COMMAND_REQUEST_TIMEOUT_MS] plus that pass's 30s, not a new number.
+ */
+export const NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS = FPP_COMMAND_REQUEST_TIMEOUT_MS + 30_000
+
+/**
  * The reconciliation TARGET for [FPP_COMMAND_REQUEST_TIMEOUT_MS] — never
  * itself the value a request uses. A FOURTH independently chosen literal,
  * for the identical module-boundary reason that constant's own doc
