@@ -498,6 +498,8 @@ func Run() int {
 
 	if cueActivate, ok := cmdHandler.operation("cue.activate"); ok {
 		fallbackIngress.setActivate(cueActivate)
+	} else {
+		fallbackIngress.setNoCueActivation()
 	}
 
 	// connectAndInstallCapabilityRepublish is the single call site for

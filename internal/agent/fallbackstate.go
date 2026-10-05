@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -111,7 +111,7 @@ func (s *fallbackProgramStore) install(program fallbackprogram.Program, document
 	if held, ok := s.held[program.FPPInstanceUUID]; ok && program.CompiledAt.Before(held.program.CompiledAt) {
 		return errFallbackProgramSuperseded
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := mkdirAllSynced(s.dir); err != nil {
 		return fmt.Errorf("create fallback program directory: %w", err)
 	}
 	data, err := json.Marshal(storedFallbackProgram{InstalledAt: now, Document: document})
@@ -125,6 +125,9 @@ func (s *fallbackProgramStore) install(program fallbackprogram.Program, document
 	}
 	if err := os.Rename(target+".tmp", target); err != nil {
 		return fmt.Errorf("commit fallback program: %w", err)
+	}
+	if err := syncDir(s.dir); err != nil {
+		return fmt.Errorf("sync fallback program directory: %w", err)
 	}
 	s.held[program.FPPInstanceUUID] = newHeldFallbackProgram(program, now)
 	return nil
@@ -143,6 +146,40 @@ func (s *fallbackProgramStore) snapshot() []mqttproto.FallbackHeldProgram {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FPPInstanceUUID < out[j].FPPInstanceUUID })
 	return out
+}
+
+// syncDir makes a file created or renamed inside dir survive a power loss.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
+}
+
+// mkdirAllSynced creates dir and any missing parents, and syncs the
+// directory each new one was created in.
+func mkdirAllSynced(dir string) error {
+	var created []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil || filepath.Dir(d) == d {
+			break
+		}
+		created = append(created, d)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, d := range created {
+		if err := syncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeFileSynced(path string, data []byte) error {
@@ -184,42 +221,44 @@ type fallbackFence struct {
 
 	mu      sync.Mutex
 	entries map[string]fallbackFenceEntry
+	// size is the length of the file's known-good content. Anything past
+	// it is the torn tail of a failed write and is cut off before the next.
+	size int64
+	// writeFailed is true while the last write to the file failed.
+	writeFailed bool
 }
 
 // openFallbackFence loads the fence, dropping entries past retention and
-// rewriting the file without them.
+// rewriting the file without them. A final line with no newline is the
+// torn tail of an interrupted write and is dropped: its request was never
+// applied. Any other unreadable line fails the open, because a damaged
+// record cannot say which requests this node already ran.
 func openFallbackFence(assetDir string, now time.Time) (*fallbackFence, error) {
 	f := &fallbackFence{
 		path:    filepath.Join(assetDir, fallbackStateSubdir, fallbackFenceFile),
 		entries: make(map[string]fallbackFenceEntry),
 	}
-	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+	if err := mkdirAllSynced(filepath.Dir(f.path)); err != nil {
 		return nil, fmt.Errorf("create fallback state directory: %w", err)
 	}
-	file, err := os.Open(f.path)
-	if os.IsNotExist(err) {
-		return f, nil
+	data, err := os.ReadFile(f.path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read fallback execution record: %w", err)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("open fallback execution record: %w", err)
-	}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
+	for lineNumber := 1; len(data) > 0; lineNumber++ {
+		end := bytes.IndexByte(data, '\n')
+		if end < 0 {
+			break
+		}
 		var entry fallbackFenceEntry
-		// A torn last line from a crash mid-append is skipped: the
-		// request it belonged to was never applied.
-		if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry.ExecutionID == "" {
-			continue
+		if err := json.Unmarshal(data[:end], &entry); err != nil || entry.ExecutionID == "" {
+			return nil, fmt.Errorf("fallback execution record %s is damaged at line %d", f.path, lineNumber)
 		}
 		if prior, ok := f.entries[entry.ExecutionID]; ok && entry.Outcome == "" {
 			entry.Outcome = prior.Outcome
 		}
 		f.entries[entry.ExecutionID] = entry
-	}
-	scanErr := scanner.Err()
-	_ = file.Close()
-	if scanErr != nil {
-		return nil, fmt.Errorf("read fallback execution record: %w", scanErr)
+		data = data[end+1:]
 	}
 	for id, entry := range f.entries {
 		if now.After(entry.ExpiresAt.Add(fallbackFenceRetention)) {
@@ -232,6 +271,8 @@ func openFallbackFence(assetDir string, now time.Time) (*fallbackFence, error) {
 	return f, nil
 }
 
+// rewrite replaces the file with exactly the entries in memory and syncs
+// its directory, so the file exists durably before the first id is written.
 func (f *fallbackFence) rewrite() error {
 	var data []byte
 	for _, entry := range f.entries {
@@ -247,27 +288,62 @@ func (f *fallbackFence) rewrite() error {
 	if err := os.Rename(f.path+".tmp", f.path); err != nil {
 		return fmt.Errorf("commit fallback execution record: %w", err)
 	}
+	if err := syncDir(filepath.Dir(f.path)); err != nil {
+		return fmt.Errorf("sync fallback state directory: %w", err)
+	}
+	f.size = int64(len(data))
 	return nil
 }
 
-func (f *fallbackFence) appendEntry(entry fallbackFenceEntry) error {
+// appendEntry writes one whole line at the end of the known-good content
+// and syncs it. A torn tail left by an earlier failed write is cut off
+// first, so a line never joins onto a partial one.
+func (f *fallbackFence) appendEntry(entry fallbackFenceEntry) (err error) {
+	defer func() { f.writeFailed = err != nil }()
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	line = append(line, '\n')
+	file, err := os.OpenFile(f.path, os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		_ = file.Close()
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < f.size {
+		return fmt.Errorf("fallback execution record %s is shorter than what this node wrote", f.path)
+	}
+	if info.Size() > f.size {
+		if err := file.Truncate(f.size); err != nil {
+			return err
+		}
+	}
+	if err := fallbackFenceWrite(file, line, f.size); err != nil {
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
 		return err
 	}
-	return file.Close()
+	f.size += int64(len(line))
+	return nil
+}
+
+// fallbackFenceWrite is the one write appendEntry makes. A test replaces
+// it to leave a partial line behind, as a full disk or a crash would.
+var fallbackFenceWrite = func(file *os.File, line []byte, offset int64) error {
+	_, err := file.WriteAt(line, offset)
+	return err
+}
+
+// failed reports whether the last write to the file failed.
+func (f *fallbackFence) failed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writeFailed
 }
 
 // claim records executionID as processed. replayed is true, with the

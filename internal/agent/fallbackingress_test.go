@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -545,5 +546,209 @@ func TestFallbackIngressLeavesEveryOtherRequestAlone(t *testing.T) {
 	}
 	if report := node.ingress.report(); len(report.Decisions) != 0 {
 		t.Fatalf("a request for another route was recorded as a fallback decision: %+v", report.Decisions)
+	}
+}
+
+func fallbackFencePath(dir string) string {
+	return filepath.Join(dir, fallbackStateSubdir, fallbackFenceFile)
+}
+
+// A damaged record cannot say which requests already ran, so the node
+// must stop accepting any rather than start from an empty record.
+func TestFallbackDamagedExecutionRecordRefusesEveryActivation(t *testing.T) {
+	cases := loadFallbackFixtureCases(t)
+	node := newFallbackTestNode(t, cases, fallbackFixtureCoordinatorKey(t), fallbackFixtureInstallTime(t, cases))
+	node.install(cases.Activations[0].Installed)
+	valid := cases.Activations[0].Body
+	if status, resp := node.postActivation(valid); status != http.StatusOK || resp.Outcome != "authorized" {
+		t.Fatalf("before the damage: status %d outcome %q, want authorized", status, resp.Outcome)
+	}
+	if err := os.WriteFile(fallbackFencePath(node.dir), []byte("not a record at all\n\x00\x01\n"), 0o644); err != nil {
+		t.Fatalf("overwrite the execution record: %v", err)
+	}
+
+	node.start()
+
+	status, resp := node.postActivation(valid)
+	if status != http.StatusServiceUnavailable || resp.Outcome != "storage-unavailable" || resp.Accepted {
+		t.Fatalf("replay of an applied request over a damaged record: status %d outcome %q accepted %v, want 503 storage-unavailable refused", status, resp.Outcome, resp.Accepted)
+	}
+	if !strings.Contains(resp.Reason, "is damaged") {
+		t.Fatalf("reason %q does not say the record is damaged", resp.Reason)
+	}
+	if node.activationCount() != 1 {
+		t.Fatalf("the Cue activation ran %d times, want only the one before the damage", node.activationCount())
+	}
+	if problem := node.ingress.report().ExecutionRecordProblem; !strings.Contains(problem, "is damaged") {
+		t.Fatalf("the node's report says %q about its execution record, want it to say the record is damaged", problem)
+	}
+}
+
+func TestFallbackFenceOpenFailsOnAnUnreadableLineThatIsNotATornTail(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	good := `{"executionId":"id-1","expiresAt":"2026-10-05T12:15:00Z"}`
+	for name, content := range map[string]string{
+		"garbage only":             "garbage\n",
+		"garbage before a record":  "garbage\n" + good + "\n",
+		"garbage between records":  good + "\ngarbage\n" + good + "\n",
+		"a record with no id":      `{"expiresAt":"2026-10-05T12:15:00Z"}` + "\n",
+		"an empty line":            good + "\n\n",
+		"two records on one line":  good + good + "\n",
+		"a partial line then more": `{"executionId":"id-0","expi` + good + "\n",
+	} {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, fallbackStateSubdir), 0o755); err != nil {
+			t.Fatalf("%s: mkdir: %v", name, err)
+		}
+		if err := os.WriteFile(fallbackFencePath(dir), []byte(content), 0o644); err != nil {
+			t.Fatalf("%s: write: %v", name, err)
+		}
+		if fence, err := openFallbackFence(dir, now); err == nil {
+			t.Errorf("%s: the fence opened with %d ids, want the open refused", name, len(fence.entries))
+		}
+	}
+}
+
+// A write that stops partway must not corrupt the next id: the id written
+// after it has to be on its own line and still be claimed after a restart.
+func TestFallbackFenceShortWriteDoesNotSwallowTheNextID(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	expires := now.Add(time.Minute)
+	fence, err := openFallbackFence(dir, now)
+	if err != nil {
+		t.Fatalf("open fence: %v", err)
+	}
+
+	realWrite := fallbackFenceWrite
+	fallbackFenceWrite = func(file *os.File, line []byte, offset int64) error {
+		_, _ = file.WriteAt(line[:len(line)/2], offset)
+		return errors.New("disk full")
+	}
+	_, _, err = fence.claim("id-a", expires)
+	fallbackFenceWrite = realWrite
+	if err == nil {
+		t.Fatal("a claim whose write stopped partway reported success")
+	}
+	if !fence.failed() {
+		t.Fatal("the fence does not report its failed write")
+	}
+	if _, replayed, _ := fence.claim("id-a", expires); replayed {
+		t.Fatal("an id whose write failed reads as processed")
+	}
+	if _, replayed, err := fence.claim("id-b", expires); err != nil || replayed {
+		t.Fatalf("claim after the short write: replayed %v err %v", replayed, err)
+	}
+	if fence.failed() {
+		t.Fatal("the fence still reports a failed write after a good one")
+	}
+
+	reopened, err := openFallbackFence(dir, now)
+	if err != nil {
+		t.Fatalf("reopen after a short write: %v", err)
+	}
+	for _, id := range []string{"id-a", "id-b"} {
+		if _, replayed, err := reopened.claim(id, expires); err != nil || !replayed {
+			t.Errorf("%s after restart: replayed %v err %v, want it still claimed", id, replayed, err)
+		}
+	}
+}
+
+// A torn tail left on disk by a crash is cut off before the next id is
+// written, even when no restart came in between.
+func TestFallbackFenceCutsOffATornTailBeforeAppending(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	expires := now.Add(time.Minute)
+	fence, err := openFallbackFence(dir, now)
+	if err != nil {
+		t.Fatalf("open fence: %v", err)
+	}
+	if _, _, err := fence.claim("id-1", expires); err != nil {
+		t.Fatalf("claim id-1: %v", err)
+	}
+	torn, err := os.OpenFile(fallbackFencePath(dir), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("open fence file: %v", err)
+	}
+	_, _ = torn.WriteString(`{"executionId":"id-torn","expi`)
+	_ = torn.Close()
+
+	if _, replayed, err := fence.claim("id-2", expires); err != nil || replayed {
+		t.Fatalf("claim id-2 over a torn tail: replayed %v err %v", replayed, err)
+	}
+	reopened, err := openFallbackFence(dir, now)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if len(reopened.entries) != 2 {
+		t.Fatalf("the reopened fence holds %d ids, want id-1 and id-2", len(reopened.entries))
+	}
+}
+
+func TestFallbackFenceRefusesToWriteToARecordThatShrank(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	fence, err := openFallbackFence(dir, now)
+	if err != nil {
+		t.Fatalf("open fence: %v", err)
+	}
+	if _, _, err := fence.claim("id-1", now.Add(time.Minute)); err != nil {
+		t.Fatalf("claim id-1: %v", err)
+	}
+	if err := os.Truncate(fallbackFencePath(dir), 0); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if _, _, err := fence.claim("id-2", now.Add(time.Minute)); err == nil {
+		t.Fatal("a claim succeeded on a record that lost what this node wrote")
+	}
+}
+
+// When the node cannot even check the Cue, the answer must not say the
+// Cue was allowed. The execution id is still spent.
+func TestFallbackUncheckableCueIsNotReportedAsAllowed(t *testing.T) {
+	cases := loadFallbackFixtureCases(t)
+	node := newFallbackTestNode(t, cases, fallbackFixtureCoordinatorKey(t), fallbackFixtureInstallTime(t, cases))
+	node.install(cases.Activations[0].Installed)
+	catalogs, _ := filepath.Glob(filepath.Join(node.dir, "cue-catalog-state", "*.json"))
+	if len(catalogs) != 1 {
+		t.Fatalf("found %d held catalog files, want 1", len(catalogs))
+	}
+	if err := os.WriteFile(catalogs[0], []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("damage the held catalog: %v", err)
+	}
+
+	status, resp := node.postActivation(cases.Activations[0].Body)
+	if status != http.StatusConflict || resp.Outcome != "cue-check-failed" || resp.Accepted {
+		t.Fatalf("status %d outcome %q accepted %v, want 409 cue-check-failed refused", status, resp.Outcome, resp.Accepted)
+	}
+	if strings.Contains(resp.Reason, "allowed") {
+		t.Fatalf("reason %q says the Cue was allowed", resp.Reason)
+	}
+	status, resp = node.postActivation(cases.Activations[0].Body)
+	if status != http.StatusConflict || resp.Outcome != "replayed-execution" || resp.FirstOutcome != "cue-check-failed" {
+		t.Fatalf("second send: status %d outcome %q first %q, want replayed-execution first cue-check-failed", status, resp.Outcome, resp.FirstOutcome)
+	}
+}
+
+func TestFallbackNodeThatCannotRunCuesSaysSo(t *testing.T) {
+	cases := loadFallbackFixtureCases(t)
+	node := newFallbackTestNode(t, cases, fallbackFixtureCoordinatorKey(t), fallbackFixtureInstallTime(t, cases))
+	node.install(cases.Activations[0].Installed)
+	valid := cases.Activations[0].Body
+
+	node.ingress.setActivate(nil)
+	status, resp := node.postActivation(valid)
+	if status != http.StatusServiceUnavailable || resp.Outcome != "not-ready" || !strings.Contains(resp.Reason, "still starting") {
+		t.Fatalf("before cue.activate is wired: status %d outcome %q reason %q, want 503 not-ready still starting", status, resp.Outcome, resp.Reason)
+	}
+
+	node.ingress.setNoCueActivation()
+	status, resp = node.postActivation(valid)
+	if status != http.StatusServiceUnavailable || resp.Outcome != "not-ready" || !strings.Contains(resp.Reason, "cannot run Cues") {
+		t.Fatalf("with no cue.activate at all: status %d outcome %q reason %q, want 503 not-ready saying it cannot run Cues", status, resp.Outcome, resp.Reason)
+	}
+	if node.activationCount() != 0 {
+		t.Fatalf("the Cue activation ran %d times", node.activationCount())
 	}
 }

@@ -46,8 +46,31 @@ type fallbackIngress struct {
 	now            func() time.Time
 	logger         *slog.Logger
 
+	// fenceDamaged is true when the replay fence could not be opened.
+	fenceDamaged bool
+
 	mu       sync.Mutex
 	activate OperationFunc
+	// noCueActivation is true when this node registered no "cue.activate".
+	noCueActivation bool
+}
+
+const (
+	fallbackReasonFenceDamaged     = "This node's record of handled fallback requests is damaged, so it refuses every fallback request. Delete fallback-state/executions.jsonl in the node's asset folder and restart the agent."
+	fallbackReasonFenceWriteFailed = "This node could not write its record of handled fallback requests, so it refused a fallback request. Check this node's disk."
+	fallbackReasonNoCueActivation  = "This node cannot run Cues, so it cannot run a fallback request. Check this node's log."
+)
+
+// executionRecordProblem is the sentence the report carries while this
+// node cannot record handled requests, or "" when it can.
+func (g *fallbackIngress) executionRecordProblem() string {
+	switch {
+	case g.fenceDamaged:
+		return fallbackReasonFenceDamaged
+	case g.fence != nil && g.fence.failed():
+		return fallbackReasonFenceWriteFailed
+	}
+	return ""
 }
 
 // newFallbackIngress loads this node's held programs and replay fence
@@ -60,6 +83,7 @@ func newFallbackIngress(nodeID, assetDir string, coordinatorKey ed25519.PublicKe
 		fence = nil
 	}
 	return &fallbackIngress{
+		fenceDamaged:   fence == nil,
 		nodeID:         nodeID,
 		coordinatorKey: coordinatorKey,
 		programs:       newFallbackProgramStore(assetDir, coordinatorKey, logger),
@@ -77,6 +101,14 @@ func newFallbackIngress(nodeID, assetDir string, coordinatorKey ed25519.PublicKe
 func (g *fallbackIngress) setActivate(op OperationFunc) {
 	g.mu.Lock()
 	g.activate = op
+	g.mu.Unlock()
+}
+
+// setNoCueActivation records that this node will never have a
+// "cue.activate", so the refusal says that instead of "still starting".
+func (g *fallbackIngress) setNoCueActivation() {
+	g.mu.Lock()
+	g.noCueActivation = true
 	g.mu.Unlock()
 }
 
@@ -102,8 +134,11 @@ func (g *fallbackIngress) wrap(next http.Handler) http.Handler {
 // fallbackAnswer is one response: the status, the outcome word, and what
 // the decision record should say about the request.
 type fallbackAnswer struct {
-	status   int
-	outcome  fallbackactivation.Outcome
+	status  int
+	outcome fallbackactivation.Outcome
+	// reason replaces the outcome's usual sentence when the usual one
+	// would not be true for this answer.
+	reason   string
 	extra    map[string]any
 	decision mqttproto.FallbackDecision
 }
@@ -152,6 +187,7 @@ var fallbackOutcomeReason = map[fallbackactivation.Outcome]string{
 	fallbackactivation.OutcomeStaleCatalog:                       "A fallback request does not match the Cue list this node holds. Nothing was started.",
 	fallbackactivation.OutcomeReplayedExecution:                  "This fallback request was already handled. It was not run again.",
 	fallbackactivation.OutcomeApplyFailed:                        "The Cue was allowed, but an output could not be started.",
+	fallbackactivation.OutcomeCueCheckFailed:                     "This node could not check the Cue, so nothing was started. Check this node's log.",
 	fallbackactivation.Outcome(cueauth.OutcomeCrossShow):         "A fallback request was for a different show than this node has active. Nothing was started.",
 	fallbackactivation.Outcome(cueauth.OutcomeUnknownGeneration): "A fallback request was for a newer activation of the show than this node has. Nothing was started.",
 	fallbackactivation.Outcome(cueauth.OutcomeUnknownCue):        "A fallback request asked for a Cue this node does not hold. Nothing was started.",
@@ -177,6 +213,9 @@ func (g *fallbackIngress) respond(w http.ResponseWriter, route string, a fallbac
 	reason, ok := fallbackOutcomeReason[a.outcome]
 	if !ok {
 		reason = fallbackReasonNotStarted
+	}
+	if a.reason != "" {
+		reason = a.reason
 	}
 
 	decision := a.decision
@@ -366,13 +405,19 @@ func (g *fallbackIngress) decideActivation(ctx context.Context, r *http.Request)
 	}
 
 	g.mu.Lock()
-	activate := g.activate
+	activate, noCueActivation := g.activate, g.noCueActivation
 	g.mu.Unlock()
 	if activate == nil {
-		return refuse(fallbackactivation.OutcomeNotReady)
+		a := refuse(fallbackactivation.OutcomeNotReady)
+		if noCueActivation {
+			a.reason = fallbackReasonNoCueActivation
+		}
+		return a
 	}
 	if g.fence == nil {
-		return refuse(fallbackactivation.OutcomeStorageUnavailable)
+		a := refuse(fallbackactivation.OutcomeStorageUnavailable)
+		a.reason = fallbackReasonFenceDamaged
+		return a
 	}
 	firstOutcome, replayed, err := g.fence.claim(req.ExecutionID, program.ExpiresAt)
 	if err != nil {
@@ -429,17 +474,21 @@ func (g *fallbackIngress) runCueActivation(ctx context.Context, activate Operati
 		err = json.Unmarshal(raw, &params)
 	}
 	if err != nil {
-		return fallbackactivation.OutcomeApplyFailed, []string{"This node could not build the Cue request."}
+		g.logger.Warn("could not build the Cue request for a fallback request", "execution_id", req.ExecutionID, "error", err)
+		return fallbackactivation.OutcomeCueCheckFailed, nil
 	}
+	// An error here means the Cue was never authorized: the held catalog
+	// could not be read or the request could not be checked against it.
 	result, err := activate(ctx, params, g.now)
 	if err != nil {
-		g.logger.Warn("the Cue activation failed for a fallback request", "execution_id", req.ExecutionID, "error", err)
-		return fallbackactivation.OutcomeApplyFailed, []string{"This node could not run the Cue."}
+		g.logger.Warn("the Cue could not be checked for a fallback request", "execution_id", req.ExecutionID, "error", err)
+		return fallbackactivation.OutcomeCueCheckFailed, nil
 	}
 	value, _ := result.Value.(map[string]any)
 	outcome, _ := value["outcome"].(string)
 	if outcome == "" {
-		return fallbackactivation.OutcomeApplyFailed, []string{"This node could not run the Cue."}
+		g.logger.Warn("the Cue activation answered with no result for a fallback request", "execution_id", req.ExecutionID)
+		return fallbackactivation.OutcomeCueCheckFailed, nil
 	}
 	reasons, _ := value["reasons"].([]string)
 	return fallbackactivation.Outcome(outcome), reasons

@@ -43,12 +43,15 @@ type FallbackDecision struct {
 // Refused count every answer since the agent started; Decisions is the
 // most recent of them, oldest first, and is bounded by the node.
 type FallbackPayload struct {
-	ObservedAt           *time.Time            `json:"observedAt"`
-	CoordinatorKeyLoaded bool                  `json:"coordinatorKeyLoaded"`
-	Programs             []FallbackHeldProgram `json:"programs"`
-	Accepted             int64                 `json:"accepted"`
-	Refused              int64                 `json:"refused"`
-	Decisions            []FallbackDecision    `json:"decisions"`
+	ObservedAt           *time.Time `json:"observedAt"`
+	CoordinatorKeyLoaded bool       `json:"coordinatorKeyLoaded"`
+	// ExecutionRecordProblem says why the node cannot record handled
+	// requests and so refuses every activation. Empty when it can.
+	ExecutionRecordProblem string                `json:"executionRecordProblem,omitempty"`
+	Programs               []FallbackHeldProgram `json:"programs"`
+	Accepted               int64                 `json:"accepted"`
+	Refused                int64                 `json:"refused"`
+	Decisions              []FallbackDecision    `json:"decisions"`
 }
 
 // Validate reports whether p carries its one required field.

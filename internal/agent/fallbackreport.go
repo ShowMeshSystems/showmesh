@@ -24,7 +24,8 @@ func (g *fallbackIngress) report() mqttproto.FallbackPayload {
 	}
 	return mqttproto.FallbackPayload{
 		ObservedAt: &observedAt, CoordinatorKeyLoaded: g.coordinatorKey != nil,
-		Programs: g.programs.snapshot(), Accepted: accepted, Refused: refused, Decisions: decisions,
+		ExecutionRecordProblem: g.executionRecordProblem(),
+		Programs:               g.programs.snapshot(), Accepted: accepted, Refused: refused, Decisions: decisions,
 	}
 }
 

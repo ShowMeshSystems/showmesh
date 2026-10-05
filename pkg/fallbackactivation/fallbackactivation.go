@@ -63,6 +63,7 @@ const (
 	OutcomeStaleCatalog            Outcome = "stale-catalog"
 	OutcomeReplayedExecution       Outcome = "replayed-execution"
 	OutcomeApplyFailed             Outcome = "apply-failed"
+	OutcomeCueCheckFailed          Outcome = "cue-check-failed"
 )
 
 // Request is what the FPP host signs. Every member is required.
