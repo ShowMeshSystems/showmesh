@@ -600,9 +600,9 @@ const renderSignalContentFSEQFilename = "surface.content.fseq_filename"
 //
 // establishRenderAssignment uses this to decide whether an
 // already-assigned surface is safe to re-establish: internal/agent/
-// renderreport.go's applyContentIdentity leaves this signal
-// [observation.StateNotCollected] (never simply omitted) whenever the
-// persisted assignment carries no fseqFilename, so "no current,
+// renderreport.go's applyContentIdentity leaves this signal without a
+// value (not applicable or not collected, never simply omitted) whenever
+// the persisted assignment carries no fseqFilename, so "no current,
 // value-bearing row" and "no real content" are the same question here. A
 // no-sequence placeholder is not "real, cue-activated content" by
 // [handlers.renderSurfaceAssignmentEvidence]'s own doc comment, so

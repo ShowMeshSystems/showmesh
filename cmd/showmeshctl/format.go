@@ -45,6 +45,9 @@ func stateGlyph(st string, reason *string) string {
 		label = "COLLECTION-FAILED"
 	case stateUnsupported:
 		label = "UNSUPPORTED"
+	case stateNotApplicable:
+		// Not a problem, so not shouted: the signal has nothing to measure.
+		label = "n/a"
 	default:
 		// An additive future state this build predates (contract §6.2).
 		// Render it loudly rather than mapping it to something that looks

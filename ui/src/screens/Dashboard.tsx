@@ -229,7 +229,7 @@ export function Dashboard() {
           />
           <StatTile
             label="Signals current"
-            value={`${counts.signals.current} / ${counts.signals.total}`}
+            value={`${counts.signals.current} / ${counts.signals.measurable}`}
             detail={
               counts.signals.total === 0
                 ? 'nothing collected yet'

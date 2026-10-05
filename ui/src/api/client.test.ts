@@ -14,6 +14,7 @@ import {
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
   MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS,
   MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS,
+  NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS,
   MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS,
   MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS,
   RENDER_COMMAND_REQUEST_TIMEOUT_MS,
@@ -286,6 +287,12 @@ describe('ApiClient error dispatch (ADR-024)', () => {
 // FPP_COMMAND_REQUEST_TIMEOUT_MS temporarily set to 6_000, both tests in
 // this describe block failed; restored to 35_000, both pass. See this
 // task's own report for the exact commands run.
+describe('NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS', () => {
+  it('outlasts the FPP confirmation deadline by more than the default budget does', () => {
+    expect(NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS + 30_000)
+  })
+})
+
 describe('FPP_COMMAND_REQUEST_TIMEOUT_MS', () => {
   it('is never below the reconciled server confirmation deadline plus margin', () => {
     // The static half of the reconciliation: MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS

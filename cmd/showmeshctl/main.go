@@ -281,7 +281,8 @@ Commands:
   night deactivate                    clear the active night session back to unset (write)
   night status                        print the current night session lifecycle state (read)
   night prepare-site                  open a new preparation epoch (write, requires night:command;
-                                       may be refused 409 by a configured "block" interlock)
+                                       may be refused 409 by a configured "block" interlock;
+                                       --stop-fpp-playback also stops what FPP is playing)
   night readiness                     run readiness for the current preparation epoch (write,
                                        requires night:command; rejected with no open epoch)
   night preshow                       enter the configured pre-show presentation (write, requires

@@ -720,7 +720,7 @@ func (h *handlers) nightCheckAudioAlignmentForNode(ctx context.Context, now time
 			"no node.audio.clock.alignment.state evidence has ever been reported for audio.node %q", nodeID)}
 	}
 	switch stateObs.StateAt(now) {
-	case observation.StateNotCollected:
+	case observation.StateNotCollected, observation.StateNotApplicable:
 		reason := stateObs.Reason
 		if reason == "" {
 			reason = fmt.Sprintf("audio.node %q's node.audio.clock.alignment.state has not been collected", nodeID)

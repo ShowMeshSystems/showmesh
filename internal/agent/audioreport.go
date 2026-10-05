@@ -489,40 +489,42 @@ const audioSessionReportLimit = 16
 
 func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionReport {
 	r := mqttproto.AudioSessionReport{
-		SessionID:            string(s.ID),
-		HasSourceRole:        s.HasSourceRole,
-		SourceRole:           string(s.SourceRole),
-		HasPlaylist:          s.HasPlaylist,
-		PlaylistRevision:     uint64(s.PlaylistRevision),
-		HasItem:              s.HasItem,
-		ItemID:               s.ItemID,
-		ItemIndex:            int64(s.ItemIndex),
-		PositionKnown:        s.PositionKnown,
-		PositionMs:           s.Position.Milliseconds(),
-		State:                string(s.State),
-		DesiredRevision:      uint64(s.DesiredRevision),
-		HasGain:              s.HasGain,
-		Gain:                 float64(s.Gain),
-		HasCeiling:           s.HasCeiling,
-		Ceiling:              float64(s.Ceiling),
-		FadeState:            string(s.FadeState),
-		Ducked:               s.Ducked,
-		DuckedBy:             string(s.DuckedBy),
-		HasAssetProbe:        s.HasAssetProbe,
-		AssetProbeState:      string(s.AssetProbeState),
-		AssetProbeReason:     s.AssetProbeReason,
-		GapKnown:             s.GapKnown,
-		ItemGapMs:            s.Gap.Milliseconds(),
-		ItemGapReason:        s.GapReason,
-		Fault:                string(s.Fault),
-		FaultReason:          s.FaultReason,
-		LTCClaimState:        string(s.LTCClaimState),
-		LTCClaimReason:       s.LTCClaimReason,
-		RestorePending:       s.RestorePending,
-		RestoreAttempts:      int64(s.RestoreAttempts),
-		RestoreNextAttemptMs: s.RestoreNextAttempt.Milliseconds(),
-		RestoreLastReason:    s.RestoreLastReason,
-		Stale:                s.Stale,
+		SessionID:             string(s.ID),
+		HasSourceRole:         s.HasSourceRole,
+		SourceRole:            string(s.SourceRole),
+		HasPlaylist:           s.HasPlaylist,
+		PlaylistRevision:      uint64(s.PlaylistRevision),
+		HasItem:               s.HasItem,
+		ItemID:                s.ItemID,
+		ItemIndex:             int64(s.ItemIndex),
+		PositionKnown:         s.PositionKnown,
+		PositionNotApplicable: !s.PositionKnown && s.NothingLoaded,
+		PositionMs:            s.Position.Milliseconds(),
+		State:                 string(s.State),
+		DesiredRevision:       uint64(s.DesiredRevision),
+		HasGain:               s.HasGain,
+		Gain:                  float64(s.Gain),
+		HasCeiling:            s.HasCeiling,
+		Ceiling:               float64(s.Ceiling),
+		FadeState:             string(s.FadeState),
+		Ducked:                s.Ducked,
+		DuckedBy:              string(s.DuckedBy),
+		HasAssetProbe:         s.HasAssetProbe,
+		AssetProbeState:       string(s.AssetProbeState),
+		AssetProbeReason:      s.AssetProbeReason,
+		GapKnown:              s.GapKnown,
+		ItemGapMs:             s.Gap.Milliseconds(),
+		ItemGapReason:         s.GapReason,
+		ItemGapNotApplicable:  s.GapNotApplicable,
+		Fault:                 string(s.Fault),
+		FaultReason:           s.FaultReason,
+		LTCClaimState:         string(s.LTCClaimState),
+		LTCClaimReason:        s.LTCClaimReason,
+		RestorePending:        s.RestorePending,
+		RestoreAttempts:       int64(s.RestoreAttempts),
+		RestoreNextAttemptMs:  s.RestoreNextAttempt.Milliseconds(),
+		RestoreLastReason:     s.RestoreLastReason,
+		Stale:                 s.Stale,
 	}
 	if r.Fault == "" {
 		r.Fault = "none"
@@ -554,7 +556,9 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 	// which this ADR's start path ever touches), reports "" and every
 	// other field at its zero value.
 	if cueActivationTriggerRegistry != nil {
-		if rec, ok := cueActivationTriggerRegistry.get(s.ID); ok {
+		rec, ok := cueActivationTriggerRegistry.get(s.ID)
+		r.StartTriggerNotApplicable = !ok
+		if ok {
 			r.StartTrigger = rec.Trigger
 			r.TriggerSequenceFilename = rec.SequenceFilename
 			r.TriggerArrivalNs = rec.ArrivalNs
@@ -685,6 +689,7 @@ func applyTimeline(ctx context.Context, payload *mqttproto.AudioPayload, mgr aud
 	}
 	t := mgr.TimelineSnapshot(ctx)
 	payload.TimelineReason = t.Reason
+	payload.TimelineNotApplicable = t.NotApplicable
 	if !t.Scheduled {
 		return
 	}
@@ -714,6 +719,7 @@ func applyAlignment(ctx context.Context, payload *mqttproto.AudioPayload, mgr au
 	a := mgr.AlignmentSnapshot(ctx)
 	payload.AlignmentSessionID = string(a.SessionID)
 	payload.AlignmentReason = a.Reason
+	payload.AlignmentNotApplicable = a.NotApplicable
 	if !a.Measured {
 		return
 	}

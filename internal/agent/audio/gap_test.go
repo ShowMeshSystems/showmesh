@@ -182,3 +182,87 @@ func TestItemGapUnknownAfterStop(t *testing.T) {
 		t.Fatal("gap reason is empty, want a stated reason")
 	}
 }
+
+// TestGapReasonsSayWhetherAGapExists pins the split the report carries: a
+// stopped or never-advanced session has no gap, a missed measurement does.
+func TestGapReasonsSayWhetherAGapExists(t *testing.T) {
+	for _, reason := range []string{
+		gapReasonNeverAdvanced, gapReasonStopped, gapReasonCleared,
+		gapReasonNoPlaylist, gapReasonPlaylistEnded, gapReasonForcedAdvance,
+	} {
+		if !gapSubjectAbsent(reason) {
+			t.Errorf("gapSubjectAbsent(%q) = false, want true", reason)
+		}
+	}
+	for _, reason := range []string{
+		"no completion evidence was available for the predecessor item",
+		"successor item did not reach a confirmed start",
+		"measured gap was negative; discarded as invalid evidence",
+		"",
+	} {
+		if gapSubjectAbsent(reason) {
+			t.Errorf("gapSubjectAbsent(%q) = true, want false: this gap went unmeasured", reason)
+		}
+	}
+	for legacy, modern := range legacyGapReasons {
+		if gapSubjectAbsent(legacy) || !gapSubjectAbsent(modern) {
+			t.Errorf("legacy reason %q must map onto a reason that classifies, got %q", legacy, modern)
+		}
+	}
+}
+
+// TestSnapshotSaysNothingIsLoadedAndNoGapExists proves a session that has
+// not started reports both absences as facts, not as missing readings.
+func TestSnapshotSaysNothingIsLoadedAndNoGapExists(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(twoItemPlaylist(t, m.assetDir))})
+
+	var snap SessionSnapshot
+	for _, s := range m.Snapshot(ctx) {
+		if s.ID == id {
+			snap = s
+		}
+	}
+	if !snap.NothingLoaded || snap.PositionKnown {
+		t.Errorf("snapshot = state %q NothingLoaded %v PositionKnown %v, want nothing loaded and no position", snap.State, snap.NothingLoaded, snap.PositionKnown)
+	}
+	if !snap.GapNotApplicable || snap.GapReason != gapReasonNeverAdvanced {
+		t.Errorf("snapshot gap = not applicable %v (%q), want true with %q", snap.GapNotApplicable, snap.GapReason, gapReasonNeverAdvanced)
+	}
+}
+
+// TestSnapshotPlayingSessionWithoutHandleOwesAPosition proves a session
+// whose state says it should be loaded never reports nothing loaded.
+func TestSnapshotPlayingSessionWithoutHandleOwesAPosition(t *testing.T) {
+	m, s := ltcHoldingShow(t)
+	s.mu.Lock()
+	s.handleLoaded = false
+	s.mu.Unlock()
+
+	var snap SessionSnapshot
+	for _, got := range m.Snapshot(context.Background()) {
+		if got.ID == "show" {
+			snap = got
+		}
+	}
+	if snap.State != pkgaudio.StatePlaying || snap.PositionKnown || snap.NothingLoaded {
+		t.Errorf("snapshot = state %q PositionKnown %v NothingLoaded %v, want playing with a missing position", snap.State, snap.PositionKnown, snap.NothingLoaded)
+	}
+}
+
+func TestOnlyRestingStatesExpectNoLoadedHandle(t *testing.T) {
+	for state, want := range map[pkgaudio.State]bool{
+		pkgaudio.StateUnknown: false, pkgaudio.StateStopped: false,
+		pkgaudio.StateCompleted: false, pkgaudio.StateFailed: false,
+		pkgaudio.StatePreparing: false, pkgaudio.StateReady: false,
+		pkgaudio.StatePlaying: true, pkgaudio.StatePaused: true,
+		pkgaudio.StateStopping: true, pkgaudio.StateRestorePending: true,
+	} {
+		if got := stateExpectsLoadedHandle(state); got != want {
+			t.Errorf("stateExpectsLoadedHandle(%q) = %v, want %v", state, got, want)
+		}
+	}
+}

@@ -917,7 +917,7 @@ right and never inferred from the pipeline still being up.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.clock.alignment` | shipped | C6/C7; measured since 2026-09-11 (PR #451): the node's signed program-to-LTC offset in ms, observedAt = the node's own sample time |
-| `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
+| `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_applicable` when no playing session holds the LTC run or no threshold is set, `not_collected` when a sample was missed |
 | `node.audio.clock.local` | shipped | ADR-052 decisions 2 and 3: the node's local clock, the interface its program route leaves through, or the operator's override. Replaces `node.audio.clock.domain` |
 | `node.audio.clock.local.source` | shipped | ADR-052 decisions 2 and 3 (`derived`, `override`). Replaces `node.audio.clock.provenance` |
 | `node.audio.sync.state` | shipped | ADR-052 decision 6 (`locked`, `acquiring`, `free_running`) |
@@ -958,7 +958,7 @@ alongside them.
 | `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
 | `node.audio.engine.restore.state` | shipped | SM-384 (`idle`/`scheduled`/`exhausted`; a node with a delivered `audio.node` binding and no persisted session has nothing in the per-session `audio_session.restore.*` fields, so this is its only remaining wire evidence that the automatic retry driver gave up) |
 | `node.audio.engine.restore.attempts` | shipped | SM-384 (node-level counterpart to `audio_session.restore.attempts`) |
-| `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
+| `node.audio.engine.restore.next_attempt_ms` | shipped | node-level counterpart to `audio_session.restore.next_attempt_ms`; not_applicable, not zero, once the state is not `scheduled` |
 | `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
 | `node.audio.engine.sink_backend` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`alsasink` or `pipewiresink`; the sibling `node.audio.engine.*` rows above already carry this section's no-additions-without-the-owner rule's standing exception) |
 | `node.audio.engine.sink_target` | shipped | RES-019 section 7.2 candidate A, ADR-046 (the PipeWire node name pipewiresink was configured to target; blank when `sink_backend` is not `pipewiresink` or no target was named at all) |
@@ -1064,7 +1064,7 @@ sample count over the nominal rate, read from the sink clock and never
 from the decode frontier; `error_ms` is expected minus actual; `resyncs`
 counts discontinuity seeks performed; `last_resync_reason` names why the
 most recent one fired. A node with no locked clock provider keeps
-start-on-arrival and reports all six as `not_collected`.
+start-on-arrival and reports all six as `not_applicable`.
 
 | Signal | Status | Owner |
 |---|---|---|

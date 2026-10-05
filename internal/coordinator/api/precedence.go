@@ -106,6 +106,10 @@ func observationTier(o observation.Observation) int {
 // request down with it.
 func absenceRank(a observation.State) int {
 	switch a {
+	case observation.StateNotApplicable:
+		// A reading that the subject does not exist outranks every
+		// statement that nothing could be read.
+		return 4
 	case observation.StateUnsupported:
 		return 3
 	case observation.StateCollectionFailed:

@@ -218,6 +218,11 @@ type FPPCommandOutcome struct {
 	// case onto the failure axis and abort a run for a condition that
 	// must never stop a show.
 	DispatchFailed bool
+
+	// FPPStatusCode is the HTTP status FPP answered the request with, or
+	// zero when FPP never answered (or on a replay). With DispatchFailed
+	// it separates a refusal by FPP from a host that could not be reached.
+	FPPStatusCode int
 }
 
 // timePtr returns a pointer to a copy of t — used by
@@ -750,6 +755,7 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		DispatchedAt:        utcTimePtr(dispatchedAt),
 		ResolvedAt:          timePtr(resolvedAt.UTC()),
 		DispatchFailed:      dispatchErr != nil,
+		FPPStatusCode:       dispatchOutcome.StatusCode,
 	}, nil, nil
 }
 

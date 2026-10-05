@@ -399,8 +399,8 @@ func TestPollLTCGeneratorRunningReportsFrameRateAndTimecodeSuppressesReason(t *t
 		t.Errorf("generator state = %v, want running", state.Value)
 	}
 	reason := findObs(t, obs, SignalLTCGeneratorReason)
-	if reason.Absence != observation.StateNotCollected {
-		t.Errorf("generator reason while running = %+v, want not_collected", reason)
+	if reason.Absence != observation.StateNotApplicable {
+		t.Errorf("generator reason while running = %+v, want not_applicable", reason)
 	}
 	rate := findObs(t, obs, SignalLTCFrameRate)
 	if rate.Value != "30" {
@@ -894,8 +894,8 @@ func TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled(t *testing.T) 
 		t.Errorf("engine restore attempts = %v, want int64(8)", attempts.Value)
 	}
 	next := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
-	if next.Absence != observation.StateNotCollected {
-		t.Errorf("engine restore next_attempt_ms absence = %q, want %q: exhausted must not report a fabricated countdown", next.Absence, observation.StateNotCollected)
+	if next.Absence != observation.StateNotApplicable {
+		t.Errorf("engine restore next_attempt_ms absence = %q, want %q: exhausted must not report a fabricated countdown", next.Absence, observation.StateNotApplicable)
 	}
 	reason := findObs(t, obs, SignalEngineRestoreLastReason)
 	if reason.Value != payload.EngineRestoreLastReason {
@@ -937,8 +937,8 @@ func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
 		t.Errorf("engine restore last_reason value on an idle node = %v, want empty string", lastReason.Value)
 	}
 	nextAttempt := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
-	if nextAttempt.Absence != observation.StateNotCollected {
-		t.Errorf("engine restore next_attempt_ms absence on an idle node = %q, want %q", nextAttempt.Absence, observation.StateNotCollected)
+	if nextAttempt.Absence != observation.StateNotApplicable {
+		t.Errorf("engine restore next_attempt_ms absence on an idle node = %q, want %q", nextAttempt.Absence, observation.StateNotApplicable)
 	}
 }
 
@@ -993,8 +993,8 @@ func TestPollEngineBackendAlsasinkReportsNoTarget(t *testing.T) {
 		t.Errorf("engine sink backend = %v, want %q", v, "alsasink")
 	}
 	target := findObs(t, obs, SignalEngineSinkTarget)
-	if target.Absence != observation.StateNotCollected {
-		t.Errorf("engine sink target absence for alsasink = %q, want %q", target.Absence, observation.StateNotCollected)
+	if target.Absence != observation.StateNotApplicable {
+		t.Errorf("engine sink target absence for alsasink = %q, want %q", target.Absence, observation.StateNotApplicable)
 	}
 }
 

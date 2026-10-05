@@ -61,6 +61,7 @@ import {
   ApiClient,
   AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
+  NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS,
   RENDER_COMMAND_REQUEST_TIMEOUT_MS,
   RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
   RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
@@ -3040,7 +3041,8 @@ export class ApiStore {
    * declares `overridePolicy: authorized-operator` and only when the
    * caller separately holds `night:override` — `night:command` alone
    * never authorizes a bypass. `skipEnterShowLead` is honored only by
-   * `start-night`; sent only when true. Throws a typed `ApiError` on the
+   * `start-night`; sent only when true. `stopFppPlayback` is honored only
+   * by `prepare-site`; sent only when true. Throws a typed `ApiError` on the
    * three distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
    * `night-ambiguous`) and the `503`
    * (`night-command-refused-audit-unavailable`, `prepare-site`/
@@ -3053,6 +3055,7 @@ export class ApiStore {
     idempotencyKey?: string,
     interlockOverrides?: readonly SchemaNightInterlockOverride[],
     skipEnterShowLead?: boolean,
+    stopFppPlayback?: boolean,
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
@@ -3062,10 +3065,12 @@ export class ApiStore {
         body.interlockOverrides = [...interlockOverrides]
       }
       if (command === 'start-night' && skipEnterShowLead === true) body.skipEnterShowLead = true
+      if (command === 'prepare-site' && stopFppPlayback === true) body.stopFppPlayback = true
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,
         controller.signal,
+        body.stopFppPlayback === true ? NIGHT_PREPARE_SITE_STOP_REQUEST_TIMEOUT_MS : undefined,
       )
     } finally {
       this.endSideCall(controller)

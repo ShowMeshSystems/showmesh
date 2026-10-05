@@ -37,6 +37,8 @@ const stubs = vi.hoisted(() => ({
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   emergencyStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   dispatchNightCommand: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNightSessionActiveConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNightSessionConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   emergencyStopPowerDown: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   armEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   fireEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -77,6 +79,8 @@ vi.mock('../api', async () => {
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     emergencyStop: (...args: never[]) => stubs.emergencyStop(...args),
     dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
+    getNightSessionActiveConfig: (...args: never[]) => stubs.getNightSessionActiveConfig(...args),
+    getNightSessionConfig: (...args: never[]) => stubs.getNightSessionConfig(...args),
     getCurrentNightSession: () => new Promise(() => {}),
     emergencyStopPowerDown: (...args: never[]) => stubs.emergencyStopPowerDown(...args),
     armEmergencyStopHardStop: (...args: never[]) => stubs.armEmergencyStopHardStop(...args),
@@ -752,6 +756,24 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Start night' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByLabelText(/Skip the enter-show lead/)).toBeInTheDocument()
+  })
+
+  it('opens the same Prepare site dialog as Show Night and sends the stop choice with a key', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: never[]) => {
+      calls.push(args as unknown[])
+      return new Promise(() => {})
+    }
+    renderScreen({ session: nightCommandSession })
+    const region = screen.getByRole('region', { name: 'Night lifecycle' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Prepare site' }))
+    expect(calls).toHaveLength(0)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Stop whatever is playing on/)).toBeChecked()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
+    expect(calls[0]?.[0]).toBe('prepare-site')
+    expect(calls[0]?.[1]).toEqual(expect.any(String))
+    expect(calls[0]?.[4]).toBe(true)
   })
 
   it('says an unconfirmed command was not confirmed', () => {
