@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
