@@ -931,15 +931,15 @@ func TestPollFailureDrawingRendersFailureOutput(t *testing.T) {
 	}
 
 	idle := findObs(t, obs, SignalSurfaceOutputIdleMode)
-	if idle.Absence != observation.StateNotCollected {
-		t.Errorf("surface.output.idle_mode during a failure: Absence = %q, want %q", idle.Absence, observation.StateNotCollected)
+	if idle.Absence != observation.StateNotApplicable {
+		t.Errorf("surface.output.idle_mode during a failure: Absence = %q, want %q", idle.Absence, observation.StateNotApplicable)
 	}
 }
 
-// TestPollIdleDrawingLeavesFailureOutputNotCollected is the counterpart: a
+// TestPollIdleDrawingLeavesFailureOutputNotApplicable is the counterpart: a
 // healthy idle states that the failure signal does not apply rather than
 // fabricating a value for it.
-func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
+func TestPollIdleDrawingLeavesFailureOutputNotApplicable(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
 	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingIdle
@@ -950,8 +950,8 @@ func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	failure := findObs(t, obs, SignalSurfaceOutputFailure)
-	if failure.Absence != observation.StateNotCollected {
-		t.Errorf("surface.output.failure while idle: Absence = %q, want %q", failure.Absence, observation.StateNotCollected)
+	if failure.Absence != observation.StateNotApplicable {
+		t.Errorf("surface.output.failure while idle: Absence = %q, want %q", failure.Absence, observation.StateNotApplicable)
 	}
 	if failure.Reason == "" {
 		t.Errorf("surface.output.failure while idle: Reason is empty, want a stated reason")

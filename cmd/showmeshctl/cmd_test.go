@@ -82,6 +82,44 @@ func TestCmdNodesTextOutputMarksStaleEvidence(t *testing.T) {
 	}
 }
 
+// TestCmdNodesNotApplicableEvidence pins ADR-056 decision 6 for this tool:
+// table output prints n/a with the reason, JSON output keeps the wire value.
+func TestCmdNodesNotApplicableEvidence(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","nodes":[
+			{"nodeId":"media-03","label":"Garage","platform":null,"agentVersion":null,"bootId":null,
+			 "startedAt":null,"firstSeenAt":null,"updatedAt":null,"capabilities":[],
+			 "controlPlane":{"state":"online","reason":null},
+			 "evidence":{
+			   "hello":{"signal":"node.hello","value":true,"unit":null,"state":"current","reason":null,"observedAt":"2026-08-10T20:59:50Z","collectedAt":"2026-08-10T20:59:50Z","source":"s","quality":"direct"},
+			   "lastWill":{"signal":"node.lastWill","value":null,"unit":null,"state":"not_applicable","reason":"No restore is queued.","observedAt":"2026-08-10T20:59:50Z","collectedAt":"2026-08-10T20:59:50Z","source":"s","quality":"direct"},
+			   "heartbeat":{"signal":"node.heartbeat","value":"ok","unit":null,"state":"current","reason":null,"observedAt":"2026-08-10T20:59:50Z","collectedAt":"2026-08-10T20:59:50Z","source":"s","quality":"direct"}
+			 }}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNodes([]string{"--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "n/a (No restore is queued.)") || strings.Contains(out, "UNRECOGNIZED") {
+		t.Errorf("table output must print n/a with its reason:\n%s", out)
+	}
+
+	stdout.Reset()
+	code = cmdNodes([]string{"--server", ts.URL, "--output", "json"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("json exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, `"not_applicable"`) || strings.Contains(out, "n/a") {
+		t.Errorf("json output must carry the wire value, not the table label:\n%s", out)
+	}
+}
+
 func TestCmdNodesJSONOutput(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

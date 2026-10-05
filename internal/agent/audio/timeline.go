@@ -120,13 +120,17 @@ type TimelineSnapshot struct {
 	ErrorMs    int64
 
 	Reason string
+
+	// NotApplicable is true when Reason says no session is scheduled, so
+	// there is no timeline rather than one that went unread.
+	NotApplicable bool
 }
 
 // notScheduledSnapshot is what a node with no session playing against a
-// T0 reports: not collected with a reason, never a zeroed timeline that
-// would read as a session perfectly on time.
+// T0 reports: nothing scheduled, never a zeroed timeline that would read
+// as a session perfectly on time.
 func notScheduledSnapshot(reason string) TimelineSnapshot {
-	return TimelineSnapshot{Reason: reason}
+	return TimelineSnapshot{Reason: reason, NotApplicable: true}
 }
 
 // TimelineSnapshot reports this node's current scheduled-playback
@@ -154,7 +158,7 @@ func (m *Manager) TimelineSnapshot(ctx context.Context) TimelineSnapshot {
 		}
 	}
 	if !best.Scheduled {
-		return notScheduledSnapshot("no session on this node is playing against a scheduled start instant")
+		return notScheduledSnapshot("No session on this node is playing against a scheduled start.")
 	}
 	return best
 }

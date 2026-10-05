@@ -200,6 +200,9 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 	s.gapKnown = rec.GapKnown
 	s.gap = rec.Gap
 	s.gapReason = rec.GapReason
+	if modern, ok := legacyGapReasons[s.gapReason]; ok {
+		s.gapReason = modern
+	}
 	s.gapObservedAt = rec.GapObservedAt
 	if !s.gapKnown && s.gapReason == "" {
 		s.gapReason = gapReasonNeverAdvanced

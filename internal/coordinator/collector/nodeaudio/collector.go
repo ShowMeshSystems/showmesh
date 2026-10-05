@@ -47,6 +47,11 @@ func timelineAbsentReason(p mqttproto.AudioPayload, scheduled bool) string {
 	return "this node could not read both its media clock and its sink clock on this report tick"
 }
 
+var timelineSignals = []observation.SignalID{
+	SignalTimelineScheduledAt, SignalTimelineResyncs, SignalTimelineLastResyncReason,
+	SignalTimelineExpectedMs, SignalTimelineActualMs, SignalTimelineErrorMs,
+}
+
 // timelineObservations renders the six node.audio.timeline.* signals
 // (signals.go) from the node's own report.
 //
@@ -67,6 +72,12 @@ func timelineObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 	reason := timelineAbsentReason(p, p.TimelineScheduled)
 
 	var obs []observation.Observation
+	if !p.TimelineScheduled && p.TimelineNotApplicable {
+		for _, sig := range timelineSignals {
+			obs = append(obs, notApplicable(res, sig, source, reason, observedAt, rep))
+		}
+		return obs
+	}
 	if p.TimelineScheduled {
 		obs = append(obs,
 			buildValue(nodeID, SignalTimelineScheduledAt, p.TimelineScheduledAtNs, observedAt, rep),
@@ -75,8 +86,8 @@ func timelineObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 		if p.TimelineLastResyncReason != "" {
 			obs = append(obs, buildValue(nodeID, SignalTimelineLastResyncReason, p.TimelineLastResyncReason, observedAt, rep))
 		} else {
-			obs = append(obs, notCollected(res, SignalTimelineLastResyncReason, source,
-				"this scheduled session has not resynced, so no resync reason is in effect", rep.receivedAt))
+			obs = append(obs, notApplicable(res, SignalTimelineLastResyncReason, source,
+				"This scheduled session has not resynced.", observedAt, rep))
 		}
 	} else {
 		obs = append(obs,
@@ -114,26 +125,32 @@ func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) o
 	if p.AlignmentMeasured {
 		return buildValue(nodeID, SignalClockAlignment, p.AlignmentOffsetMs, p.AlignmentSampledAt, rep)
 	}
+	return alignmentAbsent(res, SignalClockAlignment, source, p, rep)
+}
+
+// alignmentAbsent reports an unmeasured alignment signal: not applicable
+// when the node states no playing session holds the LTC run, not
+// collected when a sample should exist and does not.
+func alignmentAbsent(res observation.ResourceRef, sig observation.SignalID, source string, p mqttproto.AudioPayload, rep report) observation.Observation {
 	reason := p.AlignmentReason
 	if reason == "" {
 		reason = alignmentAbsentFallbackReason
 	}
-	return notCollected(res, SignalClockAlignment, source, reason, rep.receivedAt)
+	if p.AlignmentNotApplicable {
+		return notApplicable(res, sig, source, reason, p.ObservedAt, rep)
+	}
+	return notCollected(res, sig, source, reason, rep.receivedAt)
 }
 
 // alignmentStateObservation renders node.audio.clock.alignment.state, the
 // threshold verdict on the same sample alignmentObservation reported.
-// An unmeasured sample carries its own not_collected reason forward.
+// An unmeasured sample carries its own absence and reason forward.
 func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc LocalClockSource) observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
 
 	if !p.AlignmentMeasured {
-		reason := p.AlignmentReason
-		if reason == "" {
-			reason = alignmentAbsentFallbackReason
-		}
-		return notCollected(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
+		return alignmentAbsent(res, SignalClockAlignmentState, source, p, rep)
 	}
 
 	thresholdMs, reason := lookupDriftIgnoreThresholdMs(ctx, clockSrc)
@@ -141,7 +158,7 @@ func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.A
 		return failed(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
 	}
 	if thresholdMs <= 0 {
-		return notCollected(res, SignalClockAlignmentState, source, "no drift threshold is configured; audio.settings driftIgnoreThresholdMs is 0", rep.receivedAt)
+		return notApplicable(res, SignalClockAlignmentState, source, "No drift threshold is set, so alignment is not judged.", p.AlignmentSampledAt, rep)
 	}
 
 	offsetMs := p.AlignmentOffsetMs
@@ -183,14 +200,27 @@ func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc LocalClockSource
 	return payload.DriftIgnoreThresholdMs, ""
 }
 
-// ltcFrameRateAbsentReason states why a node reports no frame rate, which
-// differs between a node that cannot generate LTC at all and one that
-// simply has not run it.
-func ltcFrameRateAbsentReason(generatorState string) string {
-	if generatorState == "unsupported" {
-		return "this node cannot generate LTC, so no frame rate is in effect"
+// ltcFrameRateAbsent reports a node with no frame rate. A node that
+// cannot generate LTC, or has it stopped, has none to report; a running
+// generator with no frame rate is a reading that went missing.
+func ltcFrameRateAbsent(res observation.ResourceRef, source string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) observation.Observation {
+	switch p.LTCGeneratorState {
+	case "unsupported":
+		return notApplicable(res, SignalLTCFrameRate, source, "This node cannot generate timecode, so no frame rate is in effect.", observedAt, rep)
+	case "stopped":
+		return notApplicable(res, SignalLTCFrameRate, source, "No timecode run has set a frame rate on this node.", observedAt, rep)
 	}
-	return "no LTC run has reported a frame rate on this node"
+	return notCollected(res, SignalLTCFrameRate, source, "no LTC run has reported a frame rate on this node", rep.receivedAt)
+}
+
+// ltcTimecodeAbsent reports a node with no timecode, on the same split
+// as [ltcFrameRateAbsent].
+func ltcTimecodeAbsent(res observation.ResourceRef, source string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) observation.Observation {
+	switch p.LTCGeneratorState {
+	case "unsupported", "stopped":
+		return notApplicable(res, SignalLTCTimecode, source, "The timecode generator is not running.", observedAt, rep)
+	}
+	return notCollected(res, SignalLTCTimecode, source, "the timecode generator is not confirmed running, so no fresh timecode is available", rep.receivedAt)
 }
 
 // Collector implements collector.Collector; enforced at compile time so a
@@ -438,19 +468,19 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc L
 	if p.LTCGeneratorState != "running" {
 		obs = append(obs, buildValue(nodeID, SignalLTCGeneratorReason, p.LTCGeneratorReason, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLTCGeneratorReason, source, "generator is running; no reason is in effect", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalLTCGeneratorReason, source, "The timecode generator is running, so there is no reason to report.", observedAt, rep))
 	}
 
 	if p.LTCFrameRateKnown {
 		obs = append(obs, buildValue(nodeID, SignalLTCFrameRate, p.LTCFrameRate, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLTCFrameRate, source, ltcFrameRateAbsentReason(p.LTCGeneratorState), rep.receivedAt))
+		obs = append(obs, ltcFrameRateAbsent(res, source, p, observedAt, rep))
 	}
 
 	if p.LTCTimecodeKnown {
 		obs = append(obs, buildValue(nodeID, SignalLTCTimecode, p.LTCTimecode, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLTCTimecode, source, "the timecode generator is not confirmed running, so no fresh timecode is available", rep.receivedAt))
+		obs = append(obs, ltcTimecodeAbsent(res, source, p, observedAt, rep))
 	}
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
@@ -490,8 +520,9 @@ func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 // an agent built before these fields existed. NextAttemptMs is collected
 // only while State is "scheduled": 0 is otherwise genuinely ambiguous
 // between "never started" and "gave up", which State (not this signal)
-// exists to resolve, so reporting it not_collected rather than a
-// fabricated 0 keeps that resolution honest. LastReason is always
+// exists to resolve, so reporting no value rather than a
+// fabricated 0 keeps that resolution honest, and not_applicable because
+// the node's own State says no attempt is queued. LastReason is always
 // current: empty until Attempts is nonzero.
 func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
@@ -510,8 +541,7 @@ func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observed
 	if state == "scheduled" {
 		obs = append(obs, buildValue(nodeID, SignalEngineRestoreNextAttemptMs, p.EngineRestoreNextAttemptMs, observedAt, rep))
 	} else {
-		reason := "no automatic restore attempt is scheduled: this node's restore-retry driver has not run or has exhausted its bounded schedule"
-		obs = append(obs, notCollected(res, SignalEngineRestoreNextAttemptMs, source, reason, rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalEngineRestoreNextAttemptMs, source, "No engine restore attempt is scheduled.", observedAt, rep))
 	}
 
 	obs = append(obs, buildValue(nodeID, SignalEngineRestoreLastReason, p.EngineRestoreLastReason, observedAt, rep))
@@ -571,7 +601,7 @@ func engineGlitchObservations(nodeID string, p mqttproto.AudioPayload, observedA
 // matching [engineGlitchObservations]'s identical "known=false reports
 // not_collected on every one" rule, since sink_target/clock_source/
 // clock_reason are meaningless without a reported backend. SinkTarget is
-// reported not_collected on its own, narrower gate: it only ever applies
+// not applicable on its own, narrower gate: it only ever applies
 // to a pipewiresink backend.
 func engineBackendObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
@@ -592,7 +622,7 @@ func engineBackendObservations(nodeID string, p mqttproto.AudioPayload, observed
 	if p.EngineSinkBackend == "pipewiresink" {
 		obs = append(obs, buildValue(nodeID, SignalEngineSinkTarget, p.EngineSinkTarget, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalEngineSinkTarget, source, "this node's engine sink backend is not pipewiresink; no PipeWire target applies", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalEngineSinkTarget, source, "This node's audio output does not use PipeWire, so there is no PipeWire target.", observedAt, rep))
 	}
 	obs = append(obs,
 		buildValue(nodeID, SignalEngineClockSource, p.EngineClockSource, observedAt, rep),
@@ -639,13 +669,13 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	if sess.HasSourceRole {
 		obs = append(obs, buildSessionValue(res, source, SignalSessionSourceRole, sess.SourceRole, sessionAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSessionSourceRole, source, "session has no source role set", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalSessionSourceRole, source, "No source role is set for this session.", sessionAt, rep))
 	}
 
 	if sess.HasPlaylist {
 		obs = append(obs, buildSessionValue(res, source, SignalSessionPlaylistRevision, int64(sess.PlaylistRevision), sessionAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSessionPlaylistRevision, source, "session has no pinned playlist", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalSessionPlaylistRevision, source, "No playlist is pinned to this session.", sessionAt, rep))
 	}
 
 	if sess.HasItem {
@@ -655,8 +685,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		)
 	} else {
 		obs = append(obs,
-			notCollected(res, SignalSessionItemID, source, "session has no current item", rep.receivedAt),
-			notCollected(res, SignalSessionItemIndex, source, "session has no current item", rep.receivedAt),
+			notApplicable(res, SignalSessionItemID, source, "This session has no current item.", sessionAt, rep),
+			notApplicable(res, SignalSessionItemIndex, source, "This session has no current item.", sessionAt, rep),
 		)
 	}
 
@@ -666,6 +696,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 			posAt = sess.ObservedAt
 		}
 		obs = append(obs, buildSessionValue(res, source, SignalSessionPositionMs, sess.PositionMs, posAt, rep))
+	} else if sess.PositionNotApplicable {
+		obs = append(obs, notApplicable(res, SignalSessionPositionMs, source, "Nothing is loaded in this session.", sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh position is available from the engine; it is mid-discontinuity or has nothing loaded", rep.receivedAt))
 	}
@@ -684,7 +716,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		ceilingDb := pkgaudio.CeilingToDb(pkgaudio.Ceiling(sess.Ceiling))
 		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, ceilingDb, sessionAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSessionGainCeiling, source, "session has no gain ceiling set", rep.receivedAt))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, pkgaudio.MaxOperatorGainDb, sessionAt, rep,
+			observation.WithReason(defaultCeilingReason)))
 	}
 
 	fadeState := sess.FadeState
@@ -702,8 +735,8 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		)
 	} else {
 		obs = append(obs,
-			notCollected(res, SignalSessionAssetProbeState, source, "no asset has been probed for this session yet", rep.receivedAt),
-			notCollected(res, SignalSessionAssetProbeReason, source, "no asset has been probed for this session yet", rep.receivedAt),
+			notApplicable(res, SignalSessionAssetProbeState, source, "No asset has been probed for this session yet.", sessionAt, rep),
+			notApplicable(res, SignalSessionAssetProbeReason, source, "No asset has been probed for this session yet.", sessionAt, rep),
 		)
 	}
 
@@ -734,13 +767,22 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	if sess.RestorePending {
 		obs = append(obs, buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt))
+		obs = append(obs, notApplicable(res, SignalSessionRestoreNextAttemptMs, source, "No restore is queued for this session.", sessionAt, rep))
 	}
 
 	if sess.GapKnown {
 		obs = append(obs,
 			buildSessionConfiguredValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
 			buildSessionConfiguredValue(res, source, SignalSessionItemGapReason, sess.ItemGapReason, sess.ItemGapObservedAt, rep),
+		)
+	} else if sess.ItemGapNotApplicable {
+		gapReason := sess.ItemGapReason
+		if gapReason == "" {
+			gapReason = "No item gap exists for this session."
+		}
+		obs = append(obs,
+			notApplicable(res, SignalSessionItemGapMs, source, gapReason, sessionAt, rep),
+			notApplicable(res, SignalSessionItemGapReason, source, gapReason, sessionAt, rep),
 		)
 	} else {
 		gapReason := sess.ItemGapReason
@@ -768,14 +810,19 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 				buildSessionValue(res, source, SignalSessionStartLeadMs, int64(sess.StartLeadMs), sessionAt, rep),
 			)
 		} else {
-			reason := "this session did not start from a MultiSync START packet"
+			reason := "This session did not start from a MultiSync START packet."
 			obs = append(obs,
-				notCollected(res, SignalSessionTriggerSequenceFilename, source, reason, rep.receivedAt),
-				notCollected(res, SignalSessionTriggerArrivalNs, source, reason, rep.receivedAt),
-				notCollected(res, SignalSessionStartLeadMs, source, reason, rep.receivedAt),
+				notApplicable(res, SignalSessionTriggerSequenceFilename, source, reason, sessionAt, rep),
+				notApplicable(res, SignalSessionTriggerArrivalNs, source, reason, sessionAt, rep),
+				notApplicable(res, SignalSessionStartLeadMs, source, reason, sessionAt, rep),
 			)
 		}
 		obs = append(obs, buildSessionValue(res, source, SignalSessionPreparedLate, sess.PreparedLate, sessionAt, rep))
+	} else if sess.StartTriggerNotApplicable {
+		reason := "This node holds no start record for this session."
+		for _, sig := range startTriggerSignals {
+			obs = append(obs, notApplicable(res, sig, source, reason, sessionAt, rep))
+		}
 	} else {
 		reason := "this session has not started, or this node's build does not report how it started"
 		obs = append(obs,
@@ -789,6 +836,15 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 
 	return obs
 }
+
+var startTriggerSignals = []observation.SignalID{
+	SignalSessionStartTrigger, SignalSessionTriggerSequenceFilename,
+	SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs, SignalSessionPreparedLate,
+}
+
+// defaultCeilingReason names the ceiling in effect for a session nobody
+// set one on: the limit every operator gain entry is refused above.
+var defaultCeilingReason = fmt.Sprintf("No ceiling is set for this session. The %+g dB operator gain limit applies.", pkgaudio.MaxOperatorGainDb)
 
 // sessionStateReason states AUDIO-ENGINE section 15's distinction: Playing
 // and Paused are engine-side claims this seam has not independently
@@ -806,11 +862,11 @@ func sessionStateReason(state string) string {
 
 // buildSessionValue is [buildValue]'s audio_session counterpart: same
 // ADR-011 ObservedAt/CollectedAt split, different resource kind.
-func buildSessionValue(res observation.ResourceRef, source string, sig observation.SignalID, value any, observedAt *time.Time, rep report) observation.Observation {
-	opts := []observation.Option{
+func buildSessionValue(res observation.ResourceRef, source string, sig observation.SignalID, value any, observedAt *time.Time, rep report, extra ...observation.Option) observation.Observation {
+	opts := append([]observation.Option{
 		observation.WithSource(source),
 		observation.WithCollectedAt(rep.receivedAt),
-	}
+	}, extra...)
 	if observedAt == nil {
 		o, err := observation.MeasuredUnknownAge(res, sig, value, opts...)
 		if err != nil {
@@ -873,6 +929,22 @@ func notCollected(res observation.ResourceRef, sig observation.SignalID, source,
 		observation.WithSource(source), observation.WithCollectedAt(at))
 	if err != nil {
 		panic(fmt.Sprintf("nodeaudio: NotCollected(%q) unexpectedly failed: %v", sig, err))
+	}
+	return o
+}
+
+// notApplicable reports that the node's own report at observedAt
+// established the signal's subject does not exist (ADR-056). A report
+// with no evidence time cannot establish that and stays not collected.
+func notApplicable(res observation.ResourceRef, sig observation.SignalID, source, reason string, observedAt *time.Time, rep report) observation.Observation {
+	if observedAt == nil {
+		return notCollected(res, sig, source, reason, rep.receivedAt)
+	}
+	o, err := observation.NotApplicable(res, sig, reason, *observedAt,
+		observation.WithSource(source), observation.WithCollectedAt(rep.receivedAt),
+		observation.WithValidFor(DefaultValidFor))
+	if err != nil {
+		panic(fmt.Sprintf("nodeaudio: NotApplicable(%q) unexpectedly failed: %v", sig, err))
 	}
 	return o
 }

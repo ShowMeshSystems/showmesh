@@ -43,16 +43,13 @@
 //
 // # Why the absence vocabulary has exactly these members
 //
-// [State] has six members because BUILD-PLAN Step 3 requires distinguishing
-// three failure-to-observe cases the operator surface must not collapse
-// into one "no data" blob — [StateUnsupported] (this source cannot ever
-// provide this signal), [StateNotCollected] (no attempt has been made yet:
-// not configured, disabled, or no poll has completed), and
-// [StateCollectionFailed] (an attempt was made and failed) — plus the two
-// freshness cases ADR-011 requires once a value does exist —
-// [StateUnknownAge] (see above) and [StateStale] (aged past
-// [Observation.ValidFor]) — and [StateCurrent] for the case where none of
-// the above apply. Nothing here is derived from a sixth case; a helper that
-// needs a different answer belongs above this package, not as an addition
-// to this list.
+// [State] has seven members. Three are failures to observe that the operator
+// surface must not collapse into one "no data" blob: [StateUnsupported]
+// (this source cannot ever provide this signal), [StateNotCollected] (a
+// signal that should have a reading and does not), and
+// [StateCollectionFailed] (an attempt was made and failed). Two are the
+// freshness cases ADR-011 requires once a value exists: [StateUnknownAge]
+// and [StateStale]. [StateNotApplicable] (ADR-056) is a reading that the
+// signal's subject does not exist right now, and it ages to stale like a
+// value. [StateCurrent] is the case where none of the above apply.
 package observation

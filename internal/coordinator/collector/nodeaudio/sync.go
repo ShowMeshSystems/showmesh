@@ -60,8 +60,12 @@ func syncObservations(nodeID string, p mqttproto.AudioPayload, rep report, clock
 
 	if state != SyncStateFreeRunning && clock.OffsetKnown {
 		obs = append(obs, buildValue(nodeID, SignalSyncOffsetNs, clock.OffsetNs, observedAt, rep))
+	} else if state == SyncStateFreeRunning {
+		obs = append(obs, notApplicable(res, SignalSyncOffsetNs, source,
+			"This node's audio output is not following a global clock, so there is no offset.", observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSyncOffsetNs, source, syncOffsetAbsentReason(state), rep.receivedAt))
+		obs = append(obs, notCollected(res, SignalSyncOffsetNs, source,
+			"this node's clock provider did not report an offset for this reading", rep.receivedAt))
 	}
 
 	return obs
@@ -100,13 +104,6 @@ func syncFollows(state string, clock mqttproto.ClockPayload) (follows string, kn
 		return "PTP " + clock.GrandmasterIdentity, true
 	}
 	return "PTP " + clock.GrandmasterIdentity + ":" + strconv.FormatInt(clock.Domain, 10), true
-}
-
-func syncOffsetAbsentReason(state string) string {
-	if state == SyncStateFreeRunning {
-		return "this node's audio output is not following a global clock, so there is no offset to report"
-	}
-	return "this node's clock provider did not report an offset for this reading"
 }
 
 // notCollectedSync reports all three sync signals as not collected for one

@@ -273,7 +273,7 @@ func TestSessionStartTriggerMultisyncCarriesArrivalAndLead(t *testing.T) {
 // TestSessionStartTriggerCoordinatorReportsNoMultisyncFields proves the
 // fallback case: a session started by the coordinator's own dispatch
 // reports its trigger as "coordinator" and the three MultiSync-only
-// fields as not_collected, never a fabricated zero.
+// fields as not_applicable, never a fabricated zero.
 func TestSessionStartTriggerCoordinatorReportsNoMultisyncFields(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
@@ -289,8 +289,8 @@ func TestSessionStartTriggerCoordinatorReportsNoMultisyncFields(t *testing.T) {
 	}
 	for _, sig := range []observation.SignalID{SignalSessionTriggerSequenceFilename, SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs} {
 		got := findSessionObs(t, obs, sig)
-		if got.Absence != observation.StateNotCollected {
-			t.Errorf("signal %q absence = %q, want %q", sig, got.Absence, observation.StateNotCollected)
+		if got.Absence != observation.StateNotApplicable {
+			t.Errorf("signal %q absence = %q, want %q", sig, got.Absence, observation.StateNotApplicable)
 		}
 	}
 	late := findSessionObs(t, obs, SignalSessionPreparedLate)
@@ -404,8 +404,11 @@ func TestSessionGainReportsCurrentUnityWithNoExplicitSet(t *testing.T) {
 	}
 
 	ceiling := findSessionObs(t, obs, SignalSessionGainCeiling)
-	if ceiling.Absence != observation.StateNotCollected {
-		t.Errorf("gain.ceiling absence = %q, want %q when no ceiling applies", ceiling.Absence, observation.StateNotCollected)
+	if ceiling.Value != pkgaudio.MaxOperatorGainDb || ceiling.StateAt(sampleObservedAt) != observation.StateCurrent {
+		t.Errorf("gain.ceiling = %+v, want the %v dB operator limit as a current default", ceiling, pkgaudio.MaxOperatorGainDb)
+	}
+	if want := "No ceiling is set for this session. The +12 dB operator gain limit applies."; ceiling.Reason != want {
+		t.Errorf("gain.ceiling reason = %q, want %q", ceiling.Reason, want)
 	}
 }
 
@@ -760,10 +763,10 @@ func TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable(t *testi
 }
 
 // TestClockAlignmentStateNotCollectedWhenThresholdIsZero proves a
-// configured driftIgnoreThresholdMs of 0 reports not_collected, matching
+// configured driftIgnoreThresholdMs of 0 reports not_applicable, matching
 // the agent's own "no usable threshold" handling, rather than reporting
 // beyond_threshold on every nonzero offset forever.
-func TestClockAlignmentStateNotCollectedWhenThresholdIsZero(t *testing.T) {
+func TestClockAlignmentStateNotApplicableWhenThresholdIsZero(t *testing.T) {
 	st := NewStore(WithLocalClockSource(driftThresholdSource(t, 0)))
 	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
 	p := samplePayload()
@@ -776,8 +779,11 @@ func TestClockAlignmentStateNotCollectedWhenThresholdIsZero(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	state := findObs(t, obs, SignalClockAlignmentState)
-	if state.Absence != observation.StateNotCollected {
-		t.Errorf("clock alignment state absence = %q, want %q", state.Absence, observation.StateNotCollected)
+	if state.Absence != observation.StateNotApplicable {
+		t.Errorf("clock alignment state absence = %q, want %q", state.Absence, observation.StateNotApplicable)
+	}
+	if want := "No drift threshold is set, so alignment is not judged."; state.Reason != want {
+		t.Errorf("clock alignment state reason = %q, want %q", state.Reason, want)
 	}
 }
 
@@ -824,7 +830,7 @@ func TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt(t *testing.T) 
 // TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt exists to
 // distinguish: an ordinary session with no restore queued at all reports
 // a current 0 attempts and a current empty last_reason (both known,
-// honest facts), and next_attempt_ms not_collected since nothing is
+// honest facts), and next_attempt_ms not_applicable since nothing is
 // scheduled.
 func TestRestoreSignalsWhenNothingIsQueued(t *testing.T) {
 	st := NewStore()
@@ -851,7 +857,7 @@ func TestRestoreSignalsWhenNothingIsQueued(t *testing.T) {
 	}
 
 	next := findSessionObs(t, obs, SignalSessionRestoreNextAttemptMs)
-	if next.Absence != observation.StateNotCollected {
-		t.Errorf("restore.next_attempt_ms absence = %q, want %q when no restore is queued", next.Absence, observation.StateNotCollected)
+	if next.Absence != observation.StateNotApplicable {
+		t.Errorf("restore.next_attempt_ms absence = %q, want %q when no restore is queued", next.Absence, observation.StateNotApplicable)
 	}
 }
