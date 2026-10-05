@@ -32,16 +32,18 @@ type TileProps = {
   /** Tabular numerals: "3 / 4". */
   value: ReactNode
   detail: ReactNode
+  /** `bad` colours the detail line when it carries a failure. */
+  detailTone?: 'bad' | undefined
   to?: string
 }
 
 /** A counted fact that links to the screen that explains it. */
-export function StatTile({ label, value, detail, to }: TileProps) {
+export function StatTile({ label, value, detail, detailTone, to }: TileProps) {
   const body = (
     <>
       <p className="sm-tile__label">{label}</p>
       <p className="sm-tile__value">{value}</p>
-      <p className="sm-tile__detail">{detail}</p>
+      <p className={detailTone === undefined ? 'sm-tile__detail' : `sm-tile__detail sm-tile__detail--${detailTone}`}>{detail}</p>
     </>
   )
   if (to === undefined) return <div className="sm-tile">{body}</div>

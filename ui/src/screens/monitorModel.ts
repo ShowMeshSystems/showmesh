@@ -1,6 +1,6 @@
 import type { AuditEntry, Capability, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
-import { countSignals, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { countLabels, countSignals, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE, signalTally } from '../domain/evidence'
 import {
   audioSettingSubstitution,
   audioSettingSubstitutionSentence,
@@ -507,14 +507,9 @@ export function signalRows(model: Model, nowIso: string | null): SignalRow[] {
 }
 
 export function signalSummary(rows: readonly SignalRow[]): string {
-  const byLabel = (label: string) => rows.filter((row) => row.state === label).length
-  const current = byLabel(EVIDENCE_LABEL.current)
-  const stale = byLabel(EVIDENCE_LABEL.stale)
-  const unobserved = byLabel(EVIDENCE_LABEL.not_collected)
-  const failed = byLabel(EVIDENCE_LABEL.collection_failed)
-  const unavailable = byLabel(EVIDENCE_LABEL.unsupported) + byLabel(EVIDENCE_LABEL.unknown_age)
-  const notApplicable = byLabel(EVIDENCE_LABEL.not_applicable)
-  return `${rows.length} signals · ${current} current, ${stale} stale, ${unobserved} unobserved, ${failed} failed, ${unavailable} unavailable, ${notApplicable} N/A.`
+  const counts = countLabels(rows.map((row) => row.state))
+  const parts = signalTally(counts).map((entry) => `${entry.count} ${entry.word}`)
+  return `${counts.total} signals · ${parts.join(', ')}.`
 }
 
 // ---------------------------------------------------------------------

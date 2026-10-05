@@ -337,6 +337,10 @@ a.sm-tile:hover {
   color: var(--text-muted);
 }
 
+.sm-tile__detail--bad {
+  color: var(--bad-fg);
+}
+
 /* A verdict: the state word carries the colour, the sentence carries the fact. */
 .sm-verdict {
   margin: 10px 0 0;

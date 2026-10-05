@@ -17,6 +17,7 @@ import {
   type Connection,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { signalTileDetail } from '../domain/evidence'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import {
   acknowledgeFPPInstanceUUIDChange,
@@ -171,11 +172,8 @@ export function Monitor() {
             <StatTile
               label="Signals current"
               value={`${counts.signals.current} / ${counts.signals.measurable}`}
-              detail={
-                counts.signals.total === 0
-                  ? 'nothing collected yet'
-                  : `${counts.signals.stale} stale · ${counts.signals.unobserved} unobserved`
-              }
+              detail={counts.signals.total === 0 ? 'nothing collected yet' : signalTileDetail(counts.signals)}
+              detailTone={counts.signals.failed > 0 ? 'bad' : undefined}
               to="/monitor/signals"
             />
           </Tiles>

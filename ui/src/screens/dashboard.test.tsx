@@ -278,6 +278,15 @@ describe('Dashboard', () => {
     expect(counts.signals).toMatchObject({ total: 5, current: 2, stale: 1, unobserved: 1, unavailable: 1 })
   })
 
+  it('accounts for every signal on the tile and marks a failed one', () => {
+    renderDashboard({
+      nodes: [node('a', 'online', ['current', 'stale', 'not_collected', 'collection_failed', 'unsupported', 'not_applicable'])],
+    })
+    expect(screen.getByText('1 / 5')).toBeInTheDocument()
+    const detail = screen.getByText('1 stale · 1 unobserved · 1 failed · 1 unavailable · 1 N/A')
+    expect(detail).toHaveClass('sm-tile__detail--bad')
+  })
+
   it('counts a signal with nothing to measure apart from unobserved, and out of the measurable total', () => {
     const counts = fleetCounts({
       ...initialModel(),
