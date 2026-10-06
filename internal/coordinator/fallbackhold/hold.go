@@ -12,10 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -45,12 +48,56 @@ const SilentAfter = 45 * time.Second
 // this run is awaited.
 const StartGrace = 45 * time.Second
 
-// The coordinator's own reading of an FPP player, from its FPP collector.
+// PlayerReading is the coordinator's own current reading of an FPP player.
+// Current is false when it has no reading it can stand on.
+type PlayerReading struct {
+	Current bool
+	// Status is FPP's status word, "idle" or "playing" among others.
+	Status string
+	// Playlist is set only when PlaylistCurrent is true.
+	Playlist        string
+	PlaylistCurrent bool
+}
+
+// PlayerReader reads an FPP player by its configured id, ignoring anything
+// collected before notBefore. The API layer supplies it, so this package
+// reads a player exactly as the night loop does.
+type PlayerReader func(ctx context.Context, fppInstanceID string, notBefore, now time.Time) PlayerReading
+
+// AuditWriter is the slice of identity.Service this package writes to.
+type AuditWriter interface {
+	WriteAudit(ctx context.Context, entry identity.AuditEntry) error
+}
+
 const (
-	fppStatusSignal       observation.SignalID = "fpp.status"
-	fppPlaylistNameSignal observation.SignalID = "fpp.playlist.name"
-	fppStatusPlaying                           = "playing"
+	statusIdle    = "idle"
+	statusPlaying = "playing"
+
+	systemPrincipalID    = "system-fallback-hold"
+	systemPrincipalName  = "ShowMesh fallback hold"
+	auditActionAutoClear = "fallback.player_state.auto_clear"
 )
+
+// playlistKey is a playlist name without a directory or a trailing ".json".
+func playlistKey(name string) string {
+	return strings.TrimSuffix(path.Base(strings.TrimSpace(name)), ".json")
+}
+
+// playlistOver says whether reading shows the player is done with the
+// playlist named reported: idle, or playing a playlist of another name.
+// Anything else, a pause or a graceful stop among them, is not over.
+func playlistOver(reading PlayerReading, reported string) bool {
+	if !reading.Current {
+		return false
+	}
+	switch reading.Status {
+	case statusIdle:
+		return true
+	case statusPlaying:
+		return reading.PlaylistCurrent && reading.Playlist != "" && playlistKey(reading.Playlist) != playlistKey(reported)
+	}
+	return false
+}
 
 // Reason says why a player is held.
 type Reason string
@@ -103,12 +150,13 @@ type inputs struct {
 	// ackCurrent is true when the player has acknowledged the program
 	// published for it, or nothing is published for it.
 	ackCurrent bool
-	// playlistOverAt is when the coordinator's own FPP collector read
-	// the player as no longer playing the reported playlist, zero when it
-	// has no such reading from after the report.
-	playlistOverAt time.Time
-	startedAt      time.Time
-	now            time.Time
+	// playlistOver is true when the coordinator's own current reading of
+	// the player, taken after the report, has shown the reported playlist
+	// over for longer than [SilentAfter] without a break. A plugin whose
+	// link has only just come back reports well inside that time.
+	playlistOver bool
+	startedAt    time.Time
+	now          time.Time
 }
 
 // decide applies contract section 5.16 to one stored report.
@@ -127,17 +175,25 @@ func decide(rec store.FallbackPlayerStateRecord, in inputs) Verdict {
 		v.PluginReporting = false
 		return v
 	}
+	// The coordinator's own downtime is not the plugin's silence.
+	heardOrStarted := rec.ReceivedAt
+	if in.startedAt.After(heardOrStarted) {
+		heardOrStarted = in.startedAt
+	}
+	silent := in.now.Sub(heardOrStarted) > SilentAfter
 	switch {
-	case rec.State != StateNormal && !v.PluginReporting && !in.playlistOverAt.IsZero():
+	case rec.ReceivedAt.Before(in.startedAt) && in.now.Sub(in.startedAt) <= StartGrace:
+		// Whatever the stored row says, the plugin gets its chance to
+		// report in this run first.
+		v.Held, v.Reason = true, ReasonCoordinatorStarting
+	case rec.State != StateNormal && silent && in.playlistOver:
 		// The show the hold protected is over, seen by the coordinator.
 		v.EndedWithoutPlugin = true
 	case rec.State != StateNormal:
 		v.Held, v.Reason = true, ReasonExecutor
-	case !rec.AckWaitSince.IsZero() && !in.ackCurrent && v.PluginReporting:
+	case !rec.AckWaitSince.IsZero() && !in.ackCurrent && !silent:
 		// A silent plugin cannot be waited on.
 		v.Held, v.Reason, v.AckWaitSince = true, ReasonAwaitingAcknowledgement, rec.AckWaitSince
-	case rec.ReceivedAt.Before(in.startedAt) && in.now.Sub(in.startedAt) <= StartGrace:
-		v.Held, v.Reason = true, ReasonCoordinatorStarting
 	}
 	return v
 }
@@ -174,9 +230,17 @@ type Service struct {
 
 	mu        sync.Mutex
 	startedAt time.Time
-	// endedLogged remembers the report each hold that ended without its
-	// plugin was announced for, so it is announced once.
-	endedLogged map[string]string
+	reader    PlayerReader
+	audit     AuditWriter
+	// overSince is when each player's reported playlist was first read
+	// as over, for the report named in it.
+	overSince map[string]overReading
+}
+
+type overReading struct {
+	bootID   string
+	sequence int64
+	since    time.Time
 }
 
 // NewService builds a Service. startedAt is what [StartGrace] counts from
@@ -185,7 +249,22 @@ func NewService(st *store.Store, startedAt time.Time, logger *slog.Logger) *Serv
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{st: st, startedAt: startedAt, logger: logger, now: time.Now, endedLogged: map[string]string{}}
+	return &Service{st: st, startedAt: startedAt, logger: logger, now: time.Now}
+}
+
+// SetPlayerReader wires the coordinator's own reading of an FPP player.
+// Without one no hold ever ends without its plugin.
+func (s *Service) SetPlayerReader(r PlayerReader) {
+	s.mu.Lock()
+	s.reader = r
+	s.mu.Unlock()
+}
+
+// SetAudit wires where an automatic clear is audited.
+func (s *Service) SetAudit(a AuditWriter) {
+	s.mu.Lock()
+	s.audit = a
+	s.mu.Unlock()
 }
 
 // MarkStarted says the coordinator's loops and HTTP listener are up now.
@@ -208,37 +287,38 @@ type reader interface {
 	GetFallbackProgramAck(ctx context.Context, instanceUUID string) (store.FallbackProgramAckRecord, error)
 }
 
-// playlistOverAt reads the coordinator's own FPP status for the player:
-// the fpp.status and fpp.playlist.name signals its FPP collector writes.
-// It answers only from readings taken after the report arrived.
-func playlistOverAt(ctx context.Context, r *store.Store, rec store.FallbackPlayerStateRecord) (time.Time, error) {
-	if rec.State == StateNormal || rec.State == stateCleared || rec.PlaylistName == "" {
-		return time.Time{}, nil
+// readPlaylistOver asks the coordinator's own reading of the player, taken
+// after the report arrived, whether the reported playlist is over.
+func (s *Service) readPlaylistOver(ctx context.Context, rec store.FallbackPlayerStateRecord, now time.Time) (bool, error) {
+	s.mu.Lock()
+	reader := s.reader
+	s.mu.Unlock()
+	if reader == nil || rec.State == StateNormal || rec.State == stateCleared || rec.PlaylistName == "" {
+		return false, nil
 	}
-	endpoints, err := r.GetFPPInstanceUUIDByUUID(ctx, rec.FPPInstanceUUID)
+	endpoints, err := s.st.GetFPPInstanceUUIDByUUID(ctx, rec.FPPInstanceUUID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("fallbackhold: find the FPP player for %q: %w", rec.FPPInstanceUUID, err)
+		return false, fmt.Errorf("fallbackhold: find the FPP player for %q: %w", rec.FPPInstanceUUID, err)
 	}
 	if len(endpoints) != 1 {
-		return time.Time{}, nil
+		return false, nil
 	}
-	all, err := r.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: endpoints[0].EndpointID})
-	if err != nil {
-		return time.Time{}, fmt.Errorf("fallbackhold: read FPP status for %q: %w", endpoints[0].EndpointID, err)
+	over := playlistOver(reader(ctx, endpoints[0].EndpointID, rec.ReceivedAt, now), rec.PlaylistName)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !over {
+		delete(s.overSince, rec.FPPInstanceUUID)
+		return false, nil
 	}
-	var over time.Time
-	for _, o := range all {
-		text, ok := o.Value.(string)
-		if !ok || o.ObservedAt == nil || !o.ObservedAt.After(rec.ReceivedAt) {
-			continue
+	seen, ok := s.overSince[rec.FPPInstanceUUID]
+	if !ok || seen.bootID != rec.BootID || seen.sequence != rec.Sequence {
+		seen = overReading{bootID: rec.BootID, sequence: rec.Sequence, since: now}
+		if s.overSince == nil {
+			s.overSince = map[string]overReading{}
 		}
-		notPlaying := o.Signal == fppStatusSignal && text != fppStatusPlaying
-		otherPlaylist := o.Signal == fppPlaylistNameSignal && text != rec.PlaylistName
-		if (notPlaying || otherPlaylist) && o.ObservedAt.After(over) {
-			over = *o.ObservedAt
-		}
+		s.overSince[rec.FPPInstanceUUID] = seen
 	}
-	return over, nil
+	return now.Sub(seen.since) > SilentAfter, nil
 }
 
 // readInputs gathers what [decide] needs. Inside a transaction r is the
@@ -246,12 +326,12 @@ func playlistOverAt(ctx context.Context, r *store.Store, rec store.FallbackPlaye
 func (s *Service) readInputs(ctx context.Context, r reader, rec store.FallbackPlayerStateRecord, now time.Time) (inputs, error) {
 	instanceUUID := rec.FPPInstanceUUID
 	in := inputs{startedAt: s.started(), now: now}
-	if st, ok := r.(*store.Store); ok {
-		over, err := playlistOverAt(ctx, st, rec)
+	if _, ok := r.(*store.Store); ok {
+		over, err := s.readPlaylistOver(ctx, rec, now)
 		if err != nil {
 			return inputs{}, err
 		}
-		in.playlistOverAt = over
+		in.playlistOver = over
 	}
 	obs, err := r.GetFPPPlaylistEntryObservation(ctx, instanceUUID)
 	switch {
@@ -299,7 +379,9 @@ func (s *Service) evaluateRecord(ctx context.Context, rec store.FallbackPlayerSt
 		return Verdict{}, err
 	}
 	v := decide(rec, in)
-	s.announceEndedWithoutPlugin(ctx, v, in)
+	if v.EndedWithoutPlugin {
+		s.clearEndedWithoutPlugin(ctx, rec, now)
+	}
 	if rec.State == StateNormal && !rec.AckWaitSince.IsZero() && in.ackCurrent {
 		// The wait is over for good: a later program change must not
 		// bring the hold back.
@@ -311,31 +393,51 @@ func (s *Service) evaluateRecord(ctx context.Context, rec store.FallbackPlayerSt
 	return v, nil
 }
 
-// announceEndedWithoutPlugin writes one warning and one event the first
-// time a hold is seen to have ended without its plugin saying so.
-func (s *Service) announceEndedWithoutPlugin(ctx context.Context, v Verdict, in inputs) {
-	if !v.EndedWithoutPlugin {
+// clearEndedWithoutPlugin forgets a report whose hold ended without the
+// plugin, exactly as an operator's clear does, so the hold cannot return
+// when the player next plays a playlist of that name.
+func (s *Service) clearEndedWithoutPlugin(ctx context.Context, rec store.FallbackPlayerStateRecord, now time.Time) {
+	var cleared bool
+	err := s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		current, err := tx.GetFallbackPlayerState(ctx, rec.FPPInstanceUUID)
+		if err != nil || current.BootID != rec.BootID || current.Sequence != rec.Sequence {
+			// Gone, or a newer report arrived meanwhile and stands.
+			return nil
+		}
+		cleared, err = s.Clear(ctx, tx, rec.FPPInstanceUUID, now)
+		return err
+	})
+	if err != nil {
+		s.logger.Warn("fallback hold: clearing a hold that ended without its plugin failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
 		return
 	}
-	rec := v.Record
-	key := rec.BootID + "/" + fmt.Sprint(rec.Sequence)
-	s.mu.Lock()
-	seen := s.endedLogged[rec.FPPInstanceUUID] == key
-	s.endedLogged[rec.FPPInstanceUUID] = key
-	s.mu.Unlock()
-	if seen {
+	if !cleared {
 		return
 	}
 	message := fmt.Sprintf("The plugin on this FPP player stopped reporting while it was running playlist %q from its fallback program, and the player is no longer playing that playlist. The coordinator has taken the player back.", rec.PlaylistName)
 	s.logger.Warn("fallback hold: ended without the plugin's report", "fppInstanceUuid", rec.FPPInstanceUUID,
-		"reportedState", rec.State, "playlistName", rec.PlaylistName, "lastReportAt", rec.ReceivedAt, "playlistOverAt", in.playlistOverAt)
-	at := in.playlistOverAt
+		"reportedState", rec.State, "playlistName", rec.PlaylistName, "lastReportAt", rec.ReceivedAt)
 	if _, err := s.st.AppendEvent(ctx, store.EventRecord{
-		OccurredAt: &at, Source: ObservationSource,
+		OccurredAt: &now, Source: ObservationSource,
 		Resource: observation.ResourceRef{Kind: observation.ResourceFallbackProgram, ID: rec.FPPInstanceUUID},
 		Category: EventHoldEndedWithoutPlugin, Severity: "warning", Summary: message,
 	}); err != nil {
 		s.logger.Warn("fallback hold: recording the end of a hold failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
+	}
+	s.ForgetSignals(ctx, rec.FPPInstanceUUID, now)
+	s.mu.Lock()
+	audit := s.audit
+	s.mu.Unlock()
+	if audit == nil {
+		return
+	}
+	if err := audit.WriteAudit(ctx, identity.AuditEntry{
+		Timestamp: now, PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
+		Action: auditActionAutoClear, Target: rec.FPPInstanceUUID, Kind: identity.AuditOutcome,
+		Params:        map[string]any{"reportedState": rec.State, "playlistName": rec.PlaylistName},
+		OutcomeReason: "the plugin stopped reporting and the player is no longer playing that playlist",
+	}); err != nil {
+		s.logger.Warn("fallback hold: audit write for an automatic clear failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
 	}
 }
 

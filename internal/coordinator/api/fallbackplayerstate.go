@@ -14,6 +14,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // An FPP plugin reports whether it is running the show from its fallback
@@ -300,9 +301,73 @@ func resolveNightFallbackHold(ctx context.Context, deps Dependencies, rec store.
 	return nightFallbackHold{}, false, nil
 }
 
+// nightExemptFromFallbackHold says whether rec advances whatever is held:
+// a shutdown was asked for, or the session is already past its show.
+func nightExemptFromFallbackHold(rec store.NightSessionRecord) bool {
+	return rec.State == nightStateFadingOut || rec.State == nightStateStopped || rec.ShutdownIntent != ""
+}
+
+// nightSessionPlayerHeld says whether a player rec uses is held, whether
+// or not rec is exempt. A state it cannot read counts as held.
+func (h *handlers) nightSessionPlayerHeld(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
+	_, found, err := resolveNightFallbackHold(ctx, h.deps, rec, now)
+	return found || err != nil
+}
+
+// nightDropUnlaunchedShowForHold keeps a shutdown from launching a show on
+// a held player. A session committed to a show it has not started yet is
+// handed on as uncommitted, so the shutdown fades out now and drops it.
+func nightDropUnlaunchedShowForHold(rec *store.NightSessionRecord, heldForFallback bool) *store.NightSessionRecord {
+	if rec == nil || !heldForFallback || rec.State != nightStateTransitionToShow || !rec.ShowCommitted {
+		return rec
+	}
+	if a, ok := decodeNightContentAnchor(rec.ContentAnchorJSON); ok && a.Purpose == nightAnchorPurposeShow {
+		return rec
+	}
+	next := *rec
+	next.ShowCommitted = false
+	return &next
+}
+
+// NewFallbackPlayerReader reads an FPP player as the night loop does, from
+// the coordinator's own collectors and never from what the plugin posted.
+func NewFallbackPlayerReader(lister ObservationLister) fallbackhold.PlayerReader {
+	own := notFromPluginLister{lister}
+	return func(ctx context.Context, fppInstanceID string, notBefore, now time.Time) fallbackhold.PlayerReading {
+		obs := nightObservePlayback(ctx, own, fppInstanceID, notBefore, now)
+		return fallbackhold.PlayerReading{
+			Current: obs.Current, Status: obs.Status, Playlist: obs.Playlist, PlaylistCurrent: obs.PlaylistCurrent,
+		}
+	}
+}
+
+// fppPluginObservationSource is the source of rows built from the plugin's
+// own posts (collector/fppplugin).
+const fppPluginObservationSource = "fpp-plugin"
+
+// notFromPluginLister hides every observation the plugin itself supplied.
+type notFromPluginLister struct{ inner ObservationLister }
+
+func (l notFromPluginLister) ListObservations(ctx context.Context, filter ObservationFilter) ([]observation.Observation, error) {
+	all, err := l.inner.ListObservations(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]observation.Observation, 0, len(all))
+	for _, o := range all {
+		if o.Source != fppPluginObservationSource {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
 // mapNightFallbackHold renders the hold on rec's player for the session
-// read, nil when there is none.
+// read, nil when there is none or rec advances regardless.
 func mapNightFallbackHold(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time) *v1.NightFallbackHold {
+	if nightExemptFromFallbackHold(rec) {
+		return nil
+	}
 	hold, found, err := resolveNightFallbackHold(ctx, deps, rec, now)
 	if err != nil || !found {
 		return nil
@@ -341,7 +406,7 @@ func (h *handlers) logInfo(msg string, args ...any) {
 // show on an FPP player this session uses. A session with a shutdown asked
 // for is never held: the operator, or FPP's schedule, wins over the hold.
 func (h *handlers) nightHeldForFallback(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
-	if rec.State == nightStateFadingOut || rec.State == nightStateStopped || rec.ShutdownIntent != "" {
+	if nightExemptFromFallbackHold(rec) {
 		h.noteNightFallbackHold(rec, "")
 		return false
 	}

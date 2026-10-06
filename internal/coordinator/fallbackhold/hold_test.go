@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -416,79 +417,226 @@ func signal(t *testing.T, st *store.Store, id observation.SignalID) observation.
 	return observation.Observation{}
 }
 
-func putFPPStatus(t *testing.T, st *store.Store, status, playlist string, at time.Time) {
+// testReader wires a reading the test controls, and records the player's
+// instance UUID as the store would have it.
+type testReader struct {
+	reading PlayerReading
+	asked   []time.Time
+}
+
+func (r *testReader) wire(t *testing.T, svc *Service) {
 	t.Helper()
-	if _, _, err := st.RecordFPPInstanceUUIDObservation(context.Background(), "bench-fpp", testInstance, at); err != nil {
+	if _, _, err := svc.st.RecordFPPInstanceUUIDObservation(context.Background(), "bench-fpp", testInstance, testStart); err != nil {
 		t.Fatalf("record instance uuid: %v", err)
 	}
-	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "bench-fpp"}
-	for sig, value := range map[observation.SignalID]string{fppStatusSignal: status, fppPlaylistNameSignal: playlist} {
-		obs, err := observation.Measured(res, sig, value, at, observation.WithSource("fpp-rest"), observation.WithCollectedAt(at))
-		if err == nil {
-			err = st.UpsertObservation(context.Background(), obs)
+	svc.SetPlayerReader(func(_ context.Context, id string, notBefore, _ time.Time) PlayerReading {
+		if id != "bench-fpp" {
+			t.Errorf("the reader was asked about %q, want the player's configured id", id)
 		}
-		if err != nil {
-			t.Fatalf("write %s: %v", sig, err)
-		}
+		r.asked = append(r.asked, notBefore)
+		return r.reading
+	})
+}
+
+type recordingAudit struct{ entries []identity.AuditEntry }
+
+func (a *recordingAudit) WriteAudit(_ context.Context, e identity.AuditEntry) error {
+	a.entries = append(a.entries, e)
+	return nil
+}
+
+func playing(name string) PlayerReading {
+	return PlayerReading{Current: true, Status: "playing", Playlist: name, PlaylistCurrent: true}
+}
+
+// A hold ends without the plugin only when the coordinator is sure: the
+// player is idle, or it is playing a playlist of another name. Every
+// other reading leaves the plugin in charge.
+func TestOnlyIdleOrAnotherPlaylistPlayingCountsAsThePlaylistBeingOver(t *testing.T) {
+	cases := []struct {
+		name    string
+		reading PlayerReading
+		over    bool
+	}{
+		{"idle", PlayerReading{Current: true, Status: "idle"}, true},
+		{"playing another playlist", playing("Second Show"), true},
+		{"playing the same playlist", playing("Main Show"), false},
+		{"playing the same playlist with a directory and .json", playing("playlists/Main Show.json"), false},
+		{"playing the same playlist with .json only", playing("Main Show.json"), false},
+		{"playing, playlist name not current", PlayerReading{Current: true, Status: "playing", Playlist: "Second Show"}, false},
+		{"playing, playlist name empty", PlayerReading{Current: true, Status: "playing", PlaylistCurrent: true}, false},
+		{"paused", PlayerReading{Current: true, Status: "paused", Playlist: "Second Show", PlaylistCurrent: true}, false},
+		{"stopping gracefully", PlayerReading{Current: true, Status: "stopping gracefully", Playlist: "Main Show", PlaylistCurrent: true}, false},
+		{"stopping gracefully after loop", PlayerReading{Current: true, Status: "stopping gracefully after loop", Playlist: "Main Show", PlaylistCurrent: true}, false},
+		{"unknown", PlayerReading{Current: true, Status: "unknown"}, false},
+		{"no status value", PlayerReading{Current: true}, false},
+		{"a reading that is not current", PlayerReading{Status: "idle"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newService(t, testStart.Add(-time.Hour))
+			reader := &testReader{reading: tc.reading}
+			reader.wire(t, svc)
+			mustRecord(t, svc, report(StateFallback, 1), testStart)
+
+			// While the plugin still counts as reporting nothing ends.
+			if v := mustEvaluate(t, svc, testStart.Add(time.Second)); !v.Held {
+				t.Fatal("the hold ended one second after the report")
+			}
+			if v := mustEvaluate(t, svc, testStart.Add(SilentAfter)); !v.Held {
+				t.Fatal("the hold ended while the plugin still counted as reporting")
+			}
+			v := mustEvaluate(t, svc, testStart.Add(SilentAfter+2*time.Second))
+			if v.EndedWithoutPlugin != tc.over || v.Held == tc.over {
+				t.Fatalf("held %v, ended without the plugin %v; want ended %v", v.Held, v.EndedWithoutPlugin, tc.over)
+			}
+			for _, notBefore := range reader.asked {
+				if !notBefore.Equal(testStart) {
+					t.Fatalf("the reader was asked for readings since %s, want since the report arrived", notBefore.Format(time.TimeOnly))
+				}
+			}
+		})
 	}
 }
 
-// Review item 3a: a hold ends without the plugin once the plugin is
-// silent and the coordinator's own FPP status, read after the last
-// report, shows the playlist it entered under is no longer playing.
-func TestAHoldEndsWithoutThePluginWhenTheCoordinatorSeesThePlaylistOver(t *testing.T) {
-	for name, tc := range map[string]struct{ status, playlist string }{
-		"the player is idle":            {"idle", ""},
-		"the player plays another list": {"playing", "Resting"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, st := newService(t, testStart.Add(-time.Hour))
-			mustRecord(t, svc, report(StateFallback, 1), testStart)
+// The reported name is compared the same way when it is the one that
+// carries a directory or ".json".
+func TestTheReportedPlaylistNameIsComparedWithoutDirectoryOrJSON(t *testing.T) {
+	svc, _ := newService(t, testStart.Add(-time.Hour))
+	reader := &testReader{reading: playing("Main Show")}
+	reader.wire(t, svc)
+	r := report(StateFallback, 1)
+	r.PlaylistName = "playlists/Main Show.json"
+	mustRecord(t, svc, r, testStart)
+	if v := mustEvaluate(t, svc, testStart.Add(time.Hour)); !v.Held {
+		t.Fatal("a reported name with a directory and .json was read as another playlist")
+	}
+}
 
-			// Still playing the same playlist: held however quiet.
-			putFPPStatus(t, st, "playing", "Main Show", testStart.Add(2*time.Minute))
-			if v := mustEvaluate(t, svc, testStart.Add(3*time.Minute)); !v.Held {
-				t.Fatal("the hold ended while the coordinator still reads the playlist as playing")
-			}
-			// A reading from before the report proves nothing.
-			putFPPStatus(t, st, tc.status, tc.playlist, testStart.Add(-time.Second))
-			if v := mustEvaluate(t, svc, testStart.Add(3*time.Minute)); !v.Held {
-				t.Fatal("a status read before the report ended the hold")
-			}
-			// Read after the report, but the plugin still reports: held.
-			putFPPStatus(t, st, tc.status, tc.playlist, testStart.Add(20*time.Second))
-			if v := mustEvaluate(t, svc, testStart.Add(30*time.Second)); !v.Held {
-				t.Fatal("the hold ended while the plugin was still reporting")
-			}
+// The reviewer's case. The row says fallback under Main Show. The
+// coordinator is down ten minutes, during which FPP moved on to Second
+// Show with the plugin still running it. The coordinator's own downtime is
+// not the plugin's silence, and the start hold applies to this row too.
+func TestAfterARestartAFallbackRowIsHeldUntilThePluginReportsOrTheGraceEnds(t *testing.T) {
+	svc, st := newService(t, testStart.Add(-time.Hour))
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
 
-			at := testStart.Add(SilentAfter + time.Second)
-			v := mustEvaluate(t, svc, at)
-			if v.Held || !v.EndedWithoutPlugin {
-				t.Fatalf("with a silent plugin and the playlist over: %+v, want the hold ended without the plugin", v)
-			}
-			if !v.IgnoresObservation(testStart) {
-				t.Fatal("what the player observed before its last fallback report would be acted on")
-			}
-			mustEvaluate(t, svc, at.Add(time.Second))
-			events, _, err := st.ListEvents(context.Background(), 0, 500)
-			if err != nil {
-				t.Fatalf("list events: %v", err)
-			}
-			n := 0
-			for _, ev := range events {
-				if ev.Category == EventHoldEndedWithoutPlugin && ev.Resource.ID == testInstance && ev.Severity == "warning" {
-					n++
-				}
-			}
-			if n != 1 {
-				t.Fatalf("%d events for the ended hold after two evaluations, want exactly one", n)
-			}
-			// A plugin that comes back still in fallback is held again.
-			mustRecord(t, svc, report(StateFallback, 2), at.Add(10*time.Second))
-			if v := mustEvaluate(t, svc, at.Add(11*time.Second)); !v.Held {
-				t.Fatal("a plugin that reports fallback again is not held")
-			}
-		})
+	restartAt := testStart.Add(10 * time.Minute)
+	restarted := NewService(st, restartAt, nil)
+	audit := &recordingAudit{}
+	restarted.SetAudit(audit)
+	reader := &testReader{reading: playing("Second Show")}
+	reader.wire(t, restarted)
+
+	for _, since := range []time.Duration{time.Second, 2 * time.Second, StartGrace} {
+		v := mustEvaluate(t, restarted, restartAt.Add(since))
+		if !v.Held || v.Reason != ReasonCoordinatorStarting || v.EndedWithoutPlugin {
+			t.Fatalf("%s after the restart: %+v, want held while starting", since, v)
+		}
+	}
+	if len(audit.entries) != 0 {
+		t.Fatalf("the hold was cleared %d times during the start hold", len(audit.entries))
+	}
+
+	// The plugin reports in this run: it is running Second Show.
+	next := report(StateFallback, 2)
+	next.PlaylistName = "Second Show"
+	mustRecord(t, restarted, next, restartAt.Add(8*time.Second))
+	if v := mustEvaluate(t, restarted, restartAt.Add(9*time.Second)); !v.Held || v.Reason != ReasonExecutor {
+		t.Fatalf("after the plugin reported fallback under the new playlist: %+v, want held", v)
+	}
+}
+
+// Had the plugin never come back, the grace ends, the silence since this
+// run's start reaches 45 seconds, and only then may the hold end.
+func TestAfterARestartSilenceIsCountedFromThisRunsStart(t *testing.T) {
+	svc, st := newService(t, testStart.Add(-time.Hour))
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+	restartAt := testStart.Add(10 * time.Minute)
+	restarted := NewService(st, restartAt, nil)
+	reader := &testReader{reading: playing("Second Show")}
+	reader.wire(t, restarted)
+	restarted.MarkStarted(restartAt.Add(5 * time.Second))
+
+	if v := mustEvaluate(t, restarted, restartAt.Add(6*time.Second)); !v.Held {
+		t.Fatal("the hold ended right after the restart")
+	}
+	if v := mustEvaluate(t, restarted, restartAt.Add(5*time.Second+SilentAfter)); !v.Held {
+		t.Fatal("the hold ended before 45 seconds of silence in this run")
+	}
+	if v := mustEvaluate(t, restarted, restartAt.Add(6*time.Second+SilentAfter+time.Second)); v.Held || !v.EndedWithoutPlugin {
+		t.Fatalf("after 45 seconds of silence in this run with another playlist playing: %+v, want the hold ended", v)
+	}
+}
+
+// A hold that ends without its plugin is cleared like an operator's
+// clear, so tomorrow's playlist of the same name does not hold the night.
+func TestAHoldThatEndsWithoutItsPluginIsClearedAndDoesNotReturn(t *testing.T) {
+	svc, st := newService(t, testStart.Add(-time.Hour))
+	audit := &recordingAudit{}
+	svc.SetAudit(audit)
+	reader := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
+	reader.wire(t, svc)
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+
+	mustEvaluate(t, svc, testStart.Add(time.Second))
+	at := testStart.Add(SilentAfter + 2*time.Second)
+	if v := mustEvaluate(t, svc, at); v.Held || !v.EndedWithoutPlugin {
+		t.Fatalf("with a silent plugin and an idle player: %+v, want the hold ended", v)
+	}
+	// The next evening the same playlist plays again and the plugin is
+	// still silent.
+	reader.reading = playing("Main Show")
+	next := mustEvaluate(t, svc, at.Add(24*time.Hour))
+	if next.Held || next.Reported {
+		t.Fatalf("the next day, same playlist name: %+v, want no stored report and no hold", next)
+	}
+	if !next.IgnoresObservation(at) || next.IgnoresObservation(at.Add(time.Millisecond)) {
+		t.Fatal("the floor after an automatic clear is not at the time of the clear")
+	}
+	if all, err := svc.All(context.Background(), at.Add(time.Minute)); err != nil || len(all) != 0 {
+		t.Fatalf("the cleared player is still listed: %d rows, err %v", len(all), err)
+	}
+
+	if len(audit.entries) != 1 || audit.entries[0].Action != "fallback.player_state.auto_clear" ||
+		audit.entries[0].Target != testInstance || audit.entries[0].PrincipalID != "system-fallback-hold" {
+		t.Fatalf("audit entries = %+v, want one automatic clear for this player by the system principal", audit.entries)
+	}
+	events, _, err := st.ListEvents(context.Background(), 0, 500)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	n := 0
+	for _, ev := range events {
+		if ev.Category == EventHoldEndedWithoutPlugin && ev.Resource.ID == testInstance && ev.Severity == "warning" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d events for the ended hold, want exactly one", n)
+	}
+
+	// A plugin that reports fallback again later is held again, on a new row.
+	mustRecord(t, svc, report(StateFallback, 7), at.Add(25*time.Hour))
+	if v := mustEvaluate(t, svc, at.Add(25*time.Hour+time.Second)); !v.Held || !v.Reported {
+		t.Fatal("a plugin that reports fallback after an automatic clear is not held")
+	}
+}
+
+// With no reader wired, or a player the coordinator cannot name, nothing
+// ends a hold without the plugin.
+func TestWithoutAReadingOfThePlayerAHoldNeverEndsWithoutThePlugin(t *testing.T) {
+	svc, _ := newService(t, testStart.Add(-time.Hour))
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+	if v := mustEvaluate(t, svc, testStart.Add(time.Hour)); !v.Held {
+		t.Fatal("with no reader the hold ended")
+	}
+	svc.SetPlayerReader(func(context.Context, string, time.Time, time.Time) PlayerReading {
+		t.Error("the reader was asked about a player with no known configured id")
+		return PlayerReading{Current: true, Status: "idle"}
+	})
+	if v := mustEvaluate(t, svc, testStart.Add(time.Hour)); !v.Held {
+		t.Fatal("a hold ended for a player the coordinator cannot name")
 	}
 }
 
@@ -564,5 +712,44 @@ func TestMarkStartedMovesWhatTheStartHoldCountsFrom(t *testing.T) {
 	}
 	if v := mustEvaluate(t, restarted, testStart.Add(76*time.Second)); v.Held {
 		t.Fatal("46 seconds after the listener came up the player is still held")
+	}
+}
+
+// The link to a plugin comes back and the coordinator's own poll of the
+// player lands before the plugin's report. One reading of another
+// playlist is not enough: it has to stand for 45 seconds, and a plugin
+// that is alive reports well inside that.
+func TestOneOverReadingDoesNotEndAHoldBeforeThePluginCanReport(t *testing.T) {
+	svc, _ := newService(t, testStart.Add(-time.Hour))
+	reader := &testReader{}
+	reader.wire(t, svc)
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+
+	// Ten minutes with no reading of the player and no report.
+	back := testStart.Add(10 * time.Minute)
+	reader.reading = playing("Second Show")
+	for _, since := range []time.Duration{0, time.Second, 9 * time.Second} {
+		if v := mustEvaluate(t, svc, back.Add(since)); !v.Held || v.EndedWithoutPlugin {
+			t.Fatalf("%s after the first reading of another playlist: %+v, want still held", since, v)
+		}
+	}
+	next := report(StateFallback, 2)
+	next.PlaylistName = "Second Show"
+	mustRecord(t, svc, next, back.Add(10*time.Second))
+	if v := mustEvaluate(t, svc, back.Add(2*time.Minute)); !v.Held {
+		t.Fatal("after the plugin reported under the new playlist the hold ended")
+	}
+
+	// A reading that stops saying over starts the count again.
+	svc2, _ := newService(t, testStart.Add(-time.Hour))
+	reader2 := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
+	reader2.wire(t, svc2)
+	mustRecord(t, svc2, report(StateFallback, 1), testStart)
+	mustEvaluate(t, svc2, testStart.Add(time.Minute))
+	reader2.reading = playing("Main Show")
+	mustEvaluate(t, svc2, testStart.Add(time.Minute+30*time.Second))
+	reader2.reading = PlayerReading{Current: true, Status: "idle"}
+	if v := mustEvaluate(t, svc2, testStart.Add(time.Minute+50*time.Second)); !v.Held {
+		t.Fatal("an over reading that was interrupted still ended the hold on its first 45 seconds")
 	}
 }

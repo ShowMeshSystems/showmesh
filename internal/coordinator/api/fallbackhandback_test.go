@@ -23,6 +23,7 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/coordsig"
 	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // These tests run a show through a coordinator outage and back, Track J
@@ -69,6 +70,52 @@ type handbackWorld struct {
 	// starts is every Cue start the node saw, in order, with who sent it.
 	starts    []string
 	inventory []store.NodeAssetInventoryRecord
+
+	// fpp is what the coordinator's own FPP collector reads from the
+	// player on each pass of settle, nil while it reads nothing.
+	fpp *handbackFPPReading
+	// pluginGone stops the plugin's own timers: no probe, no report.
+	pluginGone bool
+	// reportsFail makes the state report route fail for the plugin while
+	// everything else it sends still arrives.
+	reportsFail bool
+}
+
+type handbackFPPReading struct{ source, status, playlist string }
+
+// storeLister reads observations from the store, as the coordinator's own
+// lister does.
+type storeLister struct{ st *store.Store }
+
+func (l storeLister) ListObservations(ctx context.Context, filter ObservationFilter) ([]observation.Observation, error) {
+	var sf store.ObservationFilter
+	if filter.ResourceKind != nil {
+		sf.ResourceKind = *filter.ResourceKind
+	}
+	if filter.ResourceID != nil {
+		sf.ResourceID = *filter.ResourceID
+	}
+	if filter.Signal != nil {
+		sf.Signal = *filter.Signal
+	}
+	return l.st.ListObservations(ctx, sf)
+}
+
+// collectFPP writes one collector pass of the player's status into the
+// store, through the same upsert the collectors' store path uses.
+func (w *handbackWorld) collectFPP(r handbackFPPReading) {
+	w.t.Helper()
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "bench-fpp"}
+	for sig, value := range map[observation.SignalID]string{fppStatusSignal: r.status, fppPlaylistNameSignal: r.playlist} {
+		obs, err := observation.Measured(res, sig, value, w.now,
+			observation.WithSource(r.source), observation.WithCollectedAt(w.now), observation.WithValidFor(time.Minute))
+		if err == nil {
+			err = w.setup.st.UpsertObservation(w.t.Context(), obs)
+		}
+		if err != nil {
+			w.t.Fatalf("write %s from %s: %v", sig, r.source, err)
+		}
+	}
 }
 
 func (w *handbackWorld) clock() time.Time { return w.now }
@@ -202,6 +249,8 @@ func (w *handbackWorld) publishProgram(packageID string, validity time.Duration)
 // second call is a restart: nothing held in memory carries over.
 func (w *handbackWorld) startCoordinator() {
 	w.holds = fallbackhold.NewService(w.setup.st, w.now, testLogger())
+	w.holds.SetPlayerReader(NewFallbackPlayerReader(storeLister{w.setup.st}))
+	w.holds.SetAudit(w.setup.svc)
 	deps := w.setup.deps()
 	deps.FallbackPrograms = w.setup.st
 	deps.FallbackHolds = w.holds
@@ -273,7 +322,12 @@ func (w *handbackWorld) settle(d time.Duration) {
 	for elapsed := time.Duration(0); elapsed < d; elapsed += 5 * time.Second {
 		w.advance(5 * time.Second)
 		w.reportInventory()
-		w.plugin.periodic()
+		if w.fpp != nil {
+			w.collectFPP(*w.fpp)
+		}
+		if !w.pluginGone {
+			w.plugin.periodic()
+		}
 		w.tick()
 	}
 }
@@ -336,7 +390,9 @@ type handbackPlugin struct {
 
 	installed       *fallbackprogram.Program
 	enteredPlaylist string
-	pass            int
+	// playing is the name of the playlist FPP is playing, as FPP names it.
+	playing string
+	pass    int
 	// reports counts state reports the coordinator answered with 200.
 	reports int
 }
@@ -349,7 +405,7 @@ func (p *handbackPlugin) setState(state string) {
 // report sends section 5.15's body with the state at this moment.
 func (p *handbackPlugin) report() {
 	p.w.t.Helper()
-	if !p.probeOK {
+	if !p.probeOK || p.w.reportsFail {
 		return
 	}
 	p.reportSeq++
@@ -486,6 +542,9 @@ func (p *handbackPlugin) entry(position int) {
 	case fallbackhold.StateNormal:
 		if cue, ok := p.mapped(entryKey); p.lossConfirmed && p.usable() && ok {
 			p.enteredPlaylist = handbackPlaylistName
+			if p.playing != "" {
+				p.enteredPlaylist = p.playing
+			}
 			p.setState(fallbackhold.StateFallback)
 			p.w.starts = append(p.w.starts, cue+" by plugin")
 			return
@@ -763,9 +822,12 @@ func TestHandbackAShortCoordinatorRestartDoesNotDropTheNextCue(t *testing.T) {
 }
 
 // An operator clears a player's stored state while its plugin really is
-// running the show. Until the plugin's next report the coordinator must
-// not act on the entry it observed before the outage.
-func TestHandbackAClearDuringARealFallbackStartsNothingBeforeThePluginReportsAgain(t *testing.T) {
+// running the show. The coordinator holds an entry the plugin observed
+// after its last report that got through: the plugin had handed back, its
+// normal report failed, it observed the next run's first entry, and then
+// lost the coordinator and entered fallback again. The clear must not let
+// the coordinator start that entry now.
+func TestHandbackAClearDuringARealFallbackStartsNothingObservedBeforeTheClear(t *testing.T) {
 	w := newHandbackWorld(t)
 	w.settle(10 * time.Second)
 	w.plugin.startPlaylist()
@@ -775,29 +837,233 @@ func TestHandbackAClearDuringARealFallbackStartsNothingBeforeThePluginReportsAga
 	w.playEntry(1)
 	w.reachable = true
 	w.settle(10 * time.Second)
-	w.editCue("cue-1")
+	if v := w.verdict(); !v.Held {
+		t.Fatal("the fixture's plugin is not held after reporting fallback")
+	}
+
+	// From here the plugin's reports fail and everything else arrives.
+	w.reportsFail = true
+	w.plugin.stopPlaylist()
+	w.advance(5 * time.Second)
+	w.reportInventory()
+	w.plugin.startPlaylist()
+	w.plugin.entry(0)
+	w.tick()
+	w.wantStarts("cue-1 by coordinator", "cue-2 by plugin")
+
+	// The coordinator is lost again and the plugin takes the second run.
+	w.reachable = false
+	w.advance(5 * time.Second)
+	w.plugin.probe()
+	w.plugin.entry(1)
+	if w.plugin.state != fallbackhold.StateFallback {
+		t.Fatalf("the plugin is in %s, want fallback for the second run", w.plugin.state)
+	}
 
 	// The operator's request is not the plugin's, so it does not go
 	// through the plugin's link.
+	w.advance(5 * time.Second)
+	w.reportInventory()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/fallback-programs/"+handbackInstanceUUID+"/fallback-state", nil)
 	req.Header.Set("Authorization", "Bearer "+w.operatorToken)
 	if resp, raw := doRawRequest(t, w.api.Handler, req); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("clear: status %d, body %s", resp.StatusCode, raw)
 	}
-	// The gap before the plugin's next report: checked without the
-	// two-owner guard in tick, which is exactly what must not trip.
-	before := len(w.setup.audioPub.dispatched)
-	w.loop.cueActivationTick(context.Background(), w.now, nil, w.held)
-	w.loop.cueActivationFailToBlackWG.Wait()
-	if sent := len(w.setup.audioPub.dispatched) - before; sent != 0 {
-		t.Fatalf("in the gap after a clear the coordinator sent the node %d commands, want none", sent)
-	}
+	// tick fails the test if the coordinator sends the node anything
+	// while the plugin is in fallback.
+	w.tick()
+	w.advance(5 * time.Second)
+	w.reportInventory()
+	w.tick()
+	w.wantStarts("cue-1 by coordinator", "cue-2 by plugin", "cue-2 by plugin")
+}
+
+// holdEndedAudits counts automatic clears in the audit log.
+func (w *handbackWorld) holdEndedAudits() int {
+	w.t.Helper()
+	return countAuditActionsIn(w.t, w.setup.svc, "fallback.player_state.auto_clear")
+}
+
+// fallbackThenPluginGone runs a show into a real fallback the coordinator
+// has heard about, then takes the plugin away with FPP still playing.
+func fallbackThenPluginGone(t *testing.T) *handbackWorld {
+	t.Helper()
+	w := newHandbackWorld(t)
+	w.fpp = &handbackFPPReading{"fpp-rest", "playing", handbackPlaylistName}
 	w.settle(10 * time.Second)
-	if v := w.verdict(); !v.Held {
-		t.Fatal("the plugin's next fallback report did not hold the player again")
+	w.plugin.startPlaylist()
+	w.playEntry(0)
+	w.reachable = false
+	w.settle(20 * time.Second)
+	w.playEntry(1)
+	w.reachable = true
+	w.settle(10 * time.Second)
+	if v := w.verdict(); !v.Held || v.Reason != fallbackhold.ReasonExecutor {
+		t.Fatalf("fixture: held %v reason %q, want held while the plugin runs the show", v.Held, v.Reason)
 	}
-	w.playEntry(2)
-	w.wantStarts("cue-1 by coordinator", "cue-2 by plugin", "cue-3 by plugin")
+	w.pluginGone = true
+	return w
+}
+
+// The coordinator's own collector reads the player while a plugin that
+// reported fallback has gone quiet. Only idle, or another playlist
+// playing, ends the hold; then the stored state is cleared for good.
+func TestHandbackAQuietPluginsHoldEndsOnlyWhenTheCoordinatorReadsThePlaylistOver(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reading handbackFPPReading
+		over    bool
+	}{
+		{"idle", handbackFPPReading{"fpp-rest", "idle", ""}, true},
+		{"playing another playlist", handbackFPPReading{"fpp-rest", "playing", "Second Show"}, true},
+		{"playing the same playlist", handbackFPPReading{"fpp-rest", "playing", handbackPlaylistName}, false},
+		{"playing the same playlist, named with a directory and .json", handbackFPPReading{"fpp-rest", "playing", "playlists/" + handbackPlaylistName + ".json"}, false},
+		{"paused", handbackFPPReading{"fpp-rest", "paused", handbackPlaylistName}, false},
+		{"stopping gracefully", handbackFPPReading{"fpp-rest", "stopping gracefully", handbackPlaylistName}, false},
+		{"stopping gracefully after loop", handbackFPPReading{"fpp-rest", "stopping gracefully after loop", handbackPlaylistName}, false},
+		{"unknown", handbackFPPReading{"fpp-rest", "unknown", ""}, false},
+		{"idle, but only according to what the plugin posted", handbackFPPReading{"fpp-plugin", "idle", ""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := fallbackThenPluginGone(t)
+			if tc.reading.source == "fpp-plugin" {
+				// The coordinator's own collector has stopped reading; the
+				// only rows left that are current came from the plugin.
+				w.advance(2 * time.Minute)
+			}
+			w.fpp = &tc.reading
+			w.settle(40 * time.Second)
+			if v := w.verdict(); !v.Held {
+				t.Fatalf("40 seconds into the plugin's silence the hold has ended (%+v)", v)
+			}
+			w.settle(3 * time.Minute)
+			v := w.verdict()
+			if v.Held == tc.over {
+				t.Fatalf("after three more minutes: held %v, want held %v", v.Held, !tc.over)
+			}
+			if !tc.over {
+				if w.holdEndedAudits() != 0 {
+					t.Fatal("the stored state was cleared although the playlist is not over")
+				}
+				return
+			}
+			if v.Reported || w.listedPlayerState() != nil || w.holdEndedAudits() != 1 {
+				t.Fatalf("after the hold ended: reported %v, listed %+v, %d automatic clears; want the state cleared once", v.Reported, w.listedPlayerState(), w.holdEndedAudits())
+			}
+			// The next evening the same playlist plays and the plugin is
+			// still gone: nothing is held.
+			w.advance(20 * time.Hour)
+			w.fpp = &handbackFPPReading{"fpp-rest", "playing", handbackPlaylistName}
+			w.settle(2 * time.Minute)
+			if v := w.verdict(); v.Held || w.holdEndedAudits() != 1 {
+				t.Fatalf("the next evening: held %v with %d automatic clears, want no hold and no second clear", v.Held, w.holdEndedAudits())
+			}
+			w.wantStarts("cue-1 by coordinator", "cue-2 by plugin")
+		})
+	}
+}
+
+// One reading that says idle and is then never refreshed is not enough.
+func TestHandbackAStaleReadingDoesNotEndAHold(t *testing.T) {
+	w := fallbackThenPluginGone(t)
+	w.fpp = nil
+	w.advance(time.Minute)
+	w.collectFPP(handbackFPPReading{"fpp-rest", "idle", ""})
+	// The collector reads nothing more; that one row goes stale.
+	w.advance(5 * time.Minute)
+	w.settle(2 * time.Minute)
+	if v := w.verdict(); !v.Held || w.holdEndedAudits() != 0 {
+		t.Fatalf("on one stale reading: held %v, %d automatic clears; want still held", v.Held, w.holdEndedAudits())
+	}
+}
+
+// The reviewer's restart case as a scenario. The coordinator is down ten
+// minutes; FPP's schedule moved on to another playlist and the plugin is
+// running that one. The coordinator's first poll reads the other playlist
+// before the plugin's first report of this run.
+func TestHandbackARestartDoesNotEndAHoldOnAnotherPlaylistBeforeThePluginReports(t *testing.T) {
+	w := newHandbackWorld(t)
+	w.fpp = &handbackFPPReading{"fpp-rest", "playing", handbackPlaylistName}
+	w.settle(10 * time.Second)
+	w.plugin.startPlaylist()
+	w.playEntry(0)
+	w.reachable = false
+	w.settle(20 * time.Second)
+	w.playEntry(1)
+	w.reachable = true
+	w.settle(10 * time.Second)
+
+	w.stopCoordinator()
+	w.fpp = nil
+	w.settle(20 * time.Second)
+	w.plugin.stopPlaylist()
+	w.plugin.startPlaylist()
+	w.plugin.playing = "Second Show"
+	w.plugin.entry(0)
+	if w.plugin.state != fallbackhold.StateFallback {
+		t.Fatalf("the plugin is in %s, want fallback under the second playlist", w.plugin.state)
+	}
+	w.advance(10 * time.Minute)
+
+	w.startCoordinator()
+	w.pluginGone = true // its probe has not come round yet
+	w.fpp = &handbackFPPReading{"fpp-rest", "playing", "Second Show"}
+	for i := 0; i < 2; i++ {
+		w.settle(5 * time.Second)
+		if v := w.verdict(); !v.Held || v.Reason != fallbackhold.ReasonCoordinatorStarting {
+			t.Fatalf("%d seconds after the restart: held %v reason %q, want held while starting", (i+1)*5, v.Held, v.Reason)
+		}
+	}
+	w.pluginGone = false
+	w.settle(2 * time.Minute)
+	v := w.verdict()
+	if !v.Held || v.Reason != fallbackhold.ReasonExecutor || v.Record.PlaylistName != "Second Show" || w.holdEndedAudits() != 0 {
+		t.Fatalf("after the plugin reported: %+v with %d automatic clears, want held under the second playlist and never cleared", v, w.holdEndedAudits())
+	}
+}
+
+// The link comes back with the coordinator up all along, and the
+// collector's poll of the player lands before the plugin's report.
+func TestHandbackWhenTheLinkReturnsTheCollectorsPollDoesNotBeatThePluginsReport(t *testing.T) {
+	w := newHandbackWorld(t)
+	w.fpp = &handbackFPPReading{"fpp-rest", "playing", handbackPlaylistName}
+	w.settle(10 * time.Second)
+	w.plugin.startPlaylist()
+	w.playEntry(0)
+	w.reachable = false
+	w.settle(20 * time.Second)
+	w.playEntry(1)
+	w.reachable = true
+	w.settle(10 * time.Second)
+
+	// The whole link goes: no report arrives and the collector reads
+	// nothing. FPP moves on and the plugin takes the next playlist.
+	w.reachable = false
+	w.fpp = nil
+	w.settle(20 * time.Second)
+	w.plugin.stopPlaylist()
+	w.plugin.startPlaylist()
+	w.plugin.playing = "Second Show"
+	w.plugin.entry(0)
+	w.settle(10 * time.Minute)
+	if v := w.verdict(); !v.Held {
+		t.Fatal("with no reading of the player at all the hold ended")
+	}
+
+	// The link returns. The collector polls at once; the plugin's probe
+	// comes round ten seconds later.
+	w.reachable = true
+	w.pluginGone = true
+	w.fpp = &handbackFPPReading{"fpp-rest", "playing", "Second Show"}
+	w.settle(10 * time.Second)
+	if v := w.verdict(); !v.Held || w.holdEndedAudits() != 0 {
+		t.Fatalf("after the collector's poll and before the plugin's report: held %v, %d automatic clears; want held", v.Held, w.holdEndedAudits())
+	}
+	w.pluginGone = false
+	w.settle(2 * time.Minute)
+	if v := w.verdict(); !v.Held || v.Record.PlaylistName != "Second Show" || w.holdEndedAudits() != 0 {
+		t.Fatalf("after the plugin reported: %+v, want held under the second playlist and never cleared", v)
+	}
 }
 
 // A plugin that restarts mid-playlist resumes fallback from its own file

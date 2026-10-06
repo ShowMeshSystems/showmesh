@@ -1344,6 +1344,7 @@ func (h *handlers) nightFadeOutNightCommand(ctx context.Context, now time.Time, 
 		})
 	}
 
+	heldForFallback := h.nightSessionPlayerHeld(ctx, now, current)
 	_, changed := applyNightShutdownEffect(now, current, "fade-out", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if changed {
@@ -1378,7 +1379,7 @@ func (h *handlers) nightFadeOutNightCommand(ctx context.Context, now time.Time, 
 	// concurrency test already guards: fade-out-night must never be lost
 	// to a race with another command.
 	return h.nightRunExempt(ctx, now, nightCommandFadeOutNight, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-		return h.nightFadeOutNightApply(cur, now, overrideAuditParams)
+		return h.nightFadeOutNightApply(nightDropUnlaunchedShowForHold(cur, heldForFallback), now, overrideAuditParams)
 	})
 }
 
@@ -1436,6 +1437,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 		})
 	}
 
+	heldForFallback := h.nightSessionPlayerHeld(ctx, now, current)
 	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if shutdownChanged {
@@ -1462,7 +1464,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	// nightPowerDownPresentationApply already recomputes fresh from
 	// whatever that state actually is.
 	return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, overrideAuditParams, nightShutdownOrdinary)
+		return h.nightPowerDownPresentationApply(ctx, tx, nightDropUnlaunchedShowForHold(cur, heldForFallback), now, overrideAuditParams, nightShutdownOrdinary)
 	})
 }
 

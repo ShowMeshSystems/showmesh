@@ -1032,6 +1032,10 @@ func Run() int {
 	// adapter is present. The reader remains read-only and is shared by the
 	// REST handler and the stream hub through api.Dependencies.
 	apiDeps.CurrentRuns = api.NewCurrentRunsReader(apiDeps)
+	// A hold may end without its plugin only on the coordinator's own
+	// reading of the player, and that end is audited.
+	fallbackHolds.SetPlayerReader(api.NewFallbackPlayerReader(apiDeps.Observations))
+	fallbackHolds.SetAudit(identitySvc)
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
 	// be) because Step 9's macro executor needs the IDENTICAL Dependencies
