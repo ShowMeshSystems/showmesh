@@ -1802,47 +1802,47 @@ Cue the plugin already started. So the plugin saves its state and decides
 after a restart from what FPP then does.
 
 **What is saved, and where.** Before it sends the first activation of an
-entry occurrence, the plugin writes one file, atomically: a `version` member,
-its state, the playlist it entered under, the time it entered, the cutoff of
-the copy it entered with, and that occurrence's entry key and playlist pass
-counter. The file sits beside the pairing token, with the same file
-permissions. The plugin rewrites it on every state change and removes or
-resets it on hand-back. A file that is missing or cannot be read means
-`normal`. A file whose `version` the plugin does not know means `normal` with
-a hand-back fetch owed: the plugin does step 3 of the hand-back, the fetch and
-the acknowledgement, as soon as a probe succeeds.
+entry occurrence, the plugin writes one file, atomically and one writer at a
+time. The file carries a file version, the state, the playlist the plugin
+entered under, the time the state was entered, the package id, revision, and
+expiry of the program copy it was entered with, and that occurrence's entry
+key, playlist pass counter, and execution ids. The file sits beside the
+pairing token, with the same file permissions. The plugin rewrites it on
+every state change and removes it on hand-back. A file that is missing or
+cannot be read means `normal`. A file with another version is set aside and
+never resumed: the plugin starts in `normal` with the hand-back steps owed.
 
 **Undecided.** A plugin that starts with a saved `fallback` or `resting` state
-whose cutoff has not passed is undecided. FPP constructs its plugins before it
-starts any playlist, so the plugin cannot decide when it is constructed. While
-undecided the plugin:
+whose program expiry has not passed is undecided. FPP loads its plugins before
+it starts any playlist, so the plugin cannot decide at start. For everything
+the coordinator sees, an undecided plugin is in the saved state. It:
 
 - posts no observation;
-- reports the saved state and the saved playlist name (§5.15), once its first
-  probe has succeeded, so the coordinator keeps holding the player; and
+- reports the saved state and the saved playlist (§5.15) after its first
+  successful probe, so the coordinator keeps holding the player;
+- probes at least every 10 seconds (§5.15); and
 - does not fetch a program, acknowledge, or hand back.
 
-A saved state whose cutoff has passed is not undecided: the plugin starts in
-`normal` and does the hand-back steps.
+When the saved program expiry has passed, the plugin is not undecided: it
+starts in `normal` and does the hand-back steps.
 
 **The decision comes from FPP.**
 
-- The first playlist or entry callback that names the saved playlist resumes
-  the saved state. An entry whose key and pass counter are the ones the file
-  records gets no Cue: it is the occurrence the plugin already handled. After
-  a restart that interrupted entry is not retried.
-- A callback that names another playlist is the boundary: the plugin hands
-  back, with the four steps above.
-- FPP staying idle for a settle window after the plugin started is also the
-  boundary: the playlist stopped while the plugin was down. The plugin hands
-  back. The settle window is the plugin's own setting, long enough for FPP to
-  start what its schedule owes after a restart.
+- The first callback that names the saved playlist resumes the saved state.
+  The first entry callback for the recorded entry key gets no activation,
+  whatever its pass counter says, because FPP's counter starts over with
+  `fppd`. An entry the restart interrupted is not sent again.
+- A callback that names another playlist is the boundary.
+- A stop is the boundary.
+- 30 seconds with no callback naming a playlist is the boundary. The 30
+  seconds are a named hypothesis in the plugin, not a measurement.
 
-A callback that names the saved playlist cannot tell the same run of that
-playlist from a later run of it that started while the plugin was down, so a
-plugin can resume `fallback` past the boundary. What bounds that is the expiry
-of the program copy the saved state was entered with: past it the plugin
-starts nothing (§5.14).
+At the boundary the four hand-back steps follow.
+
+The playlist name cannot tell the run fallback was entered in from a later
+run of that playlist that started while the plugin was down, so a plugin can
+resume `fallback` past the boundary. The program's expiry bounds a resume:
+past it the plugin starts nothing (§5.14).
 
 The coordinator needs nothing more for this. An undecided plugin reports the
 saved state, and §5.16 holds the player on that report as on any other.
