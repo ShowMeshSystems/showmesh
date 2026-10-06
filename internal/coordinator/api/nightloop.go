@@ -139,6 +139,11 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightTickDuringStopHold(ctx, now, rec)
 		return
 	}
+	// ADR-048 decision 4. A shutdown that was asked for is never held,
+	// and a held player is never sent a start.
+	if h.nightDropShowForHeldPlayer(ctx, now, rec) || h.nightHeldForFallback(ctx, now, rec) {
+		return
+	}
 	switch rec.State {
 	case nightStatePreshow:
 		h.nightAdvancePreshow(ctx, now, rec)

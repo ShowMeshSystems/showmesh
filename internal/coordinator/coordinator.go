@@ -34,6 +34,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/enrollment"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -137,6 +138,9 @@ func Run() int {
 	// interval. Constructed here, beside signingMgr, because it is the
 	// only other thing this service needs besides st and identitySvc.
 	fallbackReconcile := fallbackreconcile.NewService(st, signingMgr, identitySvc, logger, fallbackreconcile.DefaultInterval)
+	// fallbackHolds keeps what each FPP plugin reports about running the
+	// show from its fallback program (ADR-048 decision 4).
+	fallbackHolds := fallbackhold.NewService(st, time.Now(), logger)
 
 	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
 	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE
@@ -804,6 +808,7 @@ func Run() int {
 		// AssetManifests/Config/Assets/Commands/Discovery already are.
 		FallbackPrograms:      st,
 		FallbackProgramNudger: fallbackReconcile,
+		FallbackHolds:         fallbackHolds,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -1027,6 +1032,10 @@ func Run() int {
 	// adapter is present. The reader remains read-only and is shared by the
 	// REST handler and the stream hub through api.Dependencies.
 	apiDeps.CurrentRuns = api.NewCurrentRunsReader(apiDeps)
+	// A hold may end without its plugin only on the coordinator's own
+	// reading of the player, and that end is audited.
+	fallbackHolds.SetPlayerReader(api.NewFallbackPlayerReader(apiDeps.Observations))
+	fallbackHolds.SetAudit(identitySvc)
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
 	// be) because Step 9's macro executor needs the IDENTICAL Dependencies
@@ -1097,6 +1106,7 @@ func Run() int {
 	// further down, alongside every other background reconcile loop.
 	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
 	apiDeps.CueActivationNudger = cueActivationLoop
+	fallbackHolds.SetNudge(cueActivationLoop.Nudge)
 	apiDeps.CueActivationPinStatus = cueActivationLoop
 
 	apiInst := api.New(apiDeps, apiOpts)
@@ -1347,6 +1357,9 @@ func Run() int {
 	spawnBackground(func() {
 		fallbackReconcile.Run(ctx)
 	})
+	spawnBackground(func() {
+		fallbackHolds.Run(ctx)
+	})
 	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
 	// persistent" unclaimed-bootstrap signal's other half — the log side,
 	// alongside SessionResponse.bootstrapRequired's UI-banner side (see
@@ -1469,6 +1482,9 @@ func Run() int {
 		runWeatherDelay(ctx, st, weatherDelayState, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
 	})
 
+	// The loops above are running and the listener starts now, so this is
+	// when a plugin can first reach this run of the coordinator.
+	fallbackHolds.MarkStarted(time.Now())
 	serveErrCh := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", "addr", cfg.HTTPAddr)

@@ -112,6 +112,8 @@ type FallbackProgramResponse struct {
 	AcknowledgedStatus  string  `json:"acknowledgedStatus"`
 	AcknowledgedPackage *string `json:"acknowledgedPackageId,omitempty"`
 	AcknowledgedAt      *string `json:"acknowledgedAt,omitempty"`
+
+	PlayerState *FallbackPlayerState `json:"playerState,omitempty"`
 }
 
 // The members of FallbackProgramResponse.AcknowledgedStatus.
@@ -143,12 +145,23 @@ type FallbackProgramListEntry struct {
 	Generation      int64  `json:"generation"`
 	ExpiresAt       string `json:"expiresAt"`
 	CompiledAt      string `json:"compiledAt"`
+
+	PlayerState *FallbackPlayerState `json:"playerState,omitempty"`
 }
 
 // FallbackProgramListResponse is GET /fallback-programs's body.
 type FallbackProgramListResponse struct {
 	ServerTime string                     `json:"serverTime"`
 	Programs   []FallbackProgramListEntry `json:"programs"`
+	// PlayerStatesWithoutProgram is every stored plugin report for an FPP
+	// instance that has no published program, so none goes unlisted.
+	PlayerStatesWithoutProgram []FallbackPlayerStateEntry `json:"playerStatesWithoutProgram,omitempty"`
+}
+
+// FallbackPlayerStateEntry is one FPP instance's reported state.
+type FallbackPlayerStateEntry struct {
+	FPPInstanceUUID string              `json:"fppInstanceUuid"`
+	PlayerState     FallbackPlayerState `json:"playerState"`
 }
 
 // FallbackProgramAcknowledgeRequest is POST
@@ -197,4 +210,49 @@ type FallbackExecutorKeyResponse struct {
 	PublicKey       string `json:"publicKey"`
 	RegisteredAt    string `json:"registeredAt"`
 	Changed         bool   `json:"changed"`
+}
+
+// FallbackPlayerState is what an FPP player's plugin last reported about
+// running the show from its fallback program, and what the coordinator
+// does about it. Absent when the plugin has never reported.
+type FallbackPlayerState struct {
+	// State is "normal", "fallback" or "resting".
+	State           string `json:"state"`
+	Since           string `json:"since"`
+	PlaylistName    string `json:"playlistName,omitempty"`
+	PackageID       string `json:"packageId,omitempty"`
+	PackageRevision string `json:"packageRevision,omitempty"`
+	CutoffAt        string `json:"cutoffAt,omitempty"`
+	ReportedAt      string `json:"reportedAt"`
+	PluginReporting bool   `json:"pluginReporting"`
+	// Held is true while the coordinator starts no Cues for this player.
+	Held       bool   `json:"held"`
+	HoldReason string `json:"holdReason,omitempty"`
+	// AcknowledgementWaitSeconds is set only while HoldReason is
+	// "waiting-for-acknowledgement".
+	AcknowledgementWaitSeconds *int64 `json:"acknowledgementWaitSeconds,omitempty"`
+	Message                    string `json:"message,omitempty"`
+}
+
+// FallbackStateReportRequest is PUT
+// /fallback-programs/{fppInstanceId}/fallback-state's request body.
+type FallbackStateReportRequest struct {
+	SchemaVersion   int    `json:"schemaVersion"`
+	BootID          string `json:"bootId"`
+	Sequence        int64  `json:"sequence"`
+	State           string `json:"state"`
+	Since           string `json:"since"`
+	PlaylistName    string `json:"playlistName,omitempty"`
+	PackageID       string `json:"packageId,omitempty"`
+	PackageRevision string `json:"packageRevision,omitempty"`
+	CutoffAt        string `json:"cutoffAt,omitempty"`
+}
+
+// FallbackStateReportResponse is that route's response body. Recorded is
+// false when an equal or newer report from the same plugin start was kept.
+type FallbackStateReportResponse struct {
+	ServerTime      string `json:"serverTime"`
+	FPPInstanceUUID string `json:"fppInstanceUuid"`
+	Recorded        bool   `json:"recorded"`
+	State           string `json:"state"`
 }

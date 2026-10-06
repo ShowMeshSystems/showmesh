@@ -3539,6 +3539,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fallback-programs/{fppInstanceId}/fallback-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * A paired FPP plugin reports whether it is running the show from its fallback program (ADR-048, Track J's J5)
+         * @description Behind `fpp:fallback`, and only for the plugin paired as this FPP instance. The plugin reports `normal`, `fallback` or `resting` on start, on every change, and every 10 seconds while it can reach the coordinator. While the latest report says `fallback` or `resting` the coordinator starts no Cues for this player and does not advance a night session that uses it. A member this coordinator does not know is ignored. A report with the stored `bootId` and an equal or lower `sequence` is answered `200` with `recorded` false. The wire is FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 5.15.
+         */
+        put: operations["putFallbackState"];
+        post?: never;
+        /**
+         * Clear what the coordinator stored about one FPP player's fallback state
+         * @description Behind `fpp:command`. An operator's way out when the coordinator keeps holding a player that its plugin will not release, for example a plugin that handed back and never confirmed its current program. Idempotent and audited. A plugin that is still reporting stores its state again with its next report, so this does not take a show away from a plugin that is running it.
+         */
+        delete: operations["deleteFallbackState"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7509,6 +7533,7 @@ export interface components {
             stopHold?: components["schemas"]["NightStopHold"];
             degraded: boolean;
             degradedReason?: string;
+            fallbackHold?: components["schemas"]["NightFallbackHold"];
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
             attributionDegraded: boolean;
             authorization: components["schemas"]["NightAuthorization"];
@@ -8034,6 +8059,7 @@ export interface components {
             acknowledgedPackageId?: string;
             /** Format: date-time */
             acknowledgedAt?: string;
+            playerState?: components["schemas"]["FallbackPlayerState"];
         };
         /** @description One row of GET /fallback-programs - metadata only, never the signed payload. */
         FallbackProgramListEntry: {
@@ -8046,12 +8072,30 @@ export interface components {
             expiresAt: string;
             /** Format: date-time */
             compiledAt: string;
+            playerState?: components["schemas"]["FallbackPlayerState"];
         };
         /** @description The body of GET /fallback-programs. */
         FallbackProgramListResponse: {
             /** Format: date-time */
             serverTime: string;
             programs: components["schemas"]["FallbackProgramListEntry"][];
+            /** @description Every stored plugin report for an FPP instance that has no published program, for example a player that was replaced. Absent when there is none. */
+            playerStatesWithoutProgram?: components["schemas"]["FallbackPlayerStateEntry"][];
+        };
+        /** @description One FPP instance's reported fallback state. */
+        FallbackPlayerStateEntry: {
+            fppInstanceUuid: string;
+            playerState: components["schemas"]["FallbackPlayerState"];
+        };
+        /** @description Present on the current night session while it does not advance because an FPP player it uses is held for its fallback program. A shutdown that was asked for is never held. */
+        NightFallbackHold: {
+            /** @description The configured id of the held FPP player. */
+            fppInstanceId: string;
+            fppInstanceUuid: string;
+            /** @enum {string} */
+            reason: "running-from-fallback" | "waiting-for-acknowledgement" | "coordinator-starting";
+            /** @description One or two sentences for an operator, saying why the night waits and what ends the wait. */
+            message: string;
         };
         /** @description The body of POST /fallback-programs/{fppInstanceId}/acknowledge (ADR-048 decision 1). age is not a field: it is derived from installedAt at read time. */
         FallbackProgramAcknowledgeRequest: {
@@ -8089,6 +8133,74 @@ export interface components {
             fppInstanceUuid: string;
             /** Format: date-time */
             acknowledgedAt: string;
+        };
+        /** @description What this FPP player's plugin last reported about running the show from its fallback program, and what the coordinator does about it. Absent when the plugin has never reported. playlistName, packageId, packageRevision and cutoffAt are present only while state is "fallback" or "resting". */
+        FallbackPlayerState: {
+            /**
+             * @description "fallback" while the plugin starts the show's Cues itself, "resting" once its program reached its end time and it starts nothing more, "normal" otherwise.
+             * @enum {string}
+             */
+            state: "normal" | "fallback" | "resting";
+            /**
+             * Format: date-time
+             * @description When the plugin entered this state, on the plugin's clock.
+             */
+            since: string;
+            /** @description The playlist that was playing when the plugin entered fallback. */
+            playlistName?: string;
+            packageId?: string;
+            packageRevision?: string;
+            /** @description When the plugin's program ends, as the plugin reported it. No new Cue starts from the plugin after this time. */
+            cutoffAt?: string;
+            /**
+             * Format: date-time
+             * @description When the latest report arrived.
+             */
+            reportedAt: string;
+            /** @description False when a plugin that reported before has sent no report for more than 45 seconds. */
+            pluginReporting: boolean;
+            /** @description True while the coordinator starts no Cues for this player and does not advance a night session that uses it. */
+            held: boolean;
+            /**
+             * @description Present only while held is true.
+             * @enum {string}
+             */
+            holdReason?: "running-from-fallback" | "waiting-for-acknowledgement" | "coordinator-starting";
+            /** @description Present only while holdReason is "waiting-for-acknowledgement": how long the coordinator has waited for this player to confirm its current program after handing the show back. */
+            acknowledgementWaitSeconds?: number;
+            /** @description One or two sentences for an operator. Absent when there is nothing to say. */
+            message?: string;
+        };
+        /** @description The request body of PUT /fallback-programs/{fppInstanceId}/fallback-state (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 5.15). playlistName, packageId, packageRevision and cutoffAt are required when state is "fallback" or "resting" and must be absent when it is "normal". A member not listed here is ignored. */
+        FallbackStateReportRequest: {
+            /** @enum {integer} */
+            schemaVersion: 1;
+            /** @description A UUID in its 36 character lowercase form that the plugin creates each time it starts. */
+            bootId: string;
+            /** @description Greater than in every earlier report with this bootId. */
+            sequence: number;
+            /** @enum {string} */
+            state: "normal" | "fallback" | "resting";
+            /** Format: date-time */
+            since: string;
+            playlistName?: string;
+            packageId?: string;
+            packageRevision?: string;
+            /** Format: date-time */
+            cutoffAt?: string;
+        };
+        /** @description The response body of PUT /fallback-programs/{fppInstanceId}/fallback-state. */
+        FallbackStateReportResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            fppInstanceUuid: string;
+            /** @description False when an equal or newer report from the same plugin start was already stored and kept. */
+            recorded: boolean;
+            /**
+             * @description The state the coordinator now holds for this player.
+             * @enum {string}
+             */
+            state: "normal" | "fallback" | "resting";
         };
     };
     responses: {
@@ -15312,6 +15424,66 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFallbackState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FallbackStateReportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackStateReportResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteFallbackState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No fallback state is stored for this FPP player. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

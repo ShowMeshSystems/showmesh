@@ -50,6 +50,11 @@ const fppRunStatusUnavailable = "unavailable"
 // after a deploy succeeds (h.applyShowmeshAudioPlaylistIfAny,
 // h.establishRenderAssignments, both in cuecatalogdeploy.go).
 func (h *handlers) AutoDeployCueCatalog(ctx context.Context, now time.Time, nodeID string) {
+	// A new catalog would make a node refuse the activations a plugin
+	// sends it from its fallback program (ADR-048 decision 4).
+	if h.autoDeployHeldForFallback(ctx, now) {
+		return
+	}
 	hold := h.cueCatalogAutoDeployHold(ctx, now, nodeID)
 	if hold.Hold {
 		h.logDebug("cue catalog auto-deploy: held", "node", nodeID, "evidenceUncertain", hold.EvidenceUncertain, "reason", hold.Reason)

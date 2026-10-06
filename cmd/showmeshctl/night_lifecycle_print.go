@@ -52,6 +52,10 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		}
 		_, _ = fmt.Fprintf(w, "\nSTOPPED:     %s Held since %s%s. Run \"showmeshctl night resume-show\" to start the show playlist from its first song.\n", h.Reason, h.At, by)
 	}
+	if f := s.FallbackHold; f != nil {
+		_, _ = fmt.Fprintf(w, "\nWAITING:     The night is not advancing because FPP player %s is held. %s\n", f.FPPInstanceID, f.Message)
+		_, _ = fmt.Fprintf(w, "             To take the player back: showmeshctl fallback clear --confirm %s\n", f.FPPInstanceUUID)
+	}
 	if s.Degraded {
 		_, _ = fmt.Fprintf(w, "\nDEGRADED:    %s\n", s.DegradedReason)
 	}

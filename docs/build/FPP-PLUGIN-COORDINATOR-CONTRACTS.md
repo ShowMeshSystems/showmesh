@@ -15,6 +15,17 @@
 > fallback activation only when it is signed by that key. §1 through §4 are
 > unchanged.
 
+> **2026-10-05 amendment, fallback cutoff and hand-back.** §5.12 through §5.17
+> are new. They fix the wire for [Track J](TRACK-J-fpp-fallback.md) step J5:
+> how long a program stays valid and how often the plugin refetches it, the
+> plugin's three states, what the cutoff does, the state report the plugin
+> sends the coordinator, and what the coordinator holds back while a plugin is
+> the executor. §5.5 and §5.6 are unchanged: no request shape and no signed
+> byte in them moves, and the signed program gains no member. Two routes are
+> new, both on the coordinator: `PUT` and `DELETE` on
+> `/api/v1/fallback-programs/{fppInstanceId}/fallback-state`. §5.12 and §5.13
+> change three things plugin step J4 built, and say which.
+
 > **2026-09-29 amendment, brightness state read.** §2 gains §2.6, the
 > plugin's read-only brightness state route, which the coordinator's
 > `fppbrightness` collector polls and which no earlier revision of this file
@@ -1211,15 +1222,15 @@ before the plugin ever sees it.
 
 ## 5. Fallback activation
 
-**Status: coordinator BUILT, node BUILT, plugin NOT BUILT, NOT PROVEN ON
-HARDWARE.** This section is the frozen shape for
+**Status: §5.1 through §5.11 coordinator BUILT, node BUILT, plugin NOT BUILT,
+NOT PROVEN ON HARDWARE. §5.12 through §5.17 coordinator BUILT, plugin NOT
+BUILT, NOT PROVEN ON HARDWARE.** This section is the frozen shape for
 [Track J](TRACK-J-fpp-fallback.md) step J3 and the wire the plugin's step J4
-builds against. The evidence on the coordinator and node side is unit tests,
-the shared fixtures in §5.10, and an integration test against a real agent
-process and broker in which the test itself signs as the coordinator and as
-the plugin. Nothing here has run against a real FPP host or a real node.
+builds against. §5.12 through §5.17 are the shape for step J5, with the
+owner's rulings of 2026-10-05 written in. They ask nothing new of a node.
 
-Coordinator anchor: `handlePutFallbackExecutorKey`. Node anchor:
+Coordinator anchors: `handlePutFallbackExecutorKey`, and for §5.15 and §5.16
+`handlePutFallbackState` and the `fallbackhold` package. Node anchor:
 `handleFallbackActivation`. The plugin's half is that repository's own
 assertion and is not verified from here.
 
@@ -1646,9 +1657,498 @@ valid request's canonical bytes has a defect.
 
 ### 5.11 What this section does not do
 
-- It does not decide when the plugin declares the coordinator lost, the cutoff,
-  the rest or hold behavior, or the hand-back at the next scheduled-show
-  boundary. Those are later Track J steps.
+- §5.1 through §5.10 do not decide the cutoff, the rest or hold behavior, or
+  the hand-back at the next scheduled-show boundary. §5.12 through §5.17 do.
+- It does not decide when the plugin declares the coordinator lost. That
+  detector is the plugin's own, with its own settings.
 - It does not let a node fetch a program from the coordinator, and it gives the
   coordinator no way to push one.
 - It adds no route to the xLights compatibility surface and changes none.
+
+### 5.12 Program validity and the plugin's refetch
+
+A published program is valid for 24 hours from `compiledAt`. The length is a
+named constant on the coordinator and a hypothesis, not a measurement. The
+coordinator publishes an unchanged program again, under the same `packageId`
+and `revision` with a later `compiledAt` and `expiresAt`, once less than 12
+hours of the stored copy's validity remain. It never does so during an
+outage, because it is not running. A copy a plugin holds when the coordinator
+is lost therefore has at least 12 hours left, less the refetch interval below
+and the coordinator's own two minutes between passes.
+
+Validity is not what carries a change to a player. The plugin's refetch
+interval is fixed here and does not depend on `expiresAt`:
+
+- While the plugin is in `normal` (§5.13) and its last health probe succeeded,
+  it sends `GET /api/v1/fallback-programs/{fppInstanceId}` every 60 seconds.
+- When the fetched `packageId`, `revision`, and `expiresAt` all equal the
+  installed copy's, the plugin does nothing more: no install, no
+  acknowledgement, no delivery to a node. The one exception is the fetch at
+  a hand-back (§5.13), which always acknowledges.
+- Otherwise it verifies, installs, acknowledges, and hands the copy to every
+  node address the program names, as §5.5 already requires.
+- It never fetches while loss is confirmed, and never in `fallback` or
+  `resting`.
+
+**This replaces what plugin step J4 built**, which refetches after one third
+of the program's own validity. Under a 24 hour validity that rule would leave
+a changed program unfetched for up to 8 hours.
+
+What a longer validity changes: a player cut off from the coordinator keeps
+using the copy it holds for up to 24 hours instead of 15 minutes, and a node
+that was never handed a newer copy keeps accepting activations under the old
+one for as long. A node still refuses when its own held Cue catalog has moved
+on (`stale-generation`, `stale-catalog`, `cross-show`) and when it holds a
+newer copy (`program-not-current`). A replaced executor key stays acceptable
+to a node that holds only the older copy until that copy expires or is
+replaced. A node keeps handled execution ids for 24 hours after the copy
+expires (§5.8), so it now keeps them for up to 48 hours.
+
+### 5.13 The plugin's three states
+
+The plugin is always in exactly one of three states. The words are the wire
+values §5.15 carries.
+
+| State | The plugin |
+|---|---|
+| `normal` | Posts playlist-entry observations (§1), keeps its key registered and its program current (§5.2, §5.12), and sends no activation |
+| `fallback` | Posts no observation and fetches no program. At each entry boundary it sends the activations the installed program maps for that entry (§5.6, §5.8) |
+| `resting` | Posts no observation, fetches no program, and sends nothing to any node |
+
+**An entry boundary** is FPP's `playing` callback for a new entry occurrence,
+as §1.8 defines an occurrence. A `query_next`, a callback for the occurrence
+already handled, and FPP resuming the same entry are not boundaries. This is
+what the program's `rules.fallbackBoundary` value `safe-playback-boundary`
+means: the plugin acts at an entry boundary and never inside an entry.
+
+**A usable program** is an installed copy that verified against the pinned
+coordinator key, is before its `expiresAt`, carries an `executorPublicKey`
+equal to the plugin's own public key, and whose `rules` object has exactly
+these four values:
+
+| Member | Value |
+|---|---|
+| `fallbackBoundary` | `safe-playback-boundary` |
+| `restHold` | `hold` |
+| `localShutdown` | `local-shutdown` |
+| `recoveryBoundary` | `next-scheduled-show-boundary` |
+
+A program with any other value in `rules` is not usable. The plugin does not
+guess what an unknown rule asks of it.
+
+**`normal` to `fallback`.** The plugin enters `fallback` at an entry boundary
+when all of these hold at that boundary:
+
+1. its detector has confirmed loss of the coordinator;
+2. it holds a usable program; and
+3. the program has an entry whose `entryKey` is the playing entry's key.
+
+It then records the name of the playing playlist as the playlist it entered
+under, and sends that entry's activations. Without all three it stays in
+`normal` and sends nothing to a node. A plugin with no usable program, or
+playing a playlist the program does not map, never enters `fallback`, so the
+coordinator takes that player up again as soon as it is reachable, exactly as
+it did before fallback existed.
+
+**This narrows plugin step J4** wherever that step enters fallback on an
+entry the program does not map, or without a usable program.
+
+**Inside `fallback`.** At every later entry boundary of the playlist it
+entered under, the plugin looks the entry key up in the installed program. A
+mapped entry gets its activations. An unmapped entry gets nothing, and the
+plugin records why. The plugin stays in `fallback` when its health probe
+succeeds again. It does not fetch, install, or hand out a program, and it
+keeps using the copy it entered with.
+
+**`fallback` to `resting`** is the cutoff (§5.14).
+
+**`fallback` or `resting` to `normal`** is the hand-back. The boundary is the
+moment FPP stops playing the playlist the plugin entered under. The plugin
+sees it as FPP's playlist `stop` callback for that playlist, or as any
+callback that names a different playlist. A playlist that repeats is still
+the same playlist: a new pass is a new occurrence of its entries and not a
+boundary. This is what the program's `rules.recoveryBoundary` value
+`next-scheduled-show-boundary` means.
+
+At the boundary the plugin does these in order:
+
+1. It goes to `normal`.
+2. If its last health probe succeeded, it sends the state report (§5.15) and
+   waits for the answer, for at most 5 seconds.
+3. If its last health probe succeeded, it fetches its program at once
+   (§5.12) instead of waiting out the interval, and sends the acknowledgement
+   for the copy it then holds, whether or not the fetch changed it. The
+   coordinator keeps holding the player until that acknowledgement names the
+   published copy (§5.16), so this step is what ends the hold.
+4. It posts observations again, starting with the next callback FPP delivers.
+
+It never posts an observation for an entry that began while it was in
+`fallback` or `resting`, and it never sends later an observation it skipped or
+could not deliver. A plugin in `normal` whose last health probe failed, and
+whose detector has not confirmed loss, may post an observation before its next
+successful probe, exactly as §1 has it do. The coordinator acts on such an
+observation as soon as it is not holding the player (§5.16). When loss is still confirmed at the boundary, the plugin is
+in `normal` with a lost coordinator, and the three conditions above decide the
+next entry boundary on their own: a second outage, or one that outlasts a
+playlist, enters `fallback` again with the installed copy for as long as that
+copy is usable. When the probe later succeeds with the plugin in `normal`, it
+sends the report first (§5.15 rule 4) and then does step 3.
+
+**A plugin restart is not a hand-back.** **This replaces what plugin step J4
+built**, which leaves fallback when the plugin restarts. If it did, a plugin
+that restarts in the middle of a playlist would come back in `normal`, post an
+observation for the entry already playing, and the coordinator would start a
+Cue the plugin already started. So the plugin saves its state and decides
+after a restart from what FPP then does.
+
+**What is saved, and where.** Before it sends the first activation of an
+entry occurrence, the plugin writes one file, atomically and one writer at a
+time. The file carries a file version, the state, the playlist the plugin
+entered under, the time the state was entered, the package id, revision, and
+expiry of the program copy it was entered with, and that occurrence's entry
+key, playlist pass counter, and execution ids. The file sits beside the
+pairing token, with the same file permissions. The plugin rewrites it on
+every state change and removes it on hand-back. A file that is missing or
+cannot be read means `normal`. A file with another version is set aside and
+never resumed: the plugin starts in `normal` with the hand-back steps owed.
+
+**Undecided.** A plugin that starts with a saved `fallback` or `resting` state
+whose program expiry has not passed is undecided. FPP loads its plugins before
+it starts any playlist, so the plugin cannot decide at start. For everything
+the coordinator sees, an undecided plugin is in the saved state. It:
+
+- posts no observation;
+- reports the saved state and the saved playlist (§5.15) after its first
+  successful probe, so the coordinator keeps holding the player;
+- probes at least every 10 seconds (§5.15); and
+- does not fetch a program, acknowledge, or hand back.
+
+When the saved program expiry has passed, the plugin is not undecided: it
+starts in `normal` and does the hand-back steps.
+
+**The decision comes from FPP.**
+
+- The first callback that names the saved playlist resumes the saved state.
+  If the callback that resumes is for the recorded entry key, that entry gets
+  no activation, whatever its pass counter says, because FPP's counter starts
+  over with `fppd`. An entry the restart interrupted is not sent again.
+- A callback that names another playlist is the boundary.
+- A stop is the boundary.
+- 30 seconds with no callback naming a playlist is the boundary. The 30
+  seconds are a named hypothesis in the plugin, not a measurement, and are
+  counted on a monotonic clock.
+
+At the boundary the four hand-back steps follow.
+
+The playlist name cannot tell the run fallback was entered in from a later
+run of that playlist that started while the plugin was down, so a plugin can
+resume `fallback` past the boundary. The program's expiry bounds a resume:
+past it the plugin starts nothing (§5.14).
+
+The coordinator needs nothing more for this. An undecided plugin reports the
+saved state, and §5.16 holds the player on that report as on any other.
+
+### 5.14 The cutoff, the hold, and local shutdown
+
+ADR-048 names a cutoff, a rest or hold, and a local shutdown without saying
+what each does. Per owner ruling (2026-10-05) they mean the following, which
+adds no behavior the ADR does not name and no new node behavior.
+
+**The cutoff is the `expiresAt` of the copy the plugin entered `fallback`
+with.** It is signed, the node enforces the same instant on its own (§5.6
+step 9), and the program needs no new member for it. The plugin checks it at
+every entry boundary and at least as often as it probes the coordinator.
+
+At the first check at or after the cutoff, a plugin in `fallback` goes to
+`resting`. From then until the hand-back:
+
+- **`restHold: hold`.** The plugin sends no activation and no program to any
+  node. It does not stop, black out, or silence anything. Every output a node
+  already started keeps running to the end of its own media.
+- **`localShutdown: local-shutdown`.** Stopping is left to what is local to
+  each device. FPP's own schedule ends the playlist. A node ends a Cue's
+  output when its media ends. The plugin sends FPP no command, and it has no
+  request that could stop a node, because the node ingress accepts an
+  activation and nothing else (§5.6).
+
+**Nothing is sent to a node after the cutoff.** That includes a retry of an
+activation already queued under §5.8 and a program hand-off under §5.5: at
+the cutoff the plugin drops both. A copy that has expired is never
+acknowledged as `verified`, and is never handed to a node.
+
+The plugin does not leave `resting` because a newer program exists or because
+the coordinator answers. Only the hand-back (§5.13) ends it.
+
+A node does nothing at the cutoff except refuse later activations under that
+copy with `program-expired`.
+
+### 5.15 The state report
+
+```
+PUT /api/v1/fallback-programs/{fppInstanceId}/fallback-state
+Authorization: Bearer <pairing token>
+Content-Type: application/json
+```
+
+`fppInstanceId` is the FPP instance UUID, as in §5.2.
+
+**Authorization** is §5.2's, word for word: the token must carry
+`fpp:fallback`, and the caller must be the plugin paired as the FPP player
+whose instance UUID is `fppInstanceId`. `401`, `403`, and `409` mean what
+they mean there. The body is not signed.
+
+**Body.** At most 4 KiB. A member the coordinator does not know is ignored,
+not refused, so a newer plugin keeps working against an older coordinator.
+
+| Member | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | integer, required | `1` |
+| `bootId` | string, required | A UUID in its 36 character lowercase form that the plugin creates each time it starts |
+| `sequence` | integer, required | At least 1, and greater than in every earlier report with this `bootId`. A retry of one report repeats its `sequence` and its body |
+| `state` | string, required | `normal`, `fallback`, or `resting` |
+| `since` | string, required | RFC 3339, the plugin's clock when it entered `state`. For a `normal` state that began at plugin start, the start time |
+| `playlistName` | string | The playlist the plugin entered under, as FPP's own status names it (`current_playlist.playlist`): the bare name, no directory and no `.json`. The coordinator compares it with its own reading of the player (§5.16). Required in `fallback` and `resting`, absent in `normal` |
+| `packageId` | string | `program.packageId` of the copy the plugin entered with. Required in `fallback` and `resting`, absent in `normal` |
+| `packageRevision` | string | `program.revision` of that copy. Required and absent likewise |
+| `cutoffAt` | string | `program.expiresAt` of that copy, copied as written. Required and absent likewise |
+
+**When the plugin sends it.** A report always carries the state at the moment
+it is sent. A report that fails is not queued and not replayed.
+
+1. On its own start, as soon as it holds a pairing token and its first health
+   probe has succeeded. It does not send one before any probe.
+2. On every state change, at once.
+3. Every 10 seconds, whatever its state, while its last health probe
+   succeeded.
+4. At once after any health probe that succeeds following one that failed.
+   The report is then the first request the plugin sends the coordinator,
+   before a program fetch and before an observation.
+
+It sends no report while its last health probe failed.
+
+**The probe is bounded, because the coordinator relies on it.** While the
+plugin holds the coordinator as lost, in any state, and whenever the plugin is
+not in `normal` (in `fallback`, in `resting`, or undecided after a restart,
+§5.13), it probes at least every 10 seconds and never backs that probe off,
+however long that lasts. A
+coordinator that restarts holds a player for only 45 seconds while it waits
+for the first report (§5.16). A plugin in `fallback` that probed less often
+could miss that window, and the coordinator would then act on a show the
+plugin is running.
+
+**Responses.**
+
+| Status | When | Body |
+|---|---|---|
+| `200` | The report was read | See below |
+| `400` | The body is malformed or over 4 KiB, `schemaVersion` is not 1, a required member is missing or has the wrong type, `bootId` is not a lowercase UUID, `sequence` is below 1, `state` is not one of the three words, `since` or `cutoffAt` is not RFC 3339, a member required for the state is missing, or `normal` carries one of the four members it must not | Problem document, `invalid-parameter` |
+| `401`, `403`, `409` | As §5.2 | Problem document |
+
+The `200` body:
+
+| Member | Type | Meaning |
+|---|---|---|
+| `serverTime` | string | RFC 3339 |
+| `fppInstanceUuid` | string | The path value |
+| `recorded` | boolean | `false` when the coordinator already holds a report with this `bootId` and an equal or higher `sequence`, and kept that one |
+| `state` | string | The state the coordinator now holds for this player |
+
+**No answer changes the plugin's state.** The plugin never enters or leaves a
+state because of what this route returns, or because it returns nothing. A
+`404` means the coordinator is older than this contract; the plugin keeps
+reporting on its cadence and otherwise behaves as §5.13 says. The same holds
+for `403`, `409`, and any `5xx`: the plugin stays in the state it is in and
+keeps reporting. To the coordinator a plugin whose reports are all refused is
+silent, and what §5.16 says of a silent plugin then applies: a hold on a
+plugin in `fallback` or `resting` stands until the coordinator itself reads
+the playlist as over, and a wait for an acknowledgement ends after 45
+seconds.
+
+**An acknowledgement stays owed until it succeeds.** This is the program
+acknowledgement of §5.12 and of hand-back step 3, not the state report. One
+that got no success answer is sent again on the probe cadence, after each
+probe that succeeds, until the coordinator answers it with success. A
+timeout, a `408`, a `429`, and any `5xx` keep that retry going. An
+acknowledgement answered with any other `4xx` is not retried until the next
+pairing or the next newly installed copy, because sending the same body again
+would be refused again. The coordinator's hold after a hand-back waits for a
+success answer (§5.16).
+
+**What the coordinator keeps.** One report per FPP player, the latest, with
+the time it arrived. A report with a `bootId` it has not seen replaces the
+stored one. A report with the stored `bootId` replaces it only with a higher
+`sequence`. The coordinator writes one audit entry, action
+`fallback.player_state.report`, when the stored `state` changes, and none for
+a repeat of the same state.
+
+### 5.16 What the coordinator holds back
+
+This subsection states coordinator behavior so that a plugin author and a
+tester can predict it. It asks nothing more of the plugin.
+
+A player whose plugin has never reported is never **held**, so a plugin built
+before this contract is treated exactly as it is today. For a player whose
+plugin has reported, the latest report decides:
+
+| Latest report | The player is |
+|---|---|
+| `fallback` or `resting`, of any age | Held, until the plugin reports `normal` or the coordinator itself reads the playlist as over (below). A plugin in fallback that goes quiet is most likely cut off again and still running the show |
+| `normal`, after a `fallback` or `resting` report | Held until this player's program acknowledgement names the copy the coordinator has published for it, for as long as the plugin keeps reporting. Not held at all when nothing is published for it, when the acknowledgement already names that copy, or once the plugin has been silent for more than 45 seconds, counted as in point 1 below: a silent plugin cannot be waited on |
+| `normal`, at most 45 seconds old | Not held |
+| `normal`, older than 45 seconds | Not held. A dead or hung plugin must not stop a night from advancing. The coordinator raises a signal that the plugin has stopped reporting |
+| Any state, from before this run of the coordinator, and its loops and HTTP listener have been up for at most 45 seconds | Held until the first report of this run arrives, or the 45 seconds end. This row comes first: it applies to every stored report, whatever it says |
+
+The last row is what covers a coordinator that restarts while a plugin runs
+the show: the plugin's first report after its probe recovers says `fallback`,
+and the first row then applies. It depends on the probe bound in §5.15. The
+45 seconds count from when the coordinator can first be reached, not from
+when its process started.
+
+The second row is ADR-048 decision 4: the coordinator resumes normal Cue
+resolution only after its package acknowledgement is current. It is why
+§5.13 makes the plugin fetch and acknowledge at once at the hand-back, so
+this hold normally lasts seconds. The Cue catalog half of that sentence is
+enforced where it already was, on every activation, by the coordinator's own
+check and by the node. No hold waits for every node's catalog
+acknowledgement, because one offline node must not hold a whole show.
+
+**A hold ends without the plugin only when the coordinator is sure the show
+it protects is over.** All three of these must hold:
+
+1. The plugin has been silent for more than 45 seconds, counted from the
+   later of its latest report and the moment this run of the coordinator
+   could first be reached. The coordinator's own downtime is never the
+   plugin's silence.
+2. The coordinator's own current reading of the player says the playlist is
+   over. That reading is the `fpp.status` and `fpp.playlist.name` signals,
+   resolved exactly as the night loop resolves them, from readings taken after
+   the latest report, and never from the rows built from the plugin's own
+   posts. Over means one of two things only: the player is `idle`, or it is
+   `playing` and the playlist name differs from the reported `playlistName`
+   after a directory and a trailing `.json` are stripped from both. A player
+   that is `paused`, `stopping gracefully`, `stopping gracefully after loop`,
+   or `unknown`, a reading with no value, and a reading that is no longer
+   current are all not over.
+3. The reading has said over for more than 45 seconds without a break. When a
+   link comes back, the coordinator's poll of the player can land before the
+   plugin's report; a plugin that is alive reports well inside that time. Two
+   readings more than 15 seconds apart are not one standing reading: the count
+   starts again, so the rule does not depend on how often the coordinator
+   looks.
+
+The coordinator then clears the stored report, exactly as an operator's clear
+does (below), so the hold cannot come back when the player next plays a
+playlist of that name. It writes a warning to its log, one event of category
+`fallback.hold_ended_without_plugin`, and one audit entry, action
+`fallback.player_state.auto_clear`. A plugin that reports `fallback` again
+later is held again from that report. A plugin that is still reporting is
+never overruled this way. When a newer report arrives while the coordinator
+is ending a hold, nothing is cleared and the newer report decides.
+
+**The limit of this rule.** The coordinator cannot tell a dead plugin from one
+that can no longer reach it. If the plugin cannot reach the coordinator while
+the coordinator can still read the player, and FPP moves to another playlist,
+or sits idle for more than 45 seconds, the hold ends and the stored report is
+cleared although the plugin may still be running the show. What follows:
+
+- The plugin goes on as §5.13 says. It stays in `fallback`, or enters it
+  again under the next playlist, and keeps sending activations to the nodes.
+  Nothing tells it the coordinator has let go.
+- The coordinator treats the player as its own again. It starts no Cue
+  twice: it receives no observation from that plugin, and acts on nothing it
+  received before the clear. Its night loop does advance, so it can start or
+  replace a playlist on that player, and its automatic Cue catalog deploy can
+  hand the nodes a new catalog, after which they refuse the plugin's
+  activations.
+- When the plugin reaches the coordinator again, its first request is the
+  state report, and the player is held again from that report.
+
+This is accepted as built. A plugin cut off one way before its first
+`fallback` report is never held at all, so the design has this limit either
+way.
+
+**Two more things end any hold without the plugin's say.** A playlist-entry
+observation that arrives more than 45 seconds after the player's latest
+report comes from a plugin that does not report, a plugin replaced by an
+older one for example, and the player is not held until a report arrives
+again. A plugin that follows §5.13 never does this, because it reports before
+it observes. And an operator can clear what the coordinator stored:
+
+```
+DELETE /api/v1/fallback-programs/{fppInstanceId}/fallback-state
+Authorization: Bearer <an operator's token carrying fpp:command>
+```
+
+It answers `204` whether or not anything was stored, and writes one audit
+entry, action `fallback.player_state.clear`. It is the manual way out of a
+wait for an acknowledgement that never comes. It does not take a show away
+from a plugin that is running it: that plugin reports `fallback` again within
+10 seconds and is held again, and in between the coordinator acts on nothing
+the player observed before the clear. After a clear the player reads as one
+whose plugin has never reported, until the plugin's next report.
+
+While a player is held, the coordinator:
+
+- starts, stops, and clears no Cue from that player's playlist-entry
+  observations;
+- does not advance a night session that uses that player: it starts no
+  playlist on it, sends it no transition, and starts or stops no background
+  audio for that session; and
+- does not send any node a new Cue catalog on its own. For this one, only a
+  player that is configured now counts, under the instance UUID it has now.
+  A stored report for an instance no configured player has, a replaced
+  player's for example, holds nothing here.
+
+It still publishes fallback programs, records observations and node reports,
+answers every read, and carries out what a person or FPP's schedule asks for
+through the API: a command to a player or a node, an emergency stop, and a
+weather delay are never held. **A shutdown is never held.** Once
+`fade-out-night`, `power-down-presentation`, or `end-session` has been asked
+for, the session advances as if no player were held, including the wait for
+a live show to finish and the fade that follows it. The operator wins over
+the hold, with one limit: a held player is never sent a start. A session
+with a shutdown asked for, committed to a show it has not started, on a
+player that is held, fades out at once and drops that show. That holds
+whether the hold began before the shutdown was asked for or after it,
+including the 45 seconds after a coordinator start. A night command that starts
+something, `start-night` for example, is accepted and takes effect when the
+hold ends. `request-final-show` records the request and takes effect at the
+hand-back: it is not a shutdown and the session stays held.
+
+When a hold ends, the coordinator acts on that player's observations again,
+with one floor:
+
+- After a hand-back, it acts on nothing it received at or before the report
+  that ended the plugin's time as executor. What the player was doing before
+  the hand-back is not replayed. An observation that arrives after the
+  `normal` report and before the acknowledgement is acted on as soon as the
+  acknowledgement lands.
+- After the 45 second hold that follows a coordinator start, it acts on
+  nothing it received before this run of the coordinator, and on everything
+  it received in this run. A `normal` report that ends that hold ended no
+  time as executor, so an observation the plugin posted in this run before
+  its first report is acted on as soon as that report arrives.
+
+### 5.17 What an operator can read
+
+| Where | What |
+|---|---|
+| `GET /api/v1/fallback-programs` and `GET /api/v1/fallback-programs/{fppInstanceId}` | An added `playerState` object, absent when the plugin has never reported: `state`, `since`, `playlistName`, `packageId`, `packageRevision`, `cutoffAt`, `reportedAt`, `pluginReporting`, `held`, `holdReason` (`running-from-fallback`, `waiting-for-acknowledgement`, or `coordinator-starting`), `acknowledgementWaitSeconds`, and a one or two sentence `message` |
+| `GET /api/v1/fallback-programs` | An added `playerStatesWithoutProgram` array: every stored report for an FPP instance that has no published program, so none goes unlisted |
+| The current night session, `GET /api/v1/night/session` | An added `fallbackHold` object while the session does not advance because a player it uses is held: `fppInstanceId`, `fppInstanceUuid`, `reason`, and `message`. Absent once a shutdown has been asked for and while the session is fading out or stopped, because the session then advances regardless. Show Night renders it above the lifecycle commands |
+| `fallback_program.player_state` | The reported state. It goes stale 45 seconds after the last report |
+| `fallback_program.coordinator_holding` | Whether the coordinator is holding the player |
+| `fallback_program.plugin_reporting` | `false` when a plugin that reported before has been silent for more than 45 seconds |
+| `fallback_program.acknowledgement_wait_seconds` | How long the coordinator has waited for the acknowledgement after a `normal` report. `0` when it is not waiting |
+| `showmeshctl fallback list`, `show`, `clear` | The same fields as the listing, including a stored report with no program, and the clear route |
+| `showmeshctl night status` | The held player, the `message`, and the clear command to run |
+| The audit log | `fallback.player_state.report` for each change of reported state, `fallback.player_state.clear` for each operator clear, `fallback.player_state.auto_clear` for each hold the coordinator ended itself |
+| The event list and the coordinator's log | One event, category `fallback.hold_ended_without_plugin`, and one warning when a hold ends because the coordinator saw the playlist over. One line at information level when the night loop, or the automatic Cue catalog deploy, begins and ends a wait for a held player |
+
+For a held player whose plugin has stopped reporting, `message` says that the
+plugin has stopped reporting and that the operator can clear its fallback
+state, not that the player is running the show.
+
+The four signals are on the FPP player's fallback program, the resource
+`fallback_program.executor_key_present` (§5.3) is on, and are rewritten every
+5 seconds. Night readiness reads none of this.

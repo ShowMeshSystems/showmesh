@@ -184,6 +184,24 @@ describe('Show Night', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Cycle 3 of the night')
   })
 
+  it('says which held FPP player the night is waiting on, in the coordinator\'s own words', () => {
+    const message = 'This player is running the show from its fallback program. The coordinator starts no Cues for it until the playlist ends.'
+    renderScreen({
+      nightSession: session({
+        state: 'live',
+        fallbackHold: { fppInstanceId: 'fpp-main', fppInstanceUuid: 'u-1', reason: 'running-from-fallback', message },
+      }),
+    })
+    const notice = screen.getByRole('status')
+    expect(notice).toHaveTextContent('The night is not advancing: FPP player fpp-main is held.')
+    expect(notice).toHaveTextContent(message)
+  })
+
+  it('shows no hold notice when no player is held', () => {
+    renderScreen({ nightSession: session({ state: 'live' }) })
+    expect(screen.queryByText(/The night is not advancing/)).toBeNull()
+  })
+
   it('gives an armed step a settled state, not the never-collected one', () => {
     const steps = runOfShow(session({ cues: { state: 'recorded', reason: '', cues: [cue({})] } } as never))
     expect(steps[0]?.state).toBe('Armed')
