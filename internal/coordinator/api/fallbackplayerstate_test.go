@@ -389,56 +389,132 @@ func TestFallbackListingShowsAStoredStateThatHasNoProgram(t *testing.T) {
 	}
 }
 
-// Review item 2: an operator's shutdown always takes effect during a
-// hold, whether the plugin really runs the show or the hold lingers after
-// a plugin that went quiet.
+// nightHoldCommandAPI is the hold fixture behind the real HTTP routes, with
+// an operator's token.
+func nightHoldCommandAPI(t *testing.T) (*API, *handlers, *store.Store, *dynamicObservationLister, *fallbackhold.Service, string) {
+	t.Helper()
+	h, st, _, obs, holds, _ := nightFallbackHoldFixtureWithObservations(t)
+	api := New(h.deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+	operator := mustCreatePrincipal(t, h.deps.Identity, "operator-1", identity.RoleOperator)
+	return api, h, st, obs, holds, mustIssueToken(t, h.deps.Identity, operator.ID)
+}
+
+// An operator's shutdown always takes effect during a hold, whether the
+// plugin really runs the show or the hold lingers after a plugin that went
+// quiet. The command goes through the real route while the player is
+// still playing; the show is then allowed to finish, and the fade follows.
 func TestNightShutdownCommandsTakeEffectOnAHeldLiveSession(t *testing.T) {
 	holdsAt := map[string]time.Time{
 		"a real hold":      testNow.Add(-5 * time.Second),
 		"a lingering hold": testNow.Add(-3 * time.Hour),
 	}
-	commands := map[string]func(h *handlers, rec store.NightSessionRecord) store.NightSessionRecord{
-		"fade-out-night": func(_ *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
-			next, _ := applyNightShutdownEffect(testNow, rec, "fade-out", nightShutdownOrdinary)
-			return next
-		},
-		"power-down-presentation": func(_ *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
-			next, _ := applyNightShutdownEffect(testNow, rec, "power-down", nightShutdownOrdinary)
-			return next
-		},
-		"end-session": func(h *handlers, rec store.NightSessionRecord) store.NightSessionRecord {
-			return h.nightEndSessionDecide(testNow, &rec).result
-		},
-	}
 	for holdName, reportedAt := range holdsAt {
-		for command, apply := range commands {
+		for _, command := range []string{"fade-out-night", "power-down-presentation"} {
 			t.Run(command+" during "+holdName, func(t *testing.T) {
-				h, st, pub, obs, holds, _ := nightFallbackHoldFixtureWithObservations(t)
+				api, h, st, obs, holds, token := nightHoldCommandAPI(t)
 				recordHoldReport(t, holds, fallbackhold.StateFallback, 1, reportedAt)
-				// FPP has finished the show playlist.
-				obs.obs = []observation.Observation{
-					statusObservation("fpp-main", fppStatusValueIdle, testNow),
-					playlistNameObservation("fpp-main", "", testNow),
+				stillPlaying := []observation.Observation{
+					statusObservation("fpp-main", fppStatusValuePlaying, testNow),
+					playlistNameObservation("fpp-main", "halloween-show", testNow),
 				}
-				before := pub.count()
-				h.nightTick(context.Background(), testNow)
-				if got := mustGetCurrentSession(t, st); got.State != nightStateLive || pub.count() != before {
-					t.Fatalf("before the command the held session moved to %q and sent %d commands; the fixture holds nothing", got.State, pub.count()-before)
+				obs.obs = stillPlaying
+				if !h.nightHeldForFallback(context.Background(), testNow, mustGetCurrentSession(t, st)) {
+					t.Fatal("before the command the session is not held; the fixture holds nothing")
 				}
 
-				next := apply(h, mustGetCurrentSession(t, st))
-				if err := st.UpdateNightSession(context.Background(), next, testNow); err != nil {
-					t.Fatalf("UpdateNightSession: %v", err)
-				}
-				h.nightTick(context.Background(), testNow)
+				mustNightCommand(t, api, token, command)
 				got := mustGetCurrentSession(t, st)
-				if got.State == nightStateLive && pub.count() == before {
-					t.Fatalf("after %s the session is still live and the night loop did nothing: the command was held", command)
+				if got.State != nightStateLive || got.ShutdownIntent == "" {
+					t.Fatalf("after %s with the show still playing: state %q intent %q, want live with the shutdown recorded", command, got.State, got.ShutdownIntent)
 				}
 				if h.nightHeldForFallback(context.Background(), testNow, got) {
 					t.Fatalf("after %s the session still counts as held", command)
 				}
+				if state := mapNightSessionState(context.Background(), h.deps, got, testNow, time.Hour, true); state.FallbackHold != nil {
+					t.Fatalf("after %s the session read still says the night is not advancing: %+v", command, state.FallbackHold)
+				}
+
+				// The show is still playing: the tick lets it finish.
+				h.nightTick(context.Background(), testNow)
+				if got := mustGetCurrentSession(t, st); got.State != nightStateLive {
+					t.Fatalf("with the show still playing the tick moved the session to %q", got.State)
+				}
+
+				// FPP finishes the playlist: the shutdown completes.
+				obs.obs = []observation.Observation{
+					statusObservation("fpp-main", fppStatusValueIdle, testNow),
+					playlistNameObservation("fpp-main", "", testNow),
+				}
+				for i := 0; i < 3 && mustGetCurrentSession(t, st).State == nightStateLive; i++ {
+					h.nightTick(context.Background(), testNow)
+				}
+				if got := mustGetCurrentSession(t, st); got.State == nightStateLive {
+					t.Fatalf("after the show ended the session is still live: %s was held", command)
+				}
 			})
+		}
+	}
+}
+
+// A held player is never sent a start. A shutdown asked for after the
+// session committed to a show, and before that show was started, fades
+// out now and drops the show instead of launching it on a player whose
+// plugin is in charge.
+func TestNightShutdownDuringAHoldDropsAShowThatWasCommittedButNotStarted(t *testing.T) {
+	for _, command := range []string{"fade-out-night", "power-down-presentation"} {
+		for _, held := range []bool{true, false} {
+			name := command + " with no hold"
+			if held {
+				name = command + " during a hold"
+			}
+			t.Run(name, func(t *testing.T) {
+				api, _, st, obs, holds, token := nightHoldCommandAPI(t)
+				obs.obs = []observation.Observation{
+					statusObservation("fpp-main", fppStatusValuePlaying, testNow),
+					playlistNameObservation("fpp-main", "halloween-resting", testNow),
+				}
+				rec := mustGetCurrentSession(t, st)
+				rec.State, rec.ShowCommitted, rec.ArmedShowID, rec.ContentAnchorJSON = nightStateTransitionToShow, true, "show-1", ""
+				if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+					t.Fatalf("UpdateNightSession: %v", err)
+				}
+				if held {
+					recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow.Add(-5*time.Second))
+				}
+
+				mustNightCommand(t, api, token, command)
+				got := mustGetCurrentSession(t, st)
+				if held {
+					if got.State != nightStateFadingOut || got.ShowCommitted || got.ArmedShowID != "" {
+						t.Fatalf("during a hold: state %q committed %v show %q, want fading out with the show dropped", got.State, got.ShowCommitted, got.ArmedShowID)
+					}
+					return
+				}
+				if got.State != nightStateTransitionToShow || !got.ShowCommitted {
+					t.Fatalf("with no hold: state %q committed %v, want the committed show left to start and finish", got.State, got.ShowCommitted)
+				}
+			})
+		}
+	}
+}
+
+// The session read, and so Show Night and night status, say the night is
+// not advancing only while it really is not.
+func TestNightSessionStateDropsTheHoldOnceTheSessionAdvancesRegardless(t *testing.T) {
+	h, st, _, holds, rec := nightFallbackHoldFixture(t)
+	recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow)
+	for name, change := range map[string]func(*store.NightSessionRecord){
+		"a shutdown was asked for": func(r *store.NightSessionRecord) { r.ShutdownIntent = "fade-out" },
+		"fading out":               func(r *store.NightSessionRecord) { r.State = nightStateFadingOut },
+		"stopped":                  func(r *store.NightSessionRecord) { r.State = nightStateStopped },
+	} {
+		next := rec
+		change(&next)
+		if err := st.UpdateNightSession(context.Background(), next, testNow); err != nil {
+			t.Fatalf("UpdateNightSession: %v", err)
+		}
+		if got := mapNightSessionState(context.Background(), h.deps, next, testNow, time.Hour, true); got.FallbackHold != nil {
+			t.Errorf("%s: the session read still carries %+v", name, got.FallbackHold)
 		}
 	}
 }
