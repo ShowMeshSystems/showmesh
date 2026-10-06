@@ -69,6 +69,9 @@ func (l *NightLoop) Run(ctx context.Context) {
 			l.inFlight <- struct{}{} // wait for any in-flight tick to release.
 			if l.h != nil {
 				l.h.nightFirstCueStageWG.Wait()
+				// A lights write is bounded by its own timeout, so this never
+				// waits on a dead player longer than that.
+				l.h.lights().waitFor(nightLightsGainTimeout + time.Second)
 			}
 			return
 		case <-ticker.C:

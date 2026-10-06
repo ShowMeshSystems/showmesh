@@ -39,6 +39,8 @@ func newTestIdentityServiceWithStore(t *testing.T, now func() time.Time) (identi
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	// Runs before the store closes: no lights write outlives its test.
+	t.Cleanup(func() { nightLightsWaitForStore(st) })
 	svc := identity.NewService(st, now, filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
 	return svc, st, storeDir
 }

@@ -144,8 +144,37 @@ func (l *nightLightsGainLog) stepDone(rec store.NightSessionRecord, key string) 
 	return true
 }
 
-// wait blocks until every started write has returned. Only tests call it.
+// wait blocks until every started write has returned. Tests use it before
+// reading what a write touches; the tick path never calls it.
 func (l *nightLightsGainLog) wait() { l.wg.Wait() }
+
+// waitFor is wait bounded by d, reporting whether every write returned. A write
+// is itself bounded by nightLightsGainTimeout, so a shutdown that waits that
+// long never waits on a dead player any longer.
+func (l *nightLightsGainLog) waitFor(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		l.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// nightLightsWaitForStore waits for the lights writes of every handler set
+// built over the night store k. Test cleanup uses it.
+func nightLightsWaitForStore(k any) {
+	if k == nil || !reflect.TypeOf(k).Comparable() {
+		return
+	}
+	if v, ok := nightLightsRegistry.Load(k); ok {
+		v.(*nightLightsGainLog).wait()
+	}
+}
 
 // nightLightsInstances lists the FPP instances the night's own fades write
 // to: the resting instance, then the show instance when it differs.

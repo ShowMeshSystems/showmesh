@@ -138,6 +138,7 @@ func TestNightAdvanceRestingIntershow_StopNowNeverLaunchesFromTheStaleBoundary(t
 	// Tick 1: still playing. The boundary stays armed.
 	obs.set(nightPlayingObservations("player-01", "halloween-resting", now))
 	h.nightAdvanceRestingIntershow(context.Background(), now, mustGetCurrentSession(t, st))
+	h.lights().wait()
 	if b, _ := decodeNightBoundary(mustGetCurrentSession(t, st).BoundaryJSON); b.State != nightBoundaryStateArmed {
 		t.Fatalf("boundary state = %q while playback is healthy, want armed", b.State)
 	}
@@ -146,6 +147,7 @@ func TestNightAdvanceRestingIntershow_StopNowNeverLaunchesFromTheStaleBoundary(t
 	now = expectedE.Add(-4 * time.Minute)
 	obs.set(idleObservation("player-01", now))
 	h.nightAdvanceRestingIntershow(context.Background(), now, mustGetCurrentSession(t, st))
+	h.lights().wait()
 
 	got := mustGetCurrentSession(t, st)
 	b, _ := decodeNightBoundary(got.BoundaryJSON)
@@ -164,6 +166,7 @@ func TestNightAdvanceRestingIntershow_StopNowNeverLaunchesFromTheStaleBoundary(t
 	now = expectedE.Add(time.Minute)
 	obs.set(idleObservation("player-01", now))
 	h.nightAdvanceRestingIntershow(context.Background(), now, mustGetCurrentSession(t, st))
+	h.lights().wait()
 
 	got = mustGetCurrentSession(t, st)
 	if got.State != nightStateRestingIntershow {
