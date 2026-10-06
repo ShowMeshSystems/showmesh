@@ -1,6 +1,6 @@
 import type { FPPInstance, Model, Node, NightSessionState, ResolumeInstance } from '../api'
 import type { Tone } from '../kit'
-import { countSignals, type SignalCounts } from '../domain/evidence'
+import { countSignals, signalGroups, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /**
@@ -189,11 +189,6 @@ export type FleetCounts = {
 }
 
 export function fleetCounts(model: Model): FleetCounts {
-  const signalGroups = [
-    ...model.nodes.flatMap((node) => [node.render, node.audio, node.fppConnect]),
-    ...model.fpp.map((instance) => instance.observations),
-    ...model.resolume.map((instance) => instance.observations),
-  ]
   return {
     nodesOnline: model.nodes.filter((node) => node.controlPlane.state === 'online').length,
     nodesTotal: model.nodes.length,
@@ -202,7 +197,7 @@ export function fleetCounts(model: Model): FleetCounts {
     fppTotal: model.fpp.length,
     resolumeHealthy: model.resolume.filter((instance) => instance.health === 'healthy').length,
     resolumeTotal: model.resolume.length,
-    signals: countSignals(signalGroups),
+    signals: countSignals(signalGroups(model)),
   }
 }
 
@@ -337,16 +332,12 @@ export function fppDetail(instances: readonly FPPInstance[]): string {
 export function staleSignalLeader(model: Model): { label: string; count: number } | null {
   let best: { label: string; count: number } | null = null
   for (const node of model.nodes) {
-    const count = countSignals([node.render, node.audio, node.fppConnect]).stale
+    const count = countSignals([node.render, node.audio, node.clock, node.fppConnect]).stale
     if (count > 0 && (best === null || count > best.count)) {
       best = { label: node.label ?? node.nodeId, count }
     }
   }
-  const total = countSignals([
-    ...model.nodes.flatMap((node) => [node.render, node.audio, node.fppConnect]),
-    ...model.fpp.map((instance) => instance.observations),
-    ...model.resolume.map((instance) => instance.observations),
-  ]).stale
+  const total = countSignals(signalGroups(model)).stale
   if (best === null || total === 0 || best.count < total / 2) return null
   return best
 }

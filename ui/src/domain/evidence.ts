@@ -1,4 +1,4 @@
-import type { Evidence, EvidenceState } from '../api'
+import type { Evidence, EvidenceState, Model } from '../api'
 import type { Absence, Tone } from '../kit'
 
 /**
@@ -50,50 +50,60 @@ export type SignalCounts = {
   stale: number
   unobserved: number
   failed: number
+  /** `unsupported` and `unknown_age`: no usable value, nothing to retry. */
   unavailable: number
-  unknownAge: number
 }
 
-export function countSignals(groups: readonly (readonly Evidence[])[]): SignalCounts {
-  const counts: SignalCounts = {
-    total: 0,
-    measurable: 0,
-    notApplicable: 0,
-    current: 0,
-    stale: 0,
-    unobserved: 0,
-    failed: 0,
-    unavailable: 0,
-    unknownAge: 0,
-  }
-  for (const group of groups) {
-    for (const evidence of group) {
-      counts.total += 1
-      switch (evidence.state) {
-        case 'current':
-          counts.current += 1
-          break
-        case 'stale':
-          counts.stale += 1
-          break
-        case 'not_collected':
-          counts.unobserved += 1
-          break
-        case 'collection_failed':
-          counts.failed += 1
-          break
-        case 'unsupported':
-          counts.unavailable += 1
-          break
-        case 'unknown_age':
-          counts.unknownAge += 1
-          break
-        case 'not_applicable':
-          counts.notApplicable += 1
-          break
-      }
-    }
+export function countStates(states: Iterable<EvidenceState>): SignalCounts {
+  const counts: SignalCounts = { total: 0, measurable: 0, notApplicable: 0, current: 0, stale: 0, unobserved: 0, failed: 0, unavailable: 0 }
+  for (const state of states) {
+    counts.total += 1
+    if (state === 'current') counts.current += 1
+    else if (state === 'stale') counts.stale += 1
+    else if (state === 'not_collected') counts.unobserved += 1
+    else if (state === 'collection_failed') counts.failed += 1
+    else if (state === 'not_applicable') counts.notApplicable += 1
+    else counts.unavailable += 1
   }
   counts.measurable = counts.total - counts.notApplicable
   return counts
+}
+
+export function countSignals(groups: readonly (readonly Evidence[])[]): SignalCounts {
+  return countStates(groups.flatMap((group) => group.map((evidence) => evidence.state)))
+}
+
+export type SignalTally = { key: keyof SignalCounts; word: string; count: number }
+
+/** Every state a signal can be in, in reading order. The counts always sum to `total`. */
+export function signalTally(counts: SignalCounts): SignalTally[] {
+  return [
+    { key: 'current', word: 'current', count: counts.current },
+    { key: 'stale', word: 'stale', count: counts.stale },
+    { key: 'unobserved', word: 'unobserved', count: counts.unobserved },
+    { key: 'failed', word: 'failed', count: counts.failed },
+    { key: 'unavailable', word: 'unavailable', count: counts.unavailable },
+    { key: 'notApplicable', word: 'N/A', count: counts.notApplicable },
+  ]
+}
+
+export type TilePart = { text: string; failed: boolean }
+
+/** The tile line as parts: counted states sum to measurable minus current, N/A is named as outside that total. */
+export function signalTileParts(counts: SignalCounts): TilePart[] {
+  const parts: TilePart[] = signalTally(counts)
+    .filter((entry) => entry.key !== 'current' && entry.key !== 'notApplicable' && entry.count > 0)
+    .map((entry) => ({ text: `${entry.count} ${entry.word}`, failed: entry.key === 'failed' }))
+  if (parts.length === 0 && counts.current > 0) parts.push({ text: 'All current', failed: false })
+  if (counts.notApplicable > 0) parts.push({ text: `${counts.notApplicable} N/A not counted`, failed: false })
+  return parts
+}
+
+/** Every evidence group a signal count covers, so the tile, the tab count and the footer read the same signals. */
+export function signalGroups(model: Model): Evidence[][] {
+  return [
+    ...model.nodes.flatMap((node) => [node.render, node.audio, node.clock, node.fppConnect]),
+    ...model.fpp.map((instance) => instance.observations),
+    ...model.resolume.map((instance) => instance.observations),
+  ]
 }

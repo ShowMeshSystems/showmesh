@@ -52,6 +52,11 @@ export function StatTile({ label, value, detail, to }: TileProps) {
   )
 }
 
+/** One count inside a tile's detail line. `bad` is the failure tone, for a failed count only. */
+export function TileCount({ tone, children }: { tone?: 'bad' | undefined; children: ReactNode }) {
+  return <span className={tone === 'bad' ? 'sm-tile__count--bad' : undefined}>{children}</span>
+}
+
 export function Tiles({ children }: { children: ReactNode }) {
   return <div className="sm-tiles">{children}</div>
 }

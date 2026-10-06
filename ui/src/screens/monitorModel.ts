@@ -1,6 +1,6 @@
-import type { AuditEntry, Capability, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
+import type { AuditEntry, Capability, Evidence, EvidenceState, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
-import { countSignals, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { countSignals, countStates, displayValue, EVIDENCE_LABEL, EVIDENCE_TONE, signalGroups, signalTally } from '../domain/evidence'
 import {
   audioSettingSubstitution,
   audioSettingSubstitutionSentence,
@@ -164,11 +164,7 @@ export type FacetCounts = { fleet: number; signals: number; capabilities: number
 
 /** Tab counts are inventory counts of the tab's primary object. */
 export function facetCounts(model: Model): FacetCounts {
-  const signals = countSignals([
-    ...model.nodes.flatMap((node) => [node.render, node.audio, node.fppConnect]),
-    ...model.fpp.map((instance) => instance.observations),
-    ...model.resolume.map((instance) => instance.observations),
-  ])
+  const signals = countSignals(signalGroups(model))
   const capabilities = new Set(model.nodes.flatMap((node) => node.capabilities.map((capability) => capability.id)))
   return {
     fleet: model.nodes.length + model.fpp.length + model.resolume.length,
@@ -423,6 +419,8 @@ export type SignalRow = {
   signal: string
   value: string
   tone: Tone
+  /** The wire state. `state` below is the word shown, which is not always an evidence label. */
+  evidence: EvidenceState
   state: string
   observed: string
 }
@@ -457,6 +455,7 @@ function evidenceRows(
       kind,
       signal: entry.signal,
       value: signalValue(entry),
+      evidence: entry.state,
       tone: beyondThreshold ? 'warn' : EVIDENCE_TONE[entry.state],
       state: beyondThreshold ? 'beyond threshold' : withinThreshold ? 'within threshold' : EVIDENCE_LABEL[entry.state],
       observed: signalObserved(entry, nowIso),
@@ -507,14 +506,9 @@ export function signalRows(model: Model, nowIso: string | null): SignalRow[] {
 }
 
 export function signalSummary(rows: readonly SignalRow[]): string {
-  const byLabel = (label: string) => rows.filter((row) => row.state === label).length
-  const current = byLabel(EVIDENCE_LABEL.current)
-  const stale = byLabel(EVIDENCE_LABEL.stale)
-  const unobserved = byLabel(EVIDENCE_LABEL.not_collected)
-  const failed = byLabel(EVIDENCE_LABEL.collection_failed)
-  const unavailable = byLabel(EVIDENCE_LABEL.unsupported) + byLabel(EVIDENCE_LABEL.unknown_age)
-  const notApplicable = byLabel(EVIDENCE_LABEL.not_applicable)
-  return `${rows.length} signals · ${current} current, ${stale} stale, ${unobserved} unobserved, ${failed} failed, ${unavailable} unavailable, ${notApplicable} N/A.`
+  const counts = countStates(rows.map((row) => row.evidence))
+  const parts = signalTally(counts).map((entry) => `${entry.count} ${entry.word}`)
+  return `${counts.total} signals · ${parts.join(', ')}.`
 }
 
 // ---------------------------------------------------------------------

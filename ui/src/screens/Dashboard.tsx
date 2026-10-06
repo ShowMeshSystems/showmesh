@@ -14,6 +14,7 @@ import {
   Tiles,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { SignalsTile } from './SignalsTile'
 import { effectiveServerTimeIso, formatDuration } from '../domain/time'
 import {
   attentionItems,
@@ -227,16 +228,7 @@ export function Dashboard() {
             detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
             to="/settings/resolume"
           />
-          <StatTile
-            label="Signals current"
-            value={`${counts.signals.current} / ${counts.signals.measurable}`}
-            detail={
-              counts.signals.total === 0
-                ? 'nothing collected yet'
-                : `${counts.signals.stale} stale · ${counts.signals.unobserved} unobserved`
-            }
-            to="/monitor/signals"
-          />
+          <SignalsTile counts={counts.signals} />
         </Tiles>
         {staleLeader !== null && (
           <p className="sm-section__footnote">

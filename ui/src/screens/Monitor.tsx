@@ -17,6 +17,7 @@ import {
   type Connection,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { SignalsTile } from './SignalsTile'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import {
   acknowledgeFPPInstanceUUIDChange,
@@ -168,16 +169,7 @@ export function Monitor() {
               value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
               detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
             />
-            <StatTile
-              label="Signals current"
-              value={`${counts.signals.current} / ${counts.signals.measurable}`}
-              detail={
-                counts.signals.total === 0
-                  ? 'nothing collected yet'
-                  : `${counts.signals.stale} stale · ${counts.signals.unobserved} unobserved`
-              }
-              to="/monitor/signals"
-            />
+            <SignalsTile counts={counts.signals} />
           </Tiles>
 
           <Section id="mo-attention" title="Needs an operator">
