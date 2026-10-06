@@ -40,4 +40,5 @@ func TestRunWiresTheFallbackHoldServiceAndMarksItStartedBeforeListening(t *testi
 	}
 	position("fallbackHolds.SetPlayerReader(api.NewFallbackPlayerReader(apiDeps.Observations))")
 	position("fallbackHolds.SetAudit(identitySvc)")
+	position("fallbackHolds.SetNudge(cueActivationLoop.Nudge)")
 }

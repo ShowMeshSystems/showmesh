@@ -329,6 +329,30 @@ func nightDropUnlaunchedShowForHold(rec *store.NightSessionRecord, heldForFallba
 	return &next
 }
 
+// nightDropShowForHeldPlayer is the tick's own form of that rule, for a
+// hold that began after the shutdown was asked for. It reports whether it
+// moved the session to fading out.
+func (h *handlers) nightDropShowForHeldPlayer(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
+	if rec.ShutdownIntent == "" || rec.State != nightStateTransitionToShow || !rec.ShowCommitted {
+		return false
+	}
+	if nightDropUnlaunchedShowForHold(&rec, true).ShowCommitted {
+		// The show was already started; it is left to finish.
+		return false
+	}
+	// Only a hold that was read, never a read that failed, drops a show.
+	if _, found, err := resolveNightFallbackHold(ctx, h.deps, rec, now); err != nil || !found {
+		return false
+	}
+	h.logInfo("night loop: a shutdown was asked for and the show's player is held, so the show that had not started is dropped",
+		"sessionId", rec.ID)
+	h.nightCommit(ctx, now, rec.ID, nightStateTransitionToShow, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		next, _ := applyNightShutdownEffect(now, *nightDropUnlaunchedShowForHold(&cur, true), cur.ShutdownIntent, nightShutdownOrdinary)
+		return next
+	})
+	return true
+}
+
 // NewFallbackPlayerReader reads an FPP player as the night loop does, from
 // the coordinator's own collectors and never from what the plugin posted.
 func NewFallbackPlayerReader(lister ObservationLister) fallbackhold.PlayerReader {

@@ -498,6 +498,71 @@ func TestNightShutdownDuringAHoldDropsAShowThatWasCommittedButNotStarted(t *test
 	}
 }
 
+// The same rule when the hold begins after the shutdown was asked for:
+// the command deferred to a committed show, and before that show started
+// the player became held. The tick must drop the show, not start it.
+func TestNightTickDropsACommittedUnstartedShowWhenAHoldBeginsAfterTheShutdown(t *testing.T) {
+	type begin func(t *testing.T, h *handlers, st *store.Store, holds *fallbackhold.Service)
+	cases := map[string]begin{
+		"the plugin reports fallback": func(t *testing.T, _ *handlers, _ *store.Store, holds *fallbackhold.Service) {
+			recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow)
+		},
+		// Every stored report is held for 45 seconds after a start,
+		// with no plugin fault at all.
+		"the coordinator restarts": func(t *testing.T, h *handlers, st *store.Store, holds *fallbackhold.Service) {
+			recordHoldReport(t, holds, fallbackhold.StateNormal, 1, testNow.Add(-time.Minute))
+			h.deps.FallbackHolds = fallbackhold.NewService(st, testNow.Add(-time.Second), testLogger())
+		},
+		"no hold begins": nil,
+	}
+	for name, beginHold := range cases {
+		t.Run(name, func(t *testing.T) {
+			api, h, st, obs, holds, token := nightHoldCommandAPI(t)
+			obs.obs = []observation.Observation{
+				statusObservation("fpp-main", fppStatusValuePlaying, testNow),
+				playlistNameObservation("fpp-main", "halloween-resting", testNow),
+			}
+			rec := mustGetCurrentSession(t, st)
+			rec.State, rec.ShowCommitted, rec.ArmedShowID, rec.ContentAnchorJSON = nightStateTransitionToShow, true, "show-1", ""
+			if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+				t.Fatalf("UpdateNightSession: %v", err)
+			}
+
+			// The shutdown comes first and defers to the committed show.
+			mustNightCommand(t, api, token, "fade-out-night")
+			if got := mustGetCurrentSession(t, st); got.State != nightStateTransitionToShow || !got.ShowCommitted || got.ShutdownIntent == "" {
+				t.Fatalf("after the command with no hold: state %q committed %v intent %q, want the committed show kept", got.State, got.ShowCommitted, got.ShutdownIntent)
+			}
+			if beginHold == nil {
+				if h.nightDropShowForHeldPlayer(context.Background(), testNow, mustGetCurrentSession(t, st)) {
+					t.Fatal("with no hold the tick dropped the committed show")
+				}
+				return
+			}
+			beginHold(t, h, st, holds)
+
+			h.nightTick(context.Background(), testNow)
+			got := mustGetCurrentSession(t, st)
+			if got.State != nightStateFadingOut || got.ShowCommitted || got.ArmedShowID != "" || got.Degraded {
+				t.Fatalf("after the tick: state %q committed %v show %q degraded %v, want fading out with the show dropped", got.State, got.ShowCommitted, got.ArmedShowID, got.Degraded)
+			}
+		})
+	}
+}
+
+// A show that was already started is left to finish, held player or not.
+func TestNightTickLeavesAStartedShowAloneWhenItsPlayerIsHeld(t *testing.T) {
+	h, st, _, holds, rec := nightFallbackHoldFixture(t)
+	rec.State, rec.ShowCommitted, rec.ArmedShowID, rec.ShutdownIntent = nightStateTransitionToShow, true, "show-1", "fade-out"
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	recordHoldReport(t, holds, fallbackhold.StateFallback, 1, testNow)
+	if h.nightDropShowForHeldPlayer(context.Background(), testNow, mustGetCurrentSession(t, st)) {
+		t.Fatal("a show with a recorded start was dropped")
+	}
+}
+
 // The session read, and so Show Night and night status, say the night is
 // not advancing only while it really is not.
 func TestNightSessionStateDropsTheHoldOnceTheSessionAdvancesRegardless(t *testing.T) {

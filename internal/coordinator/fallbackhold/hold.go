@@ -64,10 +64,20 @@ type PlayerReading struct {
 // reads a player exactly as the night loop does.
 type PlayerReader func(ctx context.Context, fppInstanceID string, notBefore, now time.Time) PlayerReading
 
-// AuditWriter is the slice of identity.Service this package writes to.
+// AuditWriter is the slice of identity.Service this package writes to: a
+// store write and its audit entry in one transaction.
 type AuditWriter interface {
-	WriteAudit(ctx context.Context, entry identity.AuditEntry) error
+	AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error)) error
 }
+
+// OverReadingMaxGap is the longest two readings of a player may be apart
+// and still count as one standing reading. A longer gap restarts the count,
+// so the standing rule does not depend on how often a caller evaluates.
+const OverReadingMaxGap = 15 * time.Second
+
+// errNothingToClear rolls an automatic clear back when the report it was
+// decided on is no longer the stored one.
+var errNothingToClear = errors.New("fallbackhold: the stored report changed before the clear")
 
 const (
 	statusIdle    = "idle"
@@ -232,6 +242,7 @@ type Service struct {
 	startedAt time.Time
 	reader    PlayerReader
 	audit     AuditWriter
+	nudge     func()
 	// overSince is when each player's reported playlist was first read
 	// as over, for the report named in it.
 	overSince map[string]overReading
@@ -241,6 +252,7 @@ type overReading struct {
 	bootID   string
 	sequence int64
 	since    time.Time
+	lastSeen time.Time
 }
 
 // NewService builds a Service. startedAt is what [StartGrace] counts from
@@ -257,6 +269,14 @@ func NewService(st *store.Store, startedAt time.Time, logger *slog.Logger) *Serv
 func (s *Service) SetPlayerReader(r PlayerReader) {
 	s.mu.Lock()
 	s.reader = r
+	s.mu.Unlock()
+}
+
+// SetNudge wires what is told when an automatic clear lets a player go,
+// the Cue loop in the coordinator.
+func (s *Service) SetNudge(nudge func()) {
+	s.mu.Lock()
+	s.nudge = nudge
 	s.mu.Unlock()
 }
 
@@ -311,13 +331,15 @@ func (s *Service) readPlaylistOver(ctx context.Context, rec store.FallbackPlayer
 		return false, nil
 	}
 	seen, ok := s.overSince[rec.FPPInstanceUUID]
-	if !ok || seen.bootID != rec.BootID || seen.sequence != rec.Sequence {
+	if !ok || seen.bootID != rec.BootID || seen.sequence != rec.Sequence || now.Sub(seen.lastSeen) > OverReadingMaxGap {
+		// Nobody looked for too long to say the reading stood meanwhile.
 		seen = overReading{bootID: rec.BootID, sequence: rec.Sequence, since: now}
-		if s.overSince == nil {
-			s.overSince = map[string]overReading{}
-		}
-		s.overSince[rec.FPPInstanceUUID] = seen
 	}
+	seen.lastSeen = now
+	if s.overSince == nil {
+		s.overSince = map[string]overReading{}
+	}
+	s.overSince[rec.FPPInstanceUUID] = seen
 	return now.Sub(seen.since) > SilentAfter, nil
 }
 
@@ -379,8 +401,23 @@ func (s *Service) evaluateRecord(ctx context.Context, rec store.FallbackPlayerSt
 		return Verdict{}, err
 	}
 	v := decide(rec, in)
-	if v.EndedWithoutPlugin {
-		s.clearEndedWithoutPlugin(ctx, rec, now)
+	if v.EndedWithoutPlugin && !s.clearEndedWithoutPlugin(ctx, rec, now) {
+		// Nothing was cleared: a newer report stands, or the clear
+		// failed. The answer is whatever the stored report says now.
+		current, err := s.st.GetFallbackPlayerState(ctx, rec.FPPInstanceUUID)
+		if errors.Is(err, store.ErrFallbackPlayerStateNotFound) {
+			return Verdict{}, nil
+		}
+		if err != nil {
+			return Verdict{}, fmt.Errorf("fallbackhold: re-read player state for %q: %w", rec.FPPInstanceUUID, err)
+		}
+		if current.BootID == rec.BootID && current.Sequence == rec.Sequence {
+			// Same report and it could not be cleared: keep holding.
+			held := decide(rec, in)
+			held.EndedWithoutPlugin, held.Held, held.Reason = false, true, ReasonExecutor
+			return held, nil
+		}
+		return s.evaluateRecord(ctx, current, now)
 	}
 	if rec.State == StateNormal && !rec.AckWaitSince.IsZero() && in.ackCurrent {
 		// The wait is over for good: a later program change must not
@@ -395,24 +432,46 @@ func (s *Service) evaluateRecord(ctx context.Context, rec store.FallbackPlayerSt
 
 // clearEndedWithoutPlugin forgets a report whose hold ended without the
 // plugin, exactly as an operator's clear does, so the hold cannot return
-// when the player next plays a playlist of that name.
-func (s *Service) clearEndedWithoutPlugin(ctx context.Context, rec store.FallbackPlayerStateRecord, now time.Time) {
-	var cleared bool
-	err := s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+// when the player next plays a playlist of that name. The clear and its
+// audit entry are one transaction. It reports whether it cleared.
+func (s *Service) clearEndedWithoutPlugin(ctx context.Context, rec store.FallbackPlayerStateRecord, now time.Time) bool {
+	s.mu.Lock()
+	audit, nudge := s.audit, s.nudge
+	s.mu.Unlock()
+	clear := func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		current, err := tx.GetFallbackPlayerState(ctx, rec.FPPInstanceUUID)
 		if err != nil || current.BootID != rec.BootID || current.Sequence != rec.Sequence {
 			// Gone, or a newer report arrived meanwhile and stands.
-			return nil
+			return identity.AuditEntry{}, errNothingToClear
 		}
-		cleared, err = s.Clear(ctx, tx, rec.FPPInstanceUUID, now)
-		return err
-	})
-	if err != nil {
-		s.logger.Warn("fallback hold: clearing a hold that ended without its plugin failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
-		return
+		cleared, err := s.Clear(ctx, tx, rec.FPPInstanceUUID, now)
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		if !cleared {
+			return identity.AuditEntry{}, errNothingToClear
+		}
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
+			Action: auditActionAutoClear, Target: rec.FPPInstanceUUID, Kind: identity.AuditOutcome,
+			Params:        map[string]any{"reportedState": rec.State, "playlistName": rec.PlaylistName},
+			OutcomeReason: "the plugin stopped reporting and the player is no longer playing that playlist",
+		}, nil
 	}
-	if !cleared {
-		return
+	var err error
+	if audit != nil {
+		err = audit.AuditedWrite(ctx, clear)
+	} else {
+		err = s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+			_, cerr := clear(ctx, tx)
+			return cerr
+		})
+	}
+	if err != nil {
+		if !errors.Is(err, errNothingToClear) {
+			s.logger.Warn("fallback hold: clearing a hold that ended without its plugin failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
+		}
+		return false
 	}
 	message := fmt.Sprintf("The plugin on this FPP player stopped reporting while it was running playlist %q from its fallback program, and the player is no longer playing that playlist. The coordinator has taken the player back.", rec.PlaylistName)
 	s.logger.Warn("fallback hold: ended without the plugin's report", "fppInstanceUuid", rec.FPPInstanceUUID,
@@ -425,20 +484,10 @@ func (s *Service) clearEndedWithoutPlugin(ctx context.Context, rec store.Fallbac
 		s.logger.Warn("fallback hold: recording the end of a hold failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
 	}
 	s.ForgetSignals(ctx, rec.FPPInstanceUUID, now)
-	s.mu.Lock()
-	audit := s.audit
-	s.mu.Unlock()
-	if audit == nil {
-		return
+	if nudge != nil {
+		nudge()
 	}
-	if err := audit.WriteAudit(ctx, identity.AuditEntry{
-		Timestamp: now, PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
-		Action: auditActionAutoClear, Target: rec.FPPInstanceUUID, Kind: identity.AuditOutcome,
-		Params:        map[string]any{"reportedState": rec.State, "playlistName": rec.PlaylistName},
-		OutcomeReason: "the plugin stopped reporting and the player is no longer playing that playlist",
-	}); err != nil {
-		s.logger.Warn("fallback hold: audit write for an automatic clear failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
-	}
+	return true
 }
 
 // All returns the verdict for every player whose plugin has reported.

@@ -1106,6 +1106,7 @@ func Run() int {
 	// further down, alongside every other background reconcile loop.
 	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
 	apiDeps.CueActivationNudger = cueActivationLoop
+	fallbackHolds.SetNudge(cueActivationLoop.Nudge)
 	apiDeps.CueActivationPinStatus = cueActivationLoop
 
 	apiInst := api.New(apiDeps, apiOpts)

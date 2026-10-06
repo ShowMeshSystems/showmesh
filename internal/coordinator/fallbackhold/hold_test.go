@@ -2,6 +2,7 @@ package fallbackhold
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -438,11 +439,45 @@ func (r *testReader) wire(t *testing.T, svc *Service) {
 	})
 }
 
-type recordingAudit struct{ entries []identity.AuditEntry }
+// recordingAudit runs the write and keeps its audit entry, in one
+// transaction as identity.Service does. between, when set, runs once after
+// the caller decided to clear and before the transaction opens.
+type recordingAudit struct {
+	st      *store.Store
+	entries []identity.AuditEntry
+	between func()
+}
 
-func (a *recordingAudit) WriteAudit(_ context.Context, e identity.AuditEntry) error {
-	a.entries = append(a.entries, e)
-	return nil
+func (a *recordingAudit) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error)) error {
+	if a.between != nil {
+		between := a.between
+		a.between = nil
+		between()
+	}
+	var entry identity.AuditEntry
+	err := a.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		var ferr error
+		entry, ferr = fn(ctx, tx)
+		return ferr
+	})
+	if err == nil {
+		a.entries = append(a.entries, entry)
+	}
+	return err
+}
+
+// evaluateEvery evaluates every five seconds from just after from through
+// to, as the coordinator's own loops do. It returns the last verdict, or
+// the one that ended the hold without the plugin if any did.
+func evaluateEvery(t *testing.T, svc *Service, from, to time.Time) Verdict {
+	t.Helper()
+	var v Verdict
+	for at := from.Add(5 * time.Second); !at.After(to); at = at.Add(5 * time.Second) {
+		if v = mustEvaluate(t, svc, at); v.EndedWithoutPlugin {
+			return v
+		}
+	}
+	return v
 }
 
 func playing(name string) PlayerReading {
@@ -480,13 +515,10 @@ func TestOnlyIdleOrAnotherPlaylistPlayingCountsAsThePlaylistBeingOver(t *testing
 			mustRecord(t, svc, report(StateFallback, 1), testStart)
 
 			// While the plugin still counts as reporting nothing ends.
-			if v := mustEvaluate(t, svc, testStart.Add(time.Second)); !v.Held {
-				t.Fatal("the hold ended one second after the report")
-			}
-			if v := mustEvaluate(t, svc, testStart.Add(SilentAfter)); !v.Held {
+			if v := evaluateEvery(t, svc, testStart, testStart.Add(SilentAfter)); !v.Held {
 				t.Fatal("the hold ended while the plugin still counted as reporting")
 			}
-			v := mustEvaluate(t, svc, testStart.Add(SilentAfter+2*time.Second))
+			v := evaluateEvery(t, svc, testStart.Add(SilentAfter), testStart.Add(SilentAfter+10*time.Second))
 			if v.EndedWithoutPlugin != tc.over || v.Held == tc.over {
 				t.Fatalf("held %v, ended without the plugin %v; want ended %v", v.Held, v.EndedWithoutPlugin, tc.over)
 			}
@@ -523,12 +555,12 @@ func TestAfterARestartAFallbackRowIsHeldUntilThePluginReportsOrTheGraceEnds(t *t
 
 	restartAt := testStart.Add(10 * time.Minute)
 	restarted := NewService(st, restartAt, nil)
-	audit := &recordingAudit{}
+	audit := &recordingAudit{st: st}
 	restarted.SetAudit(audit)
 	reader := &testReader{reading: playing("Second Show")}
 	reader.wire(t, restarted)
 
-	for _, since := range []time.Duration{time.Second, 2 * time.Second, StartGrace} {
+	for since := time.Second; since <= StartGrace; since += 4 * time.Second {
 		v := mustEvaluate(t, restarted, restartAt.Add(since))
 		if !v.Held || v.Reason != ReasonCoordinatorStarting || v.EndedWithoutPlugin {
 			t.Fatalf("%s after the restart: %+v, want held while starting", since, v)
@@ -558,13 +590,10 @@ func TestAfterARestartSilenceIsCountedFromThisRunsStart(t *testing.T) {
 	reader.wire(t, restarted)
 	restarted.MarkStarted(restartAt.Add(5 * time.Second))
 
-	if v := mustEvaluate(t, restarted, restartAt.Add(6*time.Second)); !v.Held {
-		t.Fatal("the hold ended right after the restart")
-	}
-	if v := mustEvaluate(t, restarted, restartAt.Add(5*time.Second+SilentAfter)); !v.Held {
+	if v := evaluateEvery(t, restarted, restartAt, restartAt.Add(5*time.Second+SilentAfter)); !v.Held {
 		t.Fatal("the hold ended before 45 seconds of silence in this run")
 	}
-	if v := mustEvaluate(t, restarted, restartAt.Add(6*time.Second+SilentAfter+time.Second)); v.Held || !v.EndedWithoutPlugin {
+	if v := evaluateEvery(t, restarted, restartAt.Add(5*time.Second+SilentAfter), restartAt.Add(SilentAfter+15*time.Second)); v.Held || !v.EndedWithoutPlugin {
 		t.Fatalf("after 45 seconds of silence in this run with another playlist playing: %+v, want the hold ended", v)
 	}
 }
@@ -573,16 +602,20 @@ func TestAfterARestartSilenceIsCountedFromThisRunsStart(t *testing.T) {
 // clear, so tomorrow's playlist of the same name does not hold the night.
 func TestAHoldThatEndsWithoutItsPluginIsClearedAndDoesNotReturn(t *testing.T) {
 	svc, st := newService(t, testStart.Add(-time.Hour))
-	audit := &recordingAudit{}
+	audit := &recordingAudit{st: st}
 	svc.SetAudit(audit)
+	nudges := 0
+	svc.SetNudge(func() { nudges++ })
 	reader := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
 	reader.wire(t, svc)
 	mustRecord(t, svc, report(StateFallback, 1), testStart)
 
-	mustEvaluate(t, svc, testStart.Add(time.Second))
-	at := testStart.Add(SilentAfter + 2*time.Second)
-	if v := mustEvaluate(t, svc, at); v.Held || !v.EndedWithoutPlugin {
+	at := testStart.Add(SilentAfter + 10*time.Second)
+	if v := evaluateEvery(t, svc, testStart, at); v.Held || !v.EndedWithoutPlugin {
 		t.Fatalf("with a silent plugin and an idle player: %+v, want the hold ended", v)
+	}
+	if nudges != 1 {
+		t.Fatalf("the Cue loop was nudged %d times by the automatic clear, want once", nudges)
 	}
 	// The next evening the same playlist plays again and the plugin is
 	// still silent.
@@ -745,11 +778,90 @@ func TestOneOverReadingDoesNotEndAHoldBeforeThePluginCanReport(t *testing.T) {
 	reader2 := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
 	reader2.wire(t, svc2)
 	mustRecord(t, svc2, report(StateFallback, 1), testStart)
-	mustEvaluate(t, svc2, testStart.Add(time.Minute))
+	evaluateEvery(t, svc2, testStart.Add(time.Minute), testStart.Add(time.Minute+30*time.Second))
 	reader2.reading = playing("Main Show")
-	mustEvaluate(t, svc2, testStart.Add(time.Minute+30*time.Second))
+	mustEvaluate(t, svc2, testStart.Add(time.Minute+35*time.Second))
 	reader2.reading = PlayerReading{Current: true, Status: "idle"}
-	if v := mustEvaluate(t, svc2, testStart.Add(time.Minute+50*time.Second)); !v.Held {
+	if v := evaluateEvery(t, svc2, testStart.Add(time.Minute+35*time.Second), testStart.Add(time.Minute+60*time.Second)); !v.Held {
 		t.Fatal("an over reading that was interrupted still ended the hold on its first 45 seconds")
 	}
+}
+
+// The standing rule must not depend on how often the caller looks. Two
+// looks a minute apart that both say idle prove nothing about the minute
+// between them, in which the player here was playing the show.
+func TestTwoOverReadingsFarApartAreNotOneStandingReading(t *testing.T) {
+	svc, _ := newService(t, testStart.Add(-time.Hour))
+	reader := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
+	reader.wire(t, svc)
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+
+	first := testStart.Add(2 * time.Minute)
+	if v := mustEvaluate(t, svc, first); !v.Held {
+		t.Fatal("the first reading alone ended the hold")
+	}
+	// Nobody evaluates for a minute; the player plays the show meanwhile.
+	if v := mustEvaluate(t, svc, first.Add(time.Minute)); !v.Held || v.EndedWithoutPlugin {
+		t.Fatalf("two idle readings 60 seconds apart ended the hold: %+v", v)
+	}
+	// Looked at often enough, the same reading does end it.
+	if v := evaluateEvery(t, svc, first.Add(time.Minute), first.Add(2*time.Minute)); v.Held || !v.EndedWithoutPlugin {
+		t.Fatalf("a reading that stood for a minute of regular looks did not end the hold: %+v", v)
+	}
+	if OverReadingMaxGap >= SilentAfter {
+		t.Fatalf("the longest gap between looks, %s, is not shorter than the %s a reading must stand", OverReadingMaxGap, SilentAfter)
+	}
+}
+
+// The reviewer's interleaving. An evaluation decides the hold has ended;
+// before its clear runs, the plugin's report under the new playlist
+// arrives. Nothing is cleared, and that same evaluation must answer for
+// the newer report: held.
+func TestAnEvaluationThatLosesTheRaceToANewerReportAnswersForThatReport(t *testing.T) {
+	svc, st := newService(t, testStart.Add(-time.Hour))
+	audit := &recordingAudit{st: st}
+	svc.SetAudit(audit)
+	reader := &testReader{reading: playing("Second Show")}
+	reader.wire(t, svc)
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+	at := testStart.Add(SilentAfter + 10*time.Second)
+	if v := evaluateEvery(t, svc, testStart, at.Add(-5*time.Second)); !v.Held {
+		t.Fatal("the hold ended before the evaluation under test")
+	}
+
+	audit.between = func() {
+		next := report(StateFallback, 2)
+		next.PlaylistName = "Second Show"
+		mustRecord(t, svc, next, at)
+	}
+	v := mustEvaluate(t, svc, at)
+	if !v.Held || v.Reason != ReasonExecutor || v.EndedWithoutPlugin || v.Record.Sequence != 2 {
+		t.Fatalf("the evaluation that raced the newer report answered %+v, want held under that report", v)
+	}
+	if len(audit.entries) != 0 {
+		t.Fatalf("%d automatic clears were audited although nothing was cleared", len(audit.entries))
+	}
+	if v := mustEvaluate(t, svc, at.Add(time.Second)); !v.Held {
+		t.Fatal("the next evaluation is not held")
+	}
+}
+
+// A clear whose audit entry cannot be written is not a clear: the stored
+// report stays and the player stays held.
+func TestAnAutomaticClearThatCannotBeAuditedClearsNothing(t *testing.T) {
+	svc, _ := newService(t, testStart.Add(-time.Hour))
+	svc.SetAudit(failingAudit{})
+	reader := &testReader{reading: PlayerReading{Current: true, Status: "idle"}}
+	reader.wire(t, svc)
+	mustRecord(t, svc, report(StateFallback, 1), testStart)
+	v := evaluateEvery(t, svc, testStart, testStart.Add(2*time.Minute))
+	if !v.Held || v.EndedWithoutPlugin || !v.Reported {
+		t.Fatalf("with the audit log failing: %+v, want the report kept and the player held", v)
+	}
+}
+
+type failingAudit struct{}
+
+func (failingAudit) AuditedWrite(context.Context, func(context.Context, *store.Tx) (identity.AuditEntry, error)) error {
+	return errors.New("the audit log is unavailable")
 }
