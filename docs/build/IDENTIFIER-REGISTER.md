@@ -639,6 +639,7 @@ register entry comes from the code and never from a plan.
 | `fallback.executor_key.register` | shipped | Track J seam J3: a paired FPP plugin registering or replacing the public key it signs fallback activations with |
 | `fallback.player_state.report` | shipped | Track J seam J5: a paired FPP plugin reporting that its fallback state changed. Written on a change of state only, never for the 10 second repeat |
 | `fallback.player_state.clear` | shipped | Track J seam J5: an operator clearing what the coordinator stored about one FPP player's fallback state |
+| `fallback.player_state.auto_clear` | shipped | Track J seam J5: the coordinator clearing that stored state itself, under the system principal `system-fallback-hold`, when the plugin has gone silent and the coordinator's own reading shows the playlist it was running is over |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
