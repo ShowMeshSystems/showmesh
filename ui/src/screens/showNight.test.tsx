@@ -1225,6 +1225,8 @@ describe('Show Night', () => {
       },
       enterResting: { blackoutAfterShowMs: 0, cues: [] },
       announcementDefaultPolicy: 'duck',
+      lightsFadeOutMs: 20000,
+      lightsFadeInMs: 8000,
       siteControl: {
         requestThermalProfile: 'winter-thermal',
         presentationPowerOn: { action: 'power-on', powerDomain: 'presentation', domainProvenance: 'operator-declared' },
@@ -1326,6 +1328,33 @@ describe('Show Night', () => {
     expect(captured.body?.announcementDefaultPolicy).toBe('interrupt')
     expect((captured.body?.resting as Record<string, unknown>).endOfNightPlaylist).toBe('holiday-cooldown')
     expect((captured.body?.resting as Record<string, unknown>).endOfNightRepeat).toBe(false)
+  })
+
+  it('sends the lights fades as edited, drops one that is cleared, and refuses one the fade cannot use', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(screen.getByLabelText('Lights fade-out (ms)')).toHaveValue(20000)
+    expect(screen.getByLabelText('Lights fade-in (ms)')).toHaveValue(8000)
+
+    fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '999' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    expect(await screen.findByText(/Lights fade-out must be a whole number of milliseconds from 1000 to 86400000/)).toBeInTheDocument()
+    expect(captured.body).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Lights fade-in (ms)'), { target: { value: '12000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect(captured.body).not.toHaveProperty('lightsFadeOutMs')
+    expect(captured.body?.lightsFadeInMs).toBe(12000)
   })
 
   it('sends the background audio subsection with the edited item, repeat, and ceiling', async () => {

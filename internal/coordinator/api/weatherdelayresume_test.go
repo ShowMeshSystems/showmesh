@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,6 +105,11 @@ func newResumeHarnessWith(t *testing.T, weatherDelay func(*store.Store) WeatherD
 		if req.URL.Path == fppcommand.WeatherGatePath {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"weatherGateClosed":false,"weatherGateRevision":0,"effectiveOutputPercent":0}`))
+			return
+		}
+		if req.URL.Path == fppcommand.TransitionGainPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"schemaVersion":%d,"applied":true}`, fppcommand.TransitionGainSchemaVersion)
 			return
 		}
 		var body struct {

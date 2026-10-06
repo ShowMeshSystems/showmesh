@@ -208,6 +208,8 @@ type nightSession struct {
 	AnnouncementDefaultPolicy string                   `json:"announcementDefaultPolicy"`
 	SiteControl               *nightSessionSiteControl `json:"siteControl,omitempty"`
 	Interlocks                []nightSessionInterlock  `json:"interlocks,omitempty"`
+	LightsFadeOutMs           *int                     `json:"lightsFadeOutMs,omitempty"`
+	LightsFadeInMs            *int                     `json:"lightsFadeInMs,omitempty"`
 }
 
 // nightSessionConfigResponse is the body of GET and PUT

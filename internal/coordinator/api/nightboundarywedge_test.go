@@ -271,6 +271,7 @@ func TestNightAdvanceRestingIntershow_DerivedInvalidBoundaryRetriesThenWedgesWhe
 	// action too, not just this one), which
 	// TestNightTick_DegradedSessionDispatchesNothingOnAFreshAction is what
 	// actually proves.
+	h.lights().wait()
 	if n := strings.Count(logBuf.String(), "session degraded"); n != 1 {
 		t.Fatalf("\"session degraded\" logged %d times across all ticks, want exactly 1", n)
 	}

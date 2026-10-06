@@ -138,6 +138,10 @@ type handlers struct {
 	// in production; only a test ever sets it.
 	nightGainWriter nightTransitionGainWriter
 
+	// nightLightsLocal holds the lights memory when deps carry no shared
+	// night store - see [handlers.lights].
+	nightLightsLocal *nightLightsGainLog
+
 	// fppGainWriter substitutes the operator transition-gain write - see
 	// [fppTransitionGainWriter] (fpptransitiongain.go). Nil in production;
 	// only a test ever sets it.

@@ -161,6 +161,7 @@ var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
 	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
 	"siteControl": true, "interlocks": true,
+	"lightsFadeOutMs": true, "lightsFadeInMs": true,
 }
 
 var (
@@ -198,6 +199,12 @@ type NightSessionPayload struct {
 	// unchanged in that case (RESTING-MODE.md §10's own opening line).
 	SiteControl *NightSiteControl    `json:"siteControl,omitempty"`
 	Interlocks  []NightInterlockRule `json:"interlocks,omitempty"`
+
+	// LightsFadeOutMs finishes as the resting sequence ends before a show;
+	// LightsFadeInMs starts when the resting playlist starts after one.
+	// Nil means no fade in that direction.
+	LightsFadeOutMs *int `json:"lightsFadeOutMs,omitempty"`
+	LightsFadeInMs  *int `json:"lightsFadeInMs,omitempty"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -637,12 +644,30 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	lightsFadeOutMs, verr := decodeOptionalLightsFadeMs(top, "lightsFadeOutMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	lightsFadeInMs, verr := decodeOptionalLightsFadeMs(top, "lightsFadeInMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
+	if verr := rejectLightsFadeCueOverlap("lightsFadeOutMs", lightsFadeOutMs, "enterShow", enterShow.Cues); verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	if verr := rejectLightsFadeCueOverlap("lightsFadeInMs", lightsFadeInMs, "enterResting", enterResting.Cues); verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting,
 		AnnouncementDefaultPolicy: announcementDefaultPolicy,
 		SiteControl:               siteControl,
 		Interlocks:                interlocks,
+		LightsFadeOutMs:           lightsFadeOutMs,
+		LightsFadeInMs:            lightsFadeInMs,
 	}, nil
 }
 
@@ -1288,6 +1313,56 @@ func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutFie
 		}
 	}
 	return &v, &v2, nil
+}
+
+// rejectLightsFadeCueOverlap refuses a lights fade setting alongside a lighting
+// cue that fades the same way: the two would write the gain against each other.
+func rejectLightsFadeCueOverlap(field string, ms *int, phase string, cues []NightSessionCue) *ValidationError {
+	if ms == nil {
+		return nil
+	}
+	for _, c := range cues {
+		if c.Role == NightSessionCueRoleLighting && c.FadeDurationMs != nil {
+			return &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: field,
+				Detail: fmt.Sprintf("%s and the fadeDurationMs on lighting cue %q in %s both fade the lights the same way. Remove one of them.", field, c.Name, phase),
+			}
+		}
+	}
+	return nil
+}
+
+// nightLightsFadeMaxMs is the longest fade the FPP plugin's transition gain
+// accepts: 86400 seconds.
+const nightLightsFadeMaxMs = 86400 * 1000
+
+// nightLightsFadeMinMs is the shortest fade: the plugin takes whole seconds.
+const nightLightsFadeMinMs = 1000
+
+// decodeOptionalLightsFadeMs reads an optional lights fade duration: absent
+// means no fade, and a present value must be a positive whole number of
+// milliseconds the plugin can honour.
+func decodeOptionalLightsFadeMs(top map[string]json.RawMessage, key string) (*int, *ValidationError) {
+	if _, present := top[key]; !present {
+		return nil, nil
+	}
+	v, verr := decodeRequiredNonNegativeInt(top, key, key)
+	if verr != nil {
+		return nil, verr
+	}
+	if v < nightLightsFadeMinMs {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: key,
+			Detail: fmt.Sprintf("%s must be at least %d, one second. Use a longer fade, or leave it out for no fade.", key, nightLightsFadeMinMs),
+		}
+	}
+	if v > nightLightsFadeMaxMs {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: key,
+			Detail: fmt.Sprintf("%s must be at most %d. Use a shorter fade.", key, nightLightsFadeMaxMs),
+		}
+	}
+	return &v, nil
 }
 
 // --- night.session-local decode helpers not already in showaction.go. ---

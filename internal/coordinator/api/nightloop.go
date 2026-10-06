@@ -69,6 +69,9 @@ func (l *NightLoop) Run(ctx context.Context) {
 			l.inFlight <- struct{}{} // wait for any in-flight tick to release.
 			if l.h != nil {
 				l.h.nightFirstCueStageWG.Wait()
+				// A lights write is bounded by its own timeout, so this never
+				// waits on a dead player longer than that.
+				l.h.lights().waitFor(nightLightsGainTimeout + time.Second)
 			}
 			return
 		case <-ticker.C:
@@ -119,6 +122,7 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	if !ok {
 		return
 	}
+	h.nightLightsAdvance(ctx, now, rec)
 	// A degraded session advances nothing, with one exception: fading out
 	// is how the operator stops the show through this session, and the
 	// three shutdown commands are accepted while degraded precisely so
@@ -431,6 +435,7 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
+	h.nightLightsRestore(ctx, now, rec, payload, "preshow")
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.Playlist, true, 0, fppIfBusyRefuse)
 	if !changed {
 		return
@@ -618,7 +623,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	// §7.1: the transition begins at E minus the largest enterShow lead,
 	// not at E itself, or a fade meant to finish before the resting FSEQ
 	// ends only begins after it. See [nightEnterShowLeadMs].
-	lead := time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond
+	lead := time.Duration(nightTransitionLeadMs(payload)) * time.Millisecond
 	if now.Before(boundary.ExpectedAt.Add(-lead)) {
 		return
 	}
@@ -691,6 +696,7 @@ func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec s
 		cur.DegradedReason = reason
 		return cur
 	})
+	h.nightLightsRestoreFor(ctx, now, rec, "degrade")
 }
 
 func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
@@ -708,6 +714,9 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
 			obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 			if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
+				if h.lights().fadeOutRan(rec) || payload.LightsFadeOutMs != nil {
+					h.nightLightsRestore(ctx, now, rec, payload, "abandon")
+				}
 				h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 					cur.State = nightStateRestingIntershow
 					cur.StateEnteredAt = now
@@ -750,6 +759,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// fire before the hold elapses. The launch itself (below) waits on both
 	// hold AND every barrier cue's own resolved outcome.
 	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, nightPhaseEnterShow, payload.EnterShow.Cues, payload)
+	h.nightAdvanceLightsFadeOut(ctx, now, rec, payload, boundaryE)
 
 	// The bound show playlist's own first audio-bearing cue is kicked off
 	// staging, on every audio node it resolves to, the same tick the
@@ -809,7 +819,11 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 			fellBackFromStaleNudge = true
 		}
 	}
+	h.nightRestoreShowGain(ctx, now, rec, payload, false)
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, instanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
+	if !anchor.DispatchedAt.IsZero() {
+		h.nightRestoreShowGain(ctx, now, rec, payload, true)
+	}
 	if !changed {
 		return
 	}
@@ -1116,9 +1130,13 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	if now.Sub(rec.StateEnteredAt) < hold {
 		return
 	}
+	h.nightLightsFadeInDark(ctx, now, rec, payload)
 
 	if rec.FinalShowRequested {
 		anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.EndOfNightPlaylist, payload.Resting.EndOfNightRepeat, 0, fppIfBusyRefuse)
+		if !anchor.DispatchedAt.IsZero() {
+			h.nightLightsFadeIn(ctx, now, rec, payload)
+		}
 		if !changed {
 			return
 		}
@@ -1142,6 +1160,9 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		return
 	}
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingOneShot, payload.Resting.FPPInstanceID, payload.Resting.Playlist, false, res.DurationMS, fppIfBusyRefuse)
+	if !anchor.DispatchedAt.IsZero() {
+		h.nightLightsFadeIn(ctx, now, rec, payload)
+	}
 	if !changed {
 		return
 	}

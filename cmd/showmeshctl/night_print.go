@@ -68,8 +68,23 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 	printNightSessionCues(w, "Enter-resting cues", p.EnterResting.Cues)
 	_, _ = fmt.Fprintf(w, "  Blackout after show: %dms\n", p.EnterResting.BlackoutAfterShowMs)
 
+	printNightSessionLightsFades(w, p)
+
 	printNightSessionSiteControl(w, p.SiteControl)
 	printNightSessionInterlocks(w, p.Interlocks)
+}
+
+func printNightSessionLightsFades(w io.Writer, p nightSession) {
+	for _, f := range []struct {
+		label string
+		ms    *int
+	}{{"Lights fade-out before a show", p.LightsFadeOutMs}, {"Lights fade-in after a show", p.LightsFadeInMs}} {
+		if f.ms == nil {
+			_, _ = fmt.Fprintf(w, "  %s: none\n", f.label)
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %s: %dms\n", f.label, *f.ms)
+	}
 }
 
 // printNightSessionSiteControl renders night.session.siteControl
