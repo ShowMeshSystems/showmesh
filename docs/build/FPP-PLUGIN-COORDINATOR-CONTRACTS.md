@@ -1829,13 +1829,14 @@ starts in `normal` and does the hand-back steps.
 **The decision comes from FPP.**
 
 - The first callback that names the saved playlist resumes the saved state.
-  The first entry callback for the recorded entry key gets no activation,
-  whatever its pass counter says, because FPP's counter starts over with
-  `fppd`. An entry the restart interrupted is not sent again.
+  If the callback that resumes is for the recorded entry key, that entry gets
+  no activation, whatever its pass counter says, because FPP's counter starts
+  over with `fppd`. An entry the restart interrupted is not sent again.
 - A callback that names another playlist is the boundary.
 - A stop is the boundary.
 - 30 seconds with no callback naming a playlist is the boundary. The 30
-  seconds are a named hypothesis in the plugin, not a measurement.
+  seconds are a named hypothesis in the plugin, not a measurement, and are
+  counted on a monotonic clock.
 
 At the boundary the four hand-back steps follow.
 
@@ -1966,8 +1967,12 @@ seconds.
 **An acknowledgement stays owed until it succeeds.** This is the program
 acknowledgement of §5.12 and of hand-back step 3, not the state report. One
 that got no success answer is sent again on the probe cadence, after each
-probe that succeeds, until the coordinator answers it with success. The
-coordinator's hold after a hand-back waits for exactly that answer (§5.16).
+probe that succeeds, until the coordinator answers it with success. A
+timeout, a `408`, a `429`, and any `5xx` keep that retry going. An
+acknowledgement answered with any other `4xx` is not retried until the next
+pairing or the next newly installed copy, because sending the same body again
+would be refused again. The coordinator's hold after a hand-back waits for a
+success answer (§5.16).
 
 **What the coordinator keeps.** One report per FPP player, the latest, with
 the time it arrived. A report with a `bootId` it has not seen replaces the
