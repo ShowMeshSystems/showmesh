@@ -82,7 +82,8 @@ type Engine struct {
 	// pipeline. Two GStreamer state changes in flight at once against
 	// sibling elements of the same pipeline were observed deferring
 	// behind each other past their own bounds; every teardown caller
-	// passes through here, so that can never happen.
+	// passes through here, so that can never happen. It is held only
+	// around the state change and element removal, never while waiting.
 	teardownTurn chan struct{}
 
 	// elementIndex maps every one of a branch's own element names (all

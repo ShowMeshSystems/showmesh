@@ -174,8 +174,9 @@ func TestTimedOutStartMarksAnchorUnknown(t *testing.T) {
 // only while teardown holds teardownGate, after teardown's own
 // b.released check; see TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains
 // in closeincomplete_test.go for the dynamic retry behavior that guard
-// exists for) must call awaitNoElementRace before it calls
-// setElementsState or touches b.channelMixerPads / bin.Remove.
+// exists for) must call claimTeardownTurn before it calls
+// setElementsState or touches b.channelMixerPads / bin.Remove, and
+// claimTeardownTurn must call awaitNoElementRace before it takes the turn.
 func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
@@ -183,17 +184,46 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 		t.Fatalf("parsing methods.go: %v", err)
 	}
 
-	var teardownFn *ast.FuncDecl
+	var teardownFn, claimFn *ast.FuncDecl
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "doTeardown" && fn.Recv != nil {
-			teardownFn = fn
-			return false
+		if !ok || fn.Recv == nil {
+			return true
 		}
-		return true
+		switch fn.Name.Name {
+		case "doTeardown":
+			teardownFn = fn
+		case "claimTeardownTurn":
+			claimFn = fn
+		}
+		return false
 	})
 	if teardownFn == nil {
 		t.Fatal("could not find func (b *branch) doTeardown in methods.go")
+	}
+	if claimFn == nil {
+		t.Fatal("could not find func (b *branch) claimTeardownTurn in methods.go")
+	}
+
+	settleIdx, turnIdx := -1, -1
+	j := 0
+	ast.Inspect(claimFn.Body, func(n ast.Node) bool {
+		j++
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "awaitNoElementRace" && settleIdx == -1 {
+				settleIdx = j
+			}
+		case *ast.SendStmt:
+			if turnIdx == -1 {
+				turnIdx = j
+			}
+		}
+		return true
+	})
+	if settleIdx == -1 || turnIdx == -1 || settleIdx > turnIdx {
+		t.Fatal("claimTeardownTurn does not call awaitNoElementRace before it takes the teardown turn: a teardown " +
+			"would hold the turn while it only waits, or reach its state change with no settle check at all")
 	}
 
 	var awaitIdx, setNullIdx = -1, -1
@@ -209,7 +239,7 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 		}
 		i++
 		switch sel.Sel.Name {
-		case "awaitNoElementRace":
+		case "claimTeardownTurn":
 			if awaitIdx == -1 {
 				awaitIdx = i
 			}
@@ -222,7 +252,7 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	})
 
 	if awaitIdx == -1 {
-		t.Fatal("teardown does not call awaitNoElementRace: an abandoned state change from an earlier operation " +
+		t.Fatal("teardown does not call claimTeardownTurn: an abandoned state change from an earlier operation " +
 			"(a timed-out Start left running toward PLAYING) is not guarded against before teardown touches " +
 			"this branch's elements, which is the same hazard its own comment already documents for its own " +
 			"abandoned NULL transition")
@@ -231,7 +261,7 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 		t.Fatal("could not find teardown's call to setElementsState")
 	}
 	if awaitIdx > setNullIdx {
-		t.Fatal("teardown calls setElementsState before awaitNoElementRace: the guard must run first, or it does " +
+		t.Fatal("teardown calls setElementsState before claimTeardownTurn: the guard must run first, or it does " +
 			"not prevent the race it exists to prevent")
 	}
 }

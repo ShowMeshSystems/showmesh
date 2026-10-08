@@ -743,9 +743,9 @@ func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHand
 	}
 	// Only a branch whose teardown was actually attempted and overran is
 	// reaped, and only once the sweep is over: a reaper started mid-sweep
-	// would hold the teardown turn on that very branch and stall every
-	// branch behind it. One never reached stays parked for Close or the
-	// next stop, already silent either way.
+	// would take the teardown turn from the branches still behind it the
+	// moment its own could proceed. One never reached stays parked for
+	// Close or the next stop, already silent either way.
 	var reap []*branch
 	defer func() {
 		for _, b := range reap {
@@ -779,10 +779,14 @@ func (e *Engine) ReleaseAll(ctx context.Context, except ...agentaudio.EngineHand
 	// Already-parked branches are not this call's own targets: they never
 	// count toward released or firstErr, and a reaper already owns each
 	// of them. They are attempted here so a stop that overran last time
-	// is finished by the next one.
+	// is finished by the next one, except where that reaper is mid-attempt
+	// and queuing behind it would only spend this stop's time.
 	for _, b := range parked {
 		if ctx.Err() != nil {
 			break
+		}
+		if b.teardownUnderway() {
+			continue
 		}
 		_ = tearDown(b)
 	}
@@ -903,20 +907,6 @@ func (b *branch) teardown(ctx context.Context) error {
 	}
 	defer func() { <-gate }()
 
-	// The same two-step against the engine's own turn: every teardown
-	// caller passes through here, so this pipeline never has two
-	// teardowns changing element state at once.
-	select {
-	case b.engine.teardownTurn <- struct{}{}:
-	default:
-		select {
-		case b.engine.teardownTurn <- struct{}{}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	defer func() { <-b.engine.teardownTurn }()
-
 	b.mu.Lock()
 	if b.released {
 		b.mu.Unlock()
@@ -927,11 +917,48 @@ func (b *branch) teardown(ctx context.Context) error {
 	return b.doTeardown(ctx)
 }
 
+// teardownUnderway reports whether another caller is inside teardown for
+// b right now. Advisory only: the answer can be stale by the time it is read.
+func (b *branch) teardownUnderway() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.teardownGate) == 1
+}
+
+// claimTeardownTurn takes the engine's teardown turn only once no state
+// change is still running against b's elements, so a teardown that is
+// merely waiting for one to settle never holds up another branch's.
+// The turn itself waits on ctx alone and is tried without blocking first.
+func (b *branch) claimTeardownTurn(ctx context.Context) error {
+	settleBy := time.Now().Add(teardownTimeout)
+	for {
+		if !b.awaitNoElementRace(ctx, time.Until(settleBy)) {
+			return errTeardownDeferredForRace
+		}
+		select {
+		case b.engine.teardownTurn <- struct{}{}:
+		default:
+			select {
+			case b.engine.teardownTurn <- struct{}{}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// A state change that began while this call queued for the turn
+		// sends it back to wait, with the turn handed on.
+		if b.pendingStateChanges.Load() == 0 {
+			return nil
+		}
+		<-b.engine.teardownTurn
+	}
+}
+
 // doTeardown is teardown's real attempt, reached only while teardown
 // holds teardownGate: it never runs concurrently with itself on the
-// same branch. Unlike a genuine success, a deferral is never cached, so
-// a retried teardown reaches here again and re-checks pendingStateChanges
-// fresh.
+// same branch. It holds the engine's teardown turn from its state change
+// to the removal of its elements, never while it only waits. Unlike a
+// genuine success, a deferral is never cached, so a retried teardown
+// reaches here again and re-checks pendingStateChanges fresh.
 func (b *branch) doTeardown(ctx context.Context) error {
 	b.mu.Lock()
 	b.teardownClaimed = true
@@ -947,12 +974,15 @@ func (b *branch) doTeardown(ctx context.Context) error {
 		b.removeHoldForTeardown()
 	}
 
-	if !b.awaitNoElementRace(ctx, teardownTimeout) {
-		slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)
-		b.engine.markTeardownDeferred()
+	if err := b.claimTeardownTurn(ctx); err != nil {
+		if errors.Is(err, errTeardownDeferredForRace) {
+			slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)
+			b.engine.markTeardownDeferred()
+		}
 		b.silenceDeferredBranch()
-		return errTeardownDeferredForRace
+		return err
 	}
+	defer func() { <-b.engine.teardownTurn }()
 
 	// teardownTimeout as well as ctx, never ctx alone: a caller with no
 	// deadline of its own would otherwise wait out a GStreamer NULL
