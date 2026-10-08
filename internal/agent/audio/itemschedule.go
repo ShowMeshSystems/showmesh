@@ -68,10 +68,12 @@ type itemStage struct {
 func (m *Manager) anchorItemScheduleLocked(ctx context.Context, s *Session, sched *startSchedule, position time.Duration) {
 	if sched == nil {
 		s.schedule = nil
+		s.scheduleClock = nil
 		s.discardStageLocked(ctx)
 		return
 	}
 	s.schedule = &itemSchedule{itemStartAt: sched.t0.Add(-position)}
+	s.scheduleClock = scheduleClockIdentityOf(sched.status)
 	s.refreshBoundaryFromProbeLocked()
 	s.discardStageLocked(ctx)
 }

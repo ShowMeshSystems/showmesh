@@ -24,13 +24,14 @@ type ClockSource interface {
 	Last() (status agentclock.Status, polledAt time.Time, ok bool)
 }
 
-// Resync reasons: the three causes that can make a discontinuity, and
-// nothing else. Each names an event observed from evidence, never a
-// conclusion drawn from the size of the error.
+// Resync reasons: the causes that can make a discontinuity, and nothing
+// else. Each names an event observed from evidence, never a conclusion
+// drawn from the size of the error.
 const (
 	ResyncReasonPTPStep         = "ptp_step"
 	ResyncReasonProviderRestart = "provider_restart"
 	ResyncReasonDeviceChange    = "device_change"
+	ResyncReasonAgentRestart    = "agent_restart"
 )
 
 // timeline is one scheduled session's presentation timeline: the T0 it
@@ -81,6 +82,10 @@ type timeline struct {
 	// sample-rate rebuild swapped the pipeline out underneath it; see
 	// [Manager.RebindEngine], the single path all three take.
 	engineEpoch uint64
+
+	// restartPending is true on a timeline rebuilt after this agent
+	// restarted, until its first evaluation has carried that cause.
+	restartPending bool
 
 	resyncs          int64
 	lastResyncReason string
@@ -273,7 +278,7 @@ func (m *Manager) evaluateTimelineLocked(ctx context.Context, s *Session) {
 	m.resyncLocked(ctx, s, cause, presented)
 }
 
-// consumeCause reports which of the three discontinuity causes has
+// consumeCause reports which of the discontinuity causes has
 // occurred since the previous evaluation, and folds the evidence for it
 // into this timeline's own anchors so the same event cannot fire twice.
 // It reads only observed evidence: the tracker's own step instants, the
@@ -293,6 +298,13 @@ func (t *timeline) consumeCause(status agentclock.Status, engineEpoch uint64) st
 		t.sawUnlocked = false
 		if cause == "" {
 			cause = ResyncReasonProviderRestart
+		}
+	}
+
+	if t.restartPending {
+		t.restartPending = false
+		if cause == "" {
+			cause = ResyncReasonAgentRestart
 		}
 	}
 

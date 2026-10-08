@@ -87,6 +87,9 @@ func (m *Manager) StopPersisted(match func(pkgaudio.SessionID) bool) error {
 // [pkgaudio.ResumePolicy]: Resume restarts from the last bookmark,
 // Restart always begins at 0. Either way this is a discontinuity —
 // timingKnown starts false until a fresh observation resolves it.
+// A session persisted under a schedule rejoins at the scheduled position
+// instead, when this node's media clock is shown to be the one that
+// schedule was read on (see restorerejoin.go).
 //
 // retry is true only when [Manager.retryDeferredRestores] is the
 // caller, a session already deferred once, now being retried right
@@ -213,7 +216,16 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 	m.mu.Unlock()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	// restoreDucked and restoreInterrupted lock other sessions, so a
+	// session found already over runs them only after its own lock is gone.
+	endedWhileDown := false
+	defer func() {
+		s.mu.Unlock()
+		if endedWhileDown {
+			m.restoreDucked(ctx, id)
+			m.restoreInterrupted(ctx, id)
+		}
+	}()
 
 	switch s.state {
 	case pkgaudio.StatePlaying, pkgaudio.StatePreparing:
@@ -221,8 +233,20 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		if !ok {
 			return nil
 		}
+		rejoin := m.resolveRestartRejoinLocked(ctx, s, rec)
+		if rejoin.ended {
+			m.completeEndedWhileDownLocked(s)
+			endedWhileDown = true
+			return nil
+		}
 		position := time.Duration(0)
-		if s.bookmark != nil && s.desired.Playlist != nil && s.desired.Playlist.Resume == pkgaudio.ResumePolicyResume {
+		if rejoin.onSchedule {
+			item = rejoin.item
+			position = rejoin.position
+			s.currentIndex = rejoin.index
+			s.currentItemID = item.ItemID
+			s.bookmark = nil
+		} else if s.bookmark != nil && s.desired.Playlist != nil && s.desired.Playlist.Resume == pkgaudio.ResumePolicyResume {
 			resolved, err := s.resolveBookmarkPositionLocked(item)
 			if err != nil {
 				// A stale bookmark surviving a restart must not silently
@@ -263,6 +287,9 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		// this line runs, prepareLocked's own Load has already
 		// succeeded against SOME bound engine, and nothing can unbind
 		// or swap it out from under this call.
+		if rejoin.onSchedule {
+			position = rejoin.positionAfterLoad(ctx)
+		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
 				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Start failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
@@ -277,7 +304,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
 		m.startLTCLocked(ctx, s, position)
-		m.restoreItemScheduleLocked(ctx, s, rec)
+		switch {
+		case rejoin.onSchedule:
+			m.anchorRestartRejoinLocked(ctx, s, rec, rejoin, position)
+		case rejoin.legacy:
+			m.restoreItemScheduleLocked(ctx, s, rec)
+		}
 		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
 		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
