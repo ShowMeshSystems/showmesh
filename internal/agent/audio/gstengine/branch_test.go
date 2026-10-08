@@ -130,3 +130,31 @@ func TestFadeArrivedRequiresGainAtTarget(t *testing.T) {
 		})
 	}
 }
+
+// TestMixerLagBeyondPaceIsZeroForAMixerKeepingPace pins the line between
+// a mixer that keeps pace with the clock, whose branches stay anchored to
+// the clock, and one that has fallen behind it.
+func TestMixerLagBeyondPaceIsZeroForAMixerKeepingPace(t *testing.T) {
+	const latency = 31333333 * time.Nanosecond
+	const running = 700000 * time.Second
+	cases := []struct {
+		name   string
+		behind time.Duration
+		want   time.Duration
+	}{
+		{"nearest a mixer keeping pace was measured", 41 * time.Millisecond, 0},
+		{"99th percentile of a mixer keeping pace", 64 * time.Millisecond, 0},
+		{"furthest a mixer keeping pace was measured", 76 * time.Millisecond, 0},
+		{"exactly on the line", mixerPaceLatencies * latency, 0},
+		{"a 600ms drain gap", 650 * time.Millisecond, 650*time.Millisecond - mixerPaceLatencies*latency},
+		{"the late node", 2930 * time.Millisecond, 2930*time.Millisecond - mixerPaceLatencies*latency},
+	}
+	for _, tc := range cases {
+		if got := mixerLagBeyondPace(running, running-tc.behind, latency); got != tc.want {
+			t.Errorf("%s: mixer %s behind the clock: lag beyond pace = %s, want %s", tc.name, tc.behind, got, tc.want)
+		}
+	}
+	if got := mixerLagBeyondPace(0, 0, latency); got != 0 {
+		t.Errorf("pipeline with no running time yet: lag beyond pace = %s, want 0", got)
+	}
+}
