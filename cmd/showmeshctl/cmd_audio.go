@@ -42,6 +42,11 @@ type configAudioSettingsPayload struct {
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 
+	// The same two terms for a start whose target nodes all confirmed a
+	// prepare of that session. Optional on write; absent means the default.
+	PreparedStartDeliveryBoundMs int `json:"preparedStartDeliveryBoundMs"`
+	PreparedStartMarginMs        int `json:"preparedStartMarginMs"`
+
 	// MultisyncFallbackWindowMs is also read by the coordinator only
 	// (ADR-051 decision 4): how long it waits for a node's own MultiSync
 	// start evidence before dispatching with no scheduled instant instead.
@@ -261,6 +266,10 @@ multisyncFallbackWindowMs (how long, after dispatching an activation, it
 waits for a node's own evidence that a MultiSync START packet already
 started that cue's audio before it dispatches with no scheduled instant
 instead). All three are guesses, not measurements.
+preparedStartDeliveryBoundMs and preparedStartMarginMs are the same two
+terms for a start where every node has the audio loaded ahead of the
+start, so the wait covers delivery and not a load. Both are optional: a
+write that leaves one out sets it to its default (250 and 500).
 multisyncStartLeadMs is read by the NODE, not the coordinator: the fixed
 lead a MultiSync-triggered Cue audio start waits past the START packet's
 own arrival before presenting the first sample, pushed to every node on
@@ -1038,6 +1047,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 	_, _ = fmt.Fprintf(w, "  scheduledStartDeliveryBoundMs: %d\n", resp.Payload.ScheduledStartDeliveryBoundMs)
 	_, _ = fmt.Fprintf(w, "  scheduledStartMarginMs:        %d\n", resp.Payload.ScheduledStartMarginMs)
+	_, _ = fmt.Fprintf(w, "  preparedStartDeliveryBoundMs:  %d\n", resp.Payload.PreparedStartDeliveryBoundMs)
+	_, _ = fmt.Fprintf(w, "  preparedStartMarginMs:         %d\n", resp.Payload.PreparedStartMarginMs)
 	_, _ = fmt.Fprintf(w, "  multisyncFallbackWindowMs:     %d\n", resp.Payload.MultisyncFallbackWindowMs)
 	_, _ = fmt.Fprintf(w, "  multisyncStartLeadMs:          %d\n", resp.Payload.MultisyncStartLeadMs)
 }

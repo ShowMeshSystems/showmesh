@@ -5787,6 +5787,16 @@ export interface components {
             scheduledStartDeliveryBoundMs: number;
             /** @description Read by the coordinator, not by a node. Deliberate slack held back beyond scheduledStartDeliveryBoundMs. Stays a judgement even once the bound is measured. The bounds are a typo guard. */
             scheduledStartMarginMs: number;
+            /**
+             * @description Read by the coordinator, not by a node. Replaces scheduledStartDeliveryBoundMs for a start whose target nodes all confirmed a prepare of that same session, so the wait covers delivery and not a load. Optional on write: an absent key takes the default. Always present on read.
+             * @default 250
+             */
+            preparedStartDeliveryBoundMs?: number;
+            /**
+             * @description Read by the coordinator, not by a node. Slack held back beyond preparedStartDeliveryBoundMs for the same prepared start. Optional on write: an absent key takes the default. Always present on read.
+             * @default 500
+             */
+            preparedStartMarginMs?: number;
             /** @description Read by the coordinator, not by a node. How long, after dispatching an activation, it waits from the FPP entry observation for a node's own evidence that a MultiSync START packet already started that cue's audio, before dispatching with no scheduled instant instead (start on arrival). The bounds are a typo guard. */
             multisyncFallbackWindowMs: number;
             /** @description Read by the NODE, not the coordinator. The fixed lead a MultiSync-triggered Cue audio start waits past the START packet's own arrival before presenting the first sample. Pushed to every node on write and on hello. The bounds are a typo guard. */

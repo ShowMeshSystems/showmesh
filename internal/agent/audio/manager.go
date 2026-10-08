@@ -269,6 +269,37 @@ func (m *Manager) logf(format string, args ...any) {
 	}
 }
 
+// startTiming is where one start spent its time, phase by phase, so a
+// slow press-to-sound can be attributed from the node's log alone.
+type startTiming struct {
+	scheduled, loaded                              bool
+	queued, load, resolve, wait, duck, engineStart time.Duration
+}
+
+// laps returns a function that reports the time since its previous call.
+func (*startTiming) laps(now func() time.Time) func() time.Duration {
+	last := now()
+	return func() time.Duration {
+		t := now()
+		d := t.Sub(last)
+		last = t
+		return d
+	}
+}
+
+func (m *Manager) logStartTiming(id pkgaudio.SessionID, t startTiming, outcome pkgaudio.OutcomeResult) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.Info("audio session start timing",
+		"sessionId", string(id), "outcome", string(outcome.Outcome),
+		"scheduled", t.scheduled, "loadedInStart", t.loaded,
+		"queuedMs", t.queued.Milliseconds(), "loadMs", t.load.Milliseconds(),
+		"resolveScheduleMs", t.resolve.Milliseconds(), "waitForInstantMs", t.wait.Milliseconds(),
+		"duckMs", t.duck.Milliseconds(), "engineStartMs", t.engineStart.Milliseconds(),
+		"totalMs", (t.queued + t.load + t.resolve + t.wait + t.duck + t.engineStart).Milliseconds())
+}
+
 func (m *Manager) getOrCreate(id pkgaudio.SessionID) *Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -517,8 +548,11 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	// its own assignment inside exec for why this session's start must
 	// restore that duck when it does not end Playing.
 	duckedBeforeStart := false
+	timing := startTiming{scheduled: scheduledAtNs != nil}
+	lap := timing.laps(m.now)
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		timing.queued = lap()
 		if startPoint != nil {
 			if err := s.applyResumePointLocked(*startPoint); err != nil {
 				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
@@ -543,8 +577,11 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		// as stale as no handle at all: starting it would play the OLD
 		// content while every other surface reports the new one.
 		if !s.handleLoaded || s.loadedIdentity != itemIdentity(item) {
+			timing.loaded = true
 			s.releaseEngineLocked(ctx)
-			if _, err := s.prepareLocked(ctx, item); err != nil {
+			_, err := s.prepareLocked(ctx, item)
+			timing.load = lap()
+			if err != nil {
 				// No audio.node binding has arrived yet (the same boot
 				// window restoreOne's deferral exists for): a session
 				// with no other issue must not be permanently converted
@@ -576,11 +613,14 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			}
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
+		timing.resolve = lap()
 		if refusal != nil {
 			return *refusal
 		}
 		if sched != nil {
-			if err := sched.waitUntilT0(ctx); err != nil {
+			err := sched.waitUntilT0(ctx)
+			timing.wait = lap()
+			if err != nil {
 				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
 			}
 		}
@@ -632,6 +672,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			}
 		}
 
+		timing.duck = lap()
 		dispatchedAt := m.now()
 		// This call can still fail for a real engine reason
 		// (ClassifyFault below covers those), but never with
@@ -641,6 +682,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		// this line runs, m.engine has resolved to SOME bound
 		// implementation.
 		obs, err := s.mgr.engine.Start(ctx, s.handle, position)
+		timing.engineStart = lap()
 		if err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
@@ -678,6 +720,9 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	s.mu.Unlock()
 
+	if res.executed {
+		m.logStartTiming(id, timing, res.outcome)
+	}
 	if duckedBeforeStart && !started {
 		// The announcement never actually reached Playing (a failed
 		// engine.Start, or the duck fade's own wait was cut short): the

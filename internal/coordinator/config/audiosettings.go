@@ -201,6 +201,12 @@ type AudioSettingsPayload struct {
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 
+	// PreparedStartDeliveryBoundMs and PreparedStartMarginMs replace the
+	// pair above for a start whose target nodes all confirmed a prepare of
+	// that same session. Optional on write: an absent key takes its default.
+	PreparedStartDeliveryBoundMs int `json:"preparedStartDeliveryBoundMs"`
+	PreparedStartMarginMs        int `json:"preparedStartMarginMs"`
+
 	// MultisyncFallbackWindowMs is ADR-051 decision 4's own bound: after
 	// dispatching an activation, the coordinator waits this long, from the
 	// FPP entry observation, for a node's own evidence that a MultiSync
@@ -266,6 +272,12 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 	ScheduledStartDeliveryBoundMs: 2000,
 	ScheduledStartMarginMs:        1000,
 
+	// On 2026-10-08 a start reached both nodes about 110 ms after the
+	// prepare it followed, with one more round trip in between than a
+	// prepared start makes. 250 ms is twice that; the margin is slack.
+	PreparedStartDeliveryBoundMs: 250,
+	PreparedStartMarginMs:        500,
+
 	// 1.5s is RES-020's own measured value (ADR-051 decision 4): comfortably
 	// past a real MultiSync START packet's own observed arrival-to-report
 	// latency, short enough that a Cue with no trigger at all still starts
@@ -286,6 +298,7 @@ var audioSettingsTopLevelKeys = map[string]bool{
 	"duckTargetGainDb": true, "duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
 	"ltcFrameRate": true, "ltcDefaultStartOffset": true,
 	"scheduledStartDeliveryBoundMs": true, "scheduledStartMarginMs": true,
+	"preparedStartDeliveryBoundMs": true, "preparedStartMarginMs": true,
 	"multisyncFallbackWindowMs": true, "multisyncStartLeadMs": true,
 }
 
@@ -459,6 +472,15 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
+	preparedBoundMs, verr := decodeScheduledStartOffsetOrDefault(top, "preparedStartDeliveryBoundMs", AudioSettingsDefaultPayload.PreparedStartDeliveryBoundMs)
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	preparedMarginMs, verr := decodeScheduledStartOffsetOrDefault(top, "preparedStartMarginMs", AudioSettingsDefaultPayload.PreparedStartMarginMs)
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+
 	multisyncFallbackWindowMs, verr := decodeRequiredInt(top, "multisyncFallbackWindowMs", "multisyncFallbackWindowMs")
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
@@ -494,6 +516,8 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 
 		ScheduledStartDeliveryBoundMs: deliveryBoundMs,
 		ScheduledStartMarginMs:        marginMs,
+		PreparedStartDeliveryBoundMs:  preparedBoundMs,
+		PreparedStartMarginMs:         preparedMarginMs,
 		MultisyncFallbackWindowMs:     multisyncFallbackWindowMs,
 		MultisyncStartLeadMs:          multisyncStartLeadMs,
 	}, nil
@@ -515,4 +539,24 @@ func decodeRequiredFloat(top map[string]json.RawMessage, key, field string) (flo
 		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON number", field)}
 	}
 	return f, nil
+}
+
+// decodeScheduledStartOffsetOrDefault reads an optional start-lead term: an
+// absent key is def, and a present one is held to the same bounds as
+// scheduledStartDeliveryBoundMs.
+func decodeScheduledStartOffsetOrDefault(top map[string]json.RawMessage, key string, def int) (int, *ValidationError) {
+	if _, present := top[key]; !present {
+		return def, nil
+	}
+	v, verr := decodeRequiredInt(top, key, key)
+	if verr != nil {
+		return 0, verr
+	}
+	if v < minScheduledStartOffsetMs || v > maxScheduledStartOffsetMs {
+		return 0, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: key,
+			Detail: fmt.Sprintf("%s must be between %d and %d", key, minScheduledStartOffsetMs, maxScheduledStartOffsetMs),
+		}
+	}
+	return v, nil
 }

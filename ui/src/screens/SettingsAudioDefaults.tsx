@@ -37,6 +37,8 @@ export function SettingsAudioDefaults() {
   const [driftIgnoreThresholdMs, setDriftIgnoreThresholdMs] = useState('')
   const [scheduledStartDeliveryBoundMs, setScheduledStartDeliveryBoundMs] = useState('')
   const [scheduledStartMarginMs, setScheduledStartMarginMs] = useState('')
+  const [preparedStartDeliveryBoundMs, setPreparedStartDeliveryBoundMs] = useState('')
+  const [preparedStartMarginMs, setPreparedStartMarginMs] = useState('')
   const [multisyncFallbackWindowMs, setMultisyncFallbackWindowMs] = useState('')
   const [multisyncStartLeadMs, setMultisyncStartLeadMs] = useState('')
   const [ltcFrameRate, setLtcFrameRate] = useState<(typeof LTC_FRAME_RATES)[number]>('30')
@@ -61,6 +63,8 @@ export function SettingsAudioDefaults() {
         setDriftIgnoreThresholdMs(String(response.payload.driftIgnoreThresholdMs))
         setScheduledStartDeliveryBoundMs(String(response.payload.scheduledStartDeliveryBoundMs))
         setScheduledStartMarginMs(String(response.payload.scheduledStartMarginMs))
+        setPreparedStartDeliveryBoundMs(String(response.payload.preparedStartDeliveryBoundMs ?? ''))
+        setPreparedStartMarginMs(String(response.payload.preparedStartMarginMs ?? ''))
         setMultisyncFallbackWindowMs(String(response.payload.multisyncFallbackWindowMs))
         setMultisyncStartLeadMs(String(response.payload.multisyncStartLeadMs))
         setLtcFrameRate(response.payload.ltcFrameRate)
@@ -85,6 +89,8 @@ export function SettingsAudioDefaults() {
     setDriftIgnoreThresholdMs(String(state.response.payload.driftIgnoreThresholdMs))
     setScheduledStartDeliveryBoundMs(String(state.response.payload.scheduledStartDeliveryBoundMs))
     setScheduledStartMarginMs(String(state.response.payload.scheduledStartMarginMs))
+    setPreparedStartDeliveryBoundMs(String(state.response.payload.preparedStartDeliveryBoundMs ?? ''))
+    setPreparedStartMarginMs(String(state.response.payload.preparedStartMarginMs ?? ''))
     setMultisyncFallbackWindowMs(String(state.response.payload.multisyncFallbackWindowMs))
     setMultisyncStartLeadMs(String(state.response.payload.multisyncStartLeadMs))
     setLtcFrameRate(state.response.payload.ltcFrameRate)
@@ -141,6 +147,16 @@ export function SettingsAudioDefaults() {
       setSaveError('Scheduled start margin must be a whole number of milliseconds between 0 and 60000.')
       return
     }
+    for (const [label, raw] of [
+      ['Prepared start delivery bound', preparedStartDeliveryBoundMs],
+      ['Prepared start margin', preparedStartMarginMs],
+    ]) {
+      const ms = Number(raw)
+      if (raw !== '' && (!Number.isInteger(ms) || ms < 0 || ms > 60000)) {
+        setSaveError(`${label} must be a whole number of milliseconds between 0 and 60000.`)
+        return
+      }
+    }
     if (!Number.isInteger(fallbackWindowMs) || fallbackWindowMs < 0 || fallbackWindowMs > 10000) {
       setSaveError('MultiSync fallback window must be a whole number of milliseconds between 0 and 10000.')
       return
@@ -168,6 +184,8 @@ export function SettingsAudioDefaults() {
           ltcDefaultStartOffset,
           scheduledStartDeliveryBoundMs: deliveryBoundMs,
           scheduledStartMarginMs: marginMs,
+          ...(preparedStartDeliveryBoundMs === '' ? {} : { preparedStartDeliveryBoundMs: Number(preparedStartDeliveryBoundMs) }),
+          ...(preparedStartMarginMs === '' ? {} : { preparedStartMarginMs: Number(preparedStartMarginMs) }),
           multisyncFallbackWindowMs: fallbackWindowMs,
           multisyncStartLeadMs: startLeadMs,
         }),
@@ -320,6 +338,42 @@ export function SettingsAudioDefaults() {
                     value={scheduledStartMarginMs}
                     onChange={(e) => {
                       setScheduledStartMarginMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Prepared start delivery bound (ms)"
+                help="Used when every node has the audio loaded ahead of the start."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={60000}
+                    value={preparedStartDeliveryBoundMs}
+                    onChange={(e) => {
+                      setPreparedStartDeliveryBoundMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Prepared start margin (ms)"
+                help="Used when every node has the audio loaded ahead of the start."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={60000}
+                    value={preparedStartMarginMs}
+                    onChange={(e) => {
+                      setPreparedStartMarginMs(e.target.value)
                       setDirty(true)
                     }}
                   />

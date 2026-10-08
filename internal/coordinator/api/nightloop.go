@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +32,28 @@ type NightLoop struct {
 	interval time.Duration
 	logger   *slog.Logger
 	inFlight chan struct{} // 1-buffered: acts as a non-blocking mutex.
+}
+
+// nightLoopWakeRegistry holds one wake channel per night-session store, so
+// the HTTP handlers can ask the loop's own separate handlers for a tick now.
+var nightLoopWakeRegistry sync.Map
+
+func (h *handlers) nightLoopWake() chan struct{} {
+	if h == nil || h.deps.NightSessions == nil || !reflect.TypeOf(h.deps.NightSessions).Comparable() {
+		return nil
+	}
+	k := h.deps.NightSessions
+	v, _ := nightLoopWakeRegistry.LoadOrStore(k, make(chan struct{}, 1))
+	return v.(chan struct{})
+}
+
+// nightWakeLoop asks the night loop to tick now instead of at its next
+// interval. It never blocks: a wake already pending covers this one.
+func (h *handlers) nightWakeLoop() {
+	select {
+	case h.nightLoopWake() <- struct{}{}:
+	default:
+	}
 }
 
 // NewNightLoop builds a [NightLoop] against deps/opts, mirroring
@@ -63,6 +87,10 @@ func NewNightLoop(deps Dependencies, opts Options) *NightLoop {
 func (l *NightLoop) Run(ctx context.Context) {
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
+	tick := func() {
+		defer func() { <-l.inFlight }()
+		l.h.nightTick(ctx, l.h.now())
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,13 +105,20 @@ func (l *NightLoop) Run(ctx context.Context) {
 		case <-ticker.C:
 			select {
 			case l.inFlight <- struct{}{}:
-				go func() {
-					defer func() { <-l.inFlight }()
-					l.h.nightTick(ctx, l.h.now())
-				}()
+				go tick()
 			default:
 				// Previous tick still running; skip this one.
 			}
+		case <-l.h.nightLoopWake():
+			// A tick already running read the session before the command
+			// that woke this, so wait for it rather than skip.
+			go func() {
+				select {
+				case l.inFlight <- struct{}{}:
+					tick()
+				case <-ctx.Done():
+				}
+			}()
 		}
 	}
 }
@@ -189,12 +224,12 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// nothing to check.
 	switch rec.State {
 	case nightStatePreshow, nightStateEndOfNightResting:
-		h.nightAdvanceBackgroundAudio(ctx, now, rec)
+		h.nightAdvanceBackgroundAudioChain(ctx, now, rec)
 	case nightStateRestingIntershow, nightStateTransitionToShow:
 		if h.nightBackgroundAudioFadeDownDue(ctx, now, rec) {
 			h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 		} else if rec.State == nightStateRestingIntershow {
-			h.nightAdvanceBackgroundAudio(ctx, now, rec)
+			h.nightAdvanceBackgroundAudioChain(ctx, now, rec)
 		}
 		// transition-to-show, lead not yet reached: intentionally no
 		// action, per this switch's own comment above.

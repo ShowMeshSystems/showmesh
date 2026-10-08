@@ -201,8 +201,9 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ReferenceFormAppliesCompleteItemLi
 }
 
 // TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead proves
-// ADR-049 decisions 3, 4, and 6: a shared first start reads the clock once,
-// dispatches identical scheduledAtNs to both nodes, and a replay reads none.
+// ADR-049 decisions 3, 4, and 6: a shared first start prepares the bed once
+// on each node, dispatches identical scheduledAtNs to both, and a replay
+// prepares nothing.
 func TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
@@ -220,8 +221,11 @@ func TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead(t *testi
 
 	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
 
-	if got := countDispatchedAction(pub, "audio.session.prepare"); got != 1 {
-		t.Fatalf("audio.session.prepare dispatch count = %d, want exactly 1 (one schedule read)", got)
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", nightBackgroundAudioSessionID(rec)); got != 2 {
+		t.Fatalf("audio.session.prepare of the bed session = %d, want exactly 2 (one per node, one schedule read)", got)
+	}
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 0 {
+		t.Fatalf("audio.session.prepare of the probe session = %d, want 0 on a first start", got)
 	}
 	startA, okA := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
 	startB, okB := dispatchedByNodeAction(pub, "node-b", "audio.session.start")
@@ -471,23 +475,21 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 	if atA != atB {
 		t.Fatalf("resume scheduledAtNs differ: node-a=%v node-b=%v, want identical", atA, atB)
 	}
-	if got := countDispatchedAction(pub, "audio.session.prepare"); got != 2 {
-		t.Fatalf("audio.session.prepare dispatch count = %d, want 2 (one for the first start, one for the resume)", got)
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 1 {
+		t.Fatalf("audio.session.prepare of the probe session = %d, want 1 (the resume's own schedule read)", got)
 	}
 }
 
-// TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume is
-// guards the schedule clock read. nightComputeBedSchedule used to read
-// the clock by preparing the REAL bed session directly
-// (audio.session.prepare against nightBackgroundAudioSessionID(rec)), on
-// both the shared start and the shared resume - and the agent's own
-// Manager.Prepare (internal/agent/audio/manager.go) releases the engine
-// and marks the session Ready, ending a just-confirmed pause. This proves
-// both reads instead go through readScheduleProbe's own dedicated
-// [cueactivation.ScheduleProbeSessionID], never the bed's own session id,
-// and that the paused bed session sees no prepare of any kind between its
-// own confirmed pause and its own confirmed resume.
-func TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume(t *testing.T) {
+// TestNightBedScheduleReadNeverTouchesAPausedBedSession guards the resume's
+// schedule clock read. The agent's own Manager.Prepare
+// (internal/agent/audio/manager.go) releases the engine and marks the
+// session Ready, ending a just-confirmed pause, so the resume read goes
+// through readScheduleProbe's own dedicated
+// [cueactivation.ScheduleProbeSessionID] and the paused bed session sees no
+// prepare of any kind between its confirmed pause and its confirmed resume.
+// A first start has no pause to end: it prepares the bed's own session on
+// every node, which is what loads the bed ahead of the start.
+func TestNightBedScheduleReadNeverTouchesAPausedBedSession(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
@@ -519,17 +521,19 @@ func TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume(t *testing
 		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, startClockReading, ""),
 	}
 	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
-	assertNoScheduleReadTouchesSession(0)
 
 	startA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
 	if !ok {
 		t.Fatalf("node-a: no audio.session.start dispatched")
 	}
 	if _, present := startA[pkgaudio.ParamScheduledAtNs]; !present {
-		t.Fatalf("node-a start params = %v, want scheduledAtNs present (the start's own schedule read must have succeeded through the probe)", startA)
+		t.Fatalf("node-a start params = %v, want scheduledAtNs present (the start's own schedule read must have succeeded)", startA)
 	}
-	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 1 {
-		t.Fatalf("audio.session.prepare on the probe session = %d, want exactly 1 (one schedule read for the start)", got)
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", bedSessionID); got != 2 {
+		t.Fatalf("audio.session.prepare on the bed session = %d, want exactly 2 (each node loads the bed ahead of its first start)", got)
+	}
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 0 {
+		t.Fatalf("audio.session.prepare on the probe session = %d, want 0 for a first start", got)
 	}
 
 	rec.Cycle++
@@ -567,8 +571,8 @@ func TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume(t *testing
 	if _, present := resumeA[pkgaudio.ParamScheduledAtNs]; !present {
 		t.Fatalf("node-a resume params = %v, want scheduledAtNs present (the resume's own schedule read must have succeeded through the probe)", resumeA)
 	}
-	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 2 {
-		t.Fatalf("audio.session.prepare on the probe session = %d, want exactly 2 (one for the start, one for the resume)", got)
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 1 {
+		t.Fatalf("audio.session.prepare on the probe session = %d, want exactly 1 (the resume's own schedule read)", got)
 	}
 }
 

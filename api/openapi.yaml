@@ -16554,6 +16554,27 @@ components:
             Read by the coordinator, not by a node. Deliberate slack held
             back beyond scheduledStartDeliveryBoundMs. Stays a judgement
             even once the bound is measured. The bounds are a typo guard.
+        preparedStartDeliveryBoundMs:
+          type: integer
+          minimum: 0
+          maximum: 60000
+          default: 250
+          description: >-
+            Read by the coordinator, not by a node. Replaces
+            scheduledStartDeliveryBoundMs for a start whose target nodes
+            all confirmed a prepare of that same session, so the wait
+            covers delivery and not a load. Optional on write: an absent
+            key takes the default. Always present on read.
+        preparedStartMarginMs:
+          type: integer
+          minimum: 0
+          maximum: 60000
+          default: 500
+          description: >-
+            Read by the coordinator, not by a node. Slack held back beyond
+            preparedStartDeliveryBoundMs for the same prepared start.
+            Optional on write: an absent key takes the default. Always
+            present on read.
         multisyncFallbackWindowMs:
           type: integer
           minimum: 0

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -53,6 +54,35 @@ func TestPutAudioSettingsThenGetReflectsWrittenValue(t *testing.T) {
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", map[string]string{"Authorization": "Bearer " + token})
 	if !containsAll(string(getBody), `"driftIgnoreThresholdMs":30`) || !containsAll(string(getBody), `"duckTargetGainDb":-13.98`) || !containsAll(string(getBody), `"source":"api"`) {
 		t.Fatalf("GET does not reflect written value; body: %s", getBody)
+	}
+}
+
+// TestPutAudioSettingsPreparedStartTermsDefaultWhenAbsentAndKeepWhenWritten
+// proves a write without the two prepared start terms reads back their
+// defaults, and a write carrying them reads back what was written.
+func TestPutAudioSettingsPreparedStartTermsDefaultWhenAbsentAndKeepWhenWritten(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	auth := map[string]string{"Authorization": "Bearer " + mustIssueToken(t, svc, admin.ID)}
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", auth)
+	if !containsAllSubstrings(string(getBody), `"preparedStartDeliveryBoundMs":250`, `"preparedStartMarginMs":500`, `"revision":0`) {
+		t.Fatalf("the built-in default lacks the prepared start terms; body: %s", getBody)
+	}
+
+	for _, tc := range []struct{ body, wantBound, wantMargin string }{
+		{validAudioSettingsBody, `"preparedStartDeliveryBoundMs":250`, `"preparedStartMarginMs":500`},
+		{strings.TrimSuffix(validAudioSettingsBody, "}") + `,"preparedStartDeliveryBoundMs":120,"preparedStartMarginMs":300}`, `"preparedStartDeliveryBoundMs":120`, `"preparedStartMarginMs":300`},
+	} {
+		resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.settings", tc.body, auth))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", auth)
+		if !containsAllSubstrings(string(getBody), tc.wantBound, tc.wantMargin) {
+			t.Fatalf("GET = %s, want %s and %s", getBody, tc.wantBound, tc.wantMargin)
+		}
 	}
 }
 
