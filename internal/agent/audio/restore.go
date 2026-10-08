@@ -304,10 +304,9 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
 		m.startLTCLocked(ctx, s, position)
-		switch {
-		case rejoin.onSchedule:
+		if rejoin.onSchedule {
 			m.anchorRestartRejoinLocked(ctx, s, rec, rejoin, position)
-		case rejoin.legacy:
+		} else {
 			m.restoreItemScheduleLocked(ctx, s, rec)
 		}
 		s.persistBestEffortLocked("state change")
@@ -453,7 +452,8 @@ func (m *Manager) restoreItemScheduleLocked(ctx context.Context, s *Session, rec
 		m.logf("audio session %s: restore had a scheduled item boundary but the media clock is not valid (%s); falling back to decoder-end advance", s.id, mediaNow.Reason)
 		return
 	}
-	s.schedule = &itemSchedule{itemStartAt: rec.ScheduleItemStartAt}
+	s.schedule = &itemSchedule{itemIndex: rec.ScheduleItemIndex, itemStartAt: rec.ScheduleItemStartAt}
+	s.scheduleClock = rec.ScheduleClock
 	s.refreshBoundaryFromProbeLocked()
 	s.discardStageLocked(ctx)
 }

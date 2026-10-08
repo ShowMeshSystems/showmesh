@@ -1064,7 +1064,10 @@ every decoder on the path preserves the literal rather than rounding it);
 sample count over the nominal rate, read from the sink clock and never
 from the decode frontier; `error_ms` is expected minus actual; `resyncs`
 counts discontinuity seeks performed; `last_resync_reason` names why the
-most recent one fired. A node with no locked clock provider keeps
+most recent one fired, one of `ptp_step`, `provider_restart`,
+`device_change` or `agent_restart`. A session that rejoined its schedule
+after the agent restarted reports `agent_restart` from the rejoin itself,
+which is not a seek and is not counted in `resyncs`. A node with no locked clock provider keeps
 start-on-arrival and reports all six as `not_applicable`.
 
 | Signal | Status | Owner |

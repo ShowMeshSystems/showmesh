@@ -160,8 +160,8 @@ func TestFirstTimelineSnapshotAfterRestartReportsTheRestart(t *testing.T) {
 	if !snap.Scheduled || snap.ScheduledAtNs != f.t0.UnixNano() {
 		t.Fatalf("timeline after restart = %+v, want scheduled at the original instant %d", snap, f.t0.UnixNano())
 	}
-	if snap.LastResyncReason != ResyncReasonAgentRestart || snap.Resyncs != 1 {
-		t.Fatalf("timeline after restart reports %d resyncs, last %q; want 1, %q", snap.Resyncs, snap.LastResyncReason, ResyncReasonAgentRestart)
+	if snap.LastResyncReason != ResyncReasonAgentRestart || snap.Resyncs != 0 {
+		t.Fatalf("timeline after restart reports %d resyncs, last %q; want no seek counted and %q", snap.Resyncs, snap.LastResyncReason, ResyncReasonAgentRestart)
 	}
 
 	// The first evaluation carries the restart as its cause, so an error
@@ -179,8 +179,8 @@ func TestFirstTimelineSnapshotAfterRestartReportsTheRestart(t *testing.T) {
 		t.Fatalf("seeks after the first evaluation = %v, want exactly one to %s", seeks, wantSeek)
 	}
 	snap = m.TimelineSnapshot(context.Background())
-	if snap.Resyncs != 2 || snap.LastResyncReason != ResyncReasonAgentRestart {
-		t.Fatalf("timeline after the corrective seek reports %d resyncs, last %q; want 2, %q", snap.Resyncs, snap.LastResyncReason, ResyncReasonAgentRestart)
+	if snap.Resyncs != 1 || snap.LastResyncReason != ResyncReasonAgentRestart {
+		t.Fatalf("timeline after the corrective seek reports %d resyncs, last %q; want 1, %q", snap.Resyncs, snap.LastResyncReason, ResyncReasonAgentRestart)
 	}
 
 	engine.SetPresentedAdjust(-400 * time.Millisecond)
@@ -256,62 +256,74 @@ func TestRestartPastTheEndOfANonRepeatingSessionStartsNothing(t *testing.T) {
 	}
 }
 
-// TestRestartIgnoresTheStoredScheduleWithoutTheSameClock covers every way
-// the restored node can fail to show its media clock is the one the
-// schedule was read on. Each restores as an unsynchronized node does:
-// started on arrival from the stored position, under no schedule.
-func TestRestartIgnoresTheStoredScheduleWithoutTheSameClock(t *testing.T) {
-	cases := map[string]func(f *rejoinFixture, mediaNow time.Time) ClockSource{
-		"no media clock wired": func(*rejoinFixture, time.Time) ClockSource { return nil },
-		"media clock unreadable": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+// TestRestartWithoutTheSameClockStartsOnArrival covers every way the
+// restored node can fail to show its media clock is the one the schedule
+// was read on. Each starts on arrival from the stored position with no
+// timeline, and keeps the stored item boundary only when the media clock
+// can be read at all, as a restore did before a rejoin existed.
+func TestRestartWithoutTheSameClockStartsOnArrival(t *testing.T) {
+	type clockCase struct {
+		after        func(f *rejoinFixture, mediaNow time.Time) ClockSource
+		keepBoundary bool
+	}
+	cases := map[string]clockCase{
+		"no media clock wired": {after: func(*rejoinFixture, time.Time) ClockSource { return nil }},
+		"media clock unreadable": {after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.valid, src.reason = false, "the hardware clock could not be read"
 			return src
-		},
-		"provider not locked": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+		}},
+		"provider not locked": {keepBoundary: true, after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.setState(agentclock.StateAcquiring, "startup")
 			return src
-		},
-		"different grandmaster": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+		}},
+		"different grandmaster": {keepBoundary: true, after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.status.GrandmasterIdentity = "aabbcc.fffe.ddeeff"
 			return src
-		},
-		"grandmaster not reported": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+		}},
+		"grandmaster not reported": {keepBoundary: true, after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.status.GMKnown = false
 			return src
-		},
-		"different domain": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+		}},
+		"different domain": {keepBoundary: true, after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.status.Domain = 7
 			return src
-		},
-		"different provider": func(f *rejoinFixture, mediaNow time.Time) ClockSource {
+		}},
+		"different provider": {keepBoundary: true, after: func(f *rejoinFixture, mediaNow time.Time) ClockSource {
 			src := identifiedClock(mediaNow, f.clk.now)
 			src.status.Provider = agentclock.ProviderFPP
 			return src
-		},
-		"clock reads earlier than the stored instant": func(f *rejoinFixture, _ time.Time) ClockSource {
+		}},
+		"clock reads earlier than the stored instant": {keepBoundary: true, after: func(f *rejoinFixture, _ time.Time) ClockSource {
 			return identifiedClock(f.t0.Add(-time.Hour), f.clk.now)
-		},
+		}},
 	}
-	for name, clockAfter := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newRejoinFixture(t, pkgaudio.RepeatNone)
-			m, engine := f.restart(t, 3*time.Second, func(mediaNow time.Time) ClockSource { return clockAfter(f, mediaNow) })
+			m, engine := f.restart(t, 3*time.Second, func(mediaNow time.Time) ClockSource { return tc.after(f, mediaNow) })
 
 			wantOneStartAt(t, engine, 0)
 			s := restoredSession(t, m, f.id)
 			s.mu.Lock()
 			itemID, schedule, timeline := s.currentItemID, s.schedule, s.timeline
 			s.mu.Unlock()
-			if itemID != "item-a" {
-				t.Fatalf("restored to %s, want item-a", itemID)
+			if itemID != "item-a" || timeline != nil {
+				t.Fatalf("restored to %s with timeline %+v, want item-a and no timeline", itemID, timeline)
 			}
-			if schedule != nil || timeline != nil {
-				t.Fatalf("restored with schedule %+v and timeline %+v, want neither", schedule, timeline)
+			if kept := schedule != nil && schedule.itemStartAt.Equal(f.t0); kept != tc.keepBoundary {
+				t.Fatalf("restored item schedule = %+v, want the stored boundary kept: %v", schedule, tc.keepBoundary)
+			}
+			rec, ok, err := NewFileSessionStore(f.dir).Load(f.id)
+			if err != nil || !ok {
+				t.Fatalf("load persisted record: ok %v, err %v", ok, err)
+			}
+			if tc.keepBoundary && rec.ScheduleClock == nil {
+				t.Fatal("the record lost its clock identity, so a later restart could never rejoin")
 			}
 		})
 	}
@@ -357,4 +369,233 @@ func TestRestartWithAnItemOfUnknownLengthIgnoresTheStoredSchedule(t *testing.T) 
 	_, engine := f.restart(t, 25*time.Second, f.sameClock)
 
 	wantOneStartAt(t, engine, 0)
+}
+
+// restartUnbound restores the fixture's session the way a real agent
+// boots: no clock wired and no engine bound, so the restore is deferred.
+func (f *rejoinFixture) restartUnbound(t *testing.T, outage time.Duration) (*Manager, *SwitchableEngine, *startRecordingEngine) {
+	t.Helper()
+	f.clk.advance(outage)
+	f.media.advance(outage)
+	switchable := NewSwitchableEngine()
+	m := NewManager(switchable, NewFileSessionStore(f.dir), f.dir, f.dec, f.clk.now, nil)
+	if err := m.RestoreAll(context.Background()); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	if got := m.PendingRestoreCount(); got != 1 {
+		t.Fatalf("pending restores after an unbound RestoreAll = %d, want 1", got)
+	}
+	return m, switchable, newStartRecordingEngine(f.clk.now)
+}
+
+func shrinkRestartClockWait(t *testing.T, bound time.Duration) {
+	t.Helper()
+	prevBound, prevPoll := restartClockWaitBound, restartClockWaitPollInterval
+	restartClockWaitBound, restartClockWaitPollInterval = bound, 5*time.Millisecond
+	t.Cleanup(func() { restartClockWaitBound, restartClockWaitPollInterval = prevBound, prevPoll })
+}
+
+func waitForStarts(t *testing.T, engine *startRecordingEngine, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(engine.starts()) < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("engine starts = %v, waiting for %d", engine.starts(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestRestartRejoinsWhenTheClockLocksAfterTheEngineBinding is the order a
+// real agent sees: restore with nothing bound, then the audio binding,
+// then the clock locking a little later.
+func TestRestartRejoinsWhenTheClockLocksAfterTheEngineBinding(t *testing.T) {
+	shrinkRestartClockWait(t, 10*time.Second)
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	const outage = 3 * time.Second
+	m, switchable, engine := f.restartUnbound(t, outage)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.RebindEngine(ctx, switchable, engine, RebindReasonEngineRebind)
+	if starts := engine.starts(); len(starts) != 0 {
+		t.Fatalf("engine starts before the clock exists = %v, want none", starts)
+	}
+	if got := m.PendingRestoreCount(); got != 1 {
+		t.Fatalf("pending restores while waiting for the clock = %d, want 1", got)
+	}
+
+	src := identifiedClock(f.media.Now(ctx).Time, f.clk.now)
+	src.setState(agentclock.StateAcquiring, "startup")
+	m.SetClockSource(src)
+	time.Sleep(50 * time.Millisecond)
+	if starts := engine.starts(); len(starts) != 0 {
+		t.Fatalf("engine starts while the clock is still acquiring = %v, want none", starts)
+	}
+	src.setState(agentclock.StateLocked, "")
+
+	waitForStarts(t, engine, 1)
+	wantOneStartAt(t, engine, rejoinPlayedFor+outage)
+	if snap := m.TimelineSnapshot(ctx); snap.LastResyncReason != ResyncReasonAgentRestart {
+		t.Fatalf("timeline after the rejoin = %+v, want the restart reported", snap)
+	}
+	if got := m.PendingRestoreCount(); got != 0 {
+		t.Fatalf("pending restores after the rejoin = %d, want 0", got)
+	}
+}
+
+func TestRestartRejoinsWhenTheClockIsLockedBeforeTheEngineBinding(t *testing.T) {
+	shrinkRestartClockWait(t, 10*time.Second)
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	const outage = 3 * time.Second
+	m, switchable, engine := f.restartUnbound(t, outage)
+
+	m.SetClockSource(f.sameClock(f.media.Now(context.Background()).Time))
+	m.RebindEngine(context.Background(), switchable, engine, RebindReasonEngineRebind)
+
+	wantOneStartAt(t, engine, rejoinPlayedFor+outage)
+}
+
+func TestRestartStartsOnArrivalWhenTheClockNeverLocksInTime(t *testing.T) {
+	shrinkRestartClockWait(t, 60*time.Millisecond)
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	m, switchable, engine := f.restartUnbound(t, 3*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src := identifiedClock(f.media.Now(ctx).Time, f.clk.now)
+	src.setState(agentclock.StateAcquiring, "startup")
+	m.SetClockSource(src)
+
+	m.RebindEngine(ctx, switchable, engine, RebindReasonEngineRebind)
+	if starts := engine.starts(); len(starts) != 0 {
+		t.Fatalf("engine starts before the wait ran out = %v, want none", starts)
+	}
+
+	waitForStarts(t, engine, 1)
+	wantOneStartAt(t, engine, 0)
+	// The wait is spent and its goroutine gone: nothing starts again.
+	time.Sleep(30 * time.Millisecond)
+	wantOneStartAt(t, engine, 0)
+}
+
+func TestRestartDoesNotWaitForADifferentClock(t *testing.T) {
+	shrinkRestartClockWait(t, time.Hour)
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	m, switchable, engine := f.restartUnbound(t, 3*time.Second)
+	src := identifiedClock(f.media.Now(context.Background()).Time, f.clk.now)
+	src.status.GrandmasterIdentity = "aabbcc.fffe.ddeeff"
+	m.SetClockSource(src)
+
+	m.RebindEngine(context.Background(), switchable, engine, RebindReasonEngineRebind)
+
+	wantOneStartAt(t, engine, 0)
+}
+
+// TestRestartOfAPausedRecordWithAScheduleStaysPaused is a record that says
+// paused while still carrying a schedule: it comes back paused at its
+// stored position, and the schedule is not consulted.
+func TestRestartOfAPausedRecordWithAScheduleStaysPaused(t *testing.T) {
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	store := NewFileSessionStore(f.dir)
+	rec, ok, err := store.Load(f.id)
+	if err != nil || !ok || !rec.ScheduleActive || rec.ScheduleClock == nil {
+		t.Fatalf("persisted record: ok %v, err %v, schedule active %v", ok, err, rec.ScheduleActive)
+	}
+	rec.SessionState = pkgaudio.StatePaused
+	if err := store.Save(f.id, rec); err != nil {
+		t.Fatalf("save paused record: %v", err)
+	}
+
+	m, engine := f.restart(t, 3*time.Second, f.sameClock)
+
+	// Restoring a paused session loads it at its stored position and
+	// pauses it at once; that is the only engine start.
+	wantOneStartAt(t, engine, 0)
+	s := restoredSession(t, m, f.id)
+	s.mu.Lock()
+	state, handle, schedule, timeline := s.state, s.handle, s.schedule, s.timeline
+	s.mu.Unlock()
+	if state != pkgaudio.StatePaused || schedule != nil || timeline != nil {
+		t.Fatalf("restored in state %s with schedule %+v and timeline %+v, want paused with neither", state, schedule, timeline)
+	}
+	obs, err := engine.Observe(context.Background(), handle)
+	if err != nil || obs.State != pkgaudio.StatePaused {
+		t.Fatalf("engine reports %s (err %v), want paused", obs.State, err)
+	}
+}
+
+// savingStore records every record written, so a test can read the one a
+// crash at that instant would have left behind.
+type savingStore struct {
+	SessionStore
+	mu    sync.Mutex
+	saved []PersistedSession
+}
+
+func (s *savingStore) Save(id pkgaudio.SessionID, rec PersistedSession) error {
+	s.mu.Lock()
+	s.saved = append(s.saved, rec)
+	s.mu.Unlock()
+	return s.SessionStore.Save(id, rec)
+}
+
+// TestEveryRecordWrittenAtAnItemBoundaryNamesItsOwnItemStart covers a
+// crash between the two writes a scheduled item change makes: the first
+// already carries the new item's own start instant.
+func TestEveryRecordWrittenAtAnItemBoundaryNamesItsOwnItemStart(t *testing.T) {
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	store := &savingStore{SessionStore: f.m.store}
+	f.m.store = store
+
+	f.clk.advance(rejoinItemLength - rejoinPlayedFor - time.Second)
+	f.media.advance(rejoinItemLength - rejoinPlayedFor - time.Second)
+	f.m.watchTick(context.Background())
+	f.clk.advance(time.Second)
+	f.media.advance(time.Second)
+	f.m.watchTick(context.Background())
+	if got := f.currentItemID(t); got != "item-b" {
+		t.Fatalf("current item after the boundary = %s, want item-b", got)
+	}
+
+	var onNewItem int
+	for _, rec := range store.saved {
+		if rec.CurrentIndex != 1 {
+			continue
+		}
+		onNewItem++
+		if !rec.ScheduleActive || rec.ScheduleItemIndex != 1 || !rec.ScheduleItemStartAt.Equal(f.t0.Add(rejoinItemLength)) {
+			t.Fatalf("a record on item-b carries schedule index %d starting %s, want index 1 starting one item after %s",
+				rec.ScheduleItemIndex, rec.ScheduleItemStartAt, f.t0)
+		}
+	}
+	if onNewItem < 2 {
+		t.Fatalf("saw %d records on item-b, want both writes of the item change", onNewItem)
+	}
+}
+
+// TestRestartOfARecordWhoseScheduleNamesAnotherItemStartsOnArrival is a
+// record written after an advance moved on but before the schedule was
+// re-anchored: the stored instant belongs to the previous item.
+func TestRestartOfARecordWhoseScheduleNamesAnotherItemStartsOnArrival(t *testing.T) {
+	f := newRejoinFixture(t, pkgaudio.RepeatNone)
+	store := NewFileSessionStore(f.dir)
+	rec, ok, err := store.Load(f.id)
+	if err != nil || !ok {
+		t.Fatalf("load persisted record: ok %v, err %v", ok, err)
+	}
+	rec.CurrentIndex, rec.CurrentItemID = 1, "item-b"
+	if err := store.Save(f.id, rec); err != nil {
+		t.Fatalf("save record: %v", err)
+	}
+
+	m, engine := f.restart(t, 3*time.Second, f.sameClock)
+
+	wantOneStartAt(t, engine, 0)
+	s := restoredSession(t, m, f.id)
+	s.mu.Lock()
+	itemID, schedule := s.currentItemID, s.schedule
+	s.mu.Unlock()
+	if itemID != "item-b" || schedule != nil {
+		t.Fatalf("restored to %s with schedule %+v, want item-b under no schedule", itemID, schedule)
+	}
 }

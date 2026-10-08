@@ -38,13 +38,11 @@ func scheduleClockIdentityOf(status agentclock.Status) *ScheduleClockIdentity {
 
 // restartRejoin is what a persisted schedule means for one restore.
 // onSchedule rejoins at the expected position; ended means that position
-// is past the end of a session that does not repeat; legacy is a record
-// with no clock identity, restored exactly as before. None of the three
-// set means the stored schedule is ignored.
+// is past the end of a session that does not repeat. Neither set restores
+// as a record with no clock identity always has.
 type restartRejoin struct {
 	onSchedule bool
 	ended      bool
-	legacy     bool
 
 	index       int
 	item        pkgaudio.PlaylistItem
@@ -62,14 +60,11 @@ type restartRejoin struct {
 // something only on the clock they were read on, so anything short of a
 // locked provider naming the same clock ignores them. Caller holds s.mu.
 func (m *Manager) resolveRestartRejoinLocked(ctx context.Context, s *Session, rec PersistedSession) restartRejoin {
-	if !rec.ScheduleActive || rec.ScheduleItemIndex != rec.CurrentIndex {
+	if !rec.ScheduleActive || rec.ScheduleItemIndex != rec.CurrentIndex || rec.ScheduleClock == nil {
 		return restartRejoin{}
 	}
-	if rec.ScheduleClock == nil {
-		return restartRejoin{legacy: true}
-	}
 	ignored := func(why string) restartRejoin {
-		m.logf("audio session %s: restore ignored its stored schedule and starts on arrival: %s", s.id, why)
+		m.logf("audio session %s: restore did not rejoin at its scheduled position and starts on arrival: %s", s.id, why)
 		return restartRejoin{}
 	}
 
@@ -177,7 +172,7 @@ func (r restartRejoin) positionAfterLoad(ctx context.Context) time.Duration {
 // when the session is still inside the item its T0 started, for a
 // session just restarted at position on its schedule. Caller holds s.mu.
 func (m *Manager) anchorRestartRejoinLocked(ctx context.Context, s *Session, rec PersistedSession, rejoin restartRejoin, position time.Duration) {
-	s.schedule = &itemSchedule{itemStartAt: rejoin.itemStartAt}
+	s.schedule = &itemSchedule{itemIndex: rejoin.index, itemStartAt: rejoin.itemStartAt}
 	s.scheduleClock = rec.ScheduleClock
 	s.refreshBoundaryFromProbeLocked()
 	s.discardStageLocked(ctx)
@@ -194,7 +189,6 @@ func (m *Manager) anchorRestartRejoinLocked(ctx context.Context, s *Session, rec
 		lastStepKnown:    rejoin.status.LastStepKnown,
 		engineEpoch:      m.engineEpoch.Load(),
 		restartPending:   true,
-		resyncs:          1,
 		lastResyncReason: ResyncReasonAgentRestart,
 	}
 	if presented, ok, _ := ObserveEngineSinkClock(ctx, m.engine); ok {

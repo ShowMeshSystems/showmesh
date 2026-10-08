@@ -109,6 +109,12 @@ type Manager struct {
 	// door. Never acquired anywhere but RebindEngine.
 	rebindMu sync.Mutex
 
+	// clockWaitDeadline and clockWaitRunning back the one bounded wait a
+	// deferred restore gets for this node's clock; see restoreclockwait.go.
+	// Guarded by mu.
+	clockWaitDeadline map[pkgaudio.SessionID]time.Time
+	clockWaitRunning  bool
+
 	// outputLatencyUs is this node's currently bound calibrated output
 	// latency (RES-019 section 8), signed microseconds, subtracted from
 	// a scheduled start's T0. See [Manager.SetOutputLatency] and
@@ -205,6 +211,9 @@ func (m *Manager) retryDeferredRestores(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, id := range ids {
+		if m.holdRestoreForClock(ctx, id) {
+			continue
+		}
 		if err := m.restoreOne(ctx, id, true); err != nil {
 			m.logf("audio session %s: deferred restore failed: %v", id, err)
 		}

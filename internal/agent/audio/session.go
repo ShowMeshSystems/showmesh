@@ -543,7 +543,7 @@ func (s *Session) persistedLocked() PersistedSession {
 	if s.schedule != nil {
 		rec.ScheduleActive = true
 		rec.ScheduleItemStartAt = s.schedule.itemStartAt
-		rec.ScheduleItemIndex = s.currentIndex
+		rec.ScheduleItemIndex = s.schedule.itemIndex
 		rec.ScheduleClock = s.scheduleClock
 		if s.timeline != nil {
 			rec.TimelineActive = true
