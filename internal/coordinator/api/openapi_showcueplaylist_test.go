@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,4 +229,15 @@ func TestOpenAPIShowPlaylistDefinitionMovePreviewMatchesRealResponses(t *testing
 	s3.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
 	_, noCurrent := s3.preview(t, "quick")
 	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", noCurrent)
+
+	// An entry with no saved filename that follows the sequence its position held.
+	s4 := newMovePreviewSetup(t)
+	s4.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+	s4.putPlaylist(t, "quick", moveNoFilenamePlaylist)
+	s4.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	_, byPrevious := s4.preview(t, "quick")
+	if !strings.Contains(string(byPrevious), `"matchedBy":"previousSequence"`) {
+		t.Fatalf("no entry matched by previousSequence: %s", byPrevious)
+	}
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", byPrevious)
 }

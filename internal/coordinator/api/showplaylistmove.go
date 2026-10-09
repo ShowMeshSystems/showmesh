@@ -226,6 +226,10 @@ func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
 		sentences = append(sentences, fmt.Sprintf("%s now belongs to a sequence that kept its own cue. This cue will be removed from this playlist.", capitalize(moveSlotText(e.From, false))))
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPosition:
 		sentences = append(sentences, fmt.Sprintf("FPP's playlist has no entry at %s any more. This cue will be removed from this playlist.", moveSlotText(e.From, true)))
+	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPreviousSequence && e.DuplicateFilename:
+		sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue. Its position held %s, which appears more than once, and FPP's playlist has fewer copies than before. This cue will be removed from this playlist.", e.PreviousSequence))
+	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPreviousSequence:
+		sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue. Its position held %s, which is no longer in FPP's playlist. This cue will be removed from this playlist.", e.PreviousSequence))
 	case e.Outcome == config.PlaylistMoveDropped && e.DuplicateFilename:
 		sentences = append(sentences, "This sequence appears more than once, and FPP's playlist has fewer copies than before. This cue will be removed from this playlist.")
 	case e.Outcome == config.PlaylistMoveDropped:
@@ -244,6 +248,11 @@ func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
 			sentences = append(sentences,
 				fmt.Sprintf("No sequence name was saved for this cue, so it stays at %s, which now holds %s. The earlier sequence name is not known.", moveSlotText(*e.To, false), sequenceText(e.NewSequence)),
 				"If that is wrong, cancel and assign this cue again after moving.")
+		case e.MatchedBy == config.PlaylistMoveByPreviousSequence && e.Outcome == config.PlaylistMoveKept:
+			sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue, so it follows the sequence its position held, %s. Stays at %s.", e.PreviousSequence, moveSlotText(*e.To, false)))
+		case e.MatchedBy == config.PlaylistMoveByPreviousSequence:
+			withSection := e.From.Section != e.To.Section
+			sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue, so it follows the sequence its position held, %s. Moved from %s to %s.", e.PreviousSequence, moveSlotText(e.From, withSection), moveSlotText(*e.To, withSection)))
 		case e.Outcome == config.PlaylistMoveKept:
 			sentences = append(sentences, fmt.Sprintf("Stays at %s.", moveSlotText(*e.To, false)))
 		default:
