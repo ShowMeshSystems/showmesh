@@ -1224,7 +1224,8 @@ before the plugin ever sees it.
 
 **Status: §5.1 through §5.11 coordinator BUILT, node BUILT, plugin NOT BUILT,
 NOT PROVEN ON HARDWARE. §5.12 through §5.17 coordinator BUILT, plugin NOT
-BUILT, NOT PROVEN ON HARDWARE.** This section is the frozen shape for
+BUILT, NOT PROVEN ON HARDWARE. §5.18 coordinator BUILT, plugin NOT BUILT,
+NOT PROVEN ON A REAL FPP PLAYER.** This section is the frozen shape for
 [Track J](TRACK-J-fpp-fallback.md) step J3 and the wire the plugin's step J4
 builds against. §5.12 through §5.17 are the shape for step J5, with the
 owner's rulings of 2026-10-05 written in. They ask nothing new of a node.
@@ -2172,6 +2173,7 @@ coordinator's Ed25519 public key (§5.13). Pairing delivers that key
 - Only a successful pairing claim writes the file, and a later pairing replaces
   it. A refused claim carries no key. No start, restart, or fallback path
   fetches the key from the coordinator.
+- The player holds one key, and a later pairing replaces it.
 - A plugin paired before this change has no key until it pairs again. Until
   then it has no key to verify a program against.
 - The route, the request, the refusals, the rate limit, and the audit entry of
