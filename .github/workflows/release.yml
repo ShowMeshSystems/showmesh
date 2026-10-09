@@ -189,7 +189,7 @@ jobs:
       # revision or toolchain bump changes the key and starts a fresh
       # cache, exactly the cases where a stale cache would be wrong.
       - name: Cache the gst-plugins-rs cargo registry and target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -219,7 +219,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Cache the gst-plugins-rs cargo registry and target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
