@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
@@ -66,7 +67,7 @@ func TestFPPConnectSystemStatusPlayingSequence(t *testing.T) {
 
 func TestFPPConnectSystemStatusPlayingMedia(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, multiSync: multisync.Snapshot{
-		State:      multisync.StateUnsynchronized,
+		State:      multisync.StatePlaying,
 		Filename:   "Carol.mp3",
 		FileType:   multisync.SyncFileTypeMedia,
 		PositionMS: 5_000,
@@ -74,7 +75,7 @@ func TestFPPConnectSystemStatusPlayingMedia(t *testing.T) {
 	got, _ := getSystemStatus(t, view)
 
 	if got.StatusName != "playing" {
-		t.Fatalf("status_name = %q, want playing while the timeline still free-runs", got.StatusName)
+		t.Fatalf("status_name = %q, want playing", got.StatusName)
 	}
 	if got.CurrentSong != "Carol.mp3" || got.MediaFilename != "Carol.mp3" {
 		t.Fatalf("current_song/media_filename = %q/%q, want Carol.mp3", got.CurrentSong, got.MediaFilename)
@@ -116,35 +117,120 @@ func TestFPPConnectSystemStatusIdleStates(t *testing.T) {
 	}
 }
 
-// TestFPPConnectSystemStatusFollowsRealTimeline drives the production view
-// adapter over a real Timeline: nothing seen yet, then playing, then stopped.
-func TestFPPConnectSystemStatusFollowsRealTimeline(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	timeline := multisync.NewTimeline(func() time.Time { return now }, multisync.Config{})
-	view := newFPPConnectStateView(newFPPConnectState(), newTestAssignmentStore(t)).withTimeline(timeline)
+// agedTimelineStatus drives the production view adapter over a real Timeline
+// on a stepped clock: START and a SYNC at 12 s, then whatever the test does.
+type agedTimelineStatus struct {
+	t        *testing.T
+	now      time.Time
+	timeline *multisync.Timeline
+	view     fppConnectStateView
+}
 
-	if got, _ := getSystemStatus(t, view); got.StatusName != "idle" || got.SequenceFilename != "" {
-		t.Fatalf("before any packet: status_name/sequence_filename = %q/%q, want idle and empty", got.StatusName, got.SequenceFilename)
-	}
+func newAgedTimelineStatus(t *testing.T, surfaces func() []pipeline.Snapshot) *agedTimelineStatus {
+	t.Helper()
+	a := &agedTimelineStatus{t: t, now: time.Unix(1_700_000_000, 0)}
+	a.timeline = multisync.NewTimeline(func() time.Time { return a.now }, multisync.Config{})
+	a.view = newFPPConnectStateView(newFPPConnectState(), newTestAssignmentStore(t)).withPlayback(a.timeline, surfaces)
+	return a
+}
 
-	timeline.Observe(multisync.SyncPacket{Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence, Filename: "Carol.fseq"}, "192.0.2.1")
-	timeline.Observe(multisync.SyncPacket{Action: multisync.SyncActionSync, FileType: multisync.SyncFileTypeSequence, SecondsElapsed: 12, Filename: "Carol.fseq"}, "192.0.2.1")
-	got, _ := getSystemStatus(t, view)
-	if got.StatusName != "playing" || got.SequenceFilename != "Carol.fseq" || got.SecondsElapsed != "12" || got.TimeElapsed != "00:12" {
-		t.Fatalf("while playing: %+v", got)
-	}
+func (a *agedTimelineStatus) sync(action multisync.SyncAction, seconds float32) {
+	a.timeline.Observe(multisync.SyncPacket{Action: action, FileType: multisync.SyncFileTypeSequence, SecondsElapsed: seconds, Filename: "Carol.fseq"}, "192.0.2.1")
+}
 
-	timeline.Observe(multisync.SyncPacket{Action: multisync.SyncActionStop, FileType: multisync.SyncFileTypeSequence, Filename: "Carol.fseq"}, "192.0.2.1")
-	now = now.Add(time.Minute)
-	if got, _ := getSystemStatus(t, view); got.StatusName != "idle" || got.SequenceFilename != "" {
-		t.Fatalf("after stop: status_name/sequence_filename = %q/%q, want idle and empty", got.StatusName, got.SequenceFilename)
+func (a *agedTimelineStatus) want(when, statusName, filename, elapsed string) {
+	a.t.Helper()
+	got, _ := getSystemStatus(a.t, a.view)
+	if got.StatusName != statusName || got.SequenceFilename != filename || got.CurrentSequence != filename || got.TimeElapsed != elapsed {
+		a.t.Fatalf("%s: status_name/sequence_filename/current_sequence/time_elapsed = %q/%q/%q/%q, want %q/%q/%q/%q",
+			when, got.StatusName, got.SequenceFilename, got.CurrentSequence, got.TimeElapsed, statusName, filename, filename, elapsed)
 	}
 }
 
-func TestFPPConnectStateViewWithoutTimelineIsNotPlaying(t *testing.T) {
-	view := newFPPConnectStateView(newFPPConnectState(), newTestAssignmentStore(t))
-	if got, _ := getSystemStatus(t, view); got.StatusName != "idle" {
-		t.Fatalf("status_name = %q, want idle", got.StatusName)
+func drawingSurface(durationMS int64) func() []pipeline.Snapshot {
+	return func() []pipeline.Snapshot {
+		return []pipeline.Snapshot{
+			{SurfaceID: "idle-surface", Drawing: pipeline.DrawingIdle},
+			{SurfaceID: "matrix", Drawing: pipeline.DrawingContent, ContentDurationMS: &durationMS},
+		}
+	}
+}
+
+// A node with no surface drawing the sequence cannot know it is still
+// playing once sync goes silent, so it stops saying so.
+func TestFPPConnectSystemStatusSilentSyncWithNothingDrawnReadsIdle(t *testing.T) {
+	a := newAgedTimelineStatus(t, func() []pipeline.Snapshot { return nil })
+	a.want("before any packet", "idle", "", "00:00")
+
+	a.sync(multisync.SyncActionStart, 0)
+	a.sync(multisync.SyncActionSync, 12)
+	a.want("fresh sync", "playing", "Carol.fseq", "00:12")
+
+	a.now = a.now.Add(10 * time.Second)
+	a.want("10 s of silence", "idle", "", "00:00")
+
+	a.now = a.now.Add(6 * time.Hour)
+	a.want("hours of silence", "idle", "", "00:00")
+
+	a.sync(multisync.SyncActionSync, 40)
+	a.want("sync resumed", "playing", "Carol.fseq", "00:40")
+
+	a.sync(multisync.SyncActionStop, 0)
+	a.now = a.now.Add(time.Minute)
+	a.want("after stop", "idle", "", "00:00")
+}
+
+// A surface keeps drawing the sequence through silence until the sequence
+// ends, so the row follows it that far and no further.
+func TestFPPConnectSystemStatusSilentSyncFollowsTheDrawnSequenceToItsEnd(t *testing.T) {
+	a := newAgedTimelineStatus(t, drawingSurface(180_000))
+
+	a.sync(multisync.SyncActionStart, 0)
+	a.sync(multisync.SyncActionSync, 12)
+	a.want("fresh sync", "playing", "Carol.fseq", "00:12")
+
+	a.now = a.now.Add(10 * time.Second)
+	a.want("10 s of silence", "playing", "Carol.fseq", "00:22")
+
+	a.now = a.now.Add(157 * time.Second)
+	a.want("one second before the sequence ends", "playing", "Carol.fseq", "02:59")
+
+	a.now = a.now.Add(time.Second)
+	a.want("at the sequence's end", "idle", "", "00:00")
+
+	a.now = a.now.Add(72 * time.Hour)
+	a.want("days of silence", "idle", "", "00:00")
+
+	a.sync(multisync.SyncActionSync, 40)
+	a.want("sync resumed", "playing", "Carol.fseq", "00:40")
+}
+
+func TestFPPConnectStateViewDrawnSequence(t *testing.T) {
+	short, long := int64(60_000), int64(180_000)
+	base := newFPPConnectStateView(newFPPConnectState(), newTestAssignmentStore(t))
+
+	if _, ok := base.DrawnSequenceMS(); ok {
+		t.Fatal("a view built without surfaces reports a drawn sequence")
+	}
+	view := base.withPlayback(nil, func() []pipeline.Snapshot {
+		return []pipeline.Snapshot{
+			{Drawing: pipeline.DrawingContent, ContentDurationMS: &short},
+			{Drawing: pipeline.DrawingContent, ContentDurationMS: &long},
+			{Drawing: pipeline.DrawingStale},
+			{Drawing: pipeline.DrawingBlackout, ContentDurationMS: &long},
+		}
+	})
+	if got, ok := view.DrawnSequenceMS(); !ok || got != long {
+		t.Fatalf("DrawnSequenceMS() = %d, %v, want %d, true", got, ok, long)
+	}
+	none := base.withPlayback(nil, func() []pipeline.Snapshot {
+		return []pipeline.Snapshot{{Drawing: pipeline.DrawingIdle}}
+	})
+	if _, ok := none.DrawnSequenceMS(); ok {
+		t.Fatal("a view whose surfaces all draw idle output reports a drawn sequence")
+	}
+	if got, _ := getSystemStatus(t, base); got.StatusName != "idle" {
+		t.Fatalf("status_name = %q for a view with no timeline, want idle", got.StatusName)
 	}
 }
 
@@ -165,15 +251,16 @@ func TestFPPConnectSystemStatusAdvancedViewIsSystemInfo(t *testing.T) {
 	}
 }
 
-func TestFPPConnectSystemInfoCarriesAgentVersion(t *testing.T) {
-	srv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", nil)
+// TestFPPConnectSystemInfoMemberSetIsPinned keeps the document xLights reads
+// exactly as it was before the status route existed.
+func TestFPPConnectSystemInfoMemberSetIsPinned(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true, channelRanges: "0-9"}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 	_, body := getBody(t, srv.URL+"/api/system/info")
-	var got fppConnectSystemInfoResponse
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("decode: %v; body=%s", err, body)
-	}
-	if want := "ShowMesh agent " + version.Version; got.OSVersion != want {
-		t.Fatalf("OSVersion = %q, want %q", got.OSVersion, want)
+
+	want := `{"uuid":"` + fppConnectNodeUUID("node-1").String() + `","HostName":"node-1","Version":"9.5.0","majorVersion":9,"minorVersion":5,"Mode":"player","typeId":127,"channelRanges":"0-9","Platform":"ShowMesh","Variant":"ShowMesh"}` + "\n"
+	if string(body) != want {
+		t.Fatalf("GET /api/system/info body changed:\n got %s\nwant %s", body, want)
 	}
 }
 
@@ -289,11 +376,11 @@ func TestFPPConnectHostStatsOmitsWhatItCannotMeasure(t *testing.T) {
 		t.Fatalf("utilization() = %+v with unparseable files, want nil", got)
 	}
 
-	encoded, err := json.Marshal(fppConnectSystemInfoResponse{})
+	encoded, err := json.Marshal(fppConnectAdvancedView{})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	if strings.Contains(string(encoded), "Utilization") {
-		t.Fatalf("system info serves a Utilization member with nothing measured: %s", encoded)
+		t.Fatalf("advancedView serves a Utilization member with nothing measured: %s", encoded)
 	}
 }

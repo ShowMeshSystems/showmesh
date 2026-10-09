@@ -275,6 +275,7 @@ type FrameWriter struct {
 	// currentRate.
 	timelineState      string
 	timelinePositionMS *int64
+	contentDurationMS  *int64
 	drawing            string
 	idleModeNow        string
 	failureOutputNow   string
@@ -584,7 +585,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	snap := fw.timeline.Snapshot()
 
 	var outBuf []byte
-	var positionMS *int64
+	var positionMS, durationMS *int64
 	drawing := DrawingContent
 	idleMode := ""
 	failureOutput := ""
@@ -683,11 +684,14 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 			fw.loggedRangeErr = false
 			outBuf = fw.buf
 			positionMS = &pos
+			duration := int64(fw.source.FrameCount()) * fw.stepTime.Milliseconds()
+			durationMS = &duration
 		}
 	}
 
 	fw.timelineState = string(snap.State)
 	fw.timelinePositionMS = positionMS
+	fw.contentDurationMS = durationMS
 	fw.drawing = drawing
 	fw.idleModeNow = idleMode
 	fw.failureOutputNow = failureOutput
@@ -967,6 +971,7 @@ func (fw *FrameWriter) reportCounts() {
 	fw.sup.SetDrawState(fw.surfaceID, DrawState{
 		TimelineState: fw.timelineState,
 		PositionMS:    fw.timelinePositionMS,
+		DurationMS:    fw.contentDurationMS,
 		Drawing:       fw.drawing,
 		IdleMode:      fw.idleModeNow,
 		FailureOutput: fw.failureOutputNow,

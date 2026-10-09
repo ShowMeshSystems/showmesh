@@ -17,7 +17,6 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/fppconnect"
-	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -260,6 +259,11 @@ type fppConnectView interface {
 	// MultiSyncSnapshot returns this node's MultiSync timeline as of now.
 	// GET /api/system/status is its only reader.
 	MultiSyncSnapshot() multisync.Snapshot
+
+	// DrawnSequenceMS returns the length of the longest sequence a surface
+	// on this node drew content from on its latest frame; ok is false when
+	// no surface is drawing content.
+	DrawnSequenceMS() (durationMS int64, ok bool)
 }
 
 // fppConnectDefaultMaxFileBytes and fppConnectDefaultMaxAssetDirBytes
@@ -292,6 +296,7 @@ type fppConnectStateView struct {
 	state       *fppConnectState
 	assignments *pipeline.AssignmentStore
 	timeline    *multisync.Timeline
+	surfaces    func() []pipeline.Snapshot
 }
 
 // newFPPConnectStateView builds a fppConnectStateView over state and
@@ -351,10 +356,28 @@ func (v fppConnectStateView) Assignments() ([]pipeline.Assignment, error) {
 	return v.assignments.Load()
 }
 
-// withTimeline returns v reading timeline for MultiSyncSnapshot.
-func (v fppConnectStateView) withTimeline(timeline *multisync.Timeline) fppConnectStateView {
+// withPlayback returns v reading timeline for MultiSyncSnapshot and surfaces
+// for DrawnSequenceMS.
+func (v fppConnectStateView) withPlayback(timeline *multisync.Timeline, surfaces func() []pipeline.Snapshot) fppConnectStateView {
 	v.timeline = timeline
+	v.surfaces = surfaces
 	return v
+}
+
+func (v fppConnectStateView) DrawnSequenceMS() (int64, bool) {
+	if v.surfaces == nil {
+		return 0, false
+	}
+	var longest int64
+	drawing := false
+	for _, s := range v.surfaces() {
+		if s.Drawing != pipeline.DrawingContent || s.ContentDurationMS == nil {
+			continue
+		}
+		drawing = true
+		longest = max(longest, *s.ContentDurationMS)
+	}
+	return longest, drawing
 }
 
 // MultiSyncSnapshot is the zero Snapshot, which no reader treats as playing,
@@ -417,11 +440,6 @@ type fppConnectSystemInfoResponse struct {
 	ChannelRanges string `json:"channelRanges,omitempty"`
 	Platform      string `json:"Platform"`
 	Variant       string `json:"Variant"`
-	// OSVersion and Utilization are read by an FPP player's MultiSync page,
-	// not by xLights. OSVersion carries the agent's own version because the
-	// page draws it beside the advertised FPP version.
-	OSVersion   string                 `json:"OSVersion"`
-	Utilization *fppConnectUtilization `json:"Utilization,omitempty"`
 }
 
 // fppConnectMultiSyncEntry is the one self-entry GET /api/fppd/multiSyncSystems
@@ -905,7 +923,7 @@ func (s *fppConnectServer) handleSystemInfo(w http.ResponseWriter, r *http.Reque
 }
 
 // systemInfo is GET /api/system/info's body, which GET /api/system/status
-// also serves as its advancedView, the way FPP itself does.
+// also carries inside its advancedView.
 func (s *fppConnectServer) systemInfo() fppConnectSystemInfoResponse {
 	return fppConnectSystemInfoResponse{
 		UUID:          s.uuid,
@@ -918,8 +936,6 @@ func (s *fppConnectServer) systemInfo() fppConnectSystemInfoResponse {
 		ChannelRanges: s.view.ChannelRanges(),
 		Platform:      fppConnectPlatform,
 		Variant:       fppConnectPlatform,
-		OSVersion:     fppConnectPlatform + " agent " + version.Version,
-		Utilization:   s.host.utilization(),
 	}
 }
 

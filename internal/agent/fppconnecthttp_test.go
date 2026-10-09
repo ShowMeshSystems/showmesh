@@ -42,9 +42,12 @@ type fakeFPPConnectView struct {
 	assignmentsErr error
 
 	multiSync multisync.Snapshot
+	drawnMS   int64
+	drawing   bool
 }
 
 func (f fakeFPPConnectView) MultiSyncSnapshot() multisync.Snapshot { return f.multiSync }
+func (f fakeFPPConnectView) DrawnSequenceMS() (int64, bool)        { return f.drawnMS, f.drawing }
 
 func (f fakeFPPConnectView) ChannelRanges() string { return f.channelRanges }
 func (f fakeFPPConnectView) Enabled() bool         { return f.enabled }

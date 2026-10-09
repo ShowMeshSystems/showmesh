@@ -452,7 +452,7 @@ func Run() int {
 	fallbackIngress := newFallbackIngress(cfg.NodeID, cfg.AssetDir, weatherDelayPublicKey, time.Now, logger)
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore).withTimeline(timeline), cfg.NodeID, fppConnectHeld, fppConnectStatus, weatherDelayHTTP, fallbackIngress, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore).withPlayback(timeline, sup.SnapshotAll), cfg.NodeID, fppConnectHeld, fppConnectStatus, weatherDelayHTTP, fallbackIngress, logger)
 	}()
 
 	// clockMgr is Track I seam I1's PTP media clock: unconfigured until a

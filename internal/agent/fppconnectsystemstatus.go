@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -43,29 +44,56 @@ type fppConnectSystemStatusResponse struct {
 	SecondsElapsed   string `json:"seconds_elapsed"`
 	TimeElapsed      string `json:"time_elapsed"`
 
-	AdvancedView fppConnectSystemInfoResponse `json:"advancedView"`
+	AdvancedView fppConnectAdvancedView `json:"advancedView"`
+}
+
+// fppConnectAdvancedView is this node's system info plus the members only an
+// FPP player's MultiSync page reads. OSVersion carries the agent's version
+// because the page draws it beside the advertised FPP version.
+type fppConnectAdvancedView struct {
+	fppConnectSystemInfoResponse
+	OSVersion   string                 `json:"OSVersion"`
+	Utilization *fppConnectUtilization `json:"Utilization,omitempty"`
 }
 
 func (s *fppConnectServer) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 	status := fppConnectSystemStatusResponse{
-		UUID:         s.uuid,
-		Mode:         int(multisync.PingModeRemote),
-		ModeName:     fppConnectStatusModeName,
-		Status:       fppConnectStatusIdle,
-		StatusName:   fppConnectStatusNameIdle,
-		AdvancedView: s.systemInfo(),
+		UUID:       s.uuid,
+		Mode:       int(multisync.PingModeRemote),
+		ModeName:   fppConnectStatusModeName,
+		Status:     fppConnectStatusIdle,
+		StatusName: fppConnectStatusNameIdle,
+		AdvancedView: fppConnectAdvancedView{
+			fppConnectSystemInfoResponse: s.systemInfo(),
+			OSVersion:                    fppConnectPlatform + " agent " + version.Version,
+			Utilization:                  s.host.utilization(),
+		},
 	}
-	fppConnectFillPlayback(&status, s.view.MultiSyncSnapshot())
+	drawnMS, drawing := s.view.DrawnSequenceMS()
+	fppConnectFillPlayback(&status, s.view.MultiSyncSnapshot(), drawnMS, drawing)
 	fppConnectWriteJSON(w, http.StatusOK, status)
 }
 
-// fppConnectFillPlayback reports playing only while the timeline is running:
-// playing, or unsynchronized, which is still free-running. Every other state,
-// including a timeline that has never seen a packet, reads as idle with no
-// filename, exactly as an FPP remote with nothing open does.
-func fppConnectFillPlayback(status *fppConnectSystemStatusResponse, snap multisync.Snapshot) {
+// fppConnectStillPlaying reports whether this node is playing the timeline's
+// file right now. With sync arriving it is. Once sync has gone silent only a
+// surface still drawing that sequence, short of the sequence's end, counts.
+func fppConnectStillPlaying(snap multisync.Snapshot, drawnMS int64, drawing bool) bool {
+	switch snap.State {
+	case multisync.StatePlaying:
+		return true
+	case multisync.StateUnsynchronized:
+		return drawing && snap.PositionMS < drawnMS
+	default:
+		return false
+	}
+}
+
+// fppConnectFillPlayback fills the playback members, which read as idle with
+// no filename, exactly as an FPP remote with nothing open does, unless
+// fppConnectStillPlaying holds.
+func fppConnectFillPlayback(status *fppConnectSystemStatusResponse, snap multisync.Snapshot, drawnMS int64, drawing bool) {
 	seconds := int64(0)
-	if snap.State == multisync.StatePlaying || snap.State == multisync.StateUnsynchronized {
+	if fppConnectStillPlaying(snap, drawnMS, drawing) {
 		status.Status = fppConnectStatusPlaying
 		status.StatusName = fppConnectStatusNamePlaying
 		if snap.PositionMS > 0 {

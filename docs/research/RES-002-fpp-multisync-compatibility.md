@@ -61,6 +61,8 @@ Desk research 2026-08-10 (documentation and source reading; no packet captures y
 - Working third-party listeners: [ESPixelStick FPPDiscovery.cpp](https://github.com/forkineye/ESPixelStick/blob/main/src/service/FPPDiscovery.cpp) (sequence sync only, ignores media sync); xSchedule master+remote (e.g., xLights 2024.20 tag, `xSchedule/SyncFPP.cpp`); Falcon controller firmware. [src]
 - ControlProtocol.txt defines etiquette for non-FPP devices (discover pings with IP 0.0.0.0). Caveat: FPP's auto-unicast mode only targets FPP instances (`supportsUnicast`); a third-party node should rely on multicast/broadcast or manual listing in `MultiSyncRemotes`/`MultiSyncExtraRemotes`, and should answer discover pings to appear in the FPP MultiSync UI. **`supportsUnicast`'s exact formula — `(type < kSysTypeFalconController) && (fppMode == REMOTE_MODE)`, `src/MultiSync.cpp:191` — is read at the FPP 10.0 tag (`370e62ed7`) specifically, not confirmed against 9.5.3 source.** The consequence stated in "Version-dependent default transport, and why a fresh FPP 10 player is silent" below is what makes this caveat load-bearing rather than a footnote: ShowMesh (system type 0xC0) can never satisfy `type < kSysTypeFalconController`, so it can never be an automatic unicast target on any version where this formula holds. [src]
 
+  **Correction, 2026-10-09.** The node now pings as type `0x7F` in remote mode ([ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 6), not `0xC0`, so the sentence above about `0xC0` no longer describes what ShowMesh sends. Observed (L2, container run, see "What an FPP player's MultiSync page shows for a ShowMesh node" below): a node followed an FPP 10.0 player whose transport settings were as shipped. Inferred only (L1): that it was reached by automatic unicast, because `0x7F` in remote mode satisfies the formula read from source. The packets were not captured, so the transport is not observed.
+
 ### Version-dependent default transport, and why a fresh FPP 10 player is silent
 
 Added because the failure mode this describes has no error message on
@@ -95,6 +97,16 @@ blocks any FPP 10 fleet upgrade until an operator knows to look for it.
   this formula holds. This is not a bug in ShowMesh or in FPP; it is
   FPP-to-FPP remote discovery working as designed, applied to a transport
   that happens to now be the default.
+
+  **Correction, 2026-10-09.** This bullet and the consequence below were
+  written for type `0xC0`. The node now pings as `0x7F` in remote mode, which
+  satisfies the formula as read from source (L1). In a container run a node
+  followed an FPP 10.0 player with shipped transport settings and no remote
+  list entry (L2, see "What an FPP player's MultiSync page shows for a
+  ShowMesh node" below). The run did not capture packets, so it shows that
+  sync arrived, not which transport carried it. A node the player has not
+  yet listed is still not a target, which is the start-up finding in that
+  section.
 - **The consequence**: an operator who re-images or factory-resets an FPP
   10 player, or provisions one fresh, and turns on `MultiSyncEnabled` (the
   one setting this record's earlier bench evidence already established
@@ -308,6 +320,27 @@ deployed fleet's page shows.
   `current_sequence`, `seconds_played`, `seconds_elapsed` and `time_elapsed`
   (`src/httpAPI.cpp:245-258` at 10.0). The seconds are JSON strings.
 
+**When a node says playing.** The row says playing, with a filename and an
+elapsed time, only while that is true of the node:
+
+- While sync is arriving (a packet within the timeline's five second silence
+  interval), the node reports playing with the timeline's position.
+- Once sync has gone silent, the timeline keeps free-running without limit
+  and never leaves `unsynchronized` by itself, so its state alone is not
+  evidence of playing. What the node really does then: a render surface that
+  holds the sequence keeps drawing it at the free-running position until the
+  sequence's last frame, then repeats that frame
+  (`internal/agent/pipeline/frame.go`). So the node reports playing only
+  while a surface is drawing sequence content and the position is short of
+  that sequence's length. Past the end, or with no surface drawing content,
+  it reports idle with no filename and `00:00`.
+- Every other timeline state reports idle.
+
+Covered by unit tests that age a real timeline on a stepped clock (fresh
+sync, 10 seconds of silence, hours of silence, sync resuming). Not benched:
+the container node had no render surface, so the silent-sync case with a
+surface drawing has no L2 evidence.
+
 **Members the page reads from the status answer (L1).** Line numbers are
 `www/multisync.php` at 10.0, then 9.5.3.
 
@@ -324,10 +357,10 @@ deployed fleet's page shows.
 | `wifi`, `interfaces` | 1343, 633 | wifi icon | omitted |
 | `channelInputsEnabled`, `channelOutputsEnabled` | 869 (10.0 only) | channel I/O icons | omitted |
 | `advancedView.Platform`, `.Variant`, `.SubPlatform` | 1397, 686 | Platform column | `ShowMesh`, `ShowMesh`, omitted |
-| `advancedView.OSVersion` | 1436, 728 | "OS:" line of the Version column | `ShowMesh agent <version>` |
+| `advancedView.OSVersion` | 1436, 728 | "OS:" line of the Version column | `ShowMesh agent <version>`, in `advancedView` only |
 | `advancedView.HostDescription` | 1443, 732 | line under the hostname | omitted |
 | `advancedView.RemoteGitVersion`, `.LocalGitVersion`, `.Branch`, `.UpgradeSource` | 1419, 709 | Git Versions column, drawn only when `RemoteGitVersion` is present | omitted |
-| `advancedView.Utilization.CPU`, `.Memory` | 1474, 760 | percent, rounded | measured, omitted when not measurable |
+| `advancedView.Utilization.CPU`, `.Memory` | 1474, 760 | percent, rounded | measured, omitted when not measurable, in `advancedView` only |
 | `advancedView.Utilization.Uptime` | 1532, 803 | 10.0 parses `D days H:M`; 9.5.3 prints the string | `D days H:M`, FPP's own format |
 | `advancedView.Utilization.MemoryFree`, `.Disk`, `advancedView.rssi`, `.IPs`, `.backgroundColor` | 1480, 766 | extra rows, tooltip, row colour | omitted |
 
@@ -359,12 +392,12 @@ Observed on both tags unless a line says otherwise:
   filename, Elapsed counting (`00:06` in the page, `00:15` and `00:16` in the
   proxy answer fetched seconds later). After the player stopped the sequence
   the node answered `idle` with no filename.
-- The sync reached the node with the transport settings as shipped. On 9.5.3
-  that is multicast. On 10.0 the shipped default is unicast to known remotes,
-  so the node was selected as a unicast target; that is inferred from the
-  settings, the packets were not captured. The statement under "Third-party
-  interoperability" that ShowMesh can never be an automatic unicast target
-  describes the earlier `0xC0` type and does not hold for `0x7F`.
+- The node followed the player on both tags with the transport settings as
+  shipped (L2). Which transport carried the sync was not captured. From
+  source and settings only (L1): 9.5.3 defaults to multicast, and 10.0
+  defaults to unicast to known remotes, a list a `0x7F` remote qualifies for.
+  The older passages of this record that say otherwise for type `0xC0` now
+  carry a dated correction.
 - `POST`, `PUT`, `DELETE` and `PATCH` on the node's `/api/system/status` each
   answered 404.
 - CPU, memory and uptime came from the container host's `/proc`, so the

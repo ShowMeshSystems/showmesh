@@ -87,21 +87,21 @@ filesystem.
   `Mode` (`AdvertisedMode`, `"player"`), `typeId` (`127`, i.e.
   `multisync.SystemTypeShowMesh`), `channelRanges` (the holder's advertised
   string, key omitted entirely when it is empty, never `""`), and
-  `Platform`/`Variant` (`"ShowMesh"`). Two further members are read by an
-  FPP player's MultiSync page and not by xLights: `OSVersion` (`"ShowMesh
-  agent <agent version>"`) and `Utilization` (`CPU` and `Memory` as percent,
-  `Uptime` as FPP's `D days H:M` string; a value the host cannot measure is
-  omitted, and the whole object is omitted when nothing can be measured).
+  `Platform`/`Variant` (`"ShowMesh"`).
 - **`GET /api/system/status`**: what an FPP player's MultiSync page polls,
   through the player, to fill this node's row. Read only. `mode`/`mode_name`
   are `8`/`"remote"`, matching the ping. `status`/`status_name` are
-  `1`/`"playing"` while the node's MultiSync timeline is playing or
-  free-running unsynchronized, otherwise `0`/`"idle"`. While playing,
+  `1`/`"playing"` while sync is arriving, or, once sync has gone silent,
+  only while a surface is still drawing that sequence short of its end;
+  otherwise `0`/`"idle"`. While playing,
   `sequence_filename` and `current_sequence` (or `media_filename` and
   `current_song` for a media file) carry the timeline's filename, and
   `seconds_played`, `seconds_elapsed` (strings) and `time_elapsed` carry its
   position; when idle they are `""`, `"0"` and `"00:00"`. `advancedView` is
-  this node's system info document. The member list FPP reads is in
+  this node's system info document plus two members only that page reads:
+  `OSVersion` (`"ShowMesh agent <agent version>"`) and `Utilization` (`CPU`
+  and `Memory` as percent, `Uptime` as FPP's `D days H:M` string; a value the
+  host cannot measure is omitted, and the whole object when none can be). The member list FPP reads is in
   [RES-002](../research/RES-002-fpp-multisync-compatibility.md).
 - **`GET /api/fppd/multiSyncSystems`**: `{"systems":[<one self-entry>]}`. The
   entry carries `address` (the local IP of the connection the request
