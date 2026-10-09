@@ -26,7 +26,7 @@ make check     # what CI runs on the fast path
 
 Both integration targets sit behind the `integration` build tag and never run as part of `make test` or `make check`.
 
-CI runs on Go 1.26.6 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project: CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
+CI runs on Go 1.26.9 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project: CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
 
 ## Before you write code
 
@@ -117,7 +117,7 @@ by exact job name: `lint`, `vuln`, `ui`, `docker`, and `test-gate`.
 `test-gate` needs the whole `test` go-version matrix and fails unless every
 leg succeeded; its own name stays stable across a matrix version bump, so
 bumping `test`'s Go version cannot silently rename the required check the
-way requiring `test (1.26.6)` directly would have. These are deterministic:
+way requiring `test (1.26.9)` directly would have. These are deterministic:
 the same commit produces the same result, which is what makes it safe to
 block merges on them.
 
