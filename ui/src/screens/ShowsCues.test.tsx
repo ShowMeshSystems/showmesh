@@ -150,8 +150,8 @@ function fseqAsset(sequence: string, runtimeFilename: string, id = `f-${sequence
     sizeBytes: 100,
     createdAt: '2026-08-30T18:00:00Z',
     createdByPrincipalId: 'p1',
-    createdByPrincipalName: 'erbartos',
-    supersededAt: null,
+    createdByPrincipalName: 'operator',
+    supersededAt: null as string | null,
     current: true,
   }
 }
@@ -1176,6 +1176,21 @@ describe('Shows · Cues tab', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Save cue' }))
         await waitFor(() => expect(sent).not.toBeNull())
         expect((sent as unknown as ConfigShowCue).outputs.render).toEqual({ sequence: 'house-preshow-loop' })
+      })
+
+      it('does not offer an audio file or a superseded sequence file', async () => {
+        stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
+        stubs.getShow = showHead
+        stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
+        const audio = { ...fseqAsset('walk-in-music', 'Walk_In.wav', 'a-walk-in'), mediaType: 'audio' }
+        const superseded = { ...fseqAsset('old-song', 'Old_Song.fseq', 'f-old'), current: false, supersededAt: '2026-08-31T10:00:00Z' }
+        stubs.listAssets = assetsWith(fseqAsset('song-one', 'Song_One.fseq'), audio, superseded)
+        renderWorkspace({ session: signedIn(['config:write']) })
+        fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Render/ }))
+        const select = await screen.findByRole('combobox', { name: 'Sequence' })
+        const values = Array.from(select.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
+        expect(values).toEqual(['', 'song-one'])
       })
 
       it('offers no dropdown when nothing is uploaded and no sequence is saved', async () => {

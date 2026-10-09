@@ -573,7 +573,7 @@ function CueEditor({
   else if (unknownActions.length > 0) blockReason = `${unknownActions.join(', ')} is not a show action in this show. Remove it to save.`
   else if (kinds.has('ltc') && !kinds.has('audio')) blockReason = 'LTC requires Audio to also be selected.'
   else if (kinds.has('announcement') && !kinds.has('audio')) blockReason = 'Announcement requires Audio to also be selected.'
-  else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence name.'
+  else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence selected.'
   else if (kinds.has('audio') && audioAsset === '') blockReason = 'Audio needs an asset selected.'
   else if (name.trim() === '') blockReason = 'A cue needs a name.'
   else if (id.trim() === '') blockReason = 'A cue needs an id.'
