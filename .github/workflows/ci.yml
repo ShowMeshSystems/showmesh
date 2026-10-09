@@ -72,6 +72,14 @@ jobs:
     # below combine them as `docs_only != 'true' && ui_only != 'true'`, so
     # either being true is enough to skip the expensive work.
     #
+    # The `test`, `lint`, and `vuln` jobs run in a `debian:trixie` container,
+    # and GitHub pulls that image before any step condition is evaluated, so
+    # a skipped pull request would still depend on Docker Hub being
+    # reachable. Their `container:` expression is therefore empty when either
+    # output is 'true', which runs the job on the runner itself with every
+    # toolchain step skipped, and is the image when the output is false or
+    # empty, so a broken detector still runs everything in the container.
+    #
     # No documentation link checker or Markdown linter exists in this
     # workflow or the Makefile today, so a docs-only PR loses no check it
     # would otherwise have had. If one is ever added, it must run outside
@@ -122,8 +130,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    container:
-      image: debian:trixie
+    container: ${{ needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && 'debian:trixie' || '' }}
     needs: [changed-files]
     # A job with a `needs:` dependency carries an implicit `if: success()`,
     # so if `changed-files` itself ever failed, this required job would be
@@ -578,6 +585,12 @@ jobs:
 
   integration-weatherdelay:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `integration` job: never gated on docs_only, so this change
+    # gates only on ui_only and leaves the docs-only path untouched.
+    # `if: always()` keeps it running and reporting even if `changed-files`
+    # failed, in which case ui_only reads empty and the suite runs.
+    if: always()
     # ADR-053 weather delay proved end to end: a real coordinator, a real
     # agent (the real cgo GStreamer engine, against "fakesink", see the
     # `integration` job's own identical reasoning for why this cannot be a
@@ -594,6 +607,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Integration tests (weather delay end to end)
+        if: needs.changed-files.outputs.ui_only != 'true'
         run: |
           set -eux
           mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
@@ -621,8 +635,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    container:
-      image: debian:trixie
+    container: ${{ needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && 'debian:trixie' || '' }}
     needs: [changed-files]
     # See the `test` job's own comment: `needs:` implies `if: success()`,
     # which would let a failed `changed-files` job skip this required job
@@ -816,8 +829,7 @@ jobs:
 
   vuln:
     runs-on: ubuntu-latest
-    container:
-      image: debian:trixie
+    container: ${{ needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && 'debian:trixie' || '' }}
     needs: [changed-files]
     # See the `test` job's own comment: `needs:` implies `if: success()`,
     # which would let a failed `changed-files` job skip this required job
