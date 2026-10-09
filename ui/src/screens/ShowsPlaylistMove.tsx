@@ -1,0 +1,200 @@
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ApiError,
+  getShowPlaylistDefinitionMovePreview,
+  putShowPlaylist,
+  type ConfigObjectSummary,
+  type ShowPlaylistConfigResponse,
+  type ShowPlaylistMovePreviewResponse,
+} from '../api'
+import { Button, ButtonRow, RuledStrip, StatusPair, Table, TableWrap } from '../kit'
+import { describeApiError } from '../domain/session'
+import { formatClock } from '../domain/time'
+import { cueLabel } from './showsModel'
+
+type Preview = ShowPlaylistMovePreviewResponse
+
+type Availability = { kind: 'checking' } | { kind: 'ready'; preview: Preview } | { kind: 'failed'; reason: string }
+type Review = { kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; preview: Preview } | { kind: 'failed'; reason: string }
+
+const CHANGED_AFTER_REVIEW = 'This playlist was changed after you opened the review, so nothing was saved. Review the changes again.'
+
+/** Asks the coordinator, once per saved revision, whether FPP has a newer playlist; the review itself re-reads so it never shows a stale answer. */
+export function usePlaylistMove(playlist: ShowPlaylistConfigResponse, onSaved: (response: ShowPlaylistConfigResponse) => void) {
+  const [availability, setAvailability] = useState<Availability>({ kind: 'checking' })
+  const [review, setReview] = useState<Review>({ kind: 'closed' })
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [recheck, setRecheck] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    setAvailability({ kind: 'checking' })
+    setReview({ kind: 'closed' })
+    setSaveError(null)
+    getShowPlaylistDefinitionMovePreview(playlist.id)
+      .then((preview) => {
+        if (!cancelled) setAvailability({ kind: 'ready', preview })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setAvailability({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [playlist.id, playlist.revision, playlist.payload.fpp?.playlistHash, recheck])
+
+  const open = useCallback(() => {
+    setReview({ kind: 'loading' })
+    setSaveError(null)
+    getShowPlaylistDefinitionMovePreview(playlist.id)
+      .then((preview) => setReview({ kind: 'open', preview }))
+      .catch((err: unknown) => setReview({ kind: 'failed', reason: describeApiError(err) }))
+  }, [playlist.id])
+
+  const close = useCallback(() => {
+    setReview({ kind: 'closed' })
+    setSaveError(null)
+  }, [])
+
+  const confirm = useCallback(() => {
+    if (review.kind !== 'open' || review.preview.proposed === null) return
+    const { proposed, revision } = review.preview
+    setSaving(true)
+    setSaveError(null)
+    putShowPlaylist(playlist.id, proposed, revision)
+      .then((response) => {
+        setReview({ kind: 'closed' })
+        onSaved(response)
+      })
+      .catch((err: unknown) => {
+        setSaveError(err instanceof ApiError && err.status === 409 ? CHANGED_AFTER_REVIEW : describeApiError(err))
+      })
+      .finally(() => setSaving(false))
+  }, [review, playlist.id, onSaved])
+
+  const newer = availability.kind === 'ready' && availability.preview.newerAvailable ? availability.preview : null
+  return { availability, newer, review, saving, saveError, open, close, confirm, recheck: () => setRecheck((n) => n + 1) }
+}
+
+export type PlaylistMove = ReturnType<typeof usePlaylistMove>
+
+const OUTCOME: Record<string, { tone: 'good' | 'pending' | 'warn'; label: string }> = {
+  kept: { tone: 'good', label: 'Kept' },
+  moved: { tone: 'pending', label: 'Moved' },
+  dropped: { tone: 'warn', label: 'Removed' },
+}
+
+/** The notice and the button that open the review, or the plain reason the review cannot start. */
+export function PlaylistMoveNotice({ move, blockedReason }: { move: PlaylistMove; blockedReason: string | null }) {
+  if (move.availability.kind === 'failed') {
+    return <RuledStrip absence="failed" label="Read failed" fact={move.availability.reason} />
+  }
+  if (move.newer === null) return null
+  const busy = move.review.kind === 'loading' || move.review.kind === 'open'
+  return (
+    <div className="sm-stack-3">
+      <p className="sm-small sm-muted">
+        FPP&rsquo;s playlist changed at {formatClock(move.newer.newest?.capturedAt ?? '') ?? 'an unrecorded time'}. Review the changes to keep your cues on the right
+        sequences.
+      </p>
+      <Button onClick={move.open} disabled={busy || blockedReason !== null} title={blockedReason ?? undefined}>
+        {move.review.kind === 'loading' ? 'Reading…' : 'Review changes'}
+      </Button>
+      {blockedReason !== null && <p className="sm-small sm-muted">{blockedReason}</p>}
+    </div>
+  )
+}
+
+/** Every saved entry as kept, moved or removed, then the new entries with no cue. Nothing is written until the confirm button. */
+export function PlaylistMoveReview({
+  move,
+  cues,
+  confirmBlockedReason,
+}: {
+  move: PlaylistMove
+  cues: readonly ConfigObjectSummary[]
+  confirmBlockedReason: string | null
+}) {
+  const { review } = move
+  if (review.kind === 'closed' || review.kind === 'loading') return null
+  if (review.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={review.reason} />
+  const { preview } = review
+  const canConfirm = preview.canConfirm && confirmBlockedReason === null
+
+  return (
+    <div className="sm-stack-3" role="region" aria-label="Changes in FPP's playlist">
+      <p className="sm-small sm-muted">{preview.summary}</p>
+      {preview.newerAvailable && (
+        <>
+          <TableWrap label="Saved cues and what happens to them, scrollable">
+            <Table minWidth={520}>
+              <thead>
+                <tr>
+                  <th scope="col">Cue</th>
+                  <th scope="col">Sequence</th>
+                  <th scope="col">What happens</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.entries.map((entry) => {
+                  const outcome = OUTCOME[entry.outcome] ?? { tone: 'warn' as const, label: entry.outcome }
+                  return (
+                    <tr key={entry.entryId}>
+                      <td>{cueLabel(cues, entry.cue)}</td>
+                      <td>{entry.filename !== '' ? entry.filename : <span className="sm-faint">No sequence name saved</span>}</td>
+                      <td>
+                        <StatusPair tone={outcome.tone} label={outcome.label} />
+                        <br />
+                        <span className="sm-small sm-muted">{entry.summary}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </Table>
+          </TableWrap>
+          {preview.newEntries.length > 0 && (
+            <TableWrap label="New in FPP's playlist, with no cue, scrollable">
+              <Table minWidth={520}>
+                <thead>
+                  <tr>
+                    <th scope="col">New in FPP&rsquo;s playlist</th>
+                    <th scope="col">Cue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.newEntries.map((entry) => (
+                    <tr key={`${entry.section}:${entry.position}`}>
+                      <td>
+                        <span className="sm-data sm-small sm-faint">
+                          {entry.section} · {entry.position}
+                        </span>
+                        <br />
+                        {entry.name !== '' ? entry.name : '(no filename)'}
+                      </td>
+                      <td>
+                        <StatusPair tone="pending" label="No cue" />
+                        <br />
+                        <span className="sm-small sm-muted">{entry.summary}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          )}
+        </>
+      )}
+      <ButtonRow>
+        <Button variant="primary" onClick={move.confirm} disabled={!canConfirm || move.saving} title={confirmBlockedReason ?? undefined}>
+          {move.saving ? 'Saving…' : 'Move to FPP’s newest playlist'}
+        </Button>
+        <Button variant="quiet" onClick={move.close} disabled={move.saving}>
+          Cancel
+        </Button>
+      </ButtonRow>
+      {move.saveError !== null && <RuledStrip absence="failed" label="Not saved" fact={move.saveError} />}
+    </div>
+  )
+}

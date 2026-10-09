@@ -230,6 +230,7 @@ type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse'
 // aliasing pattern.
 type SchemaConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+type SchemaShowPlaylistMovePreviewResponse = components['schemas']['ShowPlaylistMovePreviewResponse']
 
 // media.playlist's own read/write response, same aliasing pattern.
 type SchemaConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
@@ -2448,6 +2449,19 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/config/show.playlist/{id}/definition-move-preview`. Read-only; writes nothing. */
+  async getShowPlaylistDefinitionMovePreview(id: string): Promise<SchemaShowPlaylistMovePreviewResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowPlaylistMovePreviewResponse>(
+        `/config/show.playlist/${encodeURIComponent(id)}/definition-move-preview`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/show.action/{id}`. Throws (404) when no such action exists. */
   async getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
     const controller = this.beginSideCall()
@@ -2832,13 +2846,14 @@ export class ApiStore {
    * and normalized server-side; a rejected payload throws and appends no
    * revision.
    */
-  async putShowPlaylist(id: string, payload: SchemaConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
+  async putShowPlaylist(id: string, payload: SchemaConfigShowPlaylist, ifMatchRevision?: number): Promise<SchemaShowPlaylistConfigResponse> {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaShowPlaylistConfigResponse>(
         `/config/show.playlist/${encodeURIComponent(id)}`,
         payload,
         controller.signal,
+        ifMatchRevision,
       )
     } finally {
       this.endSideCall(controller)

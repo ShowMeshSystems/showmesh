@@ -324,22 +324,6 @@ export function targetLabel(asset: Pick<Asset, 'targetKind' | 'target'>): string
   return asset.targetKind === 'show' ? 'Show-wide' : asset.target
 }
 
-/**
- * A newer definition, captured under a different hash for the same instance
- * and playlist name (TRACK-H-H2-SPEC.md §3.6), is the coordinator's own
- * evidence that FPP's definition moved, not a guess from comparing timestamps.
- */
-export function newerDefinition(
-  definitions: readonly FPPPlaylistDefinitionMetadata[],
-  instanceUuid: string,
-  playlistName: string,
-  boundHash: string,
-): FPPPlaylistDefinitionMetadata | null {
-  const candidates = definitions.filter((d) => d.instanceUuid === instanceUuid && d.playlistName === playlistName && d.playlistHash !== boundHash)
-  if (candidates.length === 0) return null
-  return candidates.reduce((latest, entry) => (entry.capturedAt > latest.capturedAt ? entry : latest))
-}
-
 /** The newest time the coordinator received any definition of this FPP playlist, or null when it holds none. */
 export function latestDefinitionReceivedMs(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string, playlistName: string): number | null {
   const times = definitions

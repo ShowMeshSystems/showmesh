@@ -139,6 +139,7 @@ type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigR
 type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+type SchemaShowPlaylistMovePreviewResponse = components['schemas']['ShowPlaylistMovePreviewResponse']
 type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
@@ -769,6 +770,10 @@ export function getShowPlaylist(id: string): Promise<SchemaShowPlaylistConfigRes
   return store.getShowPlaylist(id)
 }
 
+export function getShowPlaylistDefinitionMovePreview(id: string): Promise<SchemaShowPlaylistMovePreviewResponse> {
+  return store.getShowPlaylistDefinitionMovePreview(id)
+}
+
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
   return store.getShowAction(id)
 }
@@ -1002,8 +1007,8 @@ export function deleteShowCue(id: string): Promise<void> {
   return store.deleteShowCue(id)
 }
 
-export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
-  return store.putShowPlaylist(id, payload)
+export function putShowPlaylist(id: string, payload: ConfigShowPlaylist, ifMatchRevision?: number): Promise<SchemaShowPlaylistConfigResponse> {
+  return store.putShowPlaylist(id, payload, ifMatchRevision)
 }
 
 export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {

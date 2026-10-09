@@ -17,6 +17,7 @@ const stubs = vi.hoisted(() => ({
   getFPPPlaylistDefinitionEntries: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowPlaylistDefinitionMovePreview: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getMediaPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   republishFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -35,6 +36,7 @@ vi.mock('../api', async () => {
     getFPPPlaylistDefinitionEntries: (...args: never[]) => stubs.getFPPPlaylistDefinitionEntries(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
+    getShowPlaylistDefinitionMovePreview: (...args: never[]) => stubs.getShowPlaylistDefinitionMovePreview(...args),
     getMediaPlaylist: (...args: never[]) => stubs.getMediaPlaylist(...args),
     republishFPPPlaylistDefinitions: (...args: never[]) => stubs.republishFPPPlaylistDefinitions(...args),
   }
@@ -772,5 +774,158 @@ describe('Shows · Playlists tab editing', () => {
       expect(within(mediaRow).getByText('Media playlist')).toBeInTheDocument()
       expect(within(mediaRow).getByText('Not applicable')).toBeInTheDocument()
     })
+  })
+})
+
+describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  const movedPayload = fppPlaylist({
+    fpp: { instanceUuid: 'uuid-1', playlistName: 'WinterRidge_Main', playlistHash: 'b'.repeat(64) },
+    entries: [{ id: 'e1', cue: 'cue-1', fpp: { section: 'mainPlaylist', position: 1, expectedSequenceFilename: 'wizards-in-winter.fseq' } }],
+  })
+
+  function preview(overrides: Record<string, unknown> = {}) {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      playlistId: 'p1',
+      revision: 1,
+      newerAvailable: true,
+      canConfirm: true,
+      summary: 'FPP’s playlist changed. Review the changes to keep your cues on the right sequences.',
+      current: { hash: 'a'.repeat(64), capturedAt: '2026-08-30T19:00:00Z', entryCount: 1 },
+      newest: { hash: 'b'.repeat(64), capturedAt: '2026-08-30T20:20:00Z', entryCount: 2 },
+      entries: [
+        {
+          entryId: 'e1',
+          cue: 'cue-1',
+          filename: 'wizards-in-winter.fseq',
+          outcome: 'moved',
+          matchedBy: 'filename',
+          from: { section: 'mainPlaylist', position: 0 },
+          to: { section: 'mainPlaylist', position: 1 },
+          duplicateFilename: false,
+          summary: 'Moved from position 0 to position 1.',
+        },
+        {
+          entryId: 'e2',
+          cue: 'cue-2',
+          filename: '',
+          outcome: 'dropped',
+          matchedBy: 'position',
+          from: { section: 'mainPlaylist', position: 7 },
+          to: null,
+          duplicateFilename: false,
+          summary: 'FPP’s playlist has nothing at position 7 any more. This cue will be removed from this playlist.',
+        },
+      ],
+      newEntries: [
+        { section: 'mainPlaylist', position: 0, name: 'new-opener.fseq', duplicateFilename: false, summary: 'New at position 0 in FPP’s playlist. It has no cue yet; give it one after you confirm.' },
+      ],
+      proposed: movedPayload,
+      ...overrides,
+    }
+  }
+
+  async function openEditor(scopes = ['config:write'], answer: unknown = preview()) {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withPlaylistList(kind, [cueSummary(), cueSummary2()])
+    stubs.listAssets = assetsEmpty
+    stubs.getShowPlaylist = (id: string) => Promise.resolve(playlistResponse(fppPlaylist(), id))
+    stubs.getFPPPlaylistDefinitionEntries = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        instanceUuid: 'uuid-1',
+        playlistHash: 'a'.repeat(64),
+        entries: [{ section: 'mainPlaylist', position: 0, type: 'sequence', sequenceName: 'wizards-in-winter.fseq', mediaName: '' }],
+      })
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: [] })
+    stubs.getShowPlaylistDefinitionMovePreview = () => Promise.resolve(answer)
+    renderWorkspace({ session: signedIn(scopes) })
+    await openPlaylistRow('Main Show')
+    await screen.findByText('wizards-in-winter.fseq')
+  }
+
+  it('offers the review only when the coordinator reports a newer playlist, and says so in plain words', async () => {
+    await openEditor()
+    expect(await screen.findByRole('button', { name: 'Review changes' })).toBeInTheDocument()
+    expect(screen.getByText("FPP's playlist changed", { selector: '.sm-status' })).toBeInTheDocument()
+    expect(screen.queryByText('Hash changed')).not.toBeInTheDocument()
+    cleanup()
+
+    await openEditor(['config:write'], preview({ newerAvailable: false, canConfirm: false, newest: null, entries: [], newEntries: [], proposed: null }))
+    await screen.findByRole('button', { name: 'Save playlist' })
+    expect(screen.queryByRole('button', { name: 'Review changes' })).not.toBeInTheDocument()
+  })
+
+  it('shows every saved cue and the new entries without writing anything', async () => {
+    const put = vi.fn(() => Promise.resolve(null))
+    stubs.putShowPlaylist = put
+    await openEditor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    const review = await screen.findByRole('region', { name: 'Changes in FPP\'s playlist' })
+    expect(within(review).getByText('Moved from position 0 to position 1.')).toBeInTheDocument()
+    expect(within(review).getByText('Moved')).toBeInTheDocument()
+    expect(within(review).getByText('Removed')).toBeInTheDocument()
+    expect(within(review).getByText('No sequence name saved')).toBeInTheDocument()
+    expect(within(review).getByText('new-opener.fseq')).toBeInTheDocument()
+    expect(within(review).getByText('No cue')).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('confirm sends the proposed payload with the previewed revision, then shows the saved playlist', async () => {
+    const put = vi.fn<(id: string, payload: unknown, revision?: number) => Promise<unknown>>((id, payload) => Promise.resolve(playlistResponse(payload as ConfigShowPlaylist, id, 2)))
+    stubs.putShowPlaylist = put
+    await openEditor(['config:write'], preview({ revision: 1 }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('p1', movedPayload, 1))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Changes in FPP\'s playlist' })).not.toBeInTheDocument())
+  })
+
+  it('cancel closes the review and writes nothing', async () => {
+    const put = vi.fn(() => Promise.resolve(null))
+    stubs.putShowPlaylist = put
+    await openEditor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    await screen.findByRole('region', { name: 'Changes in FPP\'s playlist' })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('region', { name: 'Changes in FPP\'s playlist' })).not.toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('reports a playlist that changed after the review as not saved', async () => {
+    stubs.putShowPlaylist = () => Promise.reject(new ApiError('revision 2 is current', 409, 'conflict'))
+    await openEditor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
+    expect(await screen.findByText('This playlist was changed after you opened the review, so nothing was saved. Review the changes again.')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Changes in FPP\'s playlist' })).toBeInTheDocument()
+  })
+
+  it('does not offer the confirm when every saved cue would be removed', async () => {
+    await openEditor(['config:write'], preview({ canConfirm: false, proposed: null, summary: 'None of this playlist’s sequences are in FPP’s playlist any more, so no cue can be kept. Add them back in FPP, or make a new playlist.' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    const review = await screen.findByRole('region', { name: 'Changes in FPP\'s playlist' })
+    expect(within(review).getByText(/no cue can be kept/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move to FPP’s newest playlist' })).toBeDisabled()
+  })
+
+  it('is not usable while the editor has unsaved cue changes, and says why', async () => {
+    await openEditor()
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    expect(review).not.toBeDisabled()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 0' }), { target: { value: '' } })
+    expect(screen.getByRole('button', { name: 'Review changes' })).toBeDisabled()
+    expect(screen.getByText(/You have unsaved cue changes/)).toBeInTheDocument()
+  })
+
+  it('is disabled with the missing scope named when the principal cannot write config', async () => {
+    await openEditor([])
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    expect(review).toBeDisabled()
   })
 })

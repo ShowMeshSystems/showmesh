@@ -649,10 +649,9 @@ is an issue in the tracker; none of them is a question waiting in this repositor
   per playlist and the design intends it to follow show versus program mode instead, so the control
   is disabled, the stored value is written back unchanged, and the note says it is not settable here
   yet. Section 10 item 3 carries the same statement.
-- **Rebinding a playlist to a re-imported FPP definition is inert.** The write exists; the
-  carry-over rule for a cue binding whose FPP entry is gone from the new definition does not, and
-  neither does the way a partial carry-over is shown before saving. Doing it silently is the failure
-  mode being avoided.
+- **Moving a playlist to FPP's newest playlist is built; choosing a different instance or FPP playlist is still inert.**
+  The editor previews what happens to each saved cue (kept, moved, or removed, with new entries listed as having no
+  cue) and saves only on confirm. The Instance and FPP playlist selects stay disabled.
 - **Three facts the design draws and the API does not report** are owed to the contract rather than
   inferred in the browser: a staleness signal tying a cue's render sequence to FPP's imported
   definitions; a per-asset sync verdict, which today would mean joining the manifest on a runtime

@@ -45,6 +45,8 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 export interface JsonRequestInit {
   method?: string
   body?: unknown
+  /** A config revision sent as `If-Match`, so the coordinator refuses the write if it has moved on. */
+  ifMatchRevision?: number
 }
 
 /**
@@ -351,6 +353,7 @@ export class ApiClient {
     // `BodyInit | null` under `exactOptionalPropertyTypes` — see
     // JsonRequestInit's doc comment for why every caller passes a plain
     // object instead of a pre-encoded BodyInit in the first place.
+    if (init.ifMatchRevision !== undefined) headers['If-Match'] = `"${init.ifMatchRevision}"`
     let body: string | null = null
     if (init.body !== undefined) {
       headers['Content-Type'] = 'application/json'
@@ -443,8 +446,8 @@ export class ApiClient {
    * script can set or needs to set — this method sends nothing beyond
    * what `request()` already does for every other call.
    */
-  async putJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
-    const response = await this.request(path, signal, { method: 'PUT', body })
+  async putJson<T>(path: string, body: unknown, signal: AbortSignal, ifMatchRevision?: number): Promise<T> {
+    const response = await this.request(path, signal, ifMatchRevision === undefined ? { method: 'PUT', body } : { method: 'PUT', body, ifMatchRevision })
     return parseJsonResponse<T>(response)
   }
 

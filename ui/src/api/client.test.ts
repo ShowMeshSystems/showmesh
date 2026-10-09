@@ -117,6 +117,18 @@ describe('ApiClient.putJson', () => {
     expect(JSON.parse(recordedBody)).toEqual({ endpoints: [{ id: 'player-01', url: 'http://10.0.1.20' }] })
     expect(result).toEqual({ ok: true })
   })
+
+  it('sends the given revision as a quoted If-Match, and none when no revision is given', async () => {
+    const seen: (string | undefined)[] = []
+    const s = await server((req, res) => {
+      seen.push(req.headers['if-match'] as string | undefined)
+      void readBody(req).then(() => respondJson(res, 200, { ok: true }))
+    })
+    const client = new ApiClient(s.baseUrl)
+    await client.putJson('/config/show.playlist/p1', {}, new AbortController().signal, 4)
+    await client.putJson('/config/show.playlist/p1', {}, new AbortController().signal)
+    expect(seen).toEqual(['"4"', undefined])
+  })
 })
 
 describe('ApiClient.deleteJson', () => {

@@ -13,6 +13,7 @@ const stubs = vi.hoisted(() => ({
   getFPPPlaylistDefinitionEntries: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowPlaylistDefinitionMovePreview: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
@@ -27,6 +28,7 @@ vi.mock('../api', async () => {
     getFPPPlaylistDefinitionEntries: (...args: never[]) => stubs.getFPPPlaylistDefinitionEntries(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
+    getShowPlaylistDefinitionMovePreview: (...args: never[]) => stubs.getShowPlaylistDefinitionMovePreview(...args),
     getShowAction: (...args: never[]) => stubs.getShowAction(...args),
   }
 })
@@ -278,7 +280,7 @@ describe('Shows · Playlists tab', () => {
     expect(screen.getByText('Unbound')).toBeInTheDocument()
   })
 
-  it('shows a Hash changed verdict only when a newer definition is stored under a different hash', async () => {
+  it('says FPP’s playlist changed only when the coordinator reports a newer one', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = (kind: string) =>
       kind === 'show.playlist'
@@ -288,17 +290,35 @@ describe('Shows · Playlists tab', () => {
     stubs.getShowPlaylist = (id: string) =>
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.playlist', id, revision: 1, payload: fppPlaylist(), updatedAt: '2026-08-30T18:22:00Z', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api' })
     stubs.getFPPPlaylistDefinitionEntries = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', instanceUuid: 'uuid-1', playlistHash: 'a'.repeat(64), entries: [] })
-    stubs.listFPPPlaylistDefinitions = () =>
-      Promise.resolve({
-        serverTime: '2026-08-30T21:00:00Z',
-        definitions: [
-          { instanceUuid: 'uuid-1', playlistName: 'WinterRidge_Main', playlistHash: 'b'.repeat(64), capturedAt: '2026-08-30T20:54:00Z', receivedAt: '2026-08-30T20:54:05Z', entryCount: 6, referenced: false },
-        ],
-      })
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: [] })
+    const answer = (newerAvailable: boolean) => ({
+      serverTime: '2026-08-30T21:00:00Z',
+      playlistId: 'p1',
+      revision: 1,
+      newerAvailable,
+      canConfirm: newerAvailable,
+      summary: 'x',
+      current: { hash: 'a'.repeat(64), capturedAt: '2026-08-30T19:00:00Z', entryCount: 1 },
+      newest: newerAvailable ? { hash: 'b'.repeat(64), capturedAt: '2026-08-30T20:54:00Z', entryCount: 2 } : null,
+      entries: [],
+      newEntries: [],
+      proposed: null,
+    })
 
+    stubs.getShowPlaylistDefinitionMovePreview = () => Promise.resolve(answer(false))
     renderWorkspace()
     await openPlaylistRow('Main Show')
-    await waitFor(() => expect(screen.getByText('Hash changed')).toBeInTheDocument())
+    await screen.findByRole('button', { name: 'Save playlist' })
+    await waitFor(() => expect(screen.queryByText('FPP\u2019s playlist changed at', { exact: false })).not.toBeInTheDocument())
+    expect(screen.queryByText("FPP's playlist changed")).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review changes' })).not.toBeInTheDocument()
+    cleanup()
+
+    stubs.getShowPlaylistDefinitionMovePreview = () => Promise.resolve(answer(true))
+    renderWorkspace()
+    await openPlaylistRow('Main Show')
+    await waitFor(() => expect(screen.getByText("FPP's playlist changed")).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Review changes' })).toBeInTheDocument()
   })
 
   it('folds playlist readiness into this tab and states the failing condition, never fabricating ready', async () => {

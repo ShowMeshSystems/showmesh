@@ -272,6 +272,7 @@ export type ConfigShowPlaylistEntryFPP = components['schemas']['ConfigShowPlayli
 export type ConfigShowPlaylistEntry = components['schemas']['ConfigShowPlaylistEntry']
 export type ConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
 export type ShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+export type ShowPlaylistMovePreviewResponse = components['schemas']['ShowPlaylistMovePreviewResponse']
 
 // Media Playlists screen: media.playlist authoring. Unlike show.playlist (a
 // list of cues a runner steps through), media.playlist is a list of things
