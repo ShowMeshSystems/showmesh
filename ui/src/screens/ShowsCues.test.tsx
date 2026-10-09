@@ -137,6 +137,29 @@ function signedIn(scopes: string[]): SessionResponse {
   } as unknown as SessionResponse
 }
 
+function fseqAsset(sequence: string, runtimeFilename: string, id = `f-${sequence}`) {
+  return {
+    id,
+    show: 'winter-ridge-2026',
+    sequence,
+    targetKind: 'show',
+    target: '',
+    mediaType: 'fseq',
+    contentHash: 'sha256:' + 'b'.repeat(64),
+    runtimeFilename,
+    sizeBytes: 100,
+    createdAt: '2026-08-30T18:00:00Z',
+    createdByPrincipalId: 'p1',
+    createdByPrincipalName: 'erbartos',
+    supersededAt: null,
+    current: true,
+  }
+}
+
+function assetsWith(...assets: ReturnType<typeof fseqAsset>[]) {
+  return () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets })
+}
+
 function assetsEmpty() {
   return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [] })
 }
@@ -1083,7 +1106,7 @@ describe('Shows · Cues tab', () => {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) =>
         kind === 'show.action' ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: showActions }) : withContents(kind, [], [])
-      stubs.listAssets = assetsEmpty
+      stubs.listAssets = assetsWith(fseqAsset('song-one', 'Song_One.fseq'))
       renderWorkspace({ session: signedIn(['config:write']) })
       fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
       fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Song One' } })
@@ -1103,6 +1126,69 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(create)
       await waitFor(() => expect(sent).not.toBeNull())
       expect((sent as unknown as ConfigShowCue).outputs).toEqual({ render: { sequence: 'song-one' }, actions: ['song-one-column'] })
+    })
+
+    describe('render sequence field', () => {
+      function setupRenderCue(assets: ReturnType<typeof fseqAsset>[]) {
+        stubs.getShow = showHead
+        stubs.listConfigObjects = (kind: string) => withContents(kind, [cueSummary()], [playlistSummary()])
+        stubs.getShowCue = (id: string) =>
+          Promise.resolve(cueResponse(cuePayload({ outputs: { render: { sequence: 'house-preshow-loop' } } } as Partial<ConfigShowCue>), id))
+        stubs.getShowPlaylist = () => Promise.resolve(playlistResponse())
+        stubs.listAssets = assetsWith(...assets)
+        return renderWorkspace({ session: signedIn(['config:write']) })
+      }
+
+      it('lists the uploaded sequences by registered name and stores the picked name', async () => {
+        stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
+        stubs.getShow = showHead
+        stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
+        stubs.listAssets = assetsWith(fseqAsset('song-one', 'Song_One.fseq'), fseqAsset('carol-of-the-bells', 'Carol_of_the Bells.fseq'))
+        renderWorkspace({ session: signedIn(['config:write']) })
+        fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+        fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Carol' } })
+        fireEvent.click(screen.getByRole('checkbox', { name: /Render/ }))
+        const select = await screen.findByRole('combobox', { name: 'Sequence' })
+        const values = Array.from(select.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
+        expect(values).toEqual(['', 'song-one', 'carol-of-the-bells'])
+        fireEvent.change(select, { target: { value: 'carol-of-the-bells' } })
+        let sent: ConfigShowCue | null = null
+        stubs.putShowCue = (_id: string, payload: unknown) => {
+          sent = payload as ConfigShowCue
+          return Promise.resolve(cueResponse(sent, 'carol'))
+        }
+        fireEvent.click(screen.getByRole('button', { name: 'Create cue' }))
+        await waitFor(() => expect(sent).not.toBeNull())
+        expect((sent as unknown as ConfigShowCue).outputs.render).toEqual({ sequence: 'carol-of-the-bells' })
+      })
+
+      it('keeps a saved sequence that matches no upload, shows it, and saves it unchanged', async () => {
+        setupRenderCue([fseqAsset('other-song', 'Other.fseq')])
+        fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+        const select = (await screen.findByRole('combobox', { name: 'Sequence' })) as HTMLSelectElement
+        expect(select.value).toBe('house-preshow-loop')
+        expect(screen.getByText(/No uploaded sequence file matches house-preshow-loop/)).toBeInTheDocument()
+        let sent: ConfigShowCue | null = null
+        stubs.putShowCue = (_id: string, payload: unknown) => {
+          sent = payload as ConfigShowCue
+          return Promise.resolve(cueResponse(sent, 'house-preshow-loop'))
+        }
+        fireEvent.click(screen.getByRole('button', { name: 'Save cue' }))
+        await waitFor(() => expect(sent).not.toBeNull())
+        expect((sent as unknown as ConfigShowCue).outputs.render).toEqual({ sequence: 'house-preshow-loop' })
+      })
+
+      it('offers no dropdown when nothing is uploaded and no sequence is saved', async () => {
+        stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
+        stubs.getShow = showHead
+        stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
+        stubs.listAssets = assetsEmpty
+        renderWorkspace({ session: signedIn(['config:write']) })
+        fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Render/ }))
+        expect(screen.queryByRole('combobox', { name: 'Sequence' })).not.toBeInTheDocument()
+        expect(screen.getByText(/No sequence file is uploaded/)).toBeInTheDocument()
+      })
     })
 
     it('a stored action that is not in this show is flagged and blocks save until removed', async () => {
