@@ -345,7 +345,7 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
 
-	result := h.weatherDelayRunStartOrChange(ctx, now, desiredKind, auditAction, idempotencyKey, ac, clientAddr, afterDispatch)
+	result := h.weatherDelayRunStartOrChange(ctx, now, desiredKind, auditAction, idempotencyKey, ac, clientAddr, afterDispatch, nil)
 	jsonWrite(w, v1.WeatherDelayActionResponse{ServerTime: formatTime(now), Result: result})
 }
 
@@ -354,8 +354,10 @@ func (h *handlers) weatherDelayStartOrChange(w http.ResponseWriter, r *http.Requ
 // POST /weather-delay/decision and a trigger's default action can run
 // exactly the same start/cancel-night path (ADR-053 decision 12's "delay
 // and cancelNight run exactly the existing start and cancel-night paths")
-// under a synthetic authContext instead of a request's own.
-func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Time, desiredKind, auditAction, idempotencyKey string, ac authContext, clientAddr string, afterDispatch func(rec store.WeatherDelayStateRecord, planNodeIDs []string)) v1.WeatherDelayActionResult {
+// under a synthetic authContext instead of a request's own. A non-nil adopt
+// makes this the entry of a delay a node reported: it does nothing unless
+// [weatherDelayAdoptionAllowed] against the state read here.
+func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Time, desiredKind, auditAction, idempotencyKey string, ac authContext, clientAddr string, afterDispatch func(rec store.WeatherDelayStateRecord, planNodeIDs []string), adopt *weatherDelayAdoption) v1.WeatherDelayActionResult {
 	issuerID := ac.result.Principal.ID
 	if issuerID == "" {
 		issuerID = "unknown"
@@ -368,12 +370,27 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 	// A failed read never stops the stops either: start as not active at
 	// the highest state number this process has seen.
 	current, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
+	startedAt, startedBy, startedByName, nextRevision := now, issuerID, issuerName, current.Revision+1
+	if adopt != nil {
+		if err != nil {
+			h.logWarn("weather delay adopt: failed to read the stored state; the next report from the node is tried again", "nodeId", adopt.nodeID, "error", err)
+			return v1.WeatherDelayActionResult{}
+		}
+		var allowed bool
+		if allowed, adopt.stale = weatherDelayAdoptionAllowed(current, adopt.report); !allowed {
+			return v1.WeatherDelayActionResult{}
+		}
+		adopt.adopted = true
+		startedAt, startedBy, startedByName = adopt.startedAt(now), adopt.startedBy(), adopt.startedBy()
+		nextRevision = max(current.Revision, adopt.report.Revision) + 1
+	}
 	if err != nil {
 		h.logWarn("weather delay start: failed to read the stored state; starting anyway", "error", err)
 		current = store.WeatherDelayStateRecord{}
 		if keeper, ok := h.deps.WeatherDelay.(*WeatherDelayStateKeeper); ok {
 			current.Revision = keeper.LastRevision()
 		}
+		nextRevision = current.Revision + 1
 	}
 
 	// A failed write never stops the stops: the keeper holds the active
@@ -384,8 +401,8 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 	switch {
 	case !current.Active:
 		rec = store.WeatherDelayStateRecord{
-			Active: true, Kind: desiredKind, StartedAt: now, StartedBy: issuerID, StartedByName: issuerName,
-			Revision: current.Revision + 1,
+			Active: true, Kind: desiredKind, StartedAt: startedAt, StartedBy: startedBy, StartedByName: startedByName,
+			Revision: nextRevision,
 		}
 		saveErr = h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec)
 		if desiredKind == weatherdelay.KindCancelNight {
@@ -399,7 +416,7 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 		}
 	case desiredKind == weatherdelay.KindCancelNight:
 		rec = current
-		rec.Kind, rec.StartedBy, rec.StartedByName, rec.Revision = weatherdelay.KindCancelNight, issuerID, issuerName, current.Revision+1
+		rec.Kind, rec.StartedBy, rec.StartedByName, rec.Revision = weatherdelay.KindCancelNight, startedBy, startedByName, nextRevision
 		saveErr = h.deps.WeatherDelay.SetWeatherDelayState(ctx, rec)
 		event = "changed_to_cancel_night"
 	default:
@@ -491,13 +508,23 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 		auditParams["notSaved"], auditParams["notSavedMessage"] = true, weatherDelayNotSavedMessage
 	}
 
-	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
+	entry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
 		Action: auditAction, Target: rec.Kind, IdempotencyKey: idempotencyKey,
 		Kind: identity.AuditOutcome, Params: auditParams,
-	})
-	h.appendWeatherDelayChangedEvent(ctx, now, "started")
+	}
+	eventSummary := "started"
+	if adopt != nil {
+		entry.Target, entry.Outcome, entry.OutcomeReason = adopt.nodeID, outcomeWordConfirmed, adopt.summary(current.Active)
+		auditParams["nodeId"] = adopt.nodeID
+		if !adopt.report.StartedAt.IsZero() {
+			auditParams["nodeStartedAt"] = formatTime(adopt.report.StartedAt)
+		}
+		eventSummary = adopt.eventSummary(current.Active)
+	}
+	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, entry)
+	h.appendWeatherDelayChangedEvent(ctx, now, eventSummary)
 	if event != "" {
 		h.weatherDelayNotify(ctx, event, rec.Kind, true, rec.StartedAt, rec.StartedBy, now)
 	}

@@ -56,7 +56,7 @@ func drainHeartbeat(t *testing.T, pub *fakePublisher, nodeID, bootID string, sta
 		// TestRunHeartbeatConnectTrigger for the connect-triggered one. A
 		// nil receive-only channel is never ready in a select, so this is
 		// simply "no connect triggers", not an error.
-		runHeartbeat(ctx, pub, nodeID, bootID, startedAt, clock.now, ticks, nil, discardLogger())
+		runHeartbeat(ctx, pub, nodeID, bootID, startedAt, clock.now, ticks, nil, nil, discardLogger())
 	}()
 
 	for i := 0; i < n; i++ {
@@ -216,7 +216,7 @@ func TestRunHeartbeatACLRejectionLogsDistinctlyAndDoesNotStopLaterTicks(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHeartbeat(ctx, pub, "media-03", "boot-1", startedAt, clock.now, ticks, nil, logger)
+		runHeartbeat(ctx, pub, "media-03", "boot-1", startedAt, clock.now, ticks, nil, nil, logger)
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -262,7 +262,7 @@ func TestRunHeartbeatReturnsOnContextDone(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHeartbeat(ctx, pub, "media-03", "boot-1", time.Now(), time.Now, ticks, nil, discardLogger())
+		runHeartbeat(ctx, pub, "media-03", "boot-1", time.Now(), time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	cancel()
@@ -295,7 +295,7 @@ func TestRunHeartbeatConnectTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runHeartbeat(ctx, pub, "media-03", "boot-1", startedAt, clock.now, ticks, connected, discardLogger())
+		runHeartbeat(ctx, pub, "media-03", "boot-1", startedAt, clock.now, ticks, connected, nil, discardLogger())
 	}()
 
 	// A connect signal, with no tick having fired yet, must produce a

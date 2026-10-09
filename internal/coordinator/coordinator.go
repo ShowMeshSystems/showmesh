@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -356,7 +357,16 @@ func Run() int {
 		}
 	})
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(alignmentRecorder), inventory.WithClockSink(clockStore), inventory.WithFallbackSink(fallbackStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+	// weatherDelayAdopter needs apiDeps, built further down; a report that
+	// arrives before then is dropped and the node's next heartbeat repeats it.
+	var weatherDelayAdopter atomic.Pointer[api.WeatherDelayAdopter]
+	onWeatherDelayReport := func(nodeID string, report mqttproto.HealthWeatherDelay) {
+		if adopter := weatherDelayAdopter.Load(); adopter != nil {
+			adopter.Report(nodeID, report)
+		}
+	}
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithOnWeatherDelayReport(onWeatherDelayReport), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(alignmentRecorder), inventory.WithClockSink(clockStore), inventory.WithFallbackSink(fallbackStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
 
 	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
@@ -1395,6 +1405,7 @@ func Run() int {
 	spawnBackground(func() {
 		weatherDelayEnforcer.Run(ctx)
 	})
+	weatherDelayAdopter.Store(api.NewWeatherDelayAdopter(apiDeps, apiOpts))
 	// weatherDelayTriggerLoop always runs: an unconfigured triggers.nws
 	// (the default) leaves it applying only pending-decision deadlines,
 	// of which there is never one until an inbound trigger raises one.

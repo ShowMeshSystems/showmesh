@@ -525,7 +525,7 @@ func Run() int {
 		defer close(heartbeatDone)
 		ticker := time.NewTicker(HeartbeatInterval)
 		defer ticker.Stop()
-		runHeartbeat(sigCtx, conn, cfg.NodeID, bootID, startedAt, time.Now, ticker.C, heartbeatConnected, logger)
+		runHeartbeat(sigCtx, conn, cfg.NodeID, bootID, startedAt, time.Now, ticker.C, heartbeatConnected, weatherDelay.Report, logger)
 	}()
 
 	assetInventoryDone := make(chan struct{})
