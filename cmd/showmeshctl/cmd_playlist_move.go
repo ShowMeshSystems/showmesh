@@ -136,7 +136,7 @@ func cmdPlaylistMove(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitOK
 	}
 	printPlaylistMovePreview(stdout, preview)
-	_, _ = fmt.Fprintf(stdout, "\nSaved. Playlist %s now follows FPP's newest playlist (revision %d).\n", resp.ID, resp.Revision)
+	_, _ = fmt.Fprintf(stdout, "\nSaved. Playlist %s now follows FPP's newest playlist.\n", resp.ID)
 	return exitOK
 }
 

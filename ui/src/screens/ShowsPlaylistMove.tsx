@@ -124,7 +124,7 @@ export function PlaylistMoveReview({
 
   return (
     <div className="sm-stack-3" role="region" aria-label="Changes in FPP's playlist">
-      <p className="sm-small sm-muted">{preview.summary}</p>
+      {!preview.canConfirm && <p className="sm-small sm-muted">{preview.summary}</p>}
       {preview.newerAvailable && (
         <>
           <TableWrap label="Saved cues and what happens to them, scrollable">
@@ -155,34 +155,36 @@ export function PlaylistMoveReview({
             </Table>
           </TableWrap>
           {preview.newEntries.length > 0 && (
-            <TableWrap label="New in FPP's playlist, with no cue, scrollable">
-              <Table minWidth={520}>
-                <thead>
-                  <tr>
-                    <th scope="col">New in FPP&rsquo;s playlist</th>
-                    <th scope="col">Cue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.newEntries.map((entry) => (
-                    <tr key={`${entry.section}:${entry.position}`}>
-                      <td>
-                        <span className="sm-data sm-small sm-faint">
-                          {entry.section} · {entry.position}
-                        </span>
-                        <br />
-                        {entry.name !== '' ? entry.name : '(no filename)'}
-                      </td>
-                      <td>
-                        <StatusPair tone="pending" label="No cue" />
-                        <br />
-                        <span className="sm-small sm-muted">{entry.summary}</span>
-                      </td>
+            <div className="sm-stack-3">
+              <TableWrap label="New in FPP's playlist, with no cue, scrollable">
+                <Table minWidth={520}>
+                  <thead>
+                    <tr>
+                      <th scope="col">New in FPP&rsquo;s playlist</th>
+                      <th scope="col">Cue</th>
                     </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
+                  </thead>
+                  <tbody>
+                    {preview.newEntries.map((entry) => (
+                      <tr key={`${entry.section}:${entry.position}`}>
+                        <td>
+                          <span className="sm-data sm-small sm-faint">
+                            {entry.section} · {entry.position}
+                          </span>
+                          <br />
+                          {entry.name !== '' ? entry.name : '(no filename)'}
+                        </td>
+                        <td>
+                          <StatusPair tone="pending" label="No cue" />
+                          <br />
+                          <span className="sm-small sm-muted">{entry.summary}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            </div>
           )}
         </>
       )}
