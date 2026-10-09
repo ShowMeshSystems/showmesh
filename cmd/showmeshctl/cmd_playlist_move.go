@@ -21,7 +21,7 @@ type playlistMoveSlot struct {
 
 type playlistMoveDefinition struct {
 	Hash       string    `json:"hash"`
-	CapturedAt time.Time `json:"capturedAt"`
+	ReceivedAt time.Time `json:"receivedAt"`
 	EntryCount int       `json:"entryCount"`
 }
 
@@ -34,6 +34,9 @@ type playlistMoveEntry struct {
 	From              playlistMoveSlot  `json:"from"`
 	To                *playlistMoveSlot `json:"to"`
 	DuplicateFilename bool              `json:"duplicateFilename"`
+	PreviousSequence  string            `json:"previousSequence"`
+	NewSequence       string            `json:"newSequence"`
+	NeedsCheck        bool              `json:"needsCheck"`
 	Summary           string            `json:"summary"`
 }
 
@@ -53,7 +56,7 @@ type playlistMovePreviewResponse struct {
 	NewerAvailable bool                    `json:"newerAvailable"`
 	CanConfirm     bool                    `json:"canConfirm"`
 	Summary        string                  `json:"summary"`
-	Current        playlistMoveDefinition  `json:"current"`
+	Current        *playlistMoveDefinition `json:"current"`
 	Newest         *playlistMoveDefinition `json:"newest"`
 	Entries        []playlistMoveEntry     `json:"entries"`
 	NewEntries     []playlistMoveNewEntry  `json:"newEntries"`
@@ -102,7 +105,7 @@ func cmdPlaylistMove(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	printClockSkew(stderr, preview.ServerTime, clock())
 
-	if !confirm {
+	printPreview := func() int {
 		if g.output == outputJSON {
 			if err := printJSON(stdout, preview); err != nil {
 				return reportError(stderr, "playlist move-to-newer-fpp", err)
@@ -110,19 +113,23 @@ func cmdPlaylistMove(args []string, stdout, stderr io.Writer, clock func() time.
 			return exitOK
 		}
 		printPlaylistMovePreview(stdout, preview)
-		if preview.CanConfirm {
-			_, _ = fmt.Fprintf(stdout, "\nNothing was changed. To save this, run the same command with --confirm.\n")
-		}
 		return exitOK
 	}
 
+	if !confirm {
+		code := printPreview()
+		if code == exitOK && g.output != outputJSON && preview.CanConfirm {
+			_, _ = fmt.Fprintf(stdout, "\nNothing was changed. To save this, run the same command with --confirm.\n")
+		}
+		return code
+	}
+
 	if !preview.NewerAvailable {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl playlist move-to-newer-fpp: "+preview.Summary)
-		return exitOK
+		return printPreview()
 	}
 	if !preview.CanConfirm || preview.Proposed == nil {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl playlist move-to-newer-fpp: "+preview.Summary)
-		return exitUsage
+		_ = printPreview()
+		return exitAPIError
 	}
 
 	var resp showPlaylistConfigResponse
@@ -146,7 +153,7 @@ func printPlaylistMovePreview(w io.Writer, p playlistMovePreviewResponse) {
 		return
 	}
 	if p.Newest != nil {
-		_, _ = fmt.Fprintf(w, "FPP's playlist changed at %s.\n", p.Newest.CapturedAt.Format(time.RFC3339))
+		_, _ = fmt.Fprintf(w, "ShowMesh received FPP's changed playlist at %s.\n", p.Newest.ReceivedAt.Format(time.RFC3339))
 	}
 	_, _ = fmt.Fprintln(w, "\nSaved cues:")
 	for _, e := range p.Entries {
@@ -154,7 +161,11 @@ func printPlaylistMovePreview(w io.Writer, p playlistMovePreviewResponse) {
 		if name == "" {
 			name = "(no sequence name saved)"
 		}
-		_, _ = fmt.Fprintf(w, "  %-8s %s, cue %s\n    %s\n", e.Outcome, name, e.Cue, e.Summary)
+		marker := ""
+		if e.NeedsCheck {
+			marker = "  CHECK"
+		}
+		_, _ = fmt.Fprintf(w, "  %-8s %s, cue %s%s\n    %s\n", e.Outcome, name, e.Cue, marker, e.Summary)
 	}
 	if len(p.NewEntries) > 0 {
 		_, _ = fmt.Fprintln(w, "\nNew in FPP's playlist, with no cue:")

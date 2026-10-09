@@ -46,6 +46,15 @@ type PlaylistMoveEntry struct {
 	// PositionTaken is set on a dropped entry matched by position whose
 	// position still exists but now belongs to an entry matched by filename.
 	PositionTaken bool
+	// PreviousSequence is the sequence name the entry's saved position held
+	// in the copy the playlist follows now, when that copy is known and the
+	// entry was matched by position. NewSequence is the name at the position
+	// it lands on. NeedsCheck is set when a position-matched entry is carried
+	// and the two names differ or the earlier one is not known.
+	PreviousSequence      string
+	PreviousSequenceKnown bool
+	NewSequence           string
+	NeedsCheck            bool
 }
 
 // PlaylistMoveNewEntry is an entry of the newer FPP playlist that no saved
@@ -74,8 +83,10 @@ func (p PlaylistMovePlan) CanSave() bool { return len(p.Proposed.Entries) > 0 }
 // entries with an expected sequence filename are matched to the newer entry
 // with that sequence name, in section then position order when a name
 // repeats; entries without one are matched by section and position, from
-// the slots the filename matches left free. It only reads its inputs.
-func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries []fppidentity.DefinitionEntry) PlaylistMovePlan {
+// the slots the filename matches left free. oldEntries are the entries of the
+// copy current follows now, or nil when ShowMesh no longer holds it; they only
+// name what a position-matched entry used to sit on. It only reads its inputs.
+func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries, oldEntries []fppidentity.DefinitionEntry) PlaylistMovePlan {
 	saved := make([]ShowPlaylistEntry, len(current.Entries))
 	copy(saved, current.Entries)
 	slices.SortStableFunc(saved, func(a, b ShowPlaylistEntry) int { return compareSlots(savedSlot(a), savedSlot(b)) })
@@ -124,6 +135,10 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries []
 		}
 	}
 
+	oldNames := map[PlaylistMoveSlot]string{}
+	for _, e := range oldEntries {
+		oldNames[PlaylistMoveSlot{e.Section, e.Position}] = definitionEntryName(e)
+	}
 	slotIndex := map[PlaylistMoveSlot]int{}
 	for i, e := range news {
 		slotIndex[PlaylistMoveSlot{e.Section, e.Position}] = i
@@ -133,11 +148,14 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries []
 			continue
 		}
 		entries[i].MatchedBy = PlaylistMoveByPosition
+		entries[i].PreviousSequence, entries[i].PreviousSequenceKnown = oldNames[entries[i].From]
 		idx, ok := slotIndex[entries[i].From]
 		switch {
 		case ok && !claimed[idx]:
 			claimed[idx] = true
 			setMoveTarget(&entries[i], entries[i].From)
+			entries[i].NewSequence = definitionEntryName(news[idx])
+			entries[i].NeedsCheck = !entries[i].PreviousSequenceKnown || entries[i].PreviousSequence != entries[i].NewSequence
 		case ok:
 			entries[i].PositionTaken = true
 		}
@@ -162,6 +180,13 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries []
 		}
 	}
 	return PlaylistMovePlan{Entries: entries, Unassigned: unassigned, Proposed: proposedPayload(current, newHash, carried)}
+}
+
+func definitionEntryName(e fppidentity.DefinitionEntry) string {
+	if e.SequenceName != "" {
+		return e.SequenceName
+	}
+	return e.MediaName
 }
 
 func setMoveTarget(e *PlaylistMoveEntry, to PlaylistMoveSlot) {

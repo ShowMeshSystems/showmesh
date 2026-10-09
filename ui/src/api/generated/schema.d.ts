@@ -2724,7 +2724,7 @@ export interface paths {
         };
         /**
          * Preview moving an FPP-runner playlist to FPP's newest captured playlist
-         * @description Read-only; needs the same scopes as `GET /config/show.playlist/{id}`. Compares the playlist's saved entries with the newest captured copy of the same FPP playlist on the same FPP instance, and reports for each saved entry whether it is kept, moved or dropped, and which entries of the newest copy have no cue. Saved entries match by `expectedSequenceFilename` first; an entry with no saved filename matches by section and position. When a filename occurs more than once the entries are matched in order and flagged. `revision` is the playlist revision the answer was computed against. To apply the move, send `proposed` unchanged to `PUT /config/show.playlist/{id}` with `If-Match` set to `revision`; this endpoint never writes. When no newer copy exists, `newerAvailable` is false. `proposed` is null and `canConfirm` is false when every saved entry would be dropped, because a playlist cannot be saved with no entries. 404 when the playlist does not exist; 409 when it is not an FPP-runner playlist or ShowMesh no longer holds the copy of FPP's playlist it was made from.
+         * @description Read-only; needs the same scopes as `GET /config/show.playlist/{id}` (`show:macro:run` or `config:write`). The answer names the entries of the newest stored copy of the FPP playlist, which `GET /integrations/fpp/playlist-definitions` serves only under `observation:read`; a principal holding only the playlist read scope therefore sees those sequence names here. Compares the playlist's saved entries with the newest stored copy of the same FPP playlist on the same FPP instance, where newest means the copy ShowMesh received last, and reports for each saved entry whether it is kept, moved or dropped, and which entries of the newest copy have no cue. Saved entries match by `expectedSequenceFilename` first; an entry with no saved filename matches by section and position, and is flagged with `needsCheck` when its position may now hold a different sequence. When a filename occurs more than once the entries are matched in order and flagged. `revision` is the playlist revision the answer was computed against. To apply the move, send `proposed` unchanged to `PUT /config/show.playlist/{id}` with `If-Match` set to `revision`; this endpoint never writes. When no newer copy exists, `newerAvailable` is false. `proposed` is null and `canConfirm` is false when every saved entry would be dropped, or when the moved playlist would be refused by the write (for example a cue it uses was deleted). `current` is null, and the preview targets the newest held copy, when ShowMesh no longer holds the copy the playlist was made from. 404 when the playlist does not exist; 409 when it is not an FPP-runner playlist or ShowMesh holds no copy of its FPP playlist at all.
          */
         get: operations["getShowPlaylistDefinitionMovePreview"];
         put?: never;
@@ -7063,8 +7063,11 @@ export interface components {
         };
         ShowPlaylistMoveDefinition: {
             hash: string;
-            /** Format: date-time */
-            capturedAt: string;
+            /**
+             * Format: date-time
+             * @description When ShowMesh received this copy.
+             */
+            receivedAt: string;
             entryCount: number;
         };
         /** @description What happens to one saved entry. `to` is null when it is dropped. */
@@ -7080,6 +7083,12 @@ export interface components {
             from: components["schemas"]["ShowPlaylistMoveSlot"];
             to: components["schemas"]["ShowPlaylistMoveSlot"] | null;
             duplicateFilename: boolean;
+            /** @description For an entry matched by position, the sequence name its position held in the copy the playlist follows now. Empty for a filename match, when that copy is no longer held, or when the position had no name. */
+            previousSequence: string;
+            /** @description For a position-matched entry that is carried over, the sequence name at the position it lands on. */
+            newSequence: string;
+            /** @description True when an entry matched by position is carried over and its position may now hold a different sequence than before. */
+            needsCheck: boolean;
             /** @description Operator-facing sentence, shown verbatim. */
             summary: string;
         };
@@ -7091,7 +7100,7 @@ export interface components {
             duplicateFilename: boolean;
             summary: string;
         };
-        /** @description The body of GET /config/show.playlist/{id}/definition-move-preview. */
+        /** @description The body of GET /config/show.playlist/{id}/definition-move-preview. `current` is null when ShowMesh no longer holds the copy the playlist was made from. */
         ShowPlaylistMovePreviewResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -7100,7 +7109,7 @@ export interface components {
             newerAvailable: boolean;
             canConfirm: boolean;
             summary: string;
-            current: components["schemas"]["ShowPlaylistMoveDefinition"];
+            current: components["schemas"]["ShowPlaylistMoveDefinition"] | null;
             newest: components["schemas"]["ShowPlaylistMoveDefinition"] | null;
             entries: components["schemas"]["ShowPlaylistMoveEntry"][];
             newEntries: components["schemas"]["ShowPlaylistMoveNewEntry"][];

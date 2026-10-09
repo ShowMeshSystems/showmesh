@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigObjectSummary, type ConfigShowPlaylist, type Model, type SessionResponse } from '../api'
+import { ApiError, PROBLEM_TYPE, type ConfigObjectSummary, type ConfigShowPlaylist, type Model, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { makeFPPInstance } from '../api/test-support/fixtures'
 import { ModelContext } from '../app/ModelContext'
@@ -557,6 +557,22 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.queryByText('Sent')).not.toBeInTheDocument()
     })
 
+    it('looks again for a newer FPP playlist once a re-import lands', async () => {
+      await openReady()
+      const asked = vi.fn(() => new Promise<never>(() => {}))
+      stubs.getShowPlaylistDefinitionMovePreview = asked
+      definitionsOverTime([['2026-08-30T20:00:00Z'], ['2026-08-30T20:00:00Z', '2026-08-30T21:05:00Z']])
+      stubs.republishFPPPlaylistDefinitions = () => Promise.resolve(republishBody())
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
+      expect(await screen.findByText('Sent')).toBeInTheDocument()
+      expect(asked).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await screen.findByText('Landed')).toBeInTheDocument()
+      await waitFor(() => expect(asked).toHaveBeenCalledTimes(1))
+    })
+
     it('reads unconfirmed, saying the host gave no usable answer, when the request is refused because the plugin gave no usable result', async () => {
       await openReady()
       definitionsOverTime([[]])
@@ -796,8 +812,8 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
       newerAvailable: true,
       canConfirm: true,
       summary: 'FPP’s playlist changed. Review the changes to keep your cues on the right sequences.',
-      current: { hash: 'a'.repeat(64), capturedAt: '2026-08-30T19:00:00Z', entryCount: 1 },
-      newest: { hash: 'b'.repeat(64), capturedAt: '2026-08-30T20:20:00Z', entryCount: 2 },
+      current: { hash: 'a'.repeat(64), receivedAt: '2026-08-30T19:00:00Z', entryCount: 1 },
+      newest: { hash: 'b'.repeat(64), receivedAt: '2026-08-30T20:20:00Z', entryCount: 2 },
       entries: [
         {
           entryId: 'e1',
@@ -808,6 +824,9 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
           from: { section: 'mainPlaylist', position: 0 },
           to: { section: 'mainPlaylist', position: 1 },
           duplicateFilename: false,
+          previousSequence: '',
+          newSequence: '',
+          needsCheck: false,
           summary: 'Moved from position 0 to position 1.',
         },
         {
@@ -819,7 +838,10 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
           from: { section: 'mainPlaylist', position: 7 },
           to: null,
           duplicateFilename: false,
-          summary: 'FPP’s playlist has nothing at position 7 any more. This cue will be removed from this playlist.',
+          previousSequence: '',
+          newSequence: '',
+          needsCheck: false,
+          summary: 'FPP’s playlist has no entry at position 7 any more. This cue will be removed from this playlist.',
         },
       ],
       newEntries: [
@@ -881,9 +903,22 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     stubs.putShowPlaylist = put
     await openEditor(['config:write'], preview({ revision: 1 }))
     fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    stubs.getFPPPlaylistDefinitionEntries = (_uuid: string, hash: string) =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        instanceUuid: 'uuid-1',
+        playlistHash: hash,
+        entries: [
+          { section: 'mainPlaylist', position: 0, type: 'sequence', sequenceName: 'new-opener.fseq', mediaName: '' },
+          { section: 'mainPlaylist', position: 1, type: 'sequence', sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
+        ],
+      } as never)
     fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('p1', movedPayload, 1))
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Changes in FPP\'s playlist' })).not.toBeInTheDocument())
+    expect(await screen.findByText('new-opener.fseq')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 0' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 1' })).toHaveValue('cue-1')
   })
 
   it('cancel closes the review and writes nothing', async () => {
@@ -897,13 +932,59 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     expect(put).not.toHaveBeenCalled()
   })
 
-  it('reports a playlist that changed after the review as not saved', async () => {
-    stubs.putShowPlaylist = () => Promise.reject(new ApiError('revision 2 is current', 409, 'conflict'))
+  it('reports a playlist that changed after the review as not saved, and offers only a new review', async () => {
+    stubs.putShowPlaylist = () =>
+      Promise.reject(new ApiError('If-Match "1" is no longer current', 409, PROBLEM_TYPE.configRevisionPreconditionFailed))
     await openEditor()
     fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
     expect(await screen.findByText('This playlist was changed after you opened the review, so nothing was saved. Review the changes again.')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Changes in FPP\'s playlist' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Move to FPP’s newest playlist' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Review again' })).toBeInTheDocument()
+  })
+
+  it('shows a refusal that is not a stale write as the coordinator worded it, and keeps the confirm', async () => {
+    stubs.putShowPlaylist = () => Promise.reject(new ApiError('A cue this playlist uses no longer exists.', 400, 'x'))
+    await openEditor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
+    expect(await screen.findByText('A cue this playlist uses no longer exists.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move to FPP’s newest playlist' })).toBeInTheDocument()
+  })
+
+  it('shows a position match that may now sit on another sequence as Check, not Kept', async () => {
+    const flagged = preview()
+    ;(flagged.entries as Array<Record<string, unknown>>)[0] = {
+      entryId: 'e1',
+      cue: 'cue-1',
+      filename: '',
+      outcome: 'kept',
+      matchedBy: 'position',
+      from: { section: 'mainPlaylist', position: 0 },
+      to: { section: 'mainPlaylist', position: 0 },
+      duplicateFilename: false,
+      previousSequence: 'wizards-in-winter.fseq',
+      newSequence: 'new-opener.fseq',
+      needsCheck: true,
+      summary: 'No sequence name was saved for this cue, so it stays at position 0, which held wizards-in-winter.fseq and now holds new-opener.fseq. If that is wrong, cancel and assign this cue again after moving.',
+    }
+    await openEditor(['config:write'], flagged)
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    const review = await screen.findByRole('region', { name: 'Changes in FPP\'s playlist' })
+    expect(within(review).getByText('Check')).toBeInTheDocument()
+    expect(within(review).queryByText('Kept')).not.toBeInTheDocument()
+    expect(within(review).getByText(/held wizards-in-winter.fseq and now holds new-opener.fseq/)).toBeInTheDocument()
+  })
+
+  it('labels a refusal to preview as such, not as a failed read', async () => {
+    stubs.getFPPPlaylistDefinitionEntries = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', instanceUuid: 'uuid-1', playlistHash: 'a'.repeat(64), entries: [] })
+    await openEditor()
+    cleanup()
+    stubs.getShowPlaylistDefinitionMovePreview = () => Promise.reject(new ApiError('ShowMesh holds no copy of this FPP playlist.', 409, 'conflict'))
+    renderWorkspace({ session: signedIn(['config:write']) })
+    await openPlaylistRow('Main Show')
+    expect(await screen.findByText('Cannot review')).toBeInTheDocument()
+    expect(screen.getByText('ShowMesh holds no copy of this FPP playlist.')).toBeInTheDocument()
   })
 
   it('does not offer the confirm when every saved cue would be removed', async () => {
@@ -923,9 +1004,21 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     expect(screen.getByText(/You have unsaved cue changes/)).toBeInTheDocument()
   })
 
+  it('blocks the confirm too when cue edits are made while the review is open, and says why', async () => {
+    await openEditor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    const confirm = await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' })
+    expect(confirm).not.toBeDisabled()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 0' }), { target: { value: '' } })
+    expect(screen.getByRole('button', { name: 'Move to FPP’s newest playlist' })).toBeDisabled()
+    expect(screen.getAllByText(/You have unsaved cue changes/).length).toBeGreaterThan(0)
+  })
+
   it('is disabled with the missing scope named when the principal cannot write config', async () => {
     await openEditor([])
     const review = await screen.findByRole('button', { name: 'Review changes' })
     expect(review).toBeDisabled()
+    expect(review).toHaveAttribute('title', expect.stringContaining('config:write'))
+    expect(screen.getAllByText(/config:write/).length).toBeGreaterThan(0)
   })
 })

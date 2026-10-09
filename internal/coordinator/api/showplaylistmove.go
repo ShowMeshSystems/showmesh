@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,9 +12,10 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 )
 
-// newestFPPPlaylistDefinition returns the most recently captured stored
-// definition of one FPP playlist. Ties on capture time fall to the later
-// receipt, then to the hash, so the answer never depends on list order.
+// newestFPPPlaylistDefinition returns the stored copy of one FPP playlist
+// that ShowMesh received last, the same ordering the playlist readiness check
+// uses: the capture time is a clock the FPP host supplies, so it is not
+// trusted for this. Ties fall to the capture time, then to the hash.
 func newestFPPPlaylistDefinition(recs []store.FPPPlaylistDefinitionRecord, instanceUUID, playlistName string) (store.FPPPlaylistDefinitionRecord, bool) {
 	var newest store.FPPPlaylistDefinitionRecord
 	found := false
@@ -23,9 +25,9 @@ func newestFPPPlaylistDefinition(recs []store.FPPPlaylistDefinitionRecord, insta
 		}
 		switch {
 		case !found,
-			rec.CapturedAt.After(newest.CapturedAt),
-			rec.CapturedAt.Equal(newest.CapturedAt) && rec.ReceivedAt.After(newest.ReceivedAt),
-			rec.CapturedAt.Equal(newest.CapturedAt) && rec.ReceivedAt.Equal(newest.ReceivedAt) && rec.PlaylistHash > newest.PlaylistHash:
+			rec.ReceivedAt.After(newest.ReceivedAt),
+			rec.ReceivedAt.Equal(newest.ReceivedAt) && rec.CapturedAt.After(newest.CapturedAt),
+			rec.ReceivedAt.Equal(newest.ReceivedAt) && rec.CapturedAt.Equal(newest.CapturedAt) && rec.PlaylistHash > newest.PlaylistHash:
 			newest, found = rec, true
 		}
 	}
@@ -38,6 +40,14 @@ func playlistMovePreviewProblem(status int, detail string) v1.Problem {
 	}
 	return v1.Problem{Type: ProblemTypeConflict, Title: "Cannot preview the move", Status: status, Detail: detail}
 }
+
+const (
+	moveSummaryChanged     = "FPP's playlist changed. Review the changes to keep your cues on the right sequences."
+	moveSummaryCopyMissing = "ShowMesh no longer has the copy of FPP's playlist this playlist was made from. Review the changes to keep your cues on the right sequences."
+	moveSummaryAllDropped  = "None of this playlist's cues can be kept in FPP's changed playlist. Add the sequences back in FPP, or make a new playlist."
+	moveSummaryCueGone     = "A cue this playlist uses no longer exists. Pick a different cue for it and save, then review the changes again."
+	moveSummaryCannotSave  = "This playlist would not pass the save checks after the move. Fix the playlist and save, then review the changes again."
+)
 
 // handleGetShowPlaylistDefinitionMovePreview serves
 // GET /api/v1/config/show.playlist/{id}/definition-move-preview. It writes
@@ -77,27 +87,30 @@ func (h *handlers) handleGetShowPlaylistDefinitionMovePreview(w http.ResponseWri
 			current = &recs[i]
 		}
 	}
-	if current == nil {
-		writeProblem(w, h.logger, now, playlistMovePreviewProblem(http.StatusConflict, "ShowMesh no longer holds the copy of FPP's playlist this playlist was made from. Ask FPP to send its playlists again, then try once more."))
-		return
-	}
-	currentEntries, err := fppidentity.ParseDefinitionEntries(current.DefinitionJSON)
-	if err != nil {
-		h.writeInternalError(w, now, "parse current fpp playlist definition entries", err)
+	newest, anyHeld := newestFPPPlaylistDefinition(recs, payload.FPP.InstanceUUID, payload.FPP.PlaylistName)
+	if !anyHeld {
+		writeProblem(w, h.logger, now, playlistMovePreviewProblem(http.StatusConflict, "ShowMesh holds no copy of this FPP playlist. Ask FPP to send its playlists again, then review the changes."))
 		return
 	}
 
 	resp := v1.ShowPlaylistMovePreviewResponse{
 		ServerTime: formatTime(now), PlaylistID: id, Revision: rev.Revision,
-		Current:    v1.ShowPlaylistMoveDefinition{Hash: current.PlaylistHash, CapturedAt: formatTime(current.CapturedAt), EntryCount: len(currentEntries)},
 		Entries:    []v1.ShowPlaylistMoveEntry{},
 		NewEntries: []v1.ShowPlaylistMoveNewEntry{},
 	}
-	newest, _ := newestFPPPlaylistDefinition(recs, payload.FPP.InstanceUUID, payload.FPP.PlaylistName)
-	if newest.PlaylistHash == current.PlaylistHash || !newest.CapturedAt.After(current.CapturedAt) {
-		resp.Summary = "This playlist already follows the newest copy of FPP's playlist. There is nothing to move."
-		jsonWrite(w, resp)
-		return
+	var currentEntries []fppidentity.DefinitionEntry
+	if current != nil {
+		currentEntries, err = fppidentity.ParseDefinitionEntries(current.DefinitionJSON)
+		if err != nil {
+			h.writeInternalError(w, now, "parse current fpp playlist definition entries", err)
+			return
+		}
+		resp.Current = &v1.ShowPlaylistMoveDefinition{Hash: current.PlaylistHash, ReceivedAt: formatTime(current.ReceivedAt), EntryCount: len(currentEntries)}
+		if newest.PlaylistHash == current.PlaylistHash {
+			resp.Summary = "This playlist already follows the newest copy of FPP's playlist. There is nothing to move."
+			jsonWrite(w, resp)
+			return
+		}
 	}
 	newEntries, err := fppidentity.ParseDefinitionEntries(newest.DefinitionJSON)
 	if err != nil {
@@ -105,31 +118,98 @@ func (h *handlers) handleGetShowPlaylistDefinitionMovePreview(w http.ResponseWri
 		return
 	}
 
-	plan := config.PlanPlaylistMove(payload, newest.PlaylistHash, newEntries)
+	plan := config.PlanPlaylistMove(payload, newest.PlaylistHash, newEntries, currentEntries)
 	resp.NewerAvailable = true
-	resp.Newest = &v1.ShowPlaylistMoveDefinition{Hash: newest.PlaylistHash, CapturedAt: formatTime(newest.CapturedAt), EntryCount: len(newEntries)}
+	resp.Newest = &v1.ShowPlaylistMoveDefinition{Hash: newest.PlaylistHash, ReceivedAt: formatTime(newest.ReceivedAt), EntryCount: len(newEntries)}
 	for _, e := range plan.Entries {
 		resp.Entries = append(resp.Entries, mapPlaylistMoveEntry(e))
 	}
 	for _, e := range plan.Unassigned {
 		resp.NewEntries = append(resp.NewEntries, mapPlaylistMoveNewEntry(e))
 	}
-	if plan.CanSave() {
-		resp.CanConfirm = true
-		proposed := mapConfigShowPlaylist(plan.Proposed)
-		resp.Proposed = &proposed
-		resp.Summary = "FPP's playlist changed. Review the changes to keep your cues on the right sequences."
-	} else {
-		resp.Summary = "None of this playlist's sequences are in FPP's playlist any more, so no cue can be kept. Add them back in FPP, or make a new playlist."
+	resp.Summary = moveSummaryChanged
+	if current == nil {
+		resp.Summary = moveSummaryCopyMissing
 	}
+	if !plan.CanSave() {
+		resp.Summary = moveSummaryAllDropped
+		jsonWrite(w, resp)
+		return
+	}
+
+	refusal, err := h.refusalForMovedPlaylist(ctx, id, plan.Proposed)
+	if err != nil {
+		h.writeInternalError(w, now, "check the moved show.playlist payload", err)
+		return
+	}
+	if refusal != "" {
+		resp.Summary = refusal
+		jsonWrite(w, resp)
+		return
+	}
+	resp.CanConfirm = true
+	proposed := mapConfigShowPlaylist(plan.Proposed)
+	resp.Proposed = &proposed
 	jsonWrite(w, resp)
 }
 
-func moveSlotText(s config.PlaylistMoveSlot, withSection bool) string {
-	if withSection {
-		return fmt.Sprintf("%s position %d", s.Section, s.Position)
+// refusalForMovedPlaylist runs the proposed payload through the checks the
+// playlist write applies, and returns the operator sentence for the first one
+// it would fail, or "" when the write would accept it.
+func (h *handlers) refusalForMovedPlaylist(ctx context.Context, id string, proposed config.ShowPlaylistPayload) (string, error) {
+	raw, err := config.EncodeShowPlaylistPayload(proposed)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("position %d", s.Position)
+	resolveCue, cueErr := h.cueLookup(ctx)
+	decoded, verr := config.DecodeShowPlaylistPayload(raw, h.showExists(ctx), resolveCue)
+	if *cueErr != nil {
+		return "", *cueErr
+	}
+	if verr != nil {
+		if verr.Code == config.ValidationCodeFieldUnknownReference && (verr.Field == "safeCueRef" || strings.HasSuffix(verr.Field, ".cue")) {
+			return moveSummaryCueGone, nil
+		}
+		return moveSummaryCannotSave, nil
+	}
+	claim, err := h.checkSequenceFilenameClaims(ctx, id, decoded)
+	if err != nil {
+		return "", err
+	}
+	if claim != nil {
+		return moveSummaryCannotSave, nil
+	}
+	return "", nil
+}
+
+// sectionLabel is how an operator sentence names an FPP playlist section.
+func sectionLabel(section string) string {
+	switch section {
+	case "leadIn":
+		return "lead-in"
+	case "mainPlaylist":
+		return "main playlist"
+	case "leadOut":
+		return "lead-out"
+	}
+	return section
+}
+
+// moveSlotText names a slot. The main playlist is the default and is only
+// named when withSection is set or the slot is in another section.
+func moveSlotText(s config.PlaylistMoveSlot, withSection bool) string {
+	label := sectionLabel(s.Section)
+	if label == "" || (s.Section == "mainPlaylist" && !withSection) {
+		return fmt.Sprintf("position %d", s.Position)
+	}
+	return fmt.Sprintf("%s position %d", label, s.Position)
+}
+
+func sequenceText(name string) string {
+	if name == "" {
+		return "an entry with no sequence name"
+	}
+	return name
 }
 
 func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
@@ -138,13 +218,14 @@ func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
 		Outcome: string(e.Outcome), MatchedBy: string(e.MatchedBy),
 		From:              v1.ShowPlaylistMoveSlot{Section: e.From.Section, Position: e.From.Position},
 		DuplicateFilename: e.DuplicateFilename,
+		PreviousSequence:  e.PreviousSequence, NewSequence: e.NewSequence, NeedsCheck: e.NeedsCheck,
 	}
 	var sentences []string
 	switch {
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPosition && e.PositionTaken:
 		sentences = append(sentences, fmt.Sprintf("%s now belongs to a sequence that kept its own cue. This cue will be removed from this playlist.", capitalize(moveSlotText(e.From, false))))
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPosition:
-		sentences = append(sentences, fmt.Sprintf("FPP's playlist has nothing at %s any more. This cue will be removed from this playlist.", moveSlotText(e.From, false)))
+		sentences = append(sentences, fmt.Sprintf("FPP's playlist has no entry at %s any more. This cue will be removed from this playlist.", moveSlotText(e.From, true)))
 	case e.Outcome == config.PlaylistMoveDropped && e.DuplicateFilename:
 		sentences = append(sentences, "This sequence appears more than once, and FPP's playlist has fewer copies than before. This cue will be removed from this playlist.")
 	case e.Outcome == config.PlaylistMoveDropped:
@@ -152,14 +233,22 @@ func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
 	}
 	if e.To != nil {
 		out.To = &v1.ShowPlaylistMoveSlot{Section: e.To.Section, Position: e.To.Position}
-		if e.Outcome == config.PlaylistMoveKept {
+		switch {
+		case e.MatchedBy == config.PlaylistMoveByPosition && !e.NeedsCheck:
+			sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue, so it stays at %s, which still holds %s.", moveSlotText(*e.To, false), sequenceText(e.NewSequence)))
+		case e.MatchedBy == config.PlaylistMoveByPosition && e.PreviousSequenceKnown:
+			sentences = append(sentences,
+				fmt.Sprintf("No sequence name was saved for this cue, so it stays at %s, which held %s and now holds %s.", moveSlotText(*e.To, false), sequenceText(e.PreviousSequence), sequenceText(e.NewSequence)),
+				"If that is wrong, cancel and assign this cue again after moving.")
+		case e.MatchedBy == config.PlaylistMoveByPosition:
+			sentences = append(sentences,
+				fmt.Sprintf("No sequence name was saved for this cue, so it stays at %s, which now holds %s. The earlier sequence name is not known.", moveSlotText(*e.To, false), sequenceText(e.NewSequence)),
+				"If that is wrong, cancel and assign this cue again after moving.")
+		case e.Outcome == config.PlaylistMoveKept:
 			sentences = append(sentences, fmt.Sprintf("Stays at %s.", moveSlotText(*e.To, false)))
-		} else {
+		default:
 			withSection := e.From.Section != e.To.Section
 			sentences = append(sentences, fmt.Sprintf("Moved from %s to %s.", moveSlotText(e.From, withSection), moveSlotText(*e.To, withSection)))
-		}
-		if e.MatchedBy == config.PlaylistMoveByPosition {
-			sentences = append(sentences, "No sequence name was saved for this cue, so it was matched by position; check that it is still the right sequence.")
 		}
 	}
 	if e.DuplicateFilename && e.Outcome != config.PlaylistMoveDropped {

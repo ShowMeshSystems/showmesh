@@ -8032,22 +8032,31 @@ paths:
       operationId: getShowPlaylistDefinitionMovePreview
       summary: Preview moving an FPP-runner playlist to FPP's newest captured playlist
       description: >-
-        Read-only; needs the same scopes as `GET /config/show.playlist/{id}`.
-        Compares the playlist's saved entries with the newest captured copy of
-        the same FPP playlist on the same FPP instance, and reports for each
-        saved entry whether it is kept, moved or dropped, and which entries of
-        the newest copy have no cue. Saved entries match by
-        `expectedSequenceFilename` first; an entry with no saved filename
-        matches by section and position. When a filename occurs more than once
-        the entries are matched in order and flagged. `revision` is the
-        playlist revision the answer was computed against. To apply the move,
-        send `proposed` unchanged to `PUT /config/show.playlist/{id}` with
-        `If-Match` set to `revision`; this endpoint never writes. When no
-        newer copy exists, `newerAvailable` is false. `proposed` is null and
-        `canConfirm` is false when every saved entry would be dropped, because
-        a playlist cannot be saved with no entries. 404 when the playlist does
-        not exist; 409 when it is not an FPP-runner playlist or ShowMesh no
-        longer holds the copy of FPP's playlist it was made from.
+        Read-only; needs the same scopes as `GET /config/show.playlist/{id}`
+        (`show:macro:run` or `config:write`). The answer names the entries of
+        the newest stored copy of the FPP playlist, which `GET
+        /integrations/fpp/playlist-definitions` serves only under
+        `observation:read`; a principal holding only the playlist read scope
+        therefore sees those sequence names here. Compares the playlist's saved
+        entries with the newest stored copy of the same FPP playlist on the
+        same FPP instance, where newest means the copy ShowMesh received last,
+        and reports for each saved entry whether it is kept, moved or dropped,
+        and which entries of the newest copy have no cue. Saved entries match
+        by `expectedSequenceFilename` first; an entry with no saved filename
+        matches by section and position, and is flagged with `needsCheck` when
+        its position may now hold a different sequence. When a filename occurs
+        more than once the entries are matched in order and flagged.
+        `revision` is the playlist revision the answer was computed against.
+        To apply the move, send `proposed` unchanged to
+        `PUT /config/show.playlist/{id}` with `If-Match` set to `revision`;
+        this endpoint never writes. When no newer copy exists,
+        `newerAvailable` is false. `proposed` is null and `canConfirm` is false
+        when every saved entry would be dropped, or when the moved playlist
+        would be refused by the write (for example a cue it uses was deleted).
+        `current` is null, and the preview targets the newest held copy, when
+        ShowMesh no longer holds the copy the playlist was made from. 404 when
+        the playlist does not exist; 409 when it is not an FPP-runner playlist
+        or ShowMesh holds no copy of its FPP playlist at all.
       parameters:
         - name: id
           in: path
@@ -20063,19 +20072,20 @@ components:
           description: Zero-based, as the entries table shows it.
     ShowPlaylistMoveDefinition:
       type: object
-      required: [hash, capturedAt, entryCount]
+      required: [hash, receivedAt, entryCount]
       properties:
         hash:
           type: string
-        capturedAt:
+        receivedAt:
           type: string
           format: date-time
+          description: When ShowMesh received this copy.
         entryCount:
           type: integer
     ShowPlaylistMoveEntry:
       type: object
       description: What happens to one saved entry. `to` is null when it is dropped.
-      required: [entryId, cue, filename, outcome, matchedBy, from, to, duplicateFilename, summary]
+      required: [entryId, cue, filename, outcome, matchedBy, from, to, duplicateFilename, previousSequence, newSequence, needsCheck, summary]
       properties:
         entryId:
           type: string
@@ -20098,6 +20108,21 @@ components:
             - type: "null"
         duplicateFilename:
           type: boolean
+        previousSequence:
+          type: string
+          description: >-
+            For an entry matched by position, the sequence name its position
+            held in the copy the playlist follows now. Empty for a filename
+            match, when that copy is no longer held, or when the position had
+            no name.
+        newSequence:
+          type: string
+          description: For a position-matched entry that is carried over, the sequence name at the position it lands on.
+        needsCheck:
+          type: boolean
+          description: >-
+            True when an entry matched by position is carried over and its
+            position may now hold a different sequence than before.
         summary:
           type: string
           description: Operator-facing sentence, shown verbatim.
@@ -20118,8 +20143,11 @@ components:
           type: string
     ShowPlaylistMovePreviewResponse:
       type: object
-      description: The body of GET /config/show.playlist/{id}/definition-move-preview.
       required: [serverTime, playlistId, revision, newerAvailable, canConfirm, summary, current, newest, entries, newEntries, proposed]
+      description: >-
+        The body of GET /config/show.playlist/{id}/definition-move-preview.
+        `current` is null when ShowMesh no longer holds the copy the playlist
+        was made from.
       properties:
         serverTime:
           type: string
@@ -20135,7 +20163,9 @@ components:
         summary:
           type: string
         current:
-          $ref: "#/components/schemas/ShowPlaylistMoveDefinition"
+          oneOf:
+            - $ref: "#/components/schemas/ShowPlaylistMoveDefinition"
+            - type: "null"
         newest:
           oneOf:
             - $ref: "#/components/schemas/ShowPlaylistMoveDefinition"

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
+  PROBLEM_TYPE,
   getShowPlaylistDefinitionMovePreview,
   putShowPlaylist,
   type ConfigObjectSummary,
@@ -14,10 +15,16 @@ import { cueLabel } from './showsModel'
 
 type Preview = ShowPlaylistMovePreviewResponse
 
-type Availability = { kind: 'checking' } | { kind: 'ready'; preview: Preview } | { kind: 'failed'; reason: string }
-type Review = { kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; preview: Preview } | { kind: 'failed'; reason: string }
+type Failure = { reason: string; refused: boolean }
+type Availability = { kind: 'checking' } | { kind: 'ready'; preview: Preview } | { kind: 'failed'; failure: Failure }
+type Review = { kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; preview: Preview } | { kind: 'failed'; failure: Failure }
 
 const CHANGED_AFTER_REVIEW = 'This playlist was changed after you opened the review, so nothing was saved. Review the changes again.'
+
+/** A 409 here is the coordinator declining to preview, not a read that failed. */
+function failureOf(err: unknown): Failure {
+  return { reason: describeApiError(err), refused: err instanceof ApiError && err.status === 409 }
+}
 
 /** Asks the coordinator, once per saved revision, whether FPP has a newer playlist; the review itself re-reads so it never shows a stale answer. */
 export function usePlaylistMove(playlist: ShowPlaylistConfigResponse, onSaved: (response: ShowPlaylistConfigResponse) => void) {
@@ -25,19 +32,23 @@ export function usePlaylistMove(playlist: ShowPlaylistConfigResponse, onSaved: (
   const [review, setReview] = useState<Review>({ kind: 'closed' })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [changedSinceReview, setChangedSinceReview] = useState(false)
   const [recheck, setRecheck] = useState(0)
+  const reviewRun = useRef(0)
 
   useEffect(() => {
     let cancelled = false
+    reviewRun.current += 1
     setAvailability({ kind: 'checking' })
     setReview({ kind: 'closed' })
     setSaveError(null)
+    setChangedSinceReview(false)
     getShowPlaylistDefinitionMovePreview(playlist.id)
       .then((preview) => {
         if (!cancelled) setAvailability({ kind: 'ready', preview })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setAvailability({ kind: 'failed', reason: describeApiError(err) })
+        if (!cancelled) setAvailability({ kind: 'failed', failure: failureOf(err) })
       })
     return () => {
       cancelled = true
@@ -45,16 +56,24 @@ export function usePlaylistMove(playlist: ShowPlaylistConfigResponse, onSaved: (
   }, [playlist.id, playlist.revision, playlist.payload.fpp?.playlistHash, recheck])
 
   const open = useCallback(() => {
+    const run = ++reviewRun.current
     setReview({ kind: 'loading' })
     setSaveError(null)
+    setChangedSinceReview(false)
     getShowPlaylistDefinitionMovePreview(playlist.id)
-      .then((preview) => setReview({ kind: 'open', preview }))
-      .catch((err: unknown) => setReview({ kind: 'failed', reason: describeApiError(err) }))
+      .then((preview) => {
+        if (reviewRun.current === run) setReview({ kind: 'open', preview })
+      })
+      .catch((err: unknown) => {
+        if (reviewRun.current === run) setReview({ kind: 'failed', failure: failureOf(err) })
+      })
   }, [playlist.id])
 
   const close = useCallback(() => {
+    reviewRun.current += 1
     setReview({ kind: 'closed' })
     setSaveError(null)
+    setChangedSinceReview(false)
   }, [])
 
   const confirm = useCallback(() => {
@@ -68,13 +87,18 @@ export function usePlaylistMove(playlist: ShowPlaylistConfigResponse, onSaved: (
         onSaved(response)
       })
       .catch((err: unknown) => {
-        setSaveError(err instanceof ApiError && err.status === 409 ? CHANGED_AFTER_REVIEW : describeApiError(err))
+        if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.configRevisionPreconditionFailed) {
+          setChangedSinceReview(true)
+          setSaveError(CHANGED_AFTER_REVIEW)
+        } else {
+          setSaveError(describeApiError(err))
+        }
       })
       .finally(() => setSaving(false))
   }, [review, playlist.id, onSaved])
 
   const newer = availability.kind === 'ready' && availability.preview.newerAvailable ? availability.preview : null
-  return { availability, newer, review, saving, saveError, open, close, confirm, recheck: () => setRecheck((n) => n + 1) }
+  return { availability, newer, review, saving, saveError, changedSinceReview, open, close, confirm, recheck: () => setRecheck((n) => n + 1) }
 }
 
 export type PlaylistMove = ReturnType<typeof usePlaylistMove>
@@ -84,18 +108,23 @@ const OUTCOME: Record<string, { tone: 'good' | 'pending' | 'warn'; label: string
   moved: { tone: 'pending', label: 'Moved' },
   dropped: { tone: 'warn', label: 'Removed' },
 }
+const NEEDS_CHECK = { tone: 'warn' as const, label: 'Check' }
+
+function refusalLabel(failure: Failure): string {
+  return failure.refused ? 'Cannot review' : 'Read failed'
+}
 
 /** The notice and the button that open the review, or the plain reason the review cannot start. */
 export function PlaylistMoveNotice({ move, blockedReason }: { move: PlaylistMove; blockedReason: string | null }) {
   if (move.availability.kind === 'failed') {
-    return <RuledStrip absence="failed" label="Read failed" fact={move.availability.reason} />
+    return <RuledStrip absence="failed" label={refusalLabel(move.availability.failure)} fact={move.availability.failure.reason} />
   }
   if (move.newer === null) return null
   const busy = move.review.kind === 'loading' || move.review.kind === 'open'
   return (
     <div className="sm-stack-3">
       <p className="sm-small sm-muted">
-        FPP&rsquo;s playlist changed at {formatClock(move.newer.newest?.capturedAt ?? '') ?? 'an unrecorded time'}. Review the changes to keep your cues on the right
+        FPP&rsquo;s playlist changed at {formatClock(move.newer.newest?.receivedAt ?? '') ?? 'an unrecorded time'}. Review the changes to keep your cues on the right
         sequences.
       </p>
       <Button onClick={move.open} disabled={busy || blockedReason !== null} title={blockedReason ?? undefined}>
@@ -118,7 +147,7 @@ export function PlaylistMoveReview({
 }) {
   const { review } = move
   if (review.kind === 'closed' || review.kind === 'loading') return null
-  if (review.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={review.reason} />
+  if (review.kind === 'failed') return <RuledStrip absence="failed" label={refusalLabel(review.failure)} fact={review.failure.reason} />
   const { preview } = review
   const canConfirm = preview.canConfirm && confirmBlockedReason === null
 
@@ -138,12 +167,12 @@ export function PlaylistMoveReview({
               </thead>
               <tbody>
                 {preview.entries.map((entry) => {
-                  const outcome = OUTCOME[entry.outcome] ?? { tone: 'warn' as const, label: entry.outcome }
+                  const outcome = entry.needsCheck ? NEEDS_CHECK : (OUTCOME[entry.outcome] ?? { tone: 'warn' as const, label: entry.outcome })
                   return (
                     <tr key={entry.entryId}>
                       <td>{cueLabel(cues, entry.cue)}</td>
                       <td>{entry.filename !== '' ? entry.filename : <span className="sm-faint">No sequence name saved</span>}</td>
-                      <td>
+                      <td className="sm-table__wrap">
                         <StatusPair tone={outcome.tone} label={outcome.label} />
                         <br />
                         <span className="sm-small sm-muted">{entry.summary}</span>
@@ -174,7 +203,7 @@ export function PlaylistMoveReview({
                           <br />
                           {entry.name !== '' ? entry.name : '(no filename)'}
                         </td>
-                        <td>
+                        <td className="sm-table__wrap">
                           <StatusPair tone="pending" label="No cue" />
                           <br />
                           <span className="sm-small sm-muted">{entry.summary}</span>
@@ -189,13 +218,20 @@ export function PlaylistMoveReview({
         </>
       )}
       <ButtonRow>
-        <Button variant="primary" onClick={move.confirm} disabled={!canConfirm || move.saving} title={confirmBlockedReason ?? undefined}>
-          {move.saving ? 'Saving…' : 'Move to FPP’s newest playlist'}
-        </Button>
+        {move.changedSinceReview ? (
+          <Button variant="primary" onClick={move.open}>
+            Review again
+          </Button>
+        ) : (
+          <Button variant="primary" onClick={move.confirm} disabled={!canConfirm || move.saving} title={confirmBlockedReason ?? undefined}>
+            {move.saving ? 'Saving…' : 'Move to FPP’s newest playlist'}
+          </Button>
+        )}
         <Button variant="quiet" onClick={move.close} disabled={move.saving}>
           Cancel
         </Button>
       </ButtonRow>
+      {confirmBlockedReason !== null && preview.canConfirm && <p className="sm-small sm-muted">{confirmBlockedReason}</p>}
       {move.saveError !== null && <RuledStrip absence="failed" label="Not saved" fact={move.saveError} />}
     </div>
   )

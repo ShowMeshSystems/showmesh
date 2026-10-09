@@ -13,8 +13,9 @@ type ShowPlaylistMoveSlot struct {
 
 // ShowPlaylistMoveDefinition names one captured copy of an FPP playlist.
 type ShowPlaylistMoveDefinition struct {
-	Hash       string `json:"hash"`
-	CapturedAt string `json:"capturedAt"`
+	Hash string `json:"hash"`
+	// ReceivedAt is when ShowMesh received this copy.
+	ReceivedAt string `json:"receivedAt"`
 	EntryCount int    `json:"entryCount"`
 }
 
@@ -30,7 +31,15 @@ type ShowPlaylistMoveEntry struct {
 	From              ShowPlaylistMoveSlot  `json:"from"`
 	To                *ShowPlaylistMoveSlot `json:"to"`
 	DuplicateFilename bool                  `json:"duplicateFilename"`
-	Summary           string                `json:"summary"`
+	// PreviousSequence and NewSequence name what a position-matched entry's
+	// position held before and holds now; both are empty for an entry matched
+	// by filename. PreviousSequence is also empty when that copy is no longer
+	// held or the position held no name. NeedsCheck is true when a
+	// position-matched entry is carried over and may now sit on another sequence.
+	PreviousSequence string `json:"previousSequence"`
+	NewSequence      string `json:"newSequence"`
+	NeedsCheck       bool   `json:"needsCheck"`
+	Summary          string `json:"summary"`
 }
 
 // ShowPlaylistMoveNewEntry is an entry of the newest FPP playlist that
@@ -47,8 +56,9 @@ type ShowPlaylistMoveNewEntry struct {
 // /config/show.playlist/{id}/definition-move-preview. Revision is the
 // playlist revision the preview was computed against: send it as If-Match
 // with Proposed to PUT /config/show.playlist/{id}. When NewerAvailable is
-// false, Newest and Proposed are null and the lists are empty. Proposed is
-// also null when CanConfirm is false.
+// false, Newest and Proposed are null and the lists are empty. Current is
+// null when ShowMesh no longer holds the copy the playlist was made from.
+// Proposed is also null when CanConfirm is false.
 type ShowPlaylistMovePreviewResponse struct {
 	ServerTime     string                      `json:"serverTime"`
 	PlaylistID     string                      `json:"playlistId"`
@@ -56,7 +66,7 @@ type ShowPlaylistMovePreviewResponse struct {
 	NewerAvailable bool                        `json:"newerAvailable"`
 	CanConfirm     bool                        `json:"canConfirm"`
 	Summary        string                      `json:"summary"`
-	Current        ShowPlaylistMoveDefinition  `json:"current"`
+	Current        *ShowPlaylistMoveDefinition `json:"current"`
 	Newest         *ShowPlaylistMoveDefinition `json:"newest"`
 	Entries        []ShowPlaylistMoveEntry     `json:"entries"`
 	NewEntries     []ShowPlaylistMoveNewEntry  `json:"newEntries"`

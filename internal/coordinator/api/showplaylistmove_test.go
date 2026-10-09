@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -21,6 +22,7 @@ const (
 )
 
 type movePreviewSetup struct {
+	svc   identity.Service
 	api   *API
 	st    *store.Store
 	auth  map[string]string
@@ -40,14 +42,19 @@ func newMovePreviewSetup(t *testing.T) movePreviewSetup {
 	for _, id := range []string{"wake-up", "kpop-audio"} {
 		mustPutCue(t, api, token, id, validCueBody)
 	}
-	return movePreviewSetup{api: api, st: st, auth: auth, token: token}
+	return movePreviewSetup{svc: svc, api: api, st: st, auth: auth, token: token}
 }
 
-func (s movePreviewSetup) putDefinition(t *testing.T, hash string, capturedAt time.Time, body string) {
+func (s movePreviewSetup) putDefinition(t *testing.T, hash string, at time.Time, body string) {
+	t.Helper()
+	s.putDefinitionAt(t, hash, at, at, body)
+}
+
+func (s movePreviewSetup) putDefinitionAt(t *testing.T, hash string, capturedAt, receivedAt time.Time, body string) {
 	t.Helper()
 	if _, err := s.st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
 		InstanceUUID: moveInstance, PlaylistHash: hash, PlaylistName: moveListName,
-		DefinitionJSON: body, CapturedAt: capturedAt, ReceivedAt: capturedAt,
+		DefinitionJSON: body, CapturedAt: capturedAt, ReceivedAt: receivedAt,
 	}); err != nil {
 		t.Fatalf("put definition: %v", err)
 	}
@@ -200,16 +207,123 @@ func TestShowPlaylistDefinitionMovePreviewRefusals(t *testing.T) {
 
 	s.putPlaylist(t, "quick", movePlaylistTemplate)
 	status, body = s.preview(t, "quick")
-	if status != http.StatusConflict || !strings.Contains(string(body), "no longer holds the copy") {
-		t.Fatalf("no stored copy: status = %d; body: %s", status, body)
+	if status != http.StatusConflict || !strings.Contains(string(body), "holds no copy of this FPP playlist") {
+		t.Fatalf("no copy held at all: status = %d; body: %s", status, body)
 	}
 }
 
-func TestShowPlaylistDefinitionMovePreviewNeedsReadScope(t *testing.T) {
+func TestShowPlaylistDefinitionMovePreviewWhenTheCurrentCopyIsNotHeld(t *testing.T) {
 	s := newMovePreviewSetup(t)
-	resp, _ := doRequest(t, s.api.Handler, "GET", "/api/v1/config/show.playlist/quick/definition-move-preview", nil)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("no credential: status = %d", resp.StatusCode)
+	s.putPlaylist(t, "quick", movePlaylistTemplate)
+	s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	status, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if status != http.StatusOK || !got.NewerAvailable || !got.CanConfirm || got.Current != nil || got.Newest == nil || !strings.Contains(got.Summary, "no longer has the copy") {
+		t.Fatalf("status = %d; body: %s", status, body)
+	}
+	if got.Entries[0].Outcome != "moved" {
+		t.Fatalf("filename entries should still match: %+v", got.Entries)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewNewestIsDecidedByWhenShowMeshReceivedIt(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	// The current copy was captured later by the plugin's clock but received
+	// first; the other copy was received last, with an earlier capture time.
+	s.putDefinitionAt(t, moveOldHash, testNow, testNow.Add(-time.Hour), moveOldDefinition)
+	s.putPlaylist(t, "quick", movePlaylistTemplate)
+	s.putDefinitionAt(t, moveNewHash, testNow.Add(-2*time.Hour), testNow, moveNewDefinition)
+	status, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if status != http.StatusOK || !got.NewerAvailable || got.Newest == nil || got.Newest.Hash != moveNewHash {
+		t.Fatalf("status = %d; body: %s", status, body)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewPositionMatchesNameBothSequences(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+	s.putPlaylist(t, "quick", `{
+		"show": "halloween-2026", "name": "Quick check", "runner": "fpp",
+		"fpp": {"instanceUuid": "`+moveInstance+`", "playlistName": "`+moveListName+`", "playlistHash": "`+moveOldHash+`"},
+		"entries": [
+			{"id": "a", "cue": "wake-up", "fpp": {"section": "mainPlaylist", "position": 0}},
+			{"id": "b", "cue": "kpop-audio", "fpp": {"section": "mainPlaylist", "position": 1}}
+		]}`)
+	s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	status, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if status != http.StatusOK || !got.CanConfirm || len(got.Entries) != 2 {
+		t.Fatalf("status = %d; body: %s", status, body)
+	}
+	a := got.Entries[0]
+	if a.Outcome != "kept" || !a.NeedsCheck || a.PreviousSequence != "Wake Up.fseq" || a.NewSequence != "Opener.fseq" {
+		t.Fatalf("entry a = %+v", a)
+	}
+	if !strings.Contains(a.Summary, "held Wake Up.fseq and now holds Opener.fseq") {
+		t.Fatalf("summary = %q", a.Summary)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewRefusesAMoveTheWriteWouldRefuse(t *testing.T) {
+	deleteConfig := func(s movePreviewSetup, kind, id string) {
+		t.Helper()
+		req := newJSONRequest(t, http.MethodDelete, "/api/v1/config/"+kind+"/"+id, `{"confirm":true}`, s.auth)
+		if resp, body := doRawRequest(t, s.api.Handler, req); resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("delete %s/%s: status = %d; body: %s", kind, id, resp.StatusCode, body)
+		}
+	}
+	check := func(t *testing.T, s movePreviewSetup) {
+		t.Helper()
+		status, body := s.preview(t, "quick")
+		var got v1.ShowPlaylistMovePreviewResponse
+		_ = json.Unmarshal(body, &got)
+		if status != http.StatusOK || !got.NewerAvailable || got.CanConfirm || got.Proposed != nil || !strings.Contains(got.Summary, "no longer exists") {
+			t.Fatalf("status = %d; body: %s", status, body)
+		}
+	}
+	t.Run("a cue was deleted", func(t *testing.T) {
+		s := newMovePreviewSetup(t)
+		s.seededWithNewerDefinition(t)
+		deleteConfig(s, "show.cue", "kpop-audio")
+		check(t, s)
+	})
+	t.Run("the safe cue was deleted", func(t *testing.T) {
+		s := newMovePreviewSetup(t)
+		mustPutCue(t, s.api, s.token, "safe", validCueBody)
+		s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+		s.putPlaylist(t, "quick", strings.Replace(movePlaylistTemplate, `"mismatchPolicy": "hold"`, `"mismatchPolicy": "safeCue", "safeCueRef": "safe"`, 1))
+		s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+		deleteConfig(s, "show.cue", "safe")
+		check(t, s)
+	})
+}
+
+func TestShowPlaylistDefinitionMovePreviewReadScopes(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	s.seededWithNewerDefinition(t)
+	svc := s.svc
+	viewer := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	get := func(token string) int {
+		var hdr map[string]string
+		if token != "" {
+			hdr = map[string]string{"Authorization": "Bearer " + token}
+		}
+		resp, _ := doRequest(t, s.api.Handler, "GET", "/api/v1/config/show.playlist/quick/definition-move-preview", hdr)
+		return resp.StatusCode
+	}
+	if got := get(""); got != http.StatusUnauthorized {
+		t.Errorf("no credential: status = %d, want 401", got)
+	}
+	if got := get(mustIssueToken(t, svc, viewer.ID)); got != http.StatusForbidden {
+		t.Errorf("principal with neither scope: status = %d, want 403", got)
+	}
+	if got := get(mustIssueToken(t, svc, operator.ID)); got != http.StatusOK {
+		t.Errorf("principal with only show:macro:run: status = %d, want 200", got)
 	}
 }
 
@@ -220,12 +334,30 @@ func TestNewestFPPPlaylistDefinition(t *testing.T) {
 			CapturedAt: testNow.Add(time.Duration(captured) * time.Minute), ReceivedAt: testNow.Add(time.Duration(received) * time.Minute),
 		}
 	}
-	recs := []store.FPPPlaylistDefinitionRecord{rec("a", "p", 1, 9), rec("b", "p", 5, 1), rec("c", "p", 5, 2), rec("z", "other", 99, 99)}
+	// "late" was captured last by the plugin's clock but received first.
+	recs := []store.FPPPlaylistDefinitionRecord{rec("late", "p", 99, 1), rec("b", "p", 5, 5), rec("c", "p", 6, 5), rec("z", "other", 99, 99)}
 	got, ok := newestFPPPlaylistDefinition(recs, "i", "p")
 	if !ok || got.PlaylistHash != "c" {
-		t.Fatalf("newest = %+v ok=%v", got, ok)
+		t.Fatalf("newest = %+v ok=%v, want the last received, ties to the later capture", got, ok)
 	}
 	if _, ok := newestFPPPlaylistDefinition(recs, "i", "none"); ok {
 		t.Fatal("found a definition for an unknown playlist name")
+	}
+}
+
+func TestMovePreviewSentencesNameSectionsInPlainWords(t *testing.T) {
+	moved := mapPlaylistMoveEntry(config.PlaylistMoveEntry{
+		Outcome: config.PlaylistMoveMoved, MatchedBy: config.PlaylistMoveByFilename,
+		From: config.PlaylistMoveSlot{Section: "leadIn", Position: 0}, To: &config.PlaylistMoveSlot{Section: "mainPlaylist", Position: 1},
+	})
+	if moved.Summary != "Moved from lead-in position 0 to main playlist position 1." {
+		t.Errorf("summary = %q", moved.Summary)
+	}
+	empty := mapPlaylistMoveEntry(config.PlaylistMoveEntry{
+		Outcome: config.PlaylistMoveMoved, MatchedBy: config.PlaylistMoveByFilename,
+		From: config.PlaylistMoveSlot{Section: "", Position: 0}, To: &config.PlaylistMoveSlot{Section: "mainPlaylist", Position: 0},
+	})
+	if strings.Contains(empty.Summary, "  ") || !strings.HasPrefix(empty.Summary, "Moved from position 0 to main playlist position 0") {
+		t.Errorf("summary = %q", empty.Summary)
 	}
 }

@@ -208,8 +208,24 @@ func TestOpenAPIShowPlaylistDefinitionMovePreviewMatchesRealResponses(t *testing
 	_, none := s2.preview(t, "quick")
 	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", none)
 
-	for _, id := range []string{"missing"} {
-		_, problem := s2.preview(t, id)
+	s2.putPlaylist(t, "audio", `{"show":"halloween-2026","name":"Audio","runner":"showmesh-audio","entries":[{"id":"e1","cue":"wake-up"}]}`)
+	for id, want := range map[string]int{"missing": http.StatusNotFound, "audio": http.StatusConflict} {
+		status, problem := s2.preview(t, id)
+		if status != want {
+			t.Fatalf("%s: status = %d, want %d", id, status, want)
+		}
 		assertMatchesSchema(t, c, "Problem", problem)
 	}
+	s3 := newMovePreviewSetup(t)
+	s3.putPlaylist(t, "quick", movePlaylistTemplate)
+	status, problem := s3.preview(t, "quick")
+	if status != http.StatusConflict {
+		t.Fatalf("no copy held: status = %d", status)
+	}
+	assertMatchesSchema(t, c, "Problem", problem)
+
+	// The current copy is not held, but a newer one is.
+	s3.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	_, noCurrent := s3.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", noCurrent)
 }

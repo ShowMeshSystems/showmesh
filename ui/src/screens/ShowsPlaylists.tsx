@@ -85,30 +85,29 @@ function usePlaylists(showId: string): {
 type FPPEvidence = {
   state: 'loading' | 'loaded' | 'failed'
   entries: FPPPlaylistDefinitionEntry[]
-  definitions: FPPPlaylistDefinitionMetadata[]
   reason: string | null
   reload: () => void
 }
 
 function useFPPEvidence(playlist: Playlist | null): FPPEvidence {
   const [attempt, setAttempt] = useState(0)
-  const [read, setRead] = useState<Omit<FPPEvidence, 'reload'>>({ state: 'loading', entries: [], definitions: [], reason: null })
+  const [read, setRead] = useState<Omit<FPPEvidence, 'reload'>>({ state: 'loading', entries: [], reason: null })
   const reload = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     if (playlist === null || playlist.payload.runner !== 'fpp' || playlist.payload.fpp === undefined) {
-      setRead({ state: 'loaded', entries: [], definitions: [], reason: null })
+      setRead({ state: 'loaded', entries: [], reason: null })
       return
     }
     let cancelled = false
     const binding = playlist.payload.fpp
-    setRead({ state: 'loading', entries: [], definitions: [], reason: null })
-    Promise.all([getFPPPlaylistDefinitionEntries(binding.instanceUuid, binding.playlistHash), listFPPPlaylistDefinitions()])
-      .then(([entries, definitions]) => {
-        if (!cancelled) setRead({ state: 'loaded', entries: entries.entries, definitions: definitions.definitions, reason: null })
+    setRead({ state: 'loading', entries: [], reason: null })
+    getFPPPlaylistDefinitionEntries(binding.instanceUuid, binding.playlistHash)
+      .then((entries) => {
+        if (!cancelled) setRead({ state: 'loaded', entries: entries.entries, reason: null })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setRead({ state: 'failed', entries: [], definitions: [], reason: describeApiError(err) })
+        if (!cancelled) setRead({ state: 'failed', entries: [], reason: describeApiError(err) })
       })
     return () => {
       cancelled = true
@@ -571,10 +570,13 @@ function FPPPlaylistEditor({
           instanceUuid={binding.instanceUuid}
           playlistName={binding.playlistName}
           blockedReason={reimportGate.allowed ? null : reimportGate.reason}
-          onLanded={evidence.reload}
+          onLanded={() => {
+            evidence.reload()
+            move.recheck()
+          }}
         />
         <PlaylistMoveNotice move={move} blockedReason={moveBlockedReason} />
-        <PlaylistMoveReview move={move} cues={cues} confirmBlockedReason={saveGate.allowed ? null : saveGate.reason} />
+        <PlaylistMoveReview move={move} cues={cues} confirmBlockedReason={moveBlockedReason} />
       </div>
 
       <div className="sm-attn sm-stack-5">

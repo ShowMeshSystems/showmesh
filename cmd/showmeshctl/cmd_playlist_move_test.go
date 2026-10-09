@@ -12,11 +12,11 @@ import (
 
 const movePreviewBody = `{"serverTime":"2026-08-16T21:00:00Z","playlistId":"quick","revision":4,"newerAvailable":true,"canConfirm":true,
 	"summary":"FPP's playlist changed. Review the changes to keep your cues on the right sequences.",
-	"current":{"hash":"aa","capturedAt":"2026-08-16T19:00:00Z","entryCount":2},
-	"newest":{"hash":"bb","capturedAt":"2026-08-16T20:20:00Z","entryCount":3},
+	"current":{"hash":"aa","receivedAt":"2026-08-16T19:00:00Z","entryCount":2},
+	"newest":{"hash":"bb","receivedAt":"2026-08-16T20:20:00Z","entryCount":3},
 	"entries":[
-		{"entryId":"a","cue":"wake-up","filename":"Wake Up.fseq","outcome":"moved","matchedBy":"filename","from":{"section":"mainPlaylist","position":0},"to":{"section":"mainPlaylist","position":1},"duplicateFilename":false,"summary":"Moved from position 0 to position 1."},
-		{"entryId":"b","cue":"old","filename":"","outcome":"dropped","matchedBy":"position","from":{"section":"mainPlaylist","position":5},"to":null,"duplicateFilename":false,"summary":"FPP's playlist has nothing at position 5 any more. This cue will be removed from this playlist."}],
+		{"entryId":"a","cue":"wake-up","filename":"Wake Up.fseq","outcome":"moved","matchedBy":"filename","from":{"section":"mainPlaylist","position":0},"to":{"section":"mainPlaylist","position":1},"duplicateFilename":false,"previousSequence":"","newSequence":"","needsCheck":false,"summary":"Moved from position 0 to position 1."},
+		{"entryId":"b","cue":"old","filename":"","outcome":"dropped","matchedBy":"position","from":{"section":"mainPlaylist","position":5},"to":null,"duplicateFilename":false,"previousSequence":"Old.fseq","newSequence":"","needsCheck":true,"summary":"FPP's playlist has no entry at position 5 any more. This cue will be removed from this playlist."}],
 	"newEntries":[{"section":"mainPlaylist","position":0,"name":"Opener.fseq","duplicateFilename":false,"summary":"New at position 0 in FPP's playlist. It has no cue yet; give it one after you confirm."}],
 	"proposed":{"show":"halloween-2026","name":"Quick","runner":"fpp","mismatchPolicy":"hold",
 		"fpp":{"instanceUuid":"u","playlistName":"p","playlistHash":"bb"},
@@ -63,7 +63,7 @@ func TestCmdPlaylistMovePreviewWritesNothing(t *testing.T) {
 		t.Fatalf("requests = %v", ms.methods)
 	}
 	out := stdout.String()
-	for _, want := range []string{"moved", "Moved from position 0 to position 1.", "dropped", "nothing at position 5", "(no sequence name saved)", "Opener.fseq", "Nothing was changed"} {
+	for _, want := range []string{"moved", "Moved from position 0 to position 1.", "dropped", "no entry at position 5", "(no sequence name saved)", "Opener.fseq", "Nothing was changed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
@@ -94,15 +94,15 @@ func TestCmdPlaylistMoveConfirmSendsProposedWithIfMatch(t *testing.T) {
 func TestCmdPlaylistMoveNothingNewerWritesNothingEvenWithConfirm(t *testing.T) {
 	body := `{"serverTime":"2026-08-16T21:00:00Z","playlistId":"quick","revision":4,"newerAvailable":false,"canConfirm":false,
 		"summary":"This playlist already follows the newest copy of FPP's playlist. There is nothing to move.",
-		"current":{"hash":"aa","capturedAt":"2026-08-16T19:00:00Z","entryCount":2},"newest":null,"entries":[],"newEntries":[],"proposed":null}`
+		"current":{"hash":"aa","receivedAt":"2026-08-16T19:00:00Z","entryCount":2},"newest":null,"entries":[],"newEntries":[],"proposed":null}`
 	ms := newMoveServer(t, body)
 	var stdout, stderr bytes.Buffer
 	code := cmdPlaylist([]string{"move-to-newer-fpp", "--confirm", "--server", ms.URL, "quick"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
 	if code != exitOK || len(ms.methods) != 1 {
 		t.Fatalf("exit = %d, requests = %v", code, ms.methods)
 	}
-	if !strings.Contains(stderr.String(), "nothing to move") {
-		t.Errorf("stderr = %s", stderr.String())
+	if !strings.Contains(stdout.String(), "nothing to move") {
+		t.Errorf("stdout = %s", stdout.String())
 	}
 }
 
@@ -111,8 +111,24 @@ func TestCmdPlaylistMoveConfirmRefusedWhenEveryCueWouldBeDropped(t *testing.T) {
 	ms := newMoveServer(t, body)
 	var stdout, stderr bytes.Buffer
 	code := cmdPlaylist([]string{"move-to-newer-fpp", "--confirm", "--server", ms.URL, "quick"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
-	if code != exitUsage || len(ms.methods) != 1 {
+	if code != exitAPIError || len(ms.methods) != 1 {
 		t.Fatalf("exit = %d, requests = %v", code, ms.methods)
+	}
+	if !strings.Contains(stdout.String(), "CHECK") {
+		t.Errorf("a flagged row has no marker:\n%s", stdout.String())
+	}
+}
+
+func TestCmdPlaylistMoveConfirmWithJSONPrintsThePreviewWhenNothingIsSaved(t *testing.T) {
+	none := `{"serverTime":"2026-08-16T21:00:00Z","playlistId":"quick","revision":4,"newerAvailable":false,"canConfirm":false,"summary":"x",
+		"current":null,"newest":null,"entries":[],"newEntries":[],"proposed":null}`
+	for name, body := range map[string]string{"nothing newer": none, "cannot confirm": strings.Replace(movePreviewBody, `"canConfirm":true`, `"canConfirm":false`, 1)} {
+		ms := newMoveServer(t, body)
+		var stdout, stderr bytes.Buffer
+		cmdPlaylist([]string{"move-to-newer-fpp", "--confirm", "--output", "json", "--server", ms.URL, "quick"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if len(ms.methods) != 1 || !strings.Contains(stdout.String(), `"newerAvailable"`) {
+			t.Errorf("%s: requests = %v, stdout = %q", name, ms.methods, stdout.String())
+		}
 	}
 }
 
