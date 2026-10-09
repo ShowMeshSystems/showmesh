@@ -206,36 +206,34 @@ func TestASecondReleaseAllMutesWhileTheFirstIsStillTearingDown(t *testing.T) {
 }
 
 // TestOneTeardownAtATimeOnTheSharedPipeline proves every teardown caller
-// passes through the engine's own turn: a second Release cannot start
-// while the first is still inside its attempt, however it was reached.
+// passes through the engine's own turn before it touches an element: a
+// Release cannot start on its branch while another teardown holds the
+// turn, however it was reached.
 func TestOneTeardownAtATimeOnTheSharedPipeline(t *testing.T) {
 	e := newTestEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
-	previous := teardownTimeout
-	teardownTimeout = 600 * time.Millisecond
-	t.Cleanup(func() { teardownTimeout = previous })
+	b := loadPlaying(t, e, ctx, "turn1")[0]
+	bin := e.pipeline.(gst.Bin)
 
-	branches := loadPlaying(t, e, ctx, "turn1", "turn2")
-	branches[0].pendingStateChanges.Add(1)
-	defer branches[0].pendingStateChanges.Add(-1)
-
-	holderDone := make(chan struct{})
+	const held = 600 * time.Millisecond
+	e.teardownTurn <- struct{}{}
 	go func() {
-		defer close(holderDone)
-		_ = e.Release(ctx, "turn1")
+		time.Sleep(held / 2)
+		if bin.GetByName(b.filesrcName) == nil {
+			t.Error("the Release removed its branch's elements while another teardown held the turn")
+		}
+		time.Sleep(held / 2)
+		<-e.teardownTurn
 	}()
-	time.Sleep(100 * time.Millisecond)
 
 	began := time.Now()
-	if err := e.Release(ctx, "turn2"); err != nil {
-		t.Fatalf("Release turn2: %v", err)
+	if err := e.Release(ctx, "turn1"); err != nil {
+		t.Fatalf("Release turn1: %v", err)
 	}
-	waited := time.Since(began)
-	<-holderDone
-	if waited < 300*time.Millisecond {
-		t.Fatalf("the second Release returned after %s, want it held behind the first teardown's turn of roughly %s", waited, teardownTimeout)
+	if waited := time.Since(began); waited < held-100*time.Millisecond {
+		t.Fatalf("the Release returned after %s, want it held behind the other teardown's turn of %s", waited, held)
 	}
 }
 
