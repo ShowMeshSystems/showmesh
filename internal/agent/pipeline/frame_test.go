@@ -214,6 +214,9 @@ func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
 	if snap.TimelinePositionMS == nil || *snap.TimelinePositionMS != 250 {
 		t.Fatalf("TimelinePositionMS = %v, want a pointer to 250", snap.TimelinePositionMS)
 	}
+	if snap.ContentDurationMS == nil || *snap.ContentDurationMS != 25_000 {
+		t.Fatalf("ContentDurationMS = %v, want a pointer to 25000 (1000 frames of 25 ms)", snap.ContentDurationMS)
+	}
 	if snap.IdleMode != "" {
 		t.Fatalf("IdleMode = %q while drawing content, want empty", snap.IdleMode)
 	}
@@ -239,6 +242,9 @@ func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
 	}
 	if snap.TimelinePositionMS != nil {
 		t.Fatalf("TimelinePositionMS = %v while idle, want nil (a position is not meaningful for idle output)", *snap.TimelinePositionMS)
+	}
+	if snap.ContentDurationMS != nil {
+		t.Fatalf("ContentDurationMS = %v while idle, want nil", *snap.ContentDurationMS)
 	}
 	if snap.IdleMode != IdleOutputDiagnostic {
 		t.Fatalf("IdleMode = %q while Stopped with idleOutput=diagnostic, want %q", snap.IdleMode, IdleOutputDiagnostic)

@@ -162,6 +162,10 @@ const (
 	// "?quick=1" to end an upload, and both forms reach the same handler.
 	fppConnectPathFPPDRestart = "/api/system/fppd/restart"
 
+	// fppConnectProcRoot is where host utilization is read from. A host
+	// without it reports no utilization at all.
+	fppConnectProcRoot = "/proc"
+
 	// fppConnectPlaylistPrefix is the fourth route's fixed prefix; route()
 	// matches anything after it as the (still escaped) playlist name.
 	fppConnectPlaylistPrefix = "/api/playlist/"
@@ -251,6 +255,15 @@ type fppConnectView interface {
 	// anything but an empty array, since a client polling this endpoint
 	// mid-upload must never see a 404 or a 5xx for it.
 	Assignments() ([]pipeline.Assignment, error)
+
+	// MultiSyncSnapshot returns this node's MultiSync timeline as of now.
+	// GET /api/system/status is its only reader.
+	MultiSyncSnapshot() multisync.Snapshot
+
+	// DrawnSequenceMS returns the length of the longest sequence a surface
+	// on this node drew content from on its latest frame; ok is false when
+	// no surface is drawing content.
+	DrawnSequenceMS() (durationMS int64, ok bool)
 }
 
 // fppConnectDefaultMaxFileBytes and fppConnectDefaultMaxAssetDirBytes
@@ -282,6 +295,8 @@ const (
 type fppConnectStateView struct {
 	state       *fppConnectState
 	assignments *pipeline.AssignmentStore
+	timeline    *multisync.Timeline
+	surfaces    func() []pipeline.Snapshot
 }
 
 // newFPPConnectStateView builds a fppConnectStateView over state and
@@ -339,6 +354,39 @@ func (v fppConnectStateView) MaxAssetDirBytes() int64 {
 
 func (v fppConnectStateView) Assignments() ([]pipeline.Assignment, error) {
 	return v.assignments.Load()
+}
+
+// withPlayback returns v reading timeline for MultiSyncSnapshot and surfaces
+// for DrawnSequenceMS.
+func (v fppConnectStateView) withPlayback(timeline *multisync.Timeline, surfaces func() []pipeline.Snapshot) fppConnectStateView {
+	v.timeline = timeline
+	v.surfaces = surfaces
+	return v
+}
+
+func (v fppConnectStateView) DrawnSequenceMS() (int64, bool) {
+	if v.surfaces == nil {
+		return 0, false
+	}
+	var longest int64
+	drawing := false
+	for _, s := range v.surfaces() {
+		if s.Drawing != pipeline.DrawingContent || s.ContentDurationMS == nil {
+			continue
+		}
+		drawing = true
+		longest = max(longest, *s.ContentDurationMS)
+	}
+	return longest, drawing
+}
+
+// MultiSyncSnapshot is the zero Snapshot, which no reader treats as playing,
+// for a view built without a timeline.
+func (v fppConnectStateView) MultiSyncSnapshot() multisync.Snapshot {
+	if v.timeline == nil {
+		return multisync.Snapshot{}
+	}
+	return v.timeline.Snapshot()
 }
 
 // fppConnectLocalAddrKey is the context key runFPPConnectHTTPListener's
@@ -588,6 +636,7 @@ type fppConnectServer struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	weatherDelay weatherDelayHTTPConfig
+	host         *fppConnectHostStats
 }
 
 // newFPPConnectHandler builds the complete handler for this node's FPP
@@ -596,6 +645,7 @@ type fppConnectServer struct {
 // playlist-write routes) plus two further FC1-compatibility-only fixed GET
 // routes (/api/models and /api/system/fppd/restart, added once a real
 // xLights run showed it calls both unprompted and errors on their 404),
+// the read-only /api/system/status an FPP player's MultiSync page polls,
 // the enabled-flag gate that 404s every route when this node's
 // fppconnect.settings.enabled is false, and a request body size cap on
 // FC1's fixed routes (FC2's upload and playlist-POST routes bound their
@@ -614,6 +664,7 @@ func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHe
 		now:          now,
 		logger:       logger,
 		weatherDelay: weatherDelay,
+		host:         newFPPConnectHostStats(fppConnectProcRoot, now),
 	}
 
 	inner := fppConnectRequireEnabled(view, http.HandlerFunc(srv.route), logger)
@@ -710,8 +761,9 @@ func fppConnectSetWriteDeadline(w http.ResponseWriter, d time.Duration, logger *
 }
 
 // routeFixed is FC1's fixed-path dispatch table (its original four
-// discovery routes, plus /api/models and /api/system/fppd/restart): GET/HEAD
-// only, wrapped by route() in fppConnectLimitBody's small body cap.
+// discovery routes, plus /api/models, /api/system/fppd/restart and
+// /api/system/status): GET/HEAD only, wrapped by route() in
+// fppConnectLimitBody's small body cap.
 func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
 	// Safe to set up front on this route: every branch below responds
@@ -726,6 +778,8 @@ func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.EscapedPath() {
 	case fppConnectPathSystemInfo:
 		s.handleSystemInfo(w, r)
+	case fppConnectPathSystemStatus:
+		s.handleSystemStatus(w, r)
 	case fppConnectPathMultiSyncSystems:
 		s.handleMultiSyncSystems(w, r)
 	case fppConnectPathPlaylists:
@@ -865,7 +919,13 @@ func fppConnectLimitBody(next http.Handler, logger *slog.Logger) http.Handler {
 }
 
 func (s *fppConnectServer) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
-	fppConnectWriteJSON(w, http.StatusOK, fppConnectSystemInfoResponse{
+	fppConnectWriteJSON(w, http.StatusOK, s.systemInfo())
+}
+
+// systemInfo is GET /api/system/info's body, which GET /api/system/status
+// also carries inside its advancedView.
+func (s *fppConnectServer) systemInfo() fppConnectSystemInfoResponse {
+	return fppConnectSystemInfoResponse{
 		UUID:          s.uuid,
 		HostName:      s.nodeID,
 		Version:       fppconnect.AdvertisedVersion,
@@ -876,7 +936,7 @@ func (s *fppConnectServer) handleSystemInfo(w http.ResponseWriter, r *http.Reque
 		ChannelRanges: s.view.ChannelRanges(),
 		Platform:      fppConnectPlatform,
 		Variant:       fppConnectPlatform,
-	})
+	}
 }
 
 func (s *fppConnectServer) handleMultiSyncSystems(w http.ResponseWriter, r *http.Request) {

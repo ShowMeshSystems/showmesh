@@ -142,6 +142,11 @@ type Snapshot struct {
 	// says an inapplicable value is nil, never a stale or zero position).
 	TimelinePositionMS *int64
 
+	// ContentDurationMS is the length of the sequence TimelinePositionMS was
+	// read against, nil whenever TimelinePositionMS is. Past it the writer
+	// repeats the sequence's last frame.
+	ContentDurationMS *int64
+
 	// Drawing is what the writer actually wrote to the pipeline's stdin on
 	// its most recent tick: [DrawingContent], [DrawingIdle],
 	// [DrawingFailure], [DrawingStale], or [DrawingBlackout]. This is the
@@ -435,6 +440,7 @@ const (
 type DrawState struct {
 	TimelineState string
 	PositionMS    *int64
+	DurationMS    *int64
 	Drawing       string
 	IdleMode      string
 	FailureOutput string
@@ -450,6 +456,7 @@ func (r *runner) setDrawState(st DrawState) {
 	r.mu.Lock()
 	r.snap.TimelineState = st.TimelineState
 	r.snap.TimelinePositionMS = st.PositionMS
+	r.snap.ContentDurationMS = st.DurationMS
 	r.snap.Drawing = st.Drawing
 	r.snap.IdleMode = st.IdleMode
 	r.snap.FailureOutput = st.FailureOutput
