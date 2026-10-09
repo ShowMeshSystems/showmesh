@@ -99,6 +99,11 @@ type Engine struct {
 
 	nextID atomic.Uint64
 
+	// lagFloor is how far the mixers have stood behind the pipeline clock,
+	// fed by watchBus and read when a branch joins; see [mixerLagFloor].
+	lagFloor      mixerLagFloor
+	lagUnreadable sync.Once
+
 	brokenMu     sync.Mutex
 	brokenReason string
 
@@ -1002,11 +1007,16 @@ func (e *Engine) watchBus() {
 	}
 	bus := pipeline.GetBus()
 	defer releaseBus(bus)
+	var lagSampledAt time.Time
 	for {
 		select {
 		case <-e.done:
 			return
 		default:
+		}
+		if time.Since(lagSampledAt) >= mixerLagSampleInterval {
+			lagSampledAt = time.Now()
+			e.sampleMixerLag()
 		}
 		msg := bus.TimedPop(gst.ClockTime(200 * time.Millisecond))
 		if msg == nil {

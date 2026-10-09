@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,10 +43,6 @@ type branch struct {
 	// path is the resolved media file build linked filesrc to, read by
 	// swapToPosition to build a replacement for the same media.
 	path string
-
-	// mixerLagAtBuild is [Engine.mixerLag] as build read it, the earlier
-	// of the two readings resyncMixerPads needs. Written only by build.
-	mixerLagAtBuild time.Duration
 
 	// elementNames holds the GStreamer names of every element in
 	// elements(), computed ahead of construction so [Engine.indexBranch]
@@ -261,7 +258,6 @@ func (b *branch) build(path string) error {
 	e := b.engine
 	n := len(e.cfg.ProgramChannels)
 	b.path = path
-	_, b.mixerLagAtBuild = e.mixerLag()
 
 	name := func(role string) string { return fmt.Sprintf("h%d-%s", b.id, role) }
 	b.filesrcName = name("filesrc")
@@ -643,33 +639,43 @@ func mixerLagBeyondPace(running, mixed, latency time.Duration) time.Duration {
 
 // mixerLag reports the pipeline clock's running time and how far the
 // mixers have fallen behind it, read off the first: they all drain into
-// one interleave. An unanswered query reports no lag, never a guess.
-func (e *Engine) mixerLag() (running, lag time.Duration) {
+// one interleave. ok is false when the mixer did not answer.
+func (e *Engine) mixerLag() (running, lag time.Duration, ok bool) {
 	if rt := e.pipeline.GetCurrentRunningTime(); rt != gst.ClockTimeNone {
 		running = time.Duration(rt)
 	}
 	src := e.channelMixers[0].GetStaticPad("src")
-	mixed, ok := src.QueryPosition(gst.FormatTime)
-	if !ok || mixed < 0 {
-		return running, 0
+	mixed, answered := src.QueryPosition(gst.FormatTime)
+	if !answered || mixed < 0 {
+		return running, 0, false
 	}
 	query := gst.NewQueryLatency()
 	if !src.Query(query) {
-		return running, 0
+		return running, 0, false
 	}
 	_, latency, _ := query.ParseLatency()
-	return running, mixerLagBeyondPace(running, time.Duration(mixed), time.Duration(latency))
+	return running, mixerLagBeyondPace(running, time.Duration(mixed), time.Duration(latency)), true
+}
+
+// mixAnchor returns the running time a joining branch's next buffer must
+// carry: the clock's, less whatever lag the mixers have stood at for the
+// whole of [mixerLagFloor]'s window. An unanswered mixer leaves the clock's.
+func (e *Engine) mixAnchor() time.Duration {
+	running, lag, ok := e.mixerLag()
+	if !ok {
+		e.lagUnreadable.Do(func() {
+			slog.Warn("gstengine: the output mixer did not report its position; sessions start on the pipeline clock alone, uncorrected for a mixer that has fallen behind it")
+		})
+		return running
+	}
+	return running - e.lagFloor.standing(time.Since(e.startedAt), lag)
 }
 
 // resyncMixerPads re-anchors this branch's deinterleave src pads so the
-// next buffer lands where the mixers are about to mix: the clock's running
-// time, less their lag behind it. join is the only caller, while held.
+// next buffer lands where the mixers are about to mix (see mixAnchor), not
+// in GstAudioAggregator's past or future. join is the only caller, while held.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
-	running, lag := b.engine.mixerLag()
-	// Only lag seen at both build and join counts: a mixer late for a
-	// moment catches up, and audio anchored to it then would play early.
-	anchor := running - min(lag, b.mixerLagAtBuild)
-	offset := anchor.Nanoseconds() - b.localRunningTime(atPos).Nanoseconds()
+	offset := b.engine.mixAnchor().Nanoseconds() - b.localRunningTime(atPos).Nanoseconds()
 	b.mu.Lock()
 	b.resyncAt = time.Now()
 	b.firstMixedAt = time.Time{}

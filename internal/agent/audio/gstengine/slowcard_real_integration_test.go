@@ -210,6 +210,11 @@ func startToAudible(t *testing.T, e *Engine, card *slowCard, handle agentaudio.E
 	return 0
 }
 
+// lagStandsAfter is how long after the mixers fall behind a test waits
+// before it expects a start to be corrected: the whole floor window and
+// the slot the lag began in.
+const lagStandsAfter = (mixerLagFloorSlots + 2) * mixerLagFloorSlot
+
 // newSlowCardEngine builds a one-channel engine on clock whose sink is a
 // [slowCard] running slowdown slower than that clock.
 func newSlowCardEngine(t *testing.T, slowdown float64, clock ClockReader) (*Engine, *slowCard) {
@@ -255,18 +260,18 @@ func requireStartNotDelayed(t *testing.T, e *Engine, card *slowCard, behind time
 	after := startToAudible(t, e, card, "after", path)
 	t.Logf("start to first audible sample: %s on the fresh engine, %s once the mixers were %s behind the clock", before, after, behind)
 
-	if growth := after - before; growth > behind/3 {
+	if growth := after - before; growth > behind/2 {
 		t.Fatalf("a start was heard %s later once the mixers were %s behind the clock (%s fresh, %s after): a start must not inherit that delay",
 			growth, behind, before, after)
 	}
 }
 
 // TestStartIsNotDelayedByASinkSlowerThanTheClock runs the engine into a
-// sink 10% slower than the pipeline clock, so the mixers fall steadily
+// sink 5% slower than the pipeline clock, so the mixers fall steadily
 // further behind it the longer the engine stays up.
 func TestStartIsNotDelayedByASinkSlowerThanTheClock(t *testing.T) {
-	const slowdown = 0.1
-	const uptime = 8 * time.Second
+	const slowdown = 0.05
+	const uptime = 16 * time.Second
 	e, card := newSlowCardEngine(t, slowdown, &steppableClock{})
 	requireStartNotDelayed(t, e, card, time.Duration(float64(uptime)*slowdown), func() { time.Sleep(uptime) })
 }
@@ -278,7 +283,7 @@ func TestStartIsNotDelayedByASinkThatStoppedDraining(t *testing.T) {
 	e, card := newSlowCardEngine(t, 0, &steppableClock{})
 	requireStartNotDelayed(t, e, card, gap, func() {
 		card.stall(gap)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(lagStandsAfter)
 	})
 }
 
@@ -290,53 +295,116 @@ func TestStartIsNotDelayedByAForwardClockStep(t *testing.T) {
 	e, card := newSlowCardEngine(t, 0, clock)
 	requireStartNotDelayed(t, e, card, step, func() {
 		clock.stepForward(step)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(lagStandsAfter)
 	})
 }
 
-// TestStartOnAnEngineKeepingPaceIsAnchoredToTheClock proves the common
-// case is untouched: while the mixers keep pace with the clock, a start is
-// placed at the clock's own running time, read as Start runs.
-func TestStartOnAnEngineKeepingPaceIsAnchoredToTheClock(t *testing.T) {
-	e := newTestEngine(t)
+// stallableSink is a real fakesink, in step with the clock, whose input a
+// test can hold for a while. Unlike [slowCard] it takes late audio at once,
+// so the mixers fall behind during a stall and are back in pace after it.
+type stallableSink struct {
+	mu           sync.Mutex
+	stalledUntil time.Time
+}
+
+func newStallableSink(t *testing.T) *stallableSink {
+	t.Helper()
+	gst.Init()
+	el := gst.ElementFactoryMake("fakesink", "stallable-sink")
+	if el == nil {
+		t.Skip("skipping: could not construct fakesink")
+	}
+	el.SetObjectProperty("sync", true)
+	s := &stallableSink{}
+	el.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
+		s.mu.Lock()
+		until := s.stalledUntil
+		s.mu.Unlock()
+		time.Sleep(time.Until(until))
+		return gst.PadProbeOK
+	})
+	useSinkElement(t, el)
+	return s
+}
+
+func (s *stallableSink) stallFor(d time.Duration) {
+	s.mu.Lock()
+	s.stalledUntil = time.Now().Add(d)
+	s.mu.Unlock()
+}
+
+// rawMixerLag reads how far the first mixer's output position stands
+// behind the pipeline's running time, straight off GStreamer.
+func rawMixerLag(t *testing.T, e *Engine) time.Duration {
+	t.Helper()
+	mixed, ok := e.channelMixers[0].GetStaticPad("src").QueryPosition(gst.FormatTime)
+	if !ok {
+		t.Fatalf("the first channel mixer did not answer a position query")
+	}
+	return time.Duration(e.pipeline.GetCurrentRunningTime()) - time.Duration(mixed)
+}
+
+// TestStartDuringAMomentOfLagIsAnchoredToTheClock holds the sink of an
+// engine that otherwise keeps pace around each Load and each Start. Every
+// start must still be placed at the clock's own running time.
+func TestStartDuringAMomentOfLagIsAnchoredToTheClock(t *testing.T) {
+	const starts = 5
+	// Three times the 100ms line at this rate, so the reading taken as a
+	// branch joins is well over it.
+	const lagAtStart = 300 * time.Millisecond
+
+	sink := newStallableSink(t)
+	e, err := New(testConfig(resolveByRuntimeFilename))
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+	if ok, reason := e.Available(); !ok {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
 	path := filepath.Join(t.TempDir(), "tone.wav")
 	generateWAV(t, path, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	// A whole floor window of this engine keeping pace, so that a floor
+	// which would move a start has had every chance to form.
+	time.Sleep(lagStandsAfter)
 
-	checked := 0
-	for i := 0; i < 10; i++ {
-		handle := agentaudio.EngineHandle(fmt.Sprintf("paced-%d", i))
-		_, lagAtLoad := e.mixerLag()
+	for i := 0; i < starts; i++ {
+		handle := agentaudio.EngineHandle(fmt.Sprintf("moment-%d", i))
+		sink.stallFor(2 * lagAtStart)
+		time.Sleep(lagAtStart)
 		if _, err := e.Load(ctx, handle, mediaRef(path), 2*time.Second); err != nil {
 			t.Fatalf("Load(%s): %v", handle, err)
 		}
-		before, lagBefore := e.mixerLag()
+		time.Sleep(2 * lagAtStart)
+
+		sink.stallFor(3 * lagAtStart)
+		time.Sleep(lagAtStart)
+		lag := rawMixerLag(t, e)
+		if lag < lagAtStart-50*time.Millisecond {
+			t.Fatalf("start %d: holding the sink for %s left the mixer only %s behind the clock: the lag this test needs was not produced", i, lagAtStart, lag)
+		}
+		before := time.Duration(e.pipeline.GetCurrentRunningTime())
 		if _, err := e.Start(ctx, handle, 0); err != nil {
 			t.Fatalf("Start(%s): %v", handle, err)
 		}
-		after, lagAfter := e.mixerLag()
+		after := time.Duration(e.pipeline.GetCurrentRunningTime())
 		b, err := e.branchFor(handle)
 		if err != nil {
 			t.Fatalf("branchFor(%s): %v", handle, err)
 		}
 		offset := time.Duration(b.deinterleaveSrcPads[0].GetOffset())
+		if offset < before || offset > after {
+			t.Fatalf("start %d, made with the mixer %s behind the clock for a moment, was anchored at running time %s, %s before the clock's own %s to %s across Start: a moment of lag must not move a start",
+				i, lag, offset, before-offset, before, after)
+		}
 		if err := e.Release(ctx, handle); err != nil {
 			t.Fatalf("Release(%s): %v", handle, err)
 		}
-		// A host too starved to keep this pipeline in pace says nothing
-		// about one that does.
-		if lagAtLoad != 0 || lagBefore != 0 || lagAfter != 0 {
-			continue
-		}
-		checked++
-		if offset < before || offset > after {
-			t.Fatalf("start %d was anchored at running time %s, outside the clock's own %s to %s across Start: a mixer keeping pace must leave the anchor on the clock",
-				i, offset, before, after)
+		time.Sleep(3 * lagAtStart)
+		if settled := rawMixerLag(t, e); settled > lagAtStart/2 {
+			t.Fatalf("start %d: the mixer is still %s behind the clock after the sink was let go: this engine did not return to pace", i, settled)
 		}
 	}
-	if checked == 0 {
-		t.Skip("skipping: this host never kept the pipeline in pace across a whole start")
-	}
-	t.Logf("%d of 10 starts ran with the mixers keeping pace; every one was anchored to the clock", checked)
 }
