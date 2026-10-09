@@ -8027,6 +8027,55 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show.playlist/{id}/definition-move-preview:
+    get:
+      operationId: getShowPlaylistDefinitionMovePreview
+      summary: Preview moving an FPP-runner playlist to FPP's newest captured playlist
+      description: >-
+        Read-only; needs the same scopes as `GET /config/show.playlist/{id}`.
+        Compares the playlist's saved entries with the newest captured copy of
+        the same FPP playlist on the same FPP instance, and reports for each
+        saved entry whether it is kept, moved or dropped, and which entries of
+        the newest copy have no cue. Saved entries match by
+        `expectedSequenceFilename` first; an entry with no saved filename
+        matches by section and position. When a filename occurs more than once
+        the entries are matched in order and flagged. `revision` is the
+        playlist revision the answer was computed against. To apply the move,
+        send `proposed` unchanged to `PUT /config/show.playlist/{id}` with
+        `If-Match` set to `revision`; this endpoint never writes. When no
+        newer copy exists, `newerAvailable` is false. `proposed` is null and
+        `canConfirm` is false when every saved entry would be dropped, because
+        a playlist cannot be saved with no entries. 404 when the playlist does
+        not exist; 409 when it is not an FPP-runner playlist or ShowMesh no
+        longer holds the copy of FPP's playlist it was made from.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowPlaylistMovePreviewResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/media.playlist:
     get:
       operationId: listMediaPlaylists
@@ -20000,6 +20049,106 @@ components:
         source:
           type: string
           enum: [api]
+    ShowPlaylistMoveSlot:
+      type: object
+      required: [section, position]
+      properties:
+        section:
+          type: string
+        position:
+          type: integer
+          description: Zero-based, as the entries table shows it.
+    ShowPlaylistMoveDefinition:
+      type: object
+      required: [hash, capturedAt, entryCount]
+      properties:
+        hash:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        entryCount:
+          type: integer
+    ShowPlaylistMoveEntry:
+      type: object
+      description: What happens to one saved entry. `to` is null when it is dropped.
+      required: [entryId, cue, filename, outcome, matchedBy, from, to, duplicateFilename, summary]
+      properties:
+        entryId:
+          type: string
+        cue:
+          type: string
+        filename:
+          type: string
+          description: The saved sequence filename; empty when none was saved.
+        outcome:
+          type: string
+          enum: [kept, moved, dropped]
+        matchedBy:
+          type: string
+          enum: [filename, position]
+        from:
+          $ref: "#/components/schemas/ShowPlaylistMoveSlot"
+        to:
+          oneOf:
+            - $ref: "#/components/schemas/ShowPlaylistMoveSlot"
+            - type: "null"
+        duplicateFilename:
+          type: boolean
+        summary:
+          type: string
+          description: Operator-facing sentence, shown verbatim.
+    ShowPlaylistMoveNewEntry:
+      type: object
+      description: An entry of the newest FPP playlist that would have no cue.
+      required: [section, position, name, duplicateFilename, summary]
+      properties:
+        section:
+          type: string
+        position:
+          type: integer
+        name:
+          type: string
+        duplicateFilename:
+          type: boolean
+        summary:
+          type: string
+    ShowPlaylistMovePreviewResponse:
+      type: object
+      description: The body of GET /config/show.playlist/{id}/definition-move-preview.
+      required: [serverTime, playlistId, revision, newerAvailable, canConfirm, summary, current, newest, entries, newEntries, proposed]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        playlistId:
+          type: string
+        revision:
+          type: integer
+        newerAvailable:
+          type: boolean
+        canConfirm:
+          type: boolean
+        summary:
+          type: string
+        current:
+          $ref: "#/components/schemas/ShowPlaylistMoveDefinition"
+        newest:
+          oneOf:
+            - $ref: "#/components/schemas/ShowPlaylistMoveDefinition"
+            - type: "null"
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShowPlaylistMoveEntry"
+        newEntries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShowPlaylistMoveNewEntry"
+        proposed:
+          oneOf:
+            - $ref: "#/components/schemas/ConfigShowPlaylist"
+            - type: "null"
     ConfigMediaPlaylistItem:
       type: object
       description: >-

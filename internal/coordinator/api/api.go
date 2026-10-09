@@ -2310,6 +2310,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylist))
 	mux.HandleFunc("PUT /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowPlaylist))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistRevisions))
+	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/definition-move-preview", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistDefinitionMovePreview))
 	mux.HandleFunc("DELETE /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowPlaylist))
 
 	// --- media.playlist: an operator-authored bed the audio engine plays,

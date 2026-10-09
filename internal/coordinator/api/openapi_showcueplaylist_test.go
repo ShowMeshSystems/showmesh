@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
@@ -185,5 +186,30 @@ func TestOpenAPIShowCuePlaylistPutRequestBodiesReferenceDocumentedSchemas(t *tes
 	}
 	if got := requestBodySchemaRef(t, "put", "/config/show.playlist/{id}"); got != "ConfigShowPlaylist" {
 		t.Errorf("PUT /config/show.playlist/{id} requestBody schema = %q, want ConfigShowPlaylist", got)
+	}
+}
+
+func TestOpenAPIShowPlaylistDefinitionMovePreviewMatchesRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	compileSchema(t, c, "ShowPlaylistMovePreviewResponse")
+
+	s := newMovePreviewSetup(t)
+	s.seededWithNewerDefinition(t)
+	_, newer := s.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", newer)
+
+	s.putDefinition(t, "3333333333333333333333333333333333333333333333333333333333333333", testNow.Add(time.Hour), `{"mainPlaylist":[{"type":"sequence","sequenceName":"Other.fseq"}]}`)
+	_, dropped := s.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", dropped)
+
+	s2 := newMovePreviewSetup(t)
+	s2.putDefinition(t, moveOldHash, testNow, moveOldDefinition)
+	s2.putPlaylist(t, "quick", movePlaylistTemplate)
+	_, none := s2.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", none)
+
+	for _, id := range []string{"missing"} {
+		_, problem := s2.preview(t, id)
+		assertMatchesSchema(t, c, "Problem", problem)
 	}
 }
