@@ -650,6 +650,7 @@ register entry comes from the code and never from a plan.
 | `show.night.resume_show` | reserved | ADR-054: the resume-show night command cleared a level 1 stop hold and started the show playlist from its first entry |
 | `show.weatherdelay.enforce` | shipped | ADR-053 weather delay: the coordinator re-sent a stop or re-closed an output gate during an active delay |
 | `show.weatherdelay.presign` | shipped | ADR-053 weather delay: a pre-signed start was minted for an outside system to hold |
+| `show.weatherdelay.adopt` | shipped | ADR-053 weather delay: the coordinator entered a delay it had no record of because a node reported one |
 | `show.weatherdelay.trigger` | shipped | ADR-053 weather delay: an automatic trigger was received from a source |
 | `show.weatherdelay.decision` | shipped | ADR-053 weather delay: a trigger's question was answered by an operator or defaulted at its deadline |
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |

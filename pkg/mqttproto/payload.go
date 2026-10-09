@@ -250,6 +250,44 @@ type HealthPayload struct {
 	// rather than encoding a time.Duration field (which would marshal as a
 	// bare nanosecond integer with no unit in the field name).
 	UptimeMS int64 `json:"uptimeMs"`
+
+	// WeatherDelay is this node's own weather delay record. nil means the
+	// node sent no report, never that it is not delayed.
+	WeatherDelay *HealthWeatherDelay `json:"weatherDelay,omitempty"`
+}
+
+// HealthWeatherDelay is the weather delay a node holds, as it reports it on
+// its heartbeat. HeldRevision is the newest coordinator state revision the
+// node had seen when its delay became active; Revision is the newest it has seen.
+type HealthWeatherDelay struct {
+	Active       bool      `json:"active"`
+	Kind         string    `json:"kind,omitempty"`
+	StartedAt    time.Time `json:"startedAt,omitzero"`
+	HeldRevision int64     `json:"heldRevision"`
+	Revision     int64     `json:"revision"`
+}
+
+// MaxHealthWeatherDelayRevision is the largest revision a report may carry.
+// The coordinator numbers each state one above the last, so half of the
+// range the API promises (a JS safe integer) is left for what follows.
+const MaxHealthWeatherDelayRevision = 1 << 52
+
+// ErrInvalidHealthWeatherDelay is wrapped by every error
+// [HealthWeatherDelay.Validate] returns.
+var ErrInvalidHealthWeatherDelay = errors.New("mqttproto: invalid weather delay report")
+
+// Validate is checked by the report's consumer, not by
+// [HealthPayload.Validate]: a bad report must not cost the node its heartbeat.
+func (d HealthWeatherDelay) Validate() error {
+	switch {
+	case d.HeldRevision < 0 || d.Revision < 0:
+		return fmt.Errorf("%w: revisions %d and %d must not be negative", ErrInvalidHealthWeatherDelay, d.HeldRevision, d.Revision)
+	case d.HeldRevision > MaxHealthWeatherDelayRevision || d.Revision > MaxHealthWeatherDelayRevision:
+		return fmt.Errorf("%w: revisions %d and %d must not exceed %d", ErrInvalidHealthWeatherDelay, d.HeldRevision, d.Revision, int64(MaxHealthWeatherDelayRevision))
+	case d.Active && !weatherDelayKinds[d.Kind]:
+		return fmt.Errorf("%w: kind %q must be %q or %q while active", ErrInvalidHealthWeatherDelay, d.Kind, WeatherDelayKindDelay, WeatherDelayKindCancelNight)
+	}
+	return nil
 }
 
 // ErrPayloadSequenceTooLarge is wrapped by [HealthPayload.Validate] when

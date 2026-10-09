@@ -563,6 +563,9 @@ const (
 	AuditActionShowWeatherDelayResume      = "show.weatherdelay.resume"
 	AuditActionShowWeatherDelayEnforce     = "show.weatherdelay.enforce"
 	AuditActionShowWeatherDelayPresign     = "show.weatherdelay.presign"
+	// AuditActionShowWeatherDelayAdopt records the coordinator entering a
+	// delay it had no record of because a node reported one.
+	AuditActionShowWeatherDelayAdopt = "show.weatherdelay.adopt"
 	// AuditActionShowWeatherDelayTrigger records an automatic trigger
 	// received from a source (ADR-053 decision 12).
 	AuditActionShowWeatherDelayTrigger = "show.weatherdelay.trigger"
