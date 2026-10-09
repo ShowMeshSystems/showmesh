@@ -42,7 +42,7 @@ type configAudioSettingsPayload struct {
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 
-	// The same two terms for a start whose target nodes all confirmed a
+	// The same two terms for a start where the clock holder confirmed a
 	// prepare of that session. Optional on write; absent means the default.
 	PreparedStartDeliveryBoundMs int `json:"preparedStartDeliveryBoundMs"`
 	PreparedStartMarginMs        int `json:"preparedStartMarginMs"`

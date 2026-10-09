@@ -202,7 +202,7 @@ type AudioSettingsPayload struct {
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 
 	// PreparedStartDeliveryBoundMs and PreparedStartMarginMs replace the
-	// pair above for a start whose target nodes all confirmed a prepare of
+	// pair above for a start where the clock holder confirmed a prepare of
 	// that same session. Optional on write: an absent key takes its default.
 	PreparedStartDeliveryBoundMs int `json:"preparedStartDeliveryBoundMs"`
 	PreparedStartMarginMs        int `json:"preparedStartMarginMs"`

@@ -5788,7 +5788,7 @@ export interface components {
             /** @description Read by the coordinator, not by a node. Deliberate slack held back beyond scheduledStartDeliveryBoundMs. Stays a judgement even once the bound is measured. The bounds are a typo guard. */
             scheduledStartMarginMs: number;
             /**
-             * @description Read by the coordinator, not by a node. Replaces scheduledStartDeliveryBoundMs for a start whose target nodes all confirmed a prepare of that same session, so the wait covers delivery and not a load. Optional on write: an absent key takes the default. Always present on read.
+             * @description Read by the coordinator, not by a node. Replaces scheduledStartDeliveryBoundMs for a start where the node holding the shared clock confirmed a prepare of that same session, so the wait covers delivery and not a load. A target node whose own prepare did not confirm is not given the instant and starts on arrival. Optional on write: an absent key takes the default. Always present on read.
              * @default 250
              */
             preparedStartDeliveryBoundMs?: number;

@@ -249,37 +249,122 @@ func TestNightBedStart_NodeThatDidNotLoadStartsOnArrival(t *testing.T) {
 	}
 }
 
-// TestNightBedStart_NodeThatMissesTheInstantIsLeftRefused proves the
-// shorter lead changed nothing about a miss: the node's refusal is kept on
-// its own row and not re-sent, and the other node plays.
-func TestNightBedStart_NodeThatMissesTheInstantIsLeftRefused(t *testing.T) {
+// TestNightTick_NodeThatMissesTheInstantIsStartedAgainWithoutOne proves a
+// node the start reached too late is not left silent: the next tick sends
+// its start once more with no instant, and records why on that step.
+func TestNightTick_NodeThatMissesTheInstantIsStartedAgainWithoutOne(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	rec := twoNodeBedForStart(t, st, pub, nightStatePreshow)
-	pub.resultsByNode["node-b:audio.session.start"] = mqttproto.ResultPayload{
+	missed := mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
 		Evidence: &mqttproto.ResultEvidence{Signal: "audio.session", Value: map[string]any{
 			"outcome": "refused", "reason": pkgaudio.ReasonScheduledStartInPast + ": the instant has passed",
 		}},
 	}
+	pub.resultsByNode["node-b:audio.session.start"] = missed
 
-	for i := 0; i < 3; i++ {
-		h.nightAdvanceBackgroundAudioChain(context.Background(), testNow.Add(time.Duration(i)*defaultNightLoopInterval), rec)
+	h.nightTick(context.Background(), testNow)
+
+	if _, ok := bedStartInstant(t, pub, "node-b"); !ok {
+		t.Fatalf("node-b's first start carries no instant; the test needs it to miss one")
+	}
+	if got := countDispatchedByNodeAction(pub, "node-b", "audio.session.start"); got != 1 {
+		t.Fatalf("node-b was sent %d starts on the first tick, want 1", got)
 	}
 
-	if got := countDispatchedByNodeAction(pub, "node-b", "audio.session.start"); got != 1 {
-		t.Fatalf("node-b was sent %d starts, want exactly 1 (a missed instant is not re-sent)", got)
+	// A real node refuses for this reason only when the start names an instant.
+	delete(pub.resultsByNode, "node-b:audio.session.start")
+	h.nightTick(context.Background(), testNow.Add(defaultNightLoopInterval))
+
+	if got := countDispatchedByNodeAction(pub, "node-b", "audio.session.start"); got != 2 {
+		t.Fatalf("node-b was sent %d starts after the second tick, want 2 (one retry)", got)
+	}
+	if at, ok := bedStartInstant(t, pub, "node-b"); ok {
+		t.Fatalf("node-b's retried start carries instant %d, want none", at)
 	}
 	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
 	if err != nil {
 		t.Fatalf("history: %v", err)
 	}
 	latestB, _ := nightBackgroundAudioLatestStepForNode(history, "node-b")
-	if latestB.Step.Kind != nightBGStepStart || latestB.Row.Outcome != nightCueOutcomeRefused || !strings.Contains(latestB.Row.OutcomeReason, pkgaudio.ReasonScheduledStartInPast) {
-		t.Fatalf("node-b latest step = %s %s %q, want a refused start naming %q", latestB.Step.Kind, latestB.Row.Outcome, latestB.Row.OutcomeReason, pkgaudio.ReasonScheduledStartInPast)
+	if latestB.Step.Kind != nightBGStepStart || latestB.Row.Outcome != nightCueOutcomeConfirmed || !strings.Contains(latestB.Row.OutcomeReason, nightBedMissedInstantUnalignedReason) {
+		t.Fatalf("node-b latest step = %s %s %q, want a confirmed start saying %q", latestB.Step.Kind, latestB.Row.Outcome, latestB.Row.OutcomeReason, nightBedMissedInstantUnalignedReason)
 	}
 	latestA, _ := nightBackgroundAudioLatestStepForNode(history, "node-a")
 	if latestA.Step.Kind != nightBGStepStart || latestA.Row.Outcome != nightCueOutcomeConfirmed {
 		t.Fatalf("node-a latest step = %s %s, want a confirmed start", latestA.Step.Kind, latestA.Row.Outcome)
+	}
+
+	for i := 2; i < 5; i++ {
+		h.nightTick(context.Background(), testNow.Add(time.Duration(i)*defaultNightLoopInterval))
+	}
+	if got := countDispatchedByNodeAction(pub, "node-b", "audio.session.start"); got != 2 {
+		t.Fatalf("node-b was sent %d starts in all, want 2 (the retry is not repeated)", got)
+	}
+	if got := countDispatchedByNodeAction(pub, "node-a", "audio.session.start"); got != 1 {
+		t.Fatalf("node-a was sent %d starts, want 1", got)
+	}
+}
+
+// TestNightBedStart_SlowFailedPrepareDoesNotPutTheInstantInThePast proves
+// the lead covers the time a failing node kept the starts waiting: the clock
+// holder answers in 0.3 s, the other node fails later, and the holder's
+// instant is still ahead of it when its start goes out.
+func TestNightBedStart_SlowFailedPrepareDoesNotPutTheInstantInThePast(t *testing.T) {
+	const holderAnswers = 300 * time.Millisecond
+	for _, tc := range []struct {
+		name     string
+		failsAt  time.Duration // zero: never answers, so the wait times out.
+		heldBack time.Duration
+	}{
+		{name: "refuses after 2 s", failsAt: 2 * time.Second, heldBack: 2 * time.Second},
+		{name: "times out", heldBack: scheduleProbeStepTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+			rec := twoNodeBedForStart(t, st, pub, nightStatePreshow)
+			pub.resultsByNode["node-b:audio.session.prepare"] = refusedResultForAction("prepare", "the file is still being read")
+			h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply
+			holder, other := make(chan struct{}), make(chan struct{})
+			pub.blockUntilByNode = map[string]<-chan struct{}{
+				"node-a:audio.session.prepare": holder,
+				"node-b:audio.session.prepare": other,
+			}
+			time.AfterFunc(holderAnswers, func() { close(holder) })
+			if tc.failsAt > 0 {
+				time.AfterFunc(tc.failsAt, func() { close(other) })
+			} else {
+				t.Cleanup(func() {
+					close(other)
+					time.Sleep(200 * time.Millisecond) // let the abandoned dispatch finish before the store closes.
+				})
+			}
+
+			h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // gain, prepare, start
+
+			at, ok := bedStartInstant(t, pub, "node-a")
+			if !ok {
+				t.Fatalf("node-a start carries no instant, want the shared one")
+			}
+			// The reading is 0.3 s old when the holder answers, and the
+			// start goes out once the other node has been waited for.
+			sinceReading := tc.heldBack - holderAnswers
+			lead := time.Duration(at - bedStartClockReading)
+			if ahead := lead - sinceReading; ahead < 700*time.Millisecond {
+				t.Fatalf("instant leads the reading by %s, but the start goes out %s after it: only %s ahead, want about 750ms", lead, sinceReading, ahead)
+			}
+			if _, ok := bedStartInstant(t, pub, "node-b"); ok {
+				t.Fatalf("node-b start carries an instant, want none (its prepare did not confirm)")
+			}
+			history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+			if err != nil {
+				t.Fatalf("history: %v", err)
+			}
+			latestA, _ := nightBackgroundAudioLatestStepForNode(history, "node-a")
+			if latestA.Step.Kind != nightBGStepStart || latestA.Row.Outcome != nightCueOutcomeConfirmed || !strings.Contains(latestA.Row.OutcomeReason, "bed-aligned start") {
+				t.Fatalf("node-a latest step = %s %s %q, want a confirmed aligned start", latestA.Step.Kind, latestA.Row.Outcome, latestA.Row.OutcomeReason)
+			}
+		})
 	}
 }
 

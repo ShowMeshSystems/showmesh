@@ -1139,6 +1139,15 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 					nightBedScheduleResult{UnalignedReason: nightBedStartPointRefusedReason}, nil, history)
 				return
 			}
+			if nightBedStartMissedTheInstant(latest.Row) {
+				// A start with no instant cannot miss one, so this is sent
+				// once: playing late beats leaving this speaker silent.
+				h.logWarn("night loop: background audio: this node received its start after the shared instant; starting it without one",
+					"sessionId", rec.ID, "nodeId", nodeID, "reason", latest.Row.OutcomeReason)
+				h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID,
+					nightBedScheduleResult{UnalignedReason: nightBedMissedInstantUnalignedReason}, nil, history)
+				return
+			}
 			h.logBackgroundAudioDidNotConfirmOnce(rec, nodeID, nightBGStepStart, latest.Row)
 			return
 		}
@@ -2415,6 +2424,16 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 	})
 }
 
+// nightBedMissedInstantUnalignedReason is the recorded reason for the one
+// retry a start that arrived after its instant gets.
+const nightBedMissedInstantUnalignedReason = "this speaker received its start after the shared start time, so the background music starts on its own here"
+
+// nightBedStartMissedTheInstant reports whether the node refused row's start
+// because the instant it named had already passed there.
+func nightBedStartMissedTheInstant(row store.NightCueOutboxRecord) bool {
+	return nightBedStepNodeRefused(row) && strings.HasPrefix(row.OutcomeReason, pkgaudio.ReasonScheduledStartInPast)
+}
+
 // nightBedNotLoadedUnalignedReason is the reason a node that did not
 // confirm loading the bed starts on arrival instead of at the shared instant.
 const nightBedNotLoadedUnalignedReason = "did not finish loading before the bed's shared start"
@@ -2506,6 +2525,11 @@ func (h *handlers) nightPrepareBedAndSchedule(ctx context.Context, now time.Time
 	for i, nodeID := range ready {
 		n := nodes[i]
 		prepares[nodeID] = nightBedPrepare{revision: n.revision, loaded: n.err == nil}
+		// A prepare that failed still held the starts back for as long as
+		// it took, so it counts toward the lead like one that confirmed.
+		if n.elapsed > slowest {
+			slowest = n.elapsed
+		}
 		if n.err != nil {
 			h.logWarn("night loop: background audio: bed prepare failed; this node starts on arrival", "sessionId", rec.ID, "nodeId", nodeID, "error", n.err)
 			readings[i] = audiosched.Readiness{NodeID: nodeID, HoldsMediaClock: n.holdsClock, MediaClockReason: "reading failed: " + n.err.Error()}
@@ -2517,12 +2541,9 @@ func (h *handlers) nightPrepareBedAndSchedule(ctx context.Context, now time.Time
 		if n.holdsClock {
 			holderElapsed = n.elapsed
 		}
-		if n.elapsed > slowest {
-			slowest = n.elapsed
-		}
 	}
 	// The reading dates from the holder's own prepare, so the lead also
-	// covers how much longer the slowest node took to finish its own.
+	// covers how much longer the slowest node took to answer its own.
 	behind := slowest - holderElapsed
 	if behind < 0 {
 		behind = 0
