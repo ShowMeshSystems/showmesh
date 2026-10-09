@@ -1505,3 +1505,146 @@ func TestWeatherDelaySecondDelayOfTheNightPlaysInFull(t *testing.T) {
 
 	weatherDelayResumeAction(t, f.coord, f.token)
 }
+
+// --- Scenario: a delay only a node knows about ---
+
+// TestWeatherDelayAdoptedFromNode proves ADR-053 decision 8's adoption note
+// through the real broker: a pre-signed start reaches the node while the
+// coordinator is down, and the returning coordinator enters the same delay
+// from the node's heartbeat, records it, and releases it on Resume. An
+// earlier start and resume run first, so the delay is adopted against a
+// state the node has already seen resumed.
+func TestWeatherDelayAdoptedFromNode(t *testing.T) {
+	f := newWeatherDelayFixture(t, 0)
+
+	status, body := postRawWithToken(t, f.coord, "/api/v1/weather-delay/presigned-start", f.token,
+		v1.WeatherDelayPresignedStartRequest{Kind: "delay", ValidDays: 1})
+	if status != http.StatusOK {
+		t.Fatalf("POST /api/v1/weather-delay/presigned-start: status = %d, want 200; body: %s", status, body)
+	}
+	var presigned v1.WeatherDelayPresignedStartResponse
+	if err := json.Unmarshal(body, &presigned); err != nil {
+		t.Fatalf("decode the presigned start: %v; body: %s", err, body)
+	}
+	if len(presigned.NodeURLs) != 1 {
+		t.Fatalf("presigned start lists node URLs %v, want exactly the fixture node's", presigned.NodeURLs)
+	}
+	signedBody, err := json.Marshal(presigned.Request)
+	if err != nil {
+		t.Fatalf("encode the presigned start: %v", err)
+	}
+
+	weatherDelayStartAction(t, f.coord, f.token)
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		return nodeWeatherDelayStateActive(t, f.assetDir)
+	}, "the node to hold the first delay")
+	weatherDelayResumeAction(t, f.coord, f.token)
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		return !nodeWeatherDelayStateActive(t, f.assetDir)
+	}, "the node to clear the first delay on resume")
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		closed, _ := f.stub.gateState()
+		return !closed
+	}, "the gate to open on the first resume")
+	stopsBefore := f.stub.commandCount("Stop Now")
+
+	f.coord.shutdown()
+
+	resp, err := http.Post(presigned.NodeURLs[0], "application/json", strings.NewReader(string(signedBody)))
+	if err != nil {
+		t.Fatalf("POST the presigned start to the node at %s: %v", presigned.NodeURLs[0], err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the node answered the presigned start with %d, want 200", resp.StatusCode)
+	}
+	if !nodeWeatherDelayStateActive(t, f.assetDir) {
+		t.Fatalf("the node is not delayed after accepting the presigned start")
+	}
+	if closed, _ := f.stub.gateState(); closed {
+		t.Fatalf("the player's gate is closed while the coordinator is down; nothing in this scenario should have closed it yet")
+	}
+
+	f.coord = restartWeatherDelayCoordinator(t, f.dataDir, f.httpAddr, f.clientID, f.fppID, f.token, f.stub)
+
+	var adopted v1.WeatherDelayStateResponse
+	waitFor(t, 60*time.Second, 200*time.Millisecond, func() bool {
+		adopted = weatherDelayState(t, f.coord)
+		return adopted.Active
+	}, "the returning coordinator to enter the delay the node reports on its heartbeat")
+	if adopted.Kind != "delay" {
+		t.Errorf("adopted kind = %q, want delay", adopted.Kind)
+	}
+	if want := "node " + f.nodeID; adopted.StartedBy != want {
+		t.Errorf("adopted startedBy = %q, want %q", adopted.StartedBy, want)
+	}
+	if want := "node " + f.nodeID + " while the coordinator was unreachable"; adopted.StartedByName != want {
+		t.Errorf("adopted startedByName = %q, want %q", adopted.StartedByName, want)
+	}
+
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		closed, _ := f.stub.gateState()
+		return closed && f.stub.commandCount("Stop Now") > stopsBefore
+	}, "the adopted delay to stop the player and close its gate, as a pressed start does")
+
+	// The entry is written once every stop and node command has answered,
+	// which is after the state and the gate above.
+	var adoptEntries []v1.AuditEntry
+	waitFor(t, 30*time.Second, 500*time.Millisecond, func() bool {
+		adoptEntries = weatherDelayAuditEntries(t, f.coord, "show.weatherdelay.adopt")
+		return len(adoptEntries) > 0
+	}, "the audit log to record that the delay was adopted from the node")
+	if len(adoptEntries) != 1 {
+		t.Fatalf("audit log carries %d show.weatherdelay.adopt entries, want 1: %+v", len(adoptEntries), adoptEntries)
+	}
+	entry := adoptEntries[0]
+	if entry.Target != f.nodeID || entry.Params["nodeId"] != f.nodeID {
+		t.Errorf("adopt audit entry names target %q and params %v, want node %q", entry.Target, entry.Params, f.nodeID)
+	}
+	if want := "Started on node " + f.nodeID + " while the coordinator was unreachable."; !strings.HasPrefix(entry.OutcomeReason, want) {
+		t.Errorf("adopt audit entry reason = %q, want it to start %q", entry.OutcomeReason, want)
+	}
+
+	weatherDelayResumeAction(t, f.coord, f.token)
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		return !nodeWeatherDelayStateActive(t, f.assetDir)
+	}, "Resume to clear the node that reported the adopted delay")
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		closed, _ := f.stub.gateState()
+		return !closed
+	}, "Resume to open the gate after the adopted delay")
+
+	// Longer than one production heartbeat, so a report sent after Resume
+	// has had its chance to start a delay again.
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp := weatherDelayState(t, f.coord); resp.Active {
+			t.Fatalf("the coordinator is delayed again after Resume: %+v", resp)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if n := len(weatherDelayAuditEntries(t, f.coord, "show.weatherdelay.adopt")); n != 1 {
+		t.Fatalf("audit log carries %d show.weatherdelay.adopt entries after Resume, want still 1", n)
+	}
+}
+
+// weatherDelayAuditEntries reads the audit log and returns the entries
+// recorded under action.
+func weatherDelayAuditEntries(t *testing.T, coord *testCoordinator, action string) []v1.AuditEntry {
+	t.Helper()
+	status, body := coord.getRaw(t, "/api/v1/audit?limit=200")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/v1/audit: status = %d, want 200; body: %s", status, body)
+	}
+	var audit v1.AuditResponse
+	if err := json.Unmarshal(body, &audit); err != nil {
+		t.Fatalf("decode audit response: %v; body: %s", err, body)
+	}
+	var out []v1.AuditEntry
+	for _, e := range audit.Entries {
+		if e.Action == action {
+			out = append(out, e)
+		}
+	}
+	return out
+}

@@ -74,6 +74,10 @@ type Manager struct {
 	// about audio configuration itself.
 	onHello func(nodeID string)
 
+	// onWeatherDelayReport is called with a node's weather delay report from
+	// a live heartbeat, never a retained replay. See [WithOnWeatherDelayReport].
+	onWeatherDelayReport func(nodeID string, report mqttproto.HealthWeatherDelay)
+
 	// livenessMu and lastLiveness back [Manager.observeLiveness] (called
 	// from both recordLivenessTransition, the message-arrival path, and
 	// the exported [Manager.RecordLivenessObservation], the staleness-on-
@@ -241,6 +245,13 @@ func WithOnChange(fn func()) Option {
 // hello processing for every node behind one slow push.
 func WithOnHello(fn func(nodeID string)) Option {
 	return func(m *Manager) { m.onHello = fn }
+}
+
+// WithOnWeatherDelayReport registers fn to receive the weather delay record
+// a node carries on a live heartbeat. A heartbeat without one is no report
+// and never reaches fn. fn must not block.
+func WithOnWeatherDelayReport(fn func(nodeID string, report mqttproto.HealthWeatherDelay)) Option {
+	return func(m *Manager) { m.onWeatherDelayReport = fn }
 }
 
 // WithRenderSink registers sink to receive every decoded render report —
@@ -691,6 +702,20 @@ func (m *Manager) handleHealth(ctx context.Context, nodeID string, msg broker.Me
 	}
 	m.notify()
 	m.recordLivenessTransition(ctx, nodeID)
+	m.reportWeatherDelay(nodeID, health.WeatherDelay, msg.Retained)
+}
+
+// reportWeatherDelay hands a live heartbeat's weather delay record on. A
+// retained replay is skipped: it may describe a node that has since cleared.
+func (m *Manager) reportWeatherDelay(nodeID string, report *mqttproto.HealthWeatherDelay, retained bool) {
+	if report == nil || retained || m.onWeatherDelayReport == nil {
+		return
+	}
+	if err := report.Validate(); err != nil {
+		m.logger.Warn("ignoring a malformed weather delay report on a heartbeat", "node_id", nodeID, "error", err)
+		return
+	}
+	m.onWeatherDelayReport(nodeID, *report)
 }
 
 // handleAssetInventory ingests a node's asset inventory report (Track E

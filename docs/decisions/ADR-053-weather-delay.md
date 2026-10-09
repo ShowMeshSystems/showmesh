@@ -112,6 +112,18 @@ alert.
    a node that was started without the coordinator stays delayed until the
    coordinator returns.
 
+   **NOTE 2026-10-09, owner ruling of 2026-09-20.** When the coordinator
+   returns it adopts that delay. A node reports its delay on its health
+   heartbeat, with the newest coordinator state number it had seen when the
+   delay began. The coordinator enters the same delay, kind included, through
+   the ordinary start path when that number is not older than its own last
+   resume, and records `show.weatherdelay.adopt`. The comparison uses the
+   coordinator's own counter and no clock, so a node that missed a resume
+   cannot start a delay again; the retained state clears that node instead.
+   A node reporting a cancelled night changes an active delay into one, and a
+   cancelled night is never changed back. The adopted state is numbered
+   above every number the node has seen, so the node accepts the resume.
+
 9. **[ADR-044](ADR-044-agent-inbound-http-listener.md) decision 3 is superseded
    for one endpoint.** The node agent's inbound listener accepts a signed
    weather delay start, verified with the coordinator key the node already

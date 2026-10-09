@@ -344,10 +344,10 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 			h.logWarn("weather delay decision: failed to persist the dismiss suppression", "error", err)
 		}
 	case weathertrigger.AnswerDelay:
-		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, "", ac, clientAddr, nil)
+		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, "", ac, clientAddr, nil, nil)
 		resp.Result = &result
 	case weathertrigger.AnswerCancelNight:
-		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, "", ac, clientAddr, h.weatherDelayCancelNightAfterDispatch)
+		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, "", ac, clientAddr, h.weatherDelayCancelNightAfterDispatch, nil)
 		resp.Result = &result
 	}
 

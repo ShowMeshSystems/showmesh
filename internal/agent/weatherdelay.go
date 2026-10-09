@@ -178,6 +178,17 @@ func (h *WeatherDelayHolder) Current() WeatherDelayState {
 	}
 }
 
+// Report is the record this node puts on its heartbeat, so a coordinator
+// that never saw this delay start can learn of it.
+func (h *WeatherDelayHolder) Report() *mqttproto.HealthWeatherDelay {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return &mqttproto.HealthWeatherDelay{
+		Active: h.rec.Active, Kind: h.rec.Kind, StartedAt: h.rec.StartedAt,
+		HeldRevision: h.rec.HeldRevision, Revision: h.rec.Revision,
+	}
+}
+
 // persistLocked writes the record and logs a failure at error level. The
 // in-memory state has already taken effect either way.
 func (h *WeatherDelayHolder) persistLocked() error {

@@ -5427,9 +5427,9 @@ export interface components {
             kind?: "delay" | "cancelNight";
             /** Format: date-time */
             startedAt?: string;
-            /** @description An operator principal id, or a configured trigger source name. */
+            /** @description An operator principal id, a configured trigger source name, or `node <node id>` for a delay that began on a node while the coordinator was unreachable. */
             startedBy?: string;
-            /** @description An operator-recognizable name for startedBy: a principal's login or token label, or a trigger source name. Absent for a state written before this field existed. */
+            /** @description An operator-recognizable name for startedBy: a principal's login or token label, a trigger source name, or the node and the fact that the coordinator was unreachable. Absent for a state written before this field existed. */
             startedByName?: string;
             /** @description Monotonic per change. Fits a JS safe integer - never derived from a timestamp. */
             revision: number;

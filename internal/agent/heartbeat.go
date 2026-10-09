@@ -106,7 +106,7 @@ const agentStateRunning = "running"
 //
 // runHeartbeat returns only when ctx is done; a publish failure never
 // causes it to return early.
-func runHeartbeat(ctx context.Context, pub Publisher, nodeID, bootID string, startedAt time.Time, now func() time.Time, ticks <-chan time.Time, connected <-chan struct{}, logger *slog.Logger) {
+func runHeartbeat(ctx context.Context, pub Publisher, nodeID, bootID string, startedAt time.Time, now func() time.Time, ticks <-chan time.Time, connected <-chan struct{}, weatherDelay func() *mqttproto.HealthWeatherDelay, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "health")
 	if err != nil {
 		// nodeID is validated at config load (mqttproto.ValidateNodeID via
@@ -126,7 +126,7 @@ func runHeartbeat(ctx context.Context, pub Publisher, nodeID, bootID string, sta
 			if !ok {
 				return
 			}
-			publishOneHeartbeat(ctx, pub, topic, nodeID, bootID, seq, startedAt, tickAt, now, logger)
+			publishOneHeartbeat(ctx, pub, topic, nodeID, bootID, seq, startedAt, tickAt, now, weatherDelay, logger)
 			seq++
 		case _, ok := <-connected:
 			if !ok {
@@ -140,7 +140,7 @@ func runHeartbeat(ctx context.Context, pub Publisher, nodeID, bootID string, sta
 			// There is no natural "tick time" for a connect-triggered
 			// publish; log the current time in its place, same as ticks
 			// do for their own tickAt.
-			publishOneHeartbeat(ctx, pub, topic, nodeID, bootID, seq, startedAt, now(), now, logger)
+			publishOneHeartbeat(ctx, pub, topic, nodeID, bootID, seq, startedAt, now(), now, weatherDelay, logger)
 			seq++
 		}
 	}
@@ -152,17 +152,21 @@ func runHeartbeat(ctx context.Context, pub Publisher, nodeID, bootID string, sta
 // now() at publish time, matching how every other envelope constructor in
 // this package stamps its own send time rather than reusing a caller-
 // supplied one.
-func publishOneHeartbeat(ctx context.Context, pub Publisher, topic, nodeID, bootID string, seq uint64, startedAt, tickAt time.Time, now func() time.Time, logger *slog.Logger) {
+func publishOneHeartbeat(ctx context.Context, pub Publisher, topic, nodeID, bootID string, seq uint64, startedAt, tickAt time.Time, now func() time.Time, weatherDelay func() *mqttproto.HealthWeatherDelay, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, heartbeatPublishTimeout)
 	defer cancel()
 
 	sentAt := now()
-	env, err := mqttproto.NewHealthEnvelope(fixedClock(sentAt), nodeID, mqttproto.HealthPayload{
+	health := mqttproto.HealthPayload{
 		BootID:     bootID,
 		Sequence:   seq,
 		AgentState: agentStateRunning,
 		UptimeMS:   uptimeMS(startedAt, sentAt),
-	})
+	}
+	if weatherDelay != nil {
+		health.WeatherDelay = weatherDelay()
+	}
+	env, err := mqttproto.NewHealthEnvelope(fixedClock(sentAt), nodeID, health)
 	if err != nil {
 		logger.Error("failed to build heartbeat envelope", "sequence", seq, "error", err)
 		return
