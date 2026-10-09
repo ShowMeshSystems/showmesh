@@ -272,6 +272,132 @@ This is REST behaviour rather than MultiSync wire behaviour, so it does not
 change this record's L2/L1 split. It is recorded here because it is what makes
 the `MultiSyncEnabled` finding above actionable rather than merely known.
 
+### What an FPP player's MultiSync page shows for a ShowMesh node (2026-10-09, tier 1)
+
+Source reading at both pinned bench tags (L1), then a container run against a
+real `fppd` at each tag (L2 for what is stated as observed). No real player,
+real node, or physical network was involved, so nothing here says what the
+deployed fleet's page shows.
+
+**How a row gets filled (L1, FPP 10.0 `370e62ed7` and 9.5.3 `7979a4bb0`).**
+
+- The page lists what `fppd` returns from `api/fppd/multiSyncSystems`
+  (`www/multisync.php:2071` at 10.0, `:1121` at 9.5.3). `fppd` adds a system
+  when it receives that system's ping (`src/MultiSync.cpp:3227`,
+  `ProcessPingPacket`). The HTTP discovery path cannot find a ShowMesh node:
+  it requires the device's root page to contain FPP's own product name
+  (`src/NetworkController.cpp:82`), which a node never serves.
+- The page treats every type id from `0x01` to `0x7F` as an FPP instance
+  (`www/multisync.php:294` at 10.0, `:328` at 9.5.3), so a node pinging as
+  `0x7F` is polled the same way a real remote is. `fppd` has no name for
+  `0x7F` and reports the type as `Unknown System Type`
+  (`src/MultiSync.cpp:801` at 10.0, `:692` at 9.5.3); the page replaces that
+  text with `advancedView.Platform` once the first poll answers.
+- The browser never contacts the node. It asks the player for
+  `api/system/status?type=FPP&ip[]=<address>` (`www/multisync.php:1231` at
+  10.0, `:528` at 9.5.3), and the player's PHP fetches
+  `http://<address>/api/system/status` with a 500 ms connect and 3 s total
+  timeout (`www/api/controllers/system.php:618` at 10.0, `:263` at 9.5.3). On
+  a 404 it falls back to `/fppjson.php?command=getFPPstatus&advancedView=true`
+  (`:646` at 10.0, `:291` at 9.5.3). `/api/system/info` on the remote is not
+  read by this page at all: the advanced columns come from the `advancedView`
+  member inside the status answer, which a real FPP fills with its own system
+  info document.
+- A real `fppd` in remote mode reports `status_name: "playing"` whenever a
+  synced sequence or media file is open, together with `sequence_filename`,
+  `current_sequence`, `seconds_played`, `seconds_elapsed` and `time_elapsed`
+  (`src/httpAPI.cpp:245-258` at 10.0). The seconds are JSON strings.
+
+**Members the page reads from the status answer (L1).** Line numbers are
+`www/multisync.php` at 10.0, then 9.5.3.
+
+| Member | Lines | Use | Served by a ShowMesh node |
+|---|---|---|---|
+| `status_name` | 1244, 540 | Status column | `idle` or `playing` |
+| `current_sequence`, `current_song` | 1249, 545 | file under "Playing:" | filename from the MultiSync timeline, else `""` |
+| `time_elapsed` | 1247, 543 | Elapsed column | timeline position, `MM:SS` |
+| `mode_name`, `sequence_filename`, `media_filename` | 1279, 575 | "Syncing:" branch, only when idle | `remote`, filename or `""` |
+| `mode` | 1159, 159 | Mode column | `8` (remote) |
+| `multisync` | 1162, 162 | adds "w/ Multisync" to a player | omitted |
+| `rebootFlag`, `restartFlag` | 1305, 601 | warning lines | omitted |
+| `warnings` | 1366, 661 | warning row | omitted |
+| `wifi`, `interfaces` | 1343, 633 | wifi icon | omitted |
+| `channelInputsEnabled`, `channelOutputsEnabled` | 869 (10.0 only) | channel I/O icons | omitted |
+| `advancedView.Platform`, `.Variant`, `.SubPlatform` | 1397, 686 | Platform column | `ShowMesh`, `ShowMesh`, omitted |
+| `advancedView.OSVersion` | 1436, 728 | "OS:" line of the Version column | `ShowMesh agent <version>` |
+| `advancedView.HostDescription` | 1443, 732 | line under the hostname | omitted |
+| `advancedView.RemoteGitVersion`, `.LocalGitVersion`, `.Branch`, `.UpgradeSource` | 1419, 709 | Git Versions column, drawn only when `RemoteGitVersion` is present | omitted |
+| `advancedView.Utilization.CPU`, `.Memory` | 1474, 760 | percent, rounded | measured, omitted when not measurable |
+| `advancedView.Utilization.Uptime` | 1532, 803 | 10.0 parses `D days H:M`; 9.5.3 prints the string | `D days H:M`, FPP's own format |
+| `advancedView.Utilization.MemoryFree`, `.Disk`, `advancedView.rssi`, `.IPs`, `.backgroundColor` | 1480, 766 | extra rows, tooltip, row colour | omitted |
+
+`OSVersion` must be present: both pages print it whenever it is not the empty
+string, so a missing member is drawn as the word `undefined`. It carries the
+agent version because that line sits directly under the advertised FPP
+version, which is fixed at `9.5.0` for xLights and says nothing about the
+agent.
+
+**Container run (L2).** One `fppd` container per tag
+(`showmesh-bench/fpp:10.0`, `showmesh-bench/fpp:9.5.3`) and one container
+running `showmesh-agent` built from this change, on one Docker bridge with a
+pinned subnet. No broker was running, so the agent had no coordinator. A
+30-channel, 3 minute test sequence was copied to the player, `MultiSyncEnabled`
+was turned on and `fppd` restarted, and playback was started with
+`GET /api/sequence/<name>/start/0`. Every other FPP setting was left as
+shipped. The page was rendered with headless Chromium and its row read from
+the DOM.
+
+Observed on both tags unless a line says otherwise:
+
+- `fppd` listed the node after its own discover ping, which the agent logged
+  answering: `fppModeString: "remote"`, `typeId: 127`,
+  `type: "Unknown System Type"`, `version: "9.5.0"`, `uuid: ""`.
+- Idle row: Platform `ShowMesh` / `ShowMesh`, Mode `Remote`, Status `Idle`,
+  Elapsed empty, Version `FPP: 9.5.0` over `OS: ShowMesh agent <version>`,
+  Git Versions empty, Utilization with CPU, memory and uptime.
+- Row while the player ran the sequence: Status `Playing:` over the sequence
+  filename, Elapsed counting (`00:06` in the page, `00:15` and `00:16` in the
+  proxy answer fetched seconds later). After the player stopped the sequence
+  the node answered `idle` with no filename.
+- The sync reached the node with the transport settings as shipped. On 9.5.3
+  that is multicast. On 10.0 the shipped default is unicast to known remotes,
+  so the node was selected as a unicast target; that is inferred from the
+  settings, the packets were not captured. The statement under "Third-party
+  interoperability" that ShowMesh can never be an automatic unicast target
+  describes the earlier `0xC0` type and does not hold for `0x7F`.
+- `POST`, `PUT`, `DELETE` and `PATCH` on the node's `/api/system/status` each
+  answered 404.
+- CPU, memory and uptime came from the container host's `/proc`, so the
+  numbers are the build machine's, and the page's own render load is in the
+  CPU figure. Only the plumbing is evidenced, not the values.
+
+Findings that are not what an operator would expect:
+
+- **A node that starts after the player is not listed until the player sends
+  another discover ping.** In the first 10.0 run `fppd` sent its start-up
+  discover about one second before the agent bound UDP 32320, and the node was
+  still absent 20 seconds later. It appeared as soon as `fppd` was restarted.
+  The agent only answers discover pings; a real FPP remote also announces
+  itself at start-up (`MultiSync::Discover`, `src/MultiSync.cpp:998`). From
+  source, not observed: `fppd` re-pings a known system after 80 minutes of
+  silence and drops it after two hours (`src/MultiSync.cpp:1391`), and the
+  hourly ping it sends is not a discover.
+- **FPP's page offers its own controls for the row.** Because the type id is
+  in the FPP range and the advertised major version is 4 or higher, the page
+  draws the row's selection checkbox for "Action for selected systems"
+  (`www/multisync.php:1829` at 10.0), and the hostname and address link to
+  `http://<node>/`, which the node answers with 404. These belong to the
+  player's page. The node serves nothing that accepts them, and it was not
+  tested what each action does when pointed at a node.
+- On 10.0 the page also asks the player for
+  `api/channel/output/universeOutputs?ip=<node>` and `universeInputs` once per
+  page load, when the row is created (`www/multisync.php:1869`). The node has
+  no such routes.
+
+Not verified: a real player on the show network, a real node's own
+utilization numbers, FPP's advanced view toggles beyond the default column
+set, media-only sync, and how the row behaves over hours.
+
 ## Decision, fallback, and revalidation
 
 Direction (pending L2/L3 confirmation): implement a native MultiSync listener speaking the documented wire protocol, answering discover pings with a reserved/appropriate device type, following FPP's own remote semantics (free-run on silence, slew/jump on resume, STOP+~5-frame blank). Supplement with REST/MQTT for supervision. Fallback options remain a small FPP-side bridge, running FPP on the node, or pre-rendered media with a separate verified clock. Revalidate on supported FPP major releases (**FPP 10.0 GA has now shipped and is confirmed at the pinned bench tag** — next revalidation trigger is the following major release).

@@ -40,7 +40,11 @@ type fakeFPPConnectView struct {
 
 	assignments    []pipeline.Assignment
 	assignmentsErr error
+
+	multiSync multisync.Snapshot
 }
+
+func (f fakeFPPConnectView) MultiSyncSnapshot() multisync.Snapshot { return f.multiSync }
 
 func (f fakeFPPConnectView) ChannelRanges() string { return f.channelRanges }
 func (f fakeFPPConnectView) Enabled() bool         { return f.enabled }
@@ -439,6 +443,7 @@ func TestFPPConnectDisabledServesEvery404(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/system/info",
+		"/api/system/status",
 		"/api/fppd/multiSyncSystems",
 		"/api/playlists",
 		"/api/playlist/Halloween",
@@ -495,6 +500,7 @@ func TestFPPConnectNoProductIdentityLeak(t *testing.T) {
 	forbidden := []string{"Falcon", "Player", "FPP"}
 	routes := []string{
 		"/api/system/info",
+		"/api/system/status",
 		"/api/fppd/multiSyncSystems",
 		"/api/playlists",
 		"/api/playlist/Halloween",
@@ -781,6 +787,7 @@ func TestFPPConnectStateViewDisabledEndToEnd(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/system/info",
+		"/api/system/status",
 		"/api/fppd/multiSyncSystems",
 		"/api/playlists",
 		"/api/playlist/Halloween",

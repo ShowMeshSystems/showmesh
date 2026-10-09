@@ -66,7 +66,7 @@ Every item below was an open owner decision when this document was written on 20
 FC1's build, as specified and tested (ADR-044 decision 2: this section, not
 `api/openapi.yaml`, is this listener's specification). The listener binds
 `SHOWMESH_FPPCONNECT_LISTEN_ADDR` (default `:80`; ADR-044 decision 5) and
-serves exactly six `GET` routes (`HEAD` is also served, with no body, per
+serves exactly seven `GET` routes (`HEAD` is also served, with no body, per
 `net/http`'s own handling). Anything else, including a known path with the
 wrong method, is 404: ADR-044 decision 1 makes everything outside these
 routes 404, so a wrong method never gets `http.ServeMux`'s own 405-plus-
@@ -87,7 +87,22 @@ filesystem.
   `Mode` (`AdvertisedMode`, `"player"`), `typeId` (`127`, i.e.
   `multisync.SystemTypeShowMesh`), `channelRanges` (the holder's advertised
   string, key omitted entirely when it is empty, never `""`), and
-  `Platform`/`Variant` (`"ShowMesh"`).
+  `Platform`/`Variant` (`"ShowMesh"`). Two further members are read by an
+  FPP player's MultiSync page and not by xLights: `OSVersion` (`"ShowMesh
+  agent <agent version>"`) and `Utilization` (`CPU` and `Memory` as percent,
+  `Uptime` as FPP's `D days H:M` string; a value the host cannot measure is
+  omitted, and the whole object is omitted when nothing can be measured).
+- **`GET /api/system/status`**: what an FPP player's MultiSync page polls,
+  through the player, to fill this node's row. Read only. `mode`/`mode_name`
+  are `8`/`"remote"`, matching the ping. `status`/`status_name` are
+  `1`/`"playing"` while the node's MultiSync timeline is playing or
+  free-running unsynchronized, otherwise `0`/`"idle"`. While playing,
+  `sequence_filename` and `current_sequence` (or `media_filename` and
+  `current_song` for a media file) carry the timeline's filename, and
+  `seconds_played`, `seconds_elapsed` (strings) and `time_elapsed` carry its
+  position; when idle they are `""`, `"0"` and `"00:00"`. `advancedView` is
+  this node's system info document. The member list FPP reads is in
+  [RES-002](../research/RES-002-fpp-multisync-compatibility.md).
 - **`GET /api/fppd/multiSyncSystems`**: `{"systems":[<one self-entry>]}`. The
   entry carries `address` (the local IP of the connection the request
   arrived on, never a wildcard bind address and never `127.0.0.1` unless
