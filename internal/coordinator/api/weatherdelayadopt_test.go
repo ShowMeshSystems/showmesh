@@ -112,7 +112,7 @@ func TestWeatherDelayAdoptEntersTheNodesDelayThroughTheStartPath(t *testing.T) {
 	if !got.StartedAt.Equal(nodeStartedAt) {
 		t.Errorf("StartedAt = %s, want the node's own start %s", got.StartedAt, nodeStartedAt)
 	}
-	if got.StartedBy != "node render-01" || got.StartedByName != "node render-01 while the coordinator was unreachable" {
+	if got.StartedBy != "node render-01" || got.StartedByName != "node render-01" {
 		t.Errorf("StartedBy, StartedByName = %q, %q", got.StartedBy, got.StartedByName)
 	}
 
@@ -136,7 +136,7 @@ func TestWeatherDelayAdoptEntersTheNodesDelayThroughTheStartPath(t *testing.T) {
 	if a.Target != "render-01" || a.Params["nodeId"] != "render-01" || a.Params["kind"] != weatherdelay.KindDelay {
 		t.Errorf("audit target %q params %v, want the node and the kind", a.Target, a.Params)
 	}
-	wantReason := "Started on node render-01 while the coordinator was unreachable. Press Resume when it is safe to continue."
+	wantReason := "A weather delay was started on node render-01, and the coordinator joined it. Press Resume when it is safe to continue."
 	if a.OutcomeReason != wantReason {
 		t.Errorf("audit OutcomeReason = %q, want %q", a.OutcomeReason, wantReason)
 	}
@@ -194,6 +194,10 @@ func TestWeatherDelayAdoptCancelNightKinds(t *testing.T) {
 		if got := r.state(); !got.Active || got.Kind != weatherdelay.KindCancelNight {
 			t.Fatalf("state = %+v, want an active cancelled night", got)
 		}
+		wantReason := "The night was cancelled on node render-01, and the coordinator joined it. Press Resume to clear it."
+		if audits := r.adoptAudits(); len(audits) != 1 || audits[0].OutcomeReason != wantReason {
+			t.Errorf("adopt audits = %+v, want one with reason %q", audits, wantReason)
+		}
 	})
 
 	t.Run("a node's cancelled night changes an active delay", func(t *testing.T) {
@@ -204,8 +208,13 @@ func TestWeatherDelayAdoptCancelNightKinds(t *testing.T) {
 		if !got.Active || got.Kind != weatherdelay.KindCancelNight || got.Revision != 2 || got.StartedBy != "node render-01" {
 			t.Fatalf("state = %+v, want the delay changed to a cancelled night at revision 2", got)
 		}
-		if n := len(r.adoptAudits()); n != 1 {
-			t.Fatalf("adopt audit entries = %d, want 1", n)
+		audits := r.adoptAudits()
+		if len(audits) != 1 {
+			t.Fatalf("adopt audit entries = %d, want 1", len(audits))
+		}
+		wantReason := "Node render-01 reported a cancelled night, so the weather delay was changed to a cancelled night. Press Resume to clear it."
+		if audits[0].OutcomeReason != wantReason {
+			t.Errorf("audit OutcomeReason = %q, want %q", audits[0].OutcomeReason, wantReason)
 		}
 	})
 
@@ -247,5 +256,64 @@ func TestWeatherDelayAdopterReportIgnoresANodeThatIsNotDelayed(t *testing.T) {
 	weatherDelayAdoptBackground.Wait()
 	if got := r.state(); !got.Active || got.Revision != 1 {
 		t.Fatalf("state = %+v, want the one active report adopted at revision 1", got)
+	}
+}
+
+func (r *resumeHarness) stopCommands() int {
+	cmds, _ := r.fppCommands()
+	n := 0
+	for _, c := range cmds {
+		if strings.HasPrefix(c, "Stop") {
+			n++
+		}
+	}
+	return n
+}
+
+// The start path answers a repeated command key from its stored result
+// without sending anything, so each adoption must carry a key of its own.
+func TestWeatherDelayAdoptSendsItsStopsEveryTime(t *testing.T) {
+	r := newResumeHarness(t)
+	a := r.adopter()
+
+	a.adoptLocked(context.Background(), "render-01", mqttproto.HealthWeatherDelay{Active: true, Kind: weatherdelay.KindDelay})
+	if got := r.stopCommands(); got != 1 {
+		t.Fatalf("FPP stop commands after the first adoption = %d, want 1", got)
+	}
+	r.resume()
+
+	a.adoptLocked(context.Background(), "render-01", mqttproto.HealthWeatherDelay{Active: true, Kind: weatherdelay.KindDelay, HeldRevision: 2, Revision: 2})
+	if got := r.state(); !got.Active || got.Revision != 3 {
+		t.Fatalf("state = %+v, want the second delay adopted at revision 3", got)
+	}
+	if got := r.stopCommands(); got != 2 {
+		t.Fatalf("FPP stop commands after the second adoption = %d, want 2: the second adoption's stop was not sent", got)
+	}
+}
+
+// A report numbered so high that nothing can follow it would leave Resume
+// with no number to write. It is refused and adopts nothing.
+func TestWeatherDelayAdoptRefusesAReportThatLeavesNoRoomForResume(t *testing.T) {
+	r := newResumeHarness(t)
+	r.start()
+	a := r.adopter()
+
+	for _, report := range []mqttproto.HealthWeatherDelay{
+		{Active: true, Kind: weatherdelay.KindCancelNight, HeldRevision: 9223372036854775806, Revision: 9223372036854775806},
+		{Active: true, Kind: weatherdelay.KindCancelNight, HeldRevision: 1, Revision: 9223372036854775806},
+		{Active: true, Kind: weatherdelay.KindCancelNight, HeldRevision: 1, Revision: mqttproto.MaxHealthWeatherDelayRevision + 1},
+		{Active: true, Kind: weatherdelay.KindCancelNight, HeldRevision: -1, Revision: 1},
+	} {
+		a.Report("render-01", report)
+		weatherDelayAdoptBackground.Wait()
+	}
+
+	got := r.state()
+	if !got.Active || got.Kind != weatherdelay.KindDelay || got.Revision != 1 || len(r.adoptAudits()) != 0 {
+		t.Fatalf("state = %+v with %d adopt audits, want the operator's delay untouched at revision 1", got, len(r.adoptAudits()))
+	}
+	r.resume()
+	if cleared := r.state(); cleared.Active || cleared.Revision != 2 {
+		t.Fatalf("state after resume = %+v, want not active at revision 2", cleared)
 	}
 }

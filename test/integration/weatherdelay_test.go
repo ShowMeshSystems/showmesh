@@ -1578,7 +1578,7 @@ func TestWeatherDelayAdoptedFromNode(t *testing.T) {
 	if want := "node " + f.nodeID; adopted.StartedBy != want {
 		t.Errorf("adopted startedBy = %q, want %q", adopted.StartedBy, want)
 	}
-	if want := "node " + f.nodeID + " while the coordinator was unreachable"; adopted.StartedByName != want {
+	if want := "node " + f.nodeID; adopted.StartedByName != want {
 		t.Errorf("adopted startedByName = %q, want %q", adopted.StartedByName, want)
 	}
 
@@ -1601,7 +1601,7 @@ func TestWeatherDelayAdoptedFromNode(t *testing.T) {
 	if entry.Target != f.nodeID || entry.Params["nodeId"] != f.nodeID {
 		t.Errorf("adopt audit entry names target %q and params %v, want node %q", entry.Target, entry.Params, f.nodeID)
 	}
-	if want := "Started on node " + f.nodeID + " while the coordinator was unreachable."; !strings.HasPrefix(entry.OutcomeReason, want) {
+	if want := "A weather delay was started on node " + f.nodeID + ", and the coordinator joined it."; !strings.HasPrefix(entry.OutcomeReason, want) {
 		t.Errorf("adopt audit entry reason = %q, want it to start %q", entry.OutcomeReason, want)
 	}
 

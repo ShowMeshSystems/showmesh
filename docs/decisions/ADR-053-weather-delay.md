@@ -123,6 +123,8 @@ alert.
    A node reporting a cancelled night changes an active delay into one, and a
    cancelled night is never changed back. The adopted state is numbered
    above every number the node has seen, so the node accepts the resume.
+   A report carrying a number above 2^52 is refused, so no report can leave
+   the coordinator without a number for the resume.
 
 9. **[ADR-044](ADR-044-agent-inbound-http-listener.md) decision 3 is superseded
    for one endpoint.** The node agent's inbound listener accepts a signed

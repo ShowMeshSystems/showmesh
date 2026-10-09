@@ -381,7 +381,7 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 			return v1.WeatherDelayActionResult{}
 		}
 		adopt.adopted = true
-		startedAt, startedBy, startedByName = adopt.startedAt(now), adopt.startedBy(), adopt.startedByName()
+		startedAt, startedBy, startedByName = adopt.startedAt(now), adopt.startedBy(), adopt.startedBy()
 		nextRevision = max(current.Revision, adopt.report.Revision) + 1
 	}
 	if err != nil {
@@ -516,12 +516,12 @@ func (h *handlers) weatherDelayRunStartOrChange(ctx context.Context, now time.Ti
 	}
 	eventSummary := "started"
 	if adopt != nil {
-		entry.Target, entry.Outcome, entry.OutcomeReason = adopt.nodeID, outcomeWordConfirmed, adopt.summary()
+		entry.Target, entry.Outcome, entry.OutcomeReason = adopt.nodeID, outcomeWordConfirmed, adopt.summary(current.Active)
 		auditParams["nodeId"] = adopt.nodeID
 		if !adopt.report.StartedAt.IsZero() {
 			auditParams["nodeStartedAt"] = formatTime(adopt.report.StartedAt)
 		}
-		eventSummary = "started on " + adopt.startedByName()
+		eventSummary = adopt.eventSummary(current.Active)
 	}
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, entry)
 	h.appendWeatherDelayChangedEvent(ctx, now, eventSummary)

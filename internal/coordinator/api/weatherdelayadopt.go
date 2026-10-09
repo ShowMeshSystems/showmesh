@@ -8,6 +8,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/command"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
@@ -28,12 +29,25 @@ type weatherDelayAdoption struct {
 
 func (a *weatherDelayAdoption) startedBy() string { return "node " + a.nodeID }
 
-func (a *weatherDelayAdoption) startedByName() string {
-	return "node " + a.nodeID + " while the coordinator was unreachable"
+// summary is the audit sentence. changed means the coordinator already
+// held a delay and the node's cancelled night replaced it.
+func (a *weatherDelayAdoption) summary(changed bool) string {
+	switch {
+	case changed:
+		return "Node " + a.nodeID + " reported a cancelled night, so the weather delay was changed to a cancelled night. Press Resume to clear it."
+	case a.report.Kind == weatherdelay.KindCancelNight:
+		return "The night was cancelled on node " + a.nodeID + ", and the coordinator joined it. Press Resume to clear it."
+	default:
+		return "A weather delay was started on node " + a.nodeID + ", and the coordinator joined it. Press Resume when it is safe to continue."
+	}
 }
 
-func (a *weatherDelayAdoption) summary() string {
-	return "Started on " + a.startedByName() + ". Press Resume when it is safe to continue."
+// eventSummary follows "weather delay " in the event stream.
+func (a *weatherDelayAdoption) eventSummary(changed bool) string {
+	if changed {
+		return "changed to a cancelled night reported by node " + a.nodeID
+	}
+	return "started on node " + a.nodeID
 }
 
 // startedAt is the node's own start time, never later than now: a node
@@ -125,14 +139,18 @@ func (a *WeatherDelayAdopter) Report(nodeID string, report mqttproto.HealthWeath
 }
 
 // adoptLocked runs the ordinary start path for the node's kind. The caller
-// holds busy.
+// holds busy. Each adoption has its own key, so its stops are sent every
+// time and never answered from an earlier adoption's stored commands.
 func (a *WeatherDelayAdopter) adoptLocked(ctx context.Context, nodeID string, report mqttproto.HealthWeatherDelay) {
+	if report.Validate() != nil {
+		return
+	}
 	adoption := &weatherDelayAdoption{nodeID: nodeID, report: report}
 	var afterDispatch func(store.WeatherDelayStateRecord, []string)
 	if report.Kind == weatherdelay.KindCancelNight {
 		afterDispatch = a.h.weatherDelayCancelNightAfterDispatch
 	}
-	a.h.weatherDelayRunStartOrChange(ctx, a.h.now(), report.Kind, identity.AuditActionShowWeatherDelayAdopt, "",
+	a.h.weatherDelayRunStartOrChange(ctx, a.h.now(), report.Kind, identity.AuditActionShowWeatherDelayAdopt, command.NewIdempotencyKey(),
 		weatherDelayAdoptSystemAuthContext(nodeID), "", afterDispatch, adoption)
 
 	switch {

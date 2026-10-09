@@ -267,6 +267,11 @@ type HealthWeatherDelay struct {
 	Revision     int64     `json:"revision"`
 }
 
+// MaxHealthWeatherDelayRevision is the largest revision a report may carry.
+// The coordinator numbers each state one above the last, so half of the
+// range the API promises (a JS safe integer) is left for what follows.
+const MaxHealthWeatherDelayRevision = 1 << 52
+
 // ErrInvalidHealthWeatherDelay is wrapped by every error
 // [HealthWeatherDelay.Validate] returns.
 var ErrInvalidHealthWeatherDelay = errors.New("mqttproto: invalid weather delay report")
@@ -277,6 +282,8 @@ func (d HealthWeatherDelay) Validate() error {
 	switch {
 	case d.HeldRevision < 0 || d.Revision < 0:
 		return fmt.Errorf("%w: revisions %d and %d must not be negative", ErrInvalidHealthWeatherDelay, d.HeldRevision, d.Revision)
+	case d.HeldRevision > MaxHealthWeatherDelayRevision || d.Revision > MaxHealthWeatherDelayRevision:
+		return fmt.Errorf("%w: revisions %d and %d must not exceed %d", ErrInvalidHealthWeatherDelay, d.HeldRevision, d.Revision, int64(MaxHealthWeatherDelayRevision))
 	case d.Active && !weatherDelayKinds[d.Kind]:
 		return fmt.Errorf("%w: kind %q must be %q or %q while active", ErrInvalidHealthWeatherDelay, d.Kind, WeatherDelayKindDelay, WeatherDelayKindCancelNight)
 	}

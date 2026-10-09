@@ -75,6 +75,9 @@ func TestHealthWeatherDelayValidate(t *testing.T) {
 		{"active with an unknown kind", HealthWeatherDelay{Active: true, Kind: "storm"}, true},
 		{"negative held revision", HealthWeatherDelay{HeldRevision: -1}, true},
 		{"negative revision", HealthWeatherDelay{Revision: -1}, true},
+		{"revision at the bound", HealthWeatherDelay{HeldRevision: MaxHealthWeatherDelayRevision, Revision: MaxHealthWeatherDelayRevision}, false},
+		{"revision with no room left above it", HealthWeatherDelay{Active: true, Kind: WeatherDelayKindDelay, Revision: 9223372036854775806}, true},
+		{"held revision above the bound", HealthWeatherDelay{HeldRevision: MaxHealthWeatherDelayRevision + 1}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

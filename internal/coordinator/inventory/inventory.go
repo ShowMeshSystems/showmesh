@@ -78,6 +78,11 @@ type Manager struct {
 	// a live heartbeat, never a retained replay. See [WithOnWeatherDelayReport].
 	onWeatherDelayReport func(nodeID string, report mqttproto.HealthWeatherDelay)
 
+	// refusedWeatherDelay holds the nodes whose last report was refused, so
+	// a node repeating one on every heartbeat is logged once.
+	refusedWeatherDelayMu sync.Mutex
+	refusedWeatherDelay   map[string]bool
+
 	// livenessMu and lastLiveness back [Manager.observeLiveness] (called
 	// from both recordLivenessTransition, the message-arrival path, and
 	// the exported [Manager.RecordLivenessObservation], the staleness-on-
@@ -711,8 +716,22 @@ func (m *Manager) reportWeatherDelay(nodeID string, report *mqttproto.HealthWeat
 	if report == nil || retained || m.onWeatherDelayReport == nil {
 		return
 	}
-	if err := report.Validate(); err != nil {
-		m.logger.Warn("ignoring a malformed weather delay report on a heartbeat", "node_id", nodeID, "error", err)
+	err := report.Validate()
+	m.refusedWeatherDelayMu.Lock()
+	alreadyLogged := m.refusedWeatherDelay[nodeID]
+	if err != nil && m.refusedWeatherDelay == nil {
+		m.refusedWeatherDelay = map[string]bool{}
+	}
+	if err != nil {
+		m.refusedWeatherDelay[nodeID] = true
+	} else {
+		delete(m.refusedWeatherDelay, nodeID)
+	}
+	m.refusedWeatherDelayMu.Unlock()
+	if err != nil {
+		if !alreadyLogged {
+			m.logger.Warn("a node's weather delay report cannot be used and is ignored; no delay is started from it", "node_id", nodeID, "error", err)
+		}
 		return
 	}
 	m.onWeatherDelayReport(nodeID, *report)

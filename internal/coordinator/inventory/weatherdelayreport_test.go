@@ -53,7 +53,13 @@ func TestHandleHealthHandsOnOnlyALiveWeatherDelayReport(t *testing.T) {
 		t.Fatalf("Health = %+v, want the heartbeat carrying the malformed report stored at sequence 2", rec.Health)
 	}
 
-	m.HandleMessage(healthMessage(t, "node-a", 3, active, false))
+	tooHigh := &mqttproto.HealthWeatherDelay{Active: true, Kind: mqttproto.WeatherDelayKindDelay, HeldRevision: 2, Revision: 9223372036854775806}
+	m.HandleMessage(healthMessage(t, "node-a", 3, tooHigh, false))
+	if len(reports) != 0 {
+		t.Fatalf("a report with no room left above its revision reached the report hook: %+v", reports)
+	}
+
+	m.HandleMessage(healthMessage(t, "node-a", 4, active, false))
 	if len(reports) != 1 || reports[0].nodeID != "node-a" || reports[0].report != *active {
 		t.Fatalf("reports = %+v, want exactly the live report from node-a", reports)
 	}
