@@ -115,6 +115,15 @@ type PersistedSession struct {
 	ScheduleItemStartAt time.Time
 	ScheduleItemIndex   int
 
+	// ScheduleClock names the media clock the schedule's instants were
+	// read on, and TimelineT0/TimelineStartPosition are the running
+	// timeline's own anchor. Nil and false in a record written before a
+	// restart could rejoin on the schedule; see restorerejoin.go.
+	ScheduleClock         *ScheduleClockIdentity
+	TimelineActive        bool
+	TimelineT0            time.Time
+	TimelineStartPosition time.Duration
+
 	// CollectedAt is when this snapshot's own fields were captured --
 	// distinct from ObservedAt, which is specifically Position's engine
 	// evidence time and is zero whenever PositionKnown is false. Always
@@ -296,11 +305,14 @@ type Session struct {
 	// timeline is this session's scheduled-playback state, non-nil only
 	// while it is running against a T0 an audio.session.start actually
 	// carried and this node's clock provider was locked enough to honour.
-	// Never persisted: a T0 is an instant on a clock this process may not
-	// hold after a restart, and a restored session rejoins at its
-	// bookmark exactly as it does today rather than against a schedule
-	// nothing has re-established. See timeline.go.
+	// Its T0 is persisted with the clock it was read on, so a restart
+	// rejoins against it only once that clock is shown to be the same
+	// one. See timeline.go and restorerejoin.go.
 	timeline *timeline
+
+	// scheduleClock is the media clock schedule's instants were read on,
+	// nil when the provider did not name its grandmaster at the start.
+	scheduleClock *ScheduleClockIdentity
 
 	// schedule is this session's ADR-049 decision 8 item-boundary state:
 	// non-nil only while playing under a schedule a scheduled Start or
@@ -531,7 +543,13 @@ func (s *Session) persistedLocked() PersistedSession {
 	if s.schedule != nil {
 		rec.ScheduleActive = true
 		rec.ScheduleItemStartAt = s.schedule.itemStartAt
-		rec.ScheduleItemIndex = s.currentIndex
+		rec.ScheduleItemIndex = s.schedule.itemIndex
+		rec.ScheduleClock = s.scheduleClock
+		if s.timeline != nil {
+			rec.TimelineActive = true
+			rec.TimelineT0 = s.timeline.t0
+			rec.TimelineStartPosition = s.timeline.startPosition
+		}
 	}
 	return rec
 }

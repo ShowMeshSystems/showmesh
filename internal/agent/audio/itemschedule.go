@@ -18,6 +18,10 @@ import (
 // that item's own end, and the natural decoder-end path advances it
 // exactly as an unscheduled session would (see watchTick).
 type itemSchedule struct {
+	// itemIndex is the playlist index itemStartAt belongs to. It is
+	// persisted beside it, so a record written between an advance and its
+	// re-anchor is recognised on restore instead of misread.
+	itemIndex     int
 	itemStartAt   time.Time
 	boundaryKnown bool
 	boundaryAt    time.Time
@@ -68,10 +72,12 @@ type itemStage struct {
 func (m *Manager) anchorItemScheduleLocked(ctx context.Context, s *Session, sched *startSchedule, position time.Duration) {
 	if sched == nil {
 		s.schedule = nil
+		s.scheduleClock = nil
 		s.discardStageLocked(ctx)
 		return
 	}
-	s.schedule = &itemSchedule{itemStartAt: sched.t0.Add(-position)}
+	s.schedule = &itemSchedule{itemIndex: s.currentIndex, itemStartAt: sched.t0.Add(-position)}
+	s.scheduleClock = scheduleClockIdentityOf(sched.status)
 	s.refreshBoundaryFromProbeLocked()
 	s.discardStageLocked(ctx)
 }
@@ -113,7 +119,7 @@ func (m *Manager) reanchorScheduleAfterNaturalAdvanceLocked(ctx context.Context,
 		s.discardStageLocked(ctx)
 		return
 	}
-	s.schedule = &itemSchedule{itemStartAt: mediaNow.Time}
+	s.schedule = &itemSchedule{itemIndex: s.currentIndex, itemStartAt: mediaNow.Time}
 	s.refreshBoundaryFromProbeLocked()
 	s.discardStageLocked(ctx)
 }
@@ -240,6 +246,9 @@ func (m *Manager) scheduledAdvanceLocked(ctx context.Context, s *Session, mediaN
 	s.currentItemID = item.ItemID
 	s.state = pkgaudio.StatePreparing
 	s.bookmark = nil
+	// Moved onto the new item before the persist, so a crash right after
+	// it restores this item against its own start instant.
+	s.schedule = &itemSchedule{itemIndex: next, itemStartAt: boundaryAt}
 	s.persistBestEffortLocked("scheduled item boundary")
 
 	s.handle = stage.handle
@@ -272,7 +281,7 @@ func (m *Manager) scheduledAdvanceLocked(ctx context.Context, s *Session, mediaN
 	m.startLTCLocked(ctx, s, 0)
 
 	s.stage = nil
-	s.schedule = &itemSchedule{itemStartAt: boundaryAt}
+	s.schedule = &itemSchedule{itemIndex: next, itemStartAt: boundaryAt}
 	s.refreshBoundaryFromProbeLocked()
 
 	s.persistBestEffortLocked("state change")
