@@ -2152,3 +2152,27 @@ state, not that the player is running the show.
 The four signals are on the FPP player's fallback program, the resource
 `fallback_program.executor_key_present` (§5.3) is on, and are rewritten every
 5 seconds. Night readiness reads none of this.
+
+### 5.18 The coordinator's public key reaches the plugin at pairing
+
+The plugin accepts a fallback program only when it verifies against the
+coordinator's Ed25519 public key (§5.13). Pairing delivers that key
+([ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md) decision 8).
+
+- The 200 answer of `POST /api/v1/integrations/fpp/pairing/claim` carries one
+  more member, `coordinatorPublicKey`: a string, always present, the raw 32-byte
+  key encoded per §5.1. It is the same value, from the same source, that node
+  enrollment returns as `coordinatorPublicKey`, and it is the key that signs the
+  published fallback programs.
+- The plugin stores it in
+  `/etc/showmesh-fpp-plugin-trust/coordinator-fallback-public-key`: owned by
+  root, mode 0644, one line holding the same base64 text and a newline. It
+  reads the key only from there and refuses a file or directory that is not
+  owned by root.
+- Only a successful pairing claim writes the file, and a later pairing replaces
+  it. A refused claim carries no key. No start, restart, or fallback path
+  fetches the key from the coordinator.
+- A plugin paired before this change has no key until it pairs again. Until
+  then it has no key to verify a program against.
+- The route, the request, the refusals, the rate limit, and the audit entry of
+  the claim are unchanged. Night readiness does not read the key.

@@ -677,17 +677,19 @@ func Run() int {
 	// through while WeatherDelayTriggerLoop swaps the running poller
 	// underneath it, see that type's own doc comment.
 	weatherDelayNWSStatus := api.NewWeatherDelayNWSStatus()
+	coordinatorPublicKey := base64.StdEncoding.EncodeToString(signingMgr.PublicKey())
 	enrollmentSvc := enrollment.NewService(st, identitySvc, enrollment.NewBrokerFiles(cfg.BrokerConfigDir), enrollment.Config{
 		BrokerMode: cfg.BrokerMode, NodeBrokerURL: cfg.NodeBrokerURL, PublicURL: cfg.PublicURL,
 		NodeMQTTUsername: cfg.NodeMQTTUsername, NodeMQTTPassword: cfg.NodeMQTTPassword,
-		CoordinatorPublicKey: base64.StdEncoding.EncodeToString(signingMgr.PublicKey()),
+		CoordinatorPublicKey: coordinatorPublicKey,
 	})
 	if err := enrollmentSvc.CheckCanMint(); err != nil {
 		logger.Warn("node enrollment cannot hand out broker logins until this is fixed", "reason", err.Error())
 	}
 
 	apiDeps := api.Dependencies{
-		NodeEnrollment: enrollmentSvc,
+		NodeEnrollment:       enrollmentSvc,
+		CoordinatorPublicKey: coordinatorPublicKey,
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
 		// inbound MQTT message — also feeds each node's freshly computed

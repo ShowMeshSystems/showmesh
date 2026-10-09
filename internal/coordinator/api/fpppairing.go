@@ -544,5 +544,7 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 		Token:       token.Value,
 		PrincipalID: principal.ID,
 		InstanceID:  pending.instanceID,
+
+		CoordinatorPublicKey: h.deps.CoordinatorPublicKey,
 	})
 }

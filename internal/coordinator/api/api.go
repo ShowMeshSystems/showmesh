@@ -674,6 +674,11 @@ type Dependencies struct {
 	// NodeEnrollment is ADR-055's enrollment code service. Nil answers
 	// every /api/v1/node-enrollments route with 503.
 	NodeEnrollment NodeEnrollmentService
+
+	// CoordinatorPublicKey is the base64 standard encoding of the
+	// coordinator's raw Ed25519 public key, the one node enrollment returns.
+	// The FPP pairing claim answer carries it to the plugin.
+	CoordinatorPublicKey string
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that

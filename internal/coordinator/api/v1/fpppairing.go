@@ -46,4 +46,7 @@ type FPPPairingClaimResponse struct {
 	Token       string `json:"token"`
 	PrincipalID string `json:"principalId"`
 	InstanceID  string `json:"instanceId"`
+	// CoordinatorPublicKey is the base64 standard encoding, with padding,
+	// of the coordinator's raw 32-byte Ed25519 public key.
+	CoordinatorPublicKey string `json:"coordinatorPublicKey"`
 }

@@ -30,7 +30,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded by ADR-024) |
 | [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
 | [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted (decision 6 amended 2026-08-14: Origin fallback; decision 11 narrowed by ADR-035, then amended 2026-08-26: audit-store unavailability never blocks an action) |
-| [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
+| [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted (decision 8 added 2026-10-09: on an FPP player the plugin writes the pinned key at pairing) |
 | [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
 | [ADR-027](ADR-027-show-and-surface-model.md) | Show and surface model; xLights owns authoring, ShowMesh owns configuration | Accepted |
 | [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted (decision 10 amended in 2026-08-17: re-uploading superseded bytes is a rollback; implemented 2026-08-18 in PR #17, not yet merged) |

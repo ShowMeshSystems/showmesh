@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/enrollment"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
+	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
 )
 
 // This file drives all three pairing routes through a real [API] with a
@@ -80,9 +84,10 @@ type pairingStartForTest struct {
 }
 
 type pairingClaimForTest struct {
-	Token       string `json:"token"`
-	PrincipalID string `json:"principalId"`
-	InstanceID  string `json:"instanceId"`
+	Token                string `json:"token"`
+	PrincipalID          string `json:"principalId"`
+	InstanceID           string `json:"instanceId"`
+	CoordinatorPublicKey string `json:"coordinatorPublicKey"`
 }
 
 // TestPairingHandsTheTokenOnlyToThePluginHoldingTheSecret is the whole
@@ -594,4 +599,112 @@ func pairingState(t *testing.T, api *API, token string) string {
 		t.Fatalf("decode pairing state: %v; body: %s", err, body)
 	}
 	return got.State
+}
+
+// pairingAPIWithSigningKey is [pairingAPI] on a coordinator whose
+// signing key is a real one, wired to the claim answer and to node
+// enrollment the way coordinator.go wires them.
+func pairingAPIWithSigningKey(t *testing.T) (*enrollHarness, *signingkey.Manager, string) {
+	t.Helper()
+	manager, err := signingkey.LoadOrGenerate(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrGenerate signing key: %v", err)
+	}
+	publicKey := base64.StdEncoding.EncodeToString(manager.PublicKey())
+	brokerDir := newBrokerConfigDir(t, "")
+	clock := &movableClock{t: testNow}
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock.now)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: "http://fpp.invalid"}}}
+	deps.CoordinatorPublicKey = publicKey
+	deps.NodeEnrollment = enrollment.NewService(st, svc, enrollment.NewBrokerFiles(brokerDir), enrollment.Config{CoordinatorPublicKey: publicKey})
+	api := New(deps, Options{Clock: clock.now, Logger: testLogger()})
+	return &enrollHarness{api: api, st: st, ids: svc, clock: clock, admin: map[string]string{"Authorization": "Bearer " + token}, brokerDir: brokerDir}, manager, publicKey
+}
+
+func bearerOf(h *enrollHarness) string {
+	return strings.TrimPrefix(h.admin["Authorization"], "Bearer ")
+}
+
+func claimPairingForTest(t *testing.T, h *enrollHarness, seed byte) (pairingClaimForTest, []byte) {
+	t.Helper()
+	secret := pairingSecret(seed)
+	doRawRequest(t, h.api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, secret)+`"}`, bearerOf(h)))
+	resp, body := doRawRequest(t, h.api.Handler, claimRequest(t, `{"secret":"`+secret+`"}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var claimed pairingClaimForTest
+	if err := json.Unmarshal(body, &claimed); err != nil {
+		t.Fatalf("decode claim: %v; body: %s", err, body)
+	}
+	return claimed, body
+}
+
+// TestClaimAnswerCarriesTheKeyNodeEnrollmentReturns: both answers come
+// from the one coordinator and must name the same key.
+func TestClaimAnswerCarriesTheKeyNodeEnrollmentReturns(t *testing.T) {
+	h, _, publicKey := pairingAPIWithSigningKey(t)
+
+	claimed, _ := claimPairingForTest(t, h, 11)
+	if claimed.CoordinatorPublicKey != publicKey {
+		t.Fatalf("claim coordinatorPublicKey = %q, want %q", claimed.CoordinatorPublicKey, publicKey)
+	}
+
+	minted, _ := h.mint(t, `{"nodeId":"render-01"}`, http.StatusCreated)
+	resp, raw := h.redeem(t, minted.Code)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("redeem: status = %d; body: %s", resp.StatusCode, raw)
+	}
+	if got := decodeRedeemed(t, raw).CoordinatorPublicKey; got != claimed.CoordinatorPublicKey {
+		t.Fatalf("enrollment coordinatorPublicKey = %q, claim answer = %q, want them equal", got, claimed.CoordinatorPublicKey)
+	}
+}
+
+// TestClaimAnswerKeyVerifiesAProgramTheCoordinatorSigns: the key the
+// plugin stores must be the one that checks the programs the
+// coordinator publishes, which are signed by the same manager.
+func TestClaimAnswerKeyVerifiesAProgramTheCoordinatorSigns(t *testing.T) {
+	h, manager, _ := pairingAPIWithSigningKey(t)
+
+	claimed, _ := claimPairingForTest(t, h, 12)
+	pub, err := fallbackprogram.ParseExecutorPublicKey(claimed.CoordinatorPublicKey)
+	if err != nil {
+		t.Fatalf("the claimed coordinatorPublicKey is not a raw Ed25519 key in standard base64: %v", err)
+	}
+
+	program := fallbackprogram.Program{
+		SchemaVersion: fallbackprogram.SchemaVersion, PackageID: "pkg-1", Revision: strings.Repeat("a", 64),
+		ExpiresAt: testNow.Add(time.Hour), CompiledAt: testNow,
+		FPPInstanceUUID: "M4-7840e12f81da4191c0d00fbb6a889314", Show: "halloween-2026", Generation: 1,
+		Rules: fallbackprogram.FixedRules,
+	}
+	payload, err := program.CanonicalBytes()
+	if err != nil {
+		t.Fatalf("CanonicalBytes: %v", err)
+	}
+	sig, err := manager.Sign(payload)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if err := (fallbackprogram.SignedProgram{Program: program, Signature: sig}).Verify(pub); err != nil {
+		t.Fatalf("the claimed key does not verify the coordinator's signed program: %v", err)
+	}
+}
+
+// TestRefusedClaimCarriesNoKey: a wrong secret is the same 404 as ever
+// and its body holds no key.
+func TestRefusedClaimCarriesNoKey(t *testing.T) {
+	h, _, publicKey := pairingAPIWithSigningKey(t)
+	doRawRequest(t, h.api.Handler, startPairingRequest(t, "bench-fpp", `{"code":"`+pairingCodeFor(t, pairingSecret(13))+`"}`, bearerOf(h)))
+
+	resp, body := doRawRequest(t, h.api.Handler, claimRequest(t, `{"secret":"`+pairingSecret(14)+`"}`))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("claim status = %d, want 404", resp.StatusCode)
+	}
+	if strings.Contains(string(body), "coordinatorPublicKey") || strings.Contains(string(body), publicKey) {
+		t.Fatalf("a refused claim carried the key: %s", body)
+	}
 }
