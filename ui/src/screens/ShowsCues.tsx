@@ -135,6 +135,7 @@ export function ShowsCues() {
 
   const selected = selectedId === null ? null : state.cues.find((c) => c.id === selectedId) ?? null
   const audioAssets = state.assets.filter((a) => a.mediaType === 'audio' && a.current)
+  const sequenceAssets = uniqueSequenceAssets(state.assets.filter((a) => a.mediaType === 'fseq' && a.current))
   const existingIds = state.cues.map((c) => c.id)
   const actionLabels = new Map(state.actions.map((a) => [a.id, a.label]))
 
@@ -231,6 +232,7 @@ export function ShowsCues() {
             cue={selected}
             existingIds={existingIds}
             audioAssets={audioAssets}
+            sequenceAssets={sequenceAssets}
             showActions={state.actions}
             model={model}
             onSaved={(response) => {
@@ -348,6 +350,11 @@ function CueTable({
       </TableWrap>
     </>
   )
+}
+
+function uniqueSequenceAssets(assets: readonly Asset[]): Asset[] {
+  const seen = new Set<string>()
+  return assets.filter((a) => (seen.has(a.sequence) ? false : (seen.add(a.sequence), true)))
 }
 
 type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
@@ -479,6 +486,7 @@ function CueEditor({
   cue,
   existingIds,
   audioAssets,
+  sequenceAssets,
   showActions,
   model,
   onSaved,
@@ -489,6 +497,7 @@ function CueEditor({
   cue: ShowCueConfigResponse | null
   existingIds: readonly string[]
   audioAssets: readonly Asset[]
+  sequenceAssets: readonly Asset[]
   showActions: readonly ShowActionOption[]
   model: ReturnType<typeof useModelContext>
   onSaved: (response: ShowCueConfigResponse) => void
@@ -564,7 +573,7 @@ function CueEditor({
   else if (unknownActions.length > 0) blockReason = `${unknownActions.join(', ')} is not a show action in this show. Remove it to save.`
   else if (kinds.has('ltc') && !kinds.has('audio')) blockReason = 'LTC requires Audio to also be selected.'
   else if (kinds.has('announcement') && !kinds.has('audio')) blockReason = 'Announcement requires Audio to also be selected.'
-  else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence name.'
+  else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence selected.'
   else if (kinds.has('audio') && audioAsset === '') blockReason = 'Audio needs an asset selected.'
   else if (name.trim() === '') blockReason = 'A cue needs a name.'
   else if (id.trim() === '') blockReason = 'A cue needs an id.'
@@ -756,9 +765,36 @@ function CueEditor({
 
       {kinds.has('render') && (
         <div className="sm-inspector__group">
-          <Field label="Sequence" help="The logical sequence name, not an FSEQ filename or asset id.">
-            {(props) => <Input {...props} value={renderSequence} onChange={(e) => setRenderSequence(e.target.value)} />}
-          </Field>
+          {sequenceAssets.length === 0 && renderSequence === '' ? (
+            <RuledStrip absence="empty" label="None" fact="No sequence file is uploaded for this show." detail="Upload one in Assets, then pick it here." />
+          ) : (
+            <>
+              <Field label="Sequence">
+                {(props) => (
+                  <Select {...props} value={renderSequence} onChange={(e) => setRenderSequence(e.target.value)}>
+                    <option value="">Choose a sequence…</option>
+                    {renderSequence !== '' && !sequenceAssets.some((asset) => asset.sequence === renderSequence) && (
+                      <option value={renderSequence}>{renderSequence}</option>
+                    )}
+                    {sequenceAssets.map((asset) => (
+                      <option key={asset.id} value={asset.sequence}>
+                        {asset.sequence} · {asset.runtimeFilename}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <p className="sm-small sm-faint">This show's current sequence files, by name.</p>
+              {renderSequence !== '' && !sequenceAssets.some((asset) => asset.sequence === renderSequence) && (
+                <RuledStrip
+                  absence="failed"
+                  label="Sequence not uploaded"
+                  fact={`No uploaded sequence file matches ${renderSequence}.`}
+                  detail="Upload it in Assets, or choose a different one."
+                />
+              )}
+            </>
+          )}
         </div>
       )}
 
