@@ -65,14 +65,7 @@ func NewNightLoop(deps Dependencies, opts Options) *NightLoop {
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &NightLoop{
-		h: &handlers{
-			deps:                      deps,
-			clock:                     opts.Clock,
-			logger:                    opts.Logger,
-			fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
-			fppCommandPollInterval:    opts.FPPCommandPollInterval,
-			nightReadinessMaxAge:      opts.NightReadinessMaxAge,
-		},
+		h:        newBackgroundHandlers(deps, opts),
 		interval: opts.NightLoopInterval,
 		logger:   opts.Logger,
 		inFlight: make(chan struct{}, 1),

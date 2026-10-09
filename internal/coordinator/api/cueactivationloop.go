@@ -122,7 +122,7 @@ func NewCueActivationLoop(deps Dependencies, opts Options) *CueActivationLoop {
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &CueActivationLoop{
-		h:                &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger},
+		h:                newBackgroundHandlers(deps, opts),
 		interval:         opts.CueActivationLoopInterval,
 		logger:           opts.Logger,
 		inFlight:         make(chan struct{}, 1),

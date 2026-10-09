@@ -73,7 +73,7 @@ func NewWeatherDelayEnforcer(deps Dependencies, opts Options) *WeatherDelayEnfor
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &WeatherDelayEnforcer{
-		h:         &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger},
+		h:         newBackgroundHandlers(deps, opts),
 		interval:  weatherDelayEnforceInterval,
 		logger:    opts.Logger,
 		inFlight:  make(chan struct{}, 1),

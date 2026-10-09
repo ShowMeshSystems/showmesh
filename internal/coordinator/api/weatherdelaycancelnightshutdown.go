@@ -73,7 +73,7 @@ func (h *handlers) weatherDelayStartCancelNightShutdown(rec store.WeatherDelaySt
 func ResumeWeatherDelayCancelNightShutdown(ctx context.Context, deps Dependencies, opts Options) {
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
-	h := &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger}
+	h := newBackgroundHandlers(deps, opts)
 	rec, err := deps.WeatherDelay.GetWeatherDelayState(ctx)
 	if err != nil {
 		h.logWarn("weather delay cancel night: failed to read the state at startup; the night shutdown was not resumed", "error", err)

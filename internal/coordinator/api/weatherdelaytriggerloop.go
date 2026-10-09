@@ -70,7 +70,7 @@ func NewWeatherDelayTriggerLoop(deps Dependencies, opts Options, status *Weather
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &WeatherDelayTriggerLoop{
-		h:        &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger},
+		h:        newBackgroundHandlers(deps, opts),
 		interval: weatherDelayTriggerLoopInterval, logger: opts.Logger, status: status,
 	}
 }
