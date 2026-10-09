@@ -130,3 +130,82 @@ func TestFadeArrivedRequiresGainAtTarget(t *testing.T) {
 		})
 	}
 }
+
+// TestMixerLagBeyondPaceIsZeroForAMixerKeepingPace pins the line between
+// a mixer that keeps pace with the clock, whose branches stay anchored to
+// the clock, and one that has fallen behind it.
+func TestMixerLagBeyondPaceIsZeroForAMixerKeepingPace(t *testing.T) {
+	const latency = 31333333 * time.Nanosecond
+	const running = 700000 * time.Second
+	cases := []struct {
+		name   string
+		behind time.Duration
+		want   time.Duration
+	}{
+		{"nearest a mixer keeping pace was measured", 41 * time.Millisecond, 0},
+		{"99th percentile of a mixer keeping pace", 64 * time.Millisecond, 0},
+		{"furthest a mixer keeping pace was measured", 76 * time.Millisecond, 0},
+		{"exactly on the line", mixerPaceLatencies * latency, 0},
+		{"a 600ms drain gap", 650 * time.Millisecond, 650*time.Millisecond - mixerPaceLatencies*latency},
+		{"the late node", 2930 * time.Millisecond, 2930*time.Millisecond - mixerPaceLatencies*latency},
+	}
+	for _, tc := range cases {
+		if got := mixerLagBeyondPace(running, running-tc.behind, latency); got != tc.want {
+			t.Errorf("%s: mixer %s behind the clock: lag beyond pace = %s, want %s", tc.name, tc.behind, got, tc.want)
+		}
+	}
+	if got := mixerLagBeyondPace(0, 0, latency); got != 0 {
+		t.Errorf("pipeline with no running time yet: lag beyond pace = %s, want 0", got)
+	}
+}
+
+// TestMixerLagFloorMovesAStartOnlyForLagThatStood pins which lag reaches a
+// joining branch: lag recorded in every slot of the window, never lag
+// from part of it.
+func TestMixerLagFloorMovesAStartOnlyForLagThatStood(t *testing.T) {
+	const window = mixerLagFloorSlots * mixerLagFloorSlot
+	const age = 100 * window
+	const lag = 2 * time.Second
+	fill := func(f *mixerLagFloor, from, to time.Duration, lag time.Duration) {
+		for at := from; at < to; at += mixerLagSampleInterval {
+			f.record(at, lag)
+		}
+	}
+
+	var stood mixerLagFloor
+	fill(&stood, age-2*window, age, lag)
+	stood.record(age, lag)
+	if got := stood.standing(age, lag); got != lag {
+		t.Errorf("lag recorded across the whole window: standing = %s, want %s", got, lag)
+	}
+	if got := stood.standing(age, lag/2); got != lag/2 {
+		t.Errorf("a smaller reading at the join: standing = %s, want %s", got, lag/2)
+	}
+
+	var moment mixerLagFloor
+	fill(&moment, age-2*window, age, lag)
+	moment.record(age-window/2, 0)
+	if got := moment.standing(age, lag); got != 0 {
+		t.Errorf("one reading in pace inside the window: standing = %s, want 0", got)
+	}
+
+	var recent mixerLagFloor
+	fill(&recent, age-2*window, age-window/2, 0)
+	fill(&recent, age-window/2, age, lag)
+	if got := recent.standing(age, lag); got != 0 {
+		t.Errorf("lag that began half a window ago: standing = %s, want 0", got)
+	}
+
+	var starved mixerLagFloor
+	fill(&starved, age-2*window, age-window/2, lag)
+	fill(&starved, age-window/2+mixerLagFloorSlot, age, lag)
+	if got := starved.standing(age, lag); got != 0 {
+		t.Errorf("a slot of the window with no reading: standing = %s, want 0", got)
+	}
+
+	var young mixerLagFloor
+	fill(&young, 0, window/2, lag)
+	if got := young.standing(window/2, lag); got != 0 {
+		t.Errorf("an engine younger than the window: standing = %s, want 0", got)
+	}
+}
