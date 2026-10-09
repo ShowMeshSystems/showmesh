@@ -1,6 +1,6 @@
 # RES-020: MultiSync-Triggered Cue Start and PCM Delivery
 
-Status: planned (rehearsal rig measurements of the current path L2 2026-09-17; FPP start lifecycle L1 2026-09-18; every measurement of the new path L0)
+Status: in progress (rehearsal rig measurements of the current path L2 2026-09-17; FPP start lifecycle L1 2026-09-18; new-path rig runs L2 2026-09-18; node-to-node audible offset L2 2026-10-09; audio against the lights L0)
 Risk: critical
 Depends on: RES-002, RES-019
 
@@ -98,6 +98,50 @@ previous Cue, so the wait can return early on stale evidence and the node's
 own `cue.activate` result fields are what the persisted record now relies on;
 node-01's `audio.node` binding has `outputLatency.method: unmeasured`, so no
 latency compensation was applied in these runs.
+
+### 2.6 Loopback runs of the merged path (L2, rehearsal rig, 2026-09-25 and 2026-10-09)
+
+First audible-sample evidence. One audio interface on node-01 records both
+nodes' program outputs at once (its own on one input, the Pi's on another),
+and the node-to-node offset is the cross-correlation of the two channels.
+Positive means the Pi is later than node-01. Playlist `halloween-quick-check`
+(wake-up, then kpop-audio), 25 ms step time, bench FPP 10.0 on the coordinator
+host with MultiSync enabled. This instrument has no light channel, so audio
+against the lights is not measured here: an armed result rests on the
+node-to-node number plus each node starting on the START packet.
+
+| Date | Build | Run | Node to node | Notes |
+| -- | -- | -- | -- | -- |
+| 2026-09-25 | 0170ac0 | armed, five shows | +35 ms | steady across the shows, no growth |
+| 2026-09-25 | 0170ac0 | bed between shows | about +80 ms | bed return after a show 0.9 to 1.8 s late on the Pi |
+| 2026-10-09 | 22313e54 | armed, wake-up (staged first Cue) | -8 ms | three windows over 55 s |
+| 2026-10-09 | 22313e54 | armed, kpop-audio | -10 ms | four readings over 3 min, no growth |
+| 2026-10-09 | 22313e54 | bed returns after the show | +10.8 ms | |
+| 2026-10-09 | 22313e54 | cold, one sequence started by hand | +1887 ms | node-01 started 794 ms late, the Pi 2673 ms late |
+| 2026-10-09 | 22313e54 | fallback, MultiSync off, bound playlist | +1137 ms | `cue.activate` reached the nodes 1.65 s after FPP started |
+
+What the 2026-10-09 runs show:
+
+- **Armed.** Both nodes are inside one 25 ms frame of each other. They are not
+  inside the 0.5 ms that section 3.1 borrows from RES-019: 8 to 10 ms remains,
+  and no output latency compensation is configured on either node.
+- **Cold.** Each node logs the scheduled start as refused in the past and
+  starts at once from the top, so it stays behind the lights by its own
+  lateness for the whole sequence. The lateness is the prepare time: 0.8 s on
+  node-01, 2.7 s on the Pi 3B+. That meets section 3.1's cold bound and
+  nothing better.
+- **Fallback.** With MultiSync off the audio still played on both nodes,
+  unaligned, first sound 2.2 s (node-01) and 3.3 s (the Pi) after FPP started
+  the playlist. node-01 reported its activation unconfirmed because its
+  read-back did not match; the Pi confirmed. A bare sequence started by hand
+  with MultiSync off produced no audio at all, because no playlist binding
+  names it and no packet arrives.
+- **Loop.** One pass of the playlist on 2026-10-09, not two. The 2026-09-25
+  session measured five shows with the armed number steady.
+
+Not taken: per-node START arrival to first audible sample (the alignment run
+tooling was not used; the recording has no time reference shared with the
+packet), and run 5's MP3 against WAV prepare comparison.
 
 ## 3. What the rig run must measure
 
