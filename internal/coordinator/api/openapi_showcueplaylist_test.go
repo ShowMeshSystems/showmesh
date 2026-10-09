@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
@@ -186,4 +187,45 @@ func TestOpenAPIShowCuePlaylistPutRequestBodiesReferenceDocumentedSchemas(t *tes
 	if got := requestBodySchemaRef(t, "put", "/config/show.playlist/{id}"); got != "ConfigShowPlaylist" {
 		t.Errorf("PUT /config/show.playlist/{id} requestBody schema = %q, want ConfigShowPlaylist", got)
 	}
+}
+
+func TestOpenAPIShowPlaylistDefinitionMovePreviewMatchesRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	compileSchema(t, c, "ShowPlaylistMovePreviewResponse")
+
+	s := newMovePreviewSetup(t)
+	s.seededWithNewerDefinition(t)
+	_, newer := s.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", newer)
+
+	s.putDefinition(t, "3333333333333333333333333333333333333333333333333333333333333333", testNow.Add(time.Hour), `{"mainPlaylist":[{"type":"sequence","sequenceName":"Other.fseq"}]}`)
+	_, dropped := s.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", dropped)
+
+	s2 := newMovePreviewSetup(t)
+	s2.putDefinition(t, moveOldHash, testNow, moveOldDefinition)
+	s2.putPlaylist(t, "quick", movePlaylistTemplate)
+	_, none := s2.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", none)
+
+	s2.putPlaylist(t, "audio", `{"show":"halloween-2026","name":"Audio","runner":"showmesh-audio","entries":[{"id":"e1","cue":"wake-up"}]}`)
+	for id, want := range map[string]int{"missing": http.StatusNotFound, "audio": http.StatusConflict} {
+		status, problem := s2.preview(t, id)
+		if status != want {
+			t.Fatalf("%s: status = %d, want %d", id, status, want)
+		}
+		assertMatchesSchema(t, c, "Problem", problem)
+	}
+	s3 := newMovePreviewSetup(t)
+	s3.putPlaylist(t, "quick", movePlaylistTemplate)
+	status, problem := s3.preview(t, "quick")
+	if status != http.StatusConflict {
+		t.Fatalf("no copy held: status = %d", status)
+	}
+	assertMatchesSchema(t, c, "Problem", problem)
+
+	// The current copy is not held, but a newer one is.
+	s3.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	_, noCurrent := s3.preview(t, "quick")
+	assertMatchesSchema(t, c, "ShowPlaylistMovePreviewResponse", noCurrent)
 }

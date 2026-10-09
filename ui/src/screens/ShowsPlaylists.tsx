@@ -23,13 +23,13 @@ import { randomUUIDv4 } from '../api/uuid'
 import { Button, ButtonRow, Callout, DefinitionStrip, DeletePanel, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
-import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify, type AudioAssetOption } from './showsModel'
+import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, playlistRows, slugify, type AudioAssetOption } from './showsModel'
 import { MediaPlaylistDraft, MediaPlaylistEditor } from './ShowsMediaPlaylists'
 import { ReimportControl } from './ShowsReimport'
+import { PlaylistMoveNotice, PlaylistMoveReview, usePlaylistMove } from './ShowsPlaylistMove'
 
 type Playlist = ShowPlaylistConfigResponse
 type MediaPlaylist = MediaPlaylistConfigResponse
@@ -85,30 +85,29 @@ function usePlaylists(showId: string): {
 type FPPEvidence = {
   state: 'loading' | 'loaded' | 'failed'
   entries: FPPPlaylistDefinitionEntry[]
-  definitions: FPPPlaylistDefinitionMetadata[]
   reason: string | null
   reload: () => void
 }
 
 function useFPPEvidence(playlist: Playlist | null): FPPEvidence {
   const [attempt, setAttempt] = useState(0)
-  const [read, setRead] = useState<Omit<FPPEvidence, 'reload'>>({ state: 'loading', entries: [], definitions: [], reason: null })
+  const [read, setRead] = useState<Omit<FPPEvidence, 'reload'>>({ state: 'loading', entries: [], reason: null })
   const reload = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     if (playlist === null || playlist.payload.runner !== 'fpp' || playlist.payload.fpp === undefined) {
-      setRead({ state: 'loaded', entries: [], definitions: [], reason: null })
+      setRead({ state: 'loaded', entries: [], reason: null })
       return
     }
     let cancelled = false
     const binding = playlist.payload.fpp
-    setRead({ state: 'loading', entries: [], definitions: [], reason: null })
-    Promise.all([getFPPPlaylistDefinitionEntries(binding.instanceUuid, binding.playlistHash), listFPPPlaylistDefinitions()])
-      .then(([entries, definitions]) => {
-        if (!cancelled) setRead({ state: 'loaded', entries: entries.entries, definitions: definitions.definitions, reason: null })
+    setRead({ state: 'loading', entries: [], reason: null })
+    getFPPPlaylistDefinitionEntries(binding.instanceUuid, binding.playlistHash)
+      .then((entries) => {
+        if (!cancelled) setRead({ state: 'loaded', entries: entries.entries, reason: null })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setRead({ state: 'failed', entries: [], definitions: [], reason: describeApiError(err) })
+        if (!cancelled) setRead({ state: 'failed', entries: [], reason: describeApiError(err) })
       })
     return () => {
       cancelled = true
@@ -430,6 +429,7 @@ function FPPPlaylistEditor({
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const reimportGate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
+  const move = usePlaylistMove(playlist, onSaved)
 
   if (binding === undefined) {
     return <RuledStrip absence="unavailable" label="No binding" fact="This FPP-runner playlist has no stored FPP binding." />
@@ -438,7 +438,11 @@ function FPPPlaylistEditor({
   const instanceLabel = fppInstanceLabel(model.fpp, binding.instanceUuid)
   const instanceRoute = fppInstanceRoute(model.fpp, binding.instanceUuid)
   const reimportInstanceId = model.fpp.find((i) => i.instanceUuid === binding.instanceUuid)?.instanceId ?? null
-  const superseding = newerDefinition(evidence.definitions, binding.instanceUuid, binding.playlistName, binding.playlistHash)
+  const moveBlockedReason = !saveGate.allowed
+    ? saveGate.reason
+    : dirty
+      ? 'You have unsaved cue changes. Save or discard them, then review the changes in FPP\u2019s playlist.'
+      : null
 
   const discard = () => {
     const map: Record<string, string> = {}
@@ -519,7 +523,7 @@ function FPPPlaylistEditor({
           <p className="sm-eyebrow sm-flat">
             Imported from FPP
           </p>
-          {superseding !== null && <StatusPair tone="warn" label="Hash changed" />}
+          {move.newer !== null && <StatusPair tone="warn" label="FPP's playlist changed" />}
         </div>
         <div className="sm-grid sm-grid--auto sm-stack-3">
           <Field label="Instance">
@@ -566,15 +570,13 @@ function FPPPlaylistEditor({
           instanceUuid={binding.instanceUuid}
           playlistName={binding.playlistName}
           blockedReason={reimportGate.allowed ? null : reimportGate.reason}
-          onLanded={evidence.reload}
+          onLanded={() => {
+            evidence.reload()
+            move.recheck()
+          }}
         />
-        {superseding !== null && (
-          <p className="sm-small sm-muted sm-stack-3">
-            FPP&rsquo;s definition changed at {formatClock(superseding.capturedAt) ?? 'an unrecorded time'}, so the
-            bound hash no longer matches the latest captured definition. Every binding below should be treated as
-            held until this is reconciled.
-          </p>
-        )}
+        <PlaylistMoveNotice move={move} blockedReason={moveBlockedReason} />
+        <PlaylistMoveReview move={move} cues={cues} confirmBlockedReason={moveBlockedReason} />
       </div>
 
       <div className="sm-attn sm-stack-5">

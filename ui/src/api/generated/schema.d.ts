@@ -2715,6 +2715,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.playlist/{id}/definition-move-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview moving an FPP-runner playlist to FPP's newest captured playlist
+         * @description Read-only; needs the same scopes as `GET /config/show.playlist/{id}` (`show:macro:run` or `config:write`). The answer names the entries of the newest stored copy of the FPP playlist, which `GET /integrations/fpp/playlist-definitions` serves only under `observation:read`; a principal holding only the playlist read scope therefore sees those sequence names here. Compares the playlist's saved entries with the newest stored copy of the same FPP playlist on the same FPP instance, where newest means the copy ShowMesh received last, and reports for each saved entry whether it is kept, moved or dropped, and which entries of the newest copy have no cue. Saved entries match by `expectedSequenceFilename` first; an entry with no saved filename matches by section and position, and is flagged with `needsCheck` when its position may now hold a different sequence. When a filename occurs more than once the entries are matched in order and flagged. `revision` is the playlist revision the answer was computed against. To apply the move, send `proposed` unchanged to `PUT /config/show.playlist/{id}` with `If-Match` set to `revision`; this endpoint never writes. When no newer copy exists, `newerAvailable` is false. `proposed` is null and `canConfirm` is false when every saved entry would be dropped, or when the moved playlist would be refused by the write (for example a cue it uses was deleted). `current` is null, and the preview targets the newest held copy, when ShowMesh no longer holds the copy the playlist was made from. 404 when the playlist does not exist; 409 when it is not an FPP-runner playlist or ShowMesh holds no copy of its FPP playlist at all.
+         */
+        get: operations["getShowPlaylistDefinitionMovePreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/media.playlist": {
         parameters: {
             query?: never;
@@ -7035,6 +7055,65 @@ export interface components {
             createdByPrincipalName: string | null;
             /** @enum {string} */
             source: "api";
+        };
+        ShowPlaylistMoveSlot: {
+            section: string;
+            /** @description Zero-based, as the entries table shows it. */
+            position: number;
+        };
+        ShowPlaylistMoveDefinition: {
+            hash: string;
+            /**
+             * Format: date-time
+             * @description When ShowMesh received this copy.
+             */
+            receivedAt: string;
+            entryCount: number;
+        };
+        /** @description What happens to one saved entry. `to` is null when it is dropped. */
+        ShowPlaylistMoveEntry: {
+            entryId: string;
+            cue: string;
+            /** @description The saved sequence filename; empty when none was saved. */
+            filename: string;
+            /** @enum {string} */
+            outcome: "kept" | "moved" | "dropped";
+            /** @enum {string} */
+            matchedBy: "filename" | "position";
+            from: components["schemas"]["ShowPlaylistMoveSlot"];
+            to: components["schemas"]["ShowPlaylistMoveSlot"] | null;
+            duplicateFilename: boolean;
+            /** @description For an entry matched by position, the sequence name its position held in the copy the playlist follows now. Empty for a filename match, when that copy is no longer held, or when the position had no name. */
+            previousSequence: string;
+            /** @description For a position-matched entry that is carried over, the sequence name at the position it lands on. */
+            newSequence: string;
+            /** @description True when an entry matched by position is carried over and its position may now hold a different sequence than before. */
+            needsCheck: boolean;
+            /** @description Operator-facing sentence, shown verbatim. */
+            summary: string;
+        };
+        /** @description An entry of the newest FPP playlist that would have no cue. */
+        ShowPlaylistMoveNewEntry: {
+            section: string;
+            position: number;
+            name: string;
+            duplicateFilename: boolean;
+            summary: string;
+        };
+        /** @description The body of GET /config/show.playlist/{id}/definition-move-preview. `current` is null when ShowMesh no longer holds the copy the playlist was made from. */
+        ShowPlaylistMovePreviewResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            playlistId: string;
+            revision: number;
+            newerAvailable: boolean;
+            canConfirm: boolean;
+            summary: string;
+            current: components["schemas"]["ShowPlaylistMoveDefinition"] | null;
+            newest: components["schemas"]["ShowPlaylistMoveDefinition"] | null;
+            entries: components["schemas"]["ShowPlaylistMoveEntry"][];
+            newEntries: components["schemas"]["ShowPlaylistMoveNewEntry"][];
+            proposed: components["schemas"]["ConfigShowPlaylist"] | null;
         };
         /** @description One element of media.playlist.items. kind is today always "asset" ("cue" is reserved and refused server-side with problem type show-config-not-implemented). show/sequence/target are the same asset identity night.session's own background-audio items resolve against (ADR-028); show must equal the playlist's own show. */
         ConfigMediaPlaylistItem: {
@@ -13781,6 +13860,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowPlaylistDefinitionMovePreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowPlaylistMovePreviewResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

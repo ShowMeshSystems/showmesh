@@ -202,6 +202,7 @@ export type {
   ConfigShowPlaylistEntry,
   ConfigShowPlaylist,
   ShowPlaylistConfigResponse,
+  ShowPlaylistMovePreviewResponse,
 
   // Media Playlists screen: media.playlist authoring.
   ConfigMediaPlaylistItem,
@@ -419,6 +420,7 @@ export {
   listShowSurfacesForNode,
   getShowSurface,
   getShowPlaylist,
+  getShowPlaylistDefinitionMovePreview,
   putShowPlaylist,
   getShowPlaylistRevisions,
   deleteShowPlaylist,

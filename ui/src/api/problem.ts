@@ -23,6 +23,8 @@ export const PROBLEM_TYPE = {
   // Sec-Fetch-Site) that a client must explain differently — never dispatch
   // on HTTP status alone for either.
   forbidden: 'https://showmesh.dev/problems/forbidden',
+  // A config PUT whose If-Match revision is no longer current.
+  configRevisionPreconditionFailed: 'https://showmesh.dev/problems/config-revision-precondition-failed',
   csrfRejected: 'https://showmesh.dev/problems/csrf-rejected',
   tooManyRequests: 'https://showmesh.dev/problems/too-many-requests',
   credentialInUrl: 'https://showmesh.dev/problems/credential-in-url',

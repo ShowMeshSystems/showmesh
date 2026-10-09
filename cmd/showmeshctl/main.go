@@ -260,6 +260,7 @@ Commands:
   playlist get <id>                   show one playlist's full definition
   playlist set <id>                   write a new playlist revision (write, full replacement)
   playlist revisions <id>             list playlist revision history, newest first
+  playlist move-to-newer-fpp <id>     preview, or with --confirm save, following FPP's newest playlist (write)
   playlist delete --confirm <id>      tombstone this playlist (write); revision history stays
                                        readable via "playlist revisions"
   media-playlist list [--show <id>]   enumerate media.playlist objects, optionally by show

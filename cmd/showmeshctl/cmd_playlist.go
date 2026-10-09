@@ -66,6 +66,8 @@ func cmdPlaylist(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return cmdPlaylistRevisions(rest, stdout, stderr, clock)
 	case "delete":
 		return cmdPlaylistDelete(rest, stdout, stderr, clock)
+	case "move-to-newer-fpp":
+		return cmdPlaylistMove(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl playlist: unknown subcommand %q\n\n", sub)
 		printPlaylistUsage(stderr)
@@ -88,6 +90,10 @@ Subcommands:
   set <id>               write a new playlist revision (write, full
                          replacement)
   revisions <id>         list revision history, newest first
+  move-to-newer-fpp <id> [--confirm]
+                         show what happens to this FPP playlist's cues when
+                         it follows FPP's newest playlist; --confirm saves it
+                         (write)
   delete --confirm <id>  tombstone this playlist (write); revision history
                          stays readable via "revisions"
 
