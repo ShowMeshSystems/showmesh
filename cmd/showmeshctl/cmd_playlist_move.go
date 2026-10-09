@@ -71,9 +71,10 @@ func cmdPlaylistMove(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl playlist move-to-newer-fpp [flags] <playlist-id>")
 		_, _ = fmt.Fprintln(stderr, "\nShow what happens to this playlist's cues if it follows FPP's newest copy of")
 		_, _ = fmt.Fprintln(stderr, "its playlist (GET /api/v1/config/show.playlist/{id}/definition-move-preview).")
-		_, _ = fmt.Fprintln(stderr, "Each cue is matched by its saved sequence name, or by position when none was")
-		_, _ = fmt.Fprintln(stderr, "saved. Nothing is written unless --confirm is given; --confirm then saves the")
-		_, _ = fmt.Fprintln(stderr, "previewed move (PUT /api/v1/config/show.playlist/{id}) and is refused if the")
+		_, _ = fmt.Fprintln(stderr, "Each cue is matched by its saved sequence name, or by the sequence its position")
+		_, _ = fmt.Fprintln(stderr, "held when none was saved, or by position when that is not known. Nothing is")
+		_, _ = fmt.Fprintln(stderr, "written unless --confirm is given; --confirm then saves the previewed move")
+		_, _ = fmt.Fprintln(stderr, "(PUT /api/v1/config/show.playlist/{id}) and is refused if the")
 		_, _ = fmt.Fprintln(stderr, "playlist changed after the preview. Preview needs show:macro:run or")
 		_, _ = fmt.Fprintln(stderr, "config:write; --confirm needs config:write.")
 		fs.PrintDefaults()
@@ -158,6 +159,9 @@ func printPlaylistMovePreview(w io.Writer, p playlistMovePreviewResponse) {
 	_, _ = fmt.Fprintln(w, "\nSaved cues:")
 	for _, e := range p.Entries {
 		name := e.Filename
+		if name == "" && e.MatchedBy == "previousSequence" {
+			name = e.PreviousSequence
+		}
 		if name == "" {
 			name = "(no sequence name saved)"
 		}

@@ -171,7 +171,7 @@ export function PlaylistMoveReview({
                   return (
                     <tr key={entry.entryId}>
                       <td>{cueLabel(cues, entry.cue)}</td>
-                      <td>{entry.filename !== '' ? entry.filename : <span className="sm-faint">No sequence name saved</span>}</td>
+                      <td>{entry.filename !== '' ? entry.filename : entry.matchedBy === 'previousSequence' ? entry.previousSequence : <span className="sm-faint">No sequence name saved</span>}</td>
                       <td className="sm-table__wrap">
                         <StatusPair tone={outcome.tone} label={outcome.label} />
                         <br />

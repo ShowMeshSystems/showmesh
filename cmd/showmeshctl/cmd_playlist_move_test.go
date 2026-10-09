@@ -16,7 +16,8 @@ const movePreviewBody = `{"serverTime":"2026-08-16T21:00:00Z","playlistId":"quic
 	"newest":{"hash":"bb","receivedAt":"2026-08-16T20:20:00Z","entryCount":3},
 	"entries":[
 		{"entryId":"a","cue":"wake-up","filename":"Wake Up.fseq","outcome":"moved","matchedBy":"filename","from":{"section":"mainPlaylist","position":0},"to":{"section":"mainPlaylist","position":1},"duplicateFilename":false,"previousSequence":"","newSequence":"","needsCheck":false,"summary":"Moved from position 0 to position 1."},
-		{"entryId":"b","cue":"old","filename":"","outcome":"dropped","matchedBy":"position","from":{"section":"mainPlaylist","position":5},"to":null,"duplicateFilename":false,"previousSequence":"Old.fseq","newSequence":"","needsCheck":true,"summary":"FPP's playlist has no entry at position 5 any more. This cue will be removed from this playlist."}],
+		{"entryId":"b","cue":"old","filename":"","outcome":"dropped","matchedBy":"position","from":{"section":"mainPlaylist","position":5},"to":null,"duplicateFilename":false,"previousSequence":"Old.fseq","newSequence":"","needsCheck":true,"summary":"FPP's playlist has no entry at position 5 any more. This cue will be removed from this playlist."},
+		{"entryId":"c","cue":"kpop","filename":"","outcome":"moved","matchedBy":"previousSequence","from":{"section":"mainPlaylist","position":1},"to":{"section":"mainPlaylist","position":2},"duplicateFilename":false,"previousSequence":"kpop.fseq","newSequence":"kpop.fseq","needsCheck":false,"summary":"No sequence name was saved for this cue, so it follows the sequence its position held, kpop.fseq. Moved from position 1 to position 2."}],
 	"newEntries":[{"section":"mainPlaylist","position":0,"name":"Opener.fseq","duplicateFilename":false,"summary":"New at position 0 in FPP's playlist. It has no cue yet; give it one after you confirm."}],
 	"proposed":{"show":"halloween-2026","name":"Quick","runner":"fpp","mismatchPolicy":"hold",
 		"fpp":{"instanceUuid":"u","playlistName":"p","playlistHash":"bb"},
@@ -63,7 +64,7 @@ func TestCmdPlaylistMovePreviewWritesNothing(t *testing.T) {
 		t.Fatalf("requests = %v", ms.methods)
 	}
 	out := stdout.String()
-	for _, want := range []string{"moved", "Moved from position 0 to position 1.", "dropped", "no entry at position 5", "(no sequence name saved)", "Opener.fseq", "Nothing was changed"} {
+	for _, want := range []string{"moved", "Moved from position 0 to position 1.", "dropped", "no entry at position 5", "(no sequence name saved)", "kpop.fseq, cue kpop\n", "it follows the sequence its position held, kpop.fseq", "Opener.fseq", "Nothing was changed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
