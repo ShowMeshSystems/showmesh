@@ -266,6 +266,64 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	}
 }
 
+// TestTeardownKeepsItsTurnUntilItReturns proves doTeardown gives the
+// teardown turn back only through a defer, so it is held across the
+// state change and the element removal whichever way the attempt ends.
+func TestTeardownKeepsItsTurnUntilItReturns(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing methods.go: %v", err)
+	}
+	var doTeardownFn *ast.FuncDecl
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv != nil && fn.Name.Name == "doTeardown" {
+			doTeardownFn = fn
+		}
+	}
+	if doTeardownFn == nil {
+		t.Fatal("could not find func (b *branch) doTeardown in methods.go")
+	}
+
+	givesBack := func(n ast.Node) bool {
+		recv, ok := n.(*ast.UnaryExpr)
+		if !ok || recv.Op != token.ARROW {
+			return false
+		}
+		sel, ok := recv.X.(*ast.SelectorExpr)
+		return ok && sel.Sel.Name == "teardownTurn"
+	}
+	deferred, total := 0, 0
+	var claimPos, deferPos token.Pos
+	ast.Inspect(doTeardownFn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "claimTeardownTurn" {
+				claimPos = call.Pos()
+			}
+		}
+		if d, ok := n.(*ast.DeferStmt); ok {
+			ast.Inspect(d, func(m ast.Node) bool {
+				if givesBack(m) {
+					deferred++
+					deferPos = d.Pos()
+				}
+				return true
+			})
+		}
+		if givesBack(n) {
+			total++
+		}
+		return true
+	})
+	if deferred != 1 || total != 1 {
+		t.Fatalf("doTeardown gives the teardown turn back %d time(s), %d of them deferred; want exactly one, deferred, "+
+			"so the turn is never dropped ahead of the state change and the element removal", total, deferred)
+	}
+	if !claimPos.IsValid() || deferPos < claimPos {
+		t.Fatal("doTeardown defers giving the turn back before it has claimed it")
+	}
+}
+
 // TestTeardownOnlyCachesGenuineSuccess proves doTeardown does not set
 // b.released ahead of a deferral: teardown's only cache is a real
 // success, so a deferred attempt (see errTeardownDeferredForRace) stays

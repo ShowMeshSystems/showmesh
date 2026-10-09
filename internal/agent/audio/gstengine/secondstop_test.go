@@ -5,6 +5,7 @@ package gstengine
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,5 +143,71 @@ func TestTeardownLeavesElementsAloneWhenAStateChangeBeginsWhileItQueues(t *testi
 	b.pendingStateChanges.Add(-1)
 	if err := <-done; err != nil {
 		t.Fatalf("Release after the state change settled: %v", err)
+	}
+}
+
+// countBuffersLeavingQueue counts every buffer b sends on toward the
+// mixers from here on.
+func countBuffersLeavingQueue(b *branch) *atomic.Int64 {
+	var n atomic.Int64
+	b.queue.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
+		n.Add(1)
+		return gst.PadProbeOK
+	})
+	return &n
+}
+
+// TestAPausedBranchStaysSilentWhileItsReleaseWaitsForTheTurn proves a
+// paused branch, silent only because of its flow block, sends nothing
+// downstream while its teardown queues behind another one.
+func TestAPausedBranchStaysSilentWhileItsReleaseWaitsForTheTurn(t *testing.T) {
+	e := newTestEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+	b := loadPlaying(t, e, ctx, "paused")[0]
+	if _, err := e.Pause(ctx, "paused"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	passed := countBuffersLeavingQueue(b)
+
+	e.teardownTurn <- struct{}{}
+	done := make(chan error, 1)
+	go func() {
+		relCtx, relCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer relCancel()
+		done <- e.Release(relCtx, "paused")
+	}()
+	time.Sleep(time.Second)
+	if n := passed.Load(); n != 0 {
+		t.Errorf("the paused branch sent %d buffer(s) downstream while its Release waited for the turn, want 0", n)
+	}
+	<-e.teardownTurn
+	if err := <-done; err != nil {
+		t.Fatalf("Release once the turn was free: %v", err)
+	}
+}
+
+// TestAPausedBranchStaysSilentThroughClose proves the same of Close,
+// which tears every branch down at once so all but one must queue.
+func TestAPausedBranchStaysSilentThroughClose(t *testing.T) {
+	e := newTestEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+	b := loadPlaying(t, e, ctx, "paused", "playing1", "playing2", "playing3", "playing4")[0]
+	if _, err := e.Pause(ctx, "paused"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	passed := countBuffersLeavingQueue(b)
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Its own teardown releases the block a moment before the state
+	// change, so a buffer or two is expected; a queued wait's worth is not.
+	t.Logf("the paused branch sent %d buffer(s) downstream during Close", passed.Load())
+	if n := passed.Load(); n > 8 {
+		t.Fatalf("the paused branch sent %d buffers downstream during Close, want no more than its own teardown lets through", n)
 	}
 }

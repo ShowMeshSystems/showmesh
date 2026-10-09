@@ -925,6 +925,18 @@ func (b *branch) teardownUnderway() bool {
 	return len(b.teardownGate) == 1
 }
 
+// releaseFlowForTeardown releases any flow block so the state change
+// that follows never races it. A never-joined branch flushes the hold
+// away, since a plainly released buffer would answer NOT_LINKED.
+func (b *branch) releaseFlowForTeardown() {
+	b.unblockFlow()
+	if b.hasJoined() {
+		b.removeHold()
+	} else {
+		b.removeHoldForTeardown()
+	}
+}
+
 // claimTeardownTurn takes the engine's teardown turn only once no state
 // change is still running against b's elements, so a teardown that is
 // merely waiting for one to settle never holds up another branch's.
@@ -932,8 +944,14 @@ func (b *branch) teardownUnderway() bool {
 func (b *branch) claimTeardownTurn(ctx context.Context) error {
 	settleBy := time.Now().Add(teardownTimeout)
 	for {
-		if !b.awaitNoElementRace(ctx, time.Until(settleBy)) {
-			return errTeardownDeferredForRace
+		if b.pendingStateChanges.Load() != 0 {
+			// The running state change may itself be held by this branch's
+			// flow block, so the block goes now, behind a mute.
+			muteBranch(b)
+			b.releaseFlowForTeardown()
+			if !b.awaitNoElementRace(ctx, time.Until(settleBy)) {
+				return errTeardownDeferredForRace
+			}
 		}
 		select {
 		case b.engine.teardownTurn <- struct{}{}:
@@ -964,16 +982,6 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	b.teardownClaimed = true
 	b.mu.Unlock()
 
-	// Release any flow block first so the state change below never
-	// races it. A never-joined branch flushes the hold away, since a
-	// plainly released buffer would answer NOT_LINKED.
-	b.unblockFlow()
-	if b.hasJoined() {
-		b.removeHold()
-	} else {
-		b.removeHoldForTeardown()
-	}
-
 	if err := b.claimTeardownTurn(ctx); err != nil {
 		if errors.Is(err, errTeardownDeferredForRace) {
 			slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)
@@ -983,6 +991,10 @@ func (b *branch) doTeardown(ctx context.Context) error {
 		return err
 	}
 	defer func() { <-b.engine.teardownTurn }()
+
+	// Only now, with the turn in hand: a paused or stopped branch is
+	// silent because of its flow block alone.
+	b.releaseFlowForTeardown()
 
 	// teardownTimeout as well as ctx, never ctx alone: a caller with no
 	// deadline of its own would otherwise wait out a GStreamer NULL
