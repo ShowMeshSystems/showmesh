@@ -33,6 +33,11 @@ type ConfigAudioSettingsPayload struct {
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 
+	// The same two terms for a start where the clock holder confirmed a
+	// prepare of that session. Optional on write; absent means the default.
+	PreparedStartDeliveryBoundMs int `json:"preparedStartDeliveryBoundMs"`
+	PreparedStartMarginMs        int `json:"preparedStartMarginMs"`
+
 	// MultisyncFallbackWindowMs is also read by the coordinator only
 	// (ADR-051 decision 4): after dispatching an activation, how long it
 	// waits from the FPP entry observation for a node's own evidence

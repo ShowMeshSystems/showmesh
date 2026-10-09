@@ -423,6 +423,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	if out.result.AttributionDegraded {
 		attributionDegraded = true
 	}
+	// Pre-show's first steps start now rather than at the loop's next tick.
+	if cmd == nightCommandStartPreshow && out.outcome == nightOutcomeApplied {
+		h.nightWakeLoop()
+	}
 
 	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge, true)
 	state.AttributionDegraded = attributionDegraded

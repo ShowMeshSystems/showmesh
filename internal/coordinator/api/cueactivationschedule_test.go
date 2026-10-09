@@ -74,6 +74,7 @@ func scheduleProbeEvidenceResult(valid bool, nowNs int64, reason string) mqttpro
 		Evidence: &mqttproto.ResultEvidence{
 			Signal: "audio.session",
 			Value: map[string]any{
+				"outcome":                       "position",
 				pkgaudio.ResultMediaClockValid:  valid,
 				pkgaudio.ResultMediaClockNowNs:  json.Number(strconv.FormatInt(nowNs, 10)),
 				pkgaudio.ResultMediaClockReason: reason,

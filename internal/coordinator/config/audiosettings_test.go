@@ -26,11 +26,34 @@ func TestDecodeAudioSettingsPayloadAccepts(t *testing.T) {
 		LTCFrameRate:              "25", LTCDefaultStartOffset: "00:00:00:00",
 		ScheduledStartDeliveryBoundMs: 2000,
 		ScheduledStartMarginMs:        1000,
-		MultisyncFallbackWindowMs:     1500,
-		MultisyncStartLeadMs:          100,
+		// Absent from the payload, so both take their defaults.
+		PreparedStartDeliveryBoundMs: 250,
+		PreparedStartMarginMs:        500,
+		MultisyncFallbackWindowMs:    1500,
+		MultisyncStartLeadMs:         100,
 	}
 	if p != want {
 		t.Errorf("payload = %+v, want %+v", p, want)
+	}
+}
+
+// TestDecodeAudioSettingsPayloadPreparedStartTerms proves the two prepared
+// start terms are kept when written and held to the scheduled pair's bounds.
+func TestDecodeAudioSettingsPayloadPreparedStartTerms(t *testing.T) {
+	with := func(extra string) string {
+		return strings.TrimSuffix(strings.TrimSpace(validAudioSettingsPayloadJSON()), "}") + "," + extra + "}"
+	}
+	p, verr := DecodeAudioSettingsPayload(with(`"preparedStartDeliveryBoundMs":120,"preparedStartMarginMs":0`))
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.PreparedStartDeliveryBoundMs != 120 || p.PreparedStartMarginMs != 0 {
+		t.Fatalf("prepared terms = %d/%d, want 120/0", p.PreparedStartDeliveryBoundMs, p.PreparedStartMarginMs)
+	}
+	for _, bad := range []string{`"preparedStartDeliveryBoundMs":-1`, `"preparedStartMarginMs":60001`, `"preparedStartMarginMs":null`} {
+		if _, verr := DecodeAudioSettingsPayload(with(bad)); verr == nil {
+			t.Errorf("%s was accepted, want it refused", bad)
+		}
 	}
 }
 

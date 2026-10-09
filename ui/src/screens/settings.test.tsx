@@ -894,6 +894,8 @@ describe('Settings › Audio defaults', () => {
         ltcDefaultStartOffset: '00:00:00:00',
         scheduledStartDeliveryBoundMs: 2000,
         scheduledStartMarginMs: 1000,
+        preparedStartDeliveryBoundMs: 250,
+        preparedStartMarginMs: 500,
         multisyncFallbackWindowMs: 1500,
         multisyncStartLeadMs: 100,
       },
@@ -929,6 +931,33 @@ describe('Settings › Audio defaults', () => {
     expect(screen.getByRole('button', { name: 'Discard changes' })).not.toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
     expect(duckFadeInput.value).toBe('400')
+  })
+
+  it('shows the two prepared start terms, says when they apply, validates them, and saves them', async () => {
+    stubs.getAudioSettingsConfig = () => Promise.resolve(audioSettingsConfig())
+    const put = vi.fn(() => Promise.resolve(audioSettingsConfig()))
+    stubs.putAudioSettingsConfig = put
+
+    renderAt('/settings/audio-defaults')
+
+    const bound = (await screen.findByLabelText('Prepared start delivery bound (ms)')) as HTMLInputElement
+    const margin = screen.getByLabelText('Prepared start margin (ms)') as HTMLInputElement
+    expect(bound.value).toBe('250')
+    expect(margin.value).toBe('500')
+    expect(screen.getAllByText('Used when every node has the audio loaded ahead of the start.')).toHaveLength(2)
+
+    fireEvent.change(bound, { target: { value: '70000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }))
+    expect(await screen.findByText('Prepared start delivery bound must be a whole number of milliseconds between 0 and 60000.')).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(bound, { target: { value: '120' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        expect.objectContaining({ preparedStartDeliveryBoundMs: 120, preparedStartMarginMs: 500, scheduledStartDeliveryBoundMs: 2000 }),
+      ),
+    )
   })
 })
 
