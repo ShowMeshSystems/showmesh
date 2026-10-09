@@ -11920,15 +11920,20 @@ components:
     FPPPairingClaimResponse:
       description: >-
         The body of a successful (200) claim: the only time the minted
-        token appears on the wire.
+        token appears on the wire. `coordinatorPublicKey` is the standard
+        base64 of the coordinator's raw 32-byte Ed25519 public key, the same
+        key node enrollment returns. The plugin stores it to check the
+        fallback programs this coordinator signs.
       type: object
-      required: [token, principalId, instanceId]
+      required: [token, principalId, instanceId, coordinatorPublicKey]
       properties:
         token:
           type: string
         principalId:
           type: string
         instanceId:
+          type: string
+        coordinatorPublicKey:
           type: string
     FPPDefinitionRepublishRequest:
       description: >-

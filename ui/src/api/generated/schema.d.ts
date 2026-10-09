@@ -3988,11 +3988,12 @@ export interface components {
             /** @description The plugin's own 32 random bytes as lower-case hex. Never logged, never audited, never returned. */
             secret: string;
         };
-        /** @description The body of a successful (200) claim: the only time the minted token appears on the wire. */
+        /** @description The body of a successful (200) claim: the only time the minted token appears on the wire. `coordinatorPublicKey` is the standard base64 of the coordinator's raw 32-byte Ed25519 public key, the same key node enrollment returns. The plugin stores it to check the fallback programs this coordinator signs. */
         FPPPairingClaimResponse: {
             token: string;
             principalId: string;
             instanceId: string;
+            coordinatorPublicKey: string;
         };
         /** @description The body of POST /fpp/{instanceId}/playlist-definitions/republish (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). Every field is optional, so the body itself may be omitted entirely: a republish is all of that host's definitions or none, and has no parameters. */
         FPPDefinitionRepublishRequest: {
