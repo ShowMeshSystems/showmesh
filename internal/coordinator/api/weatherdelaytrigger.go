@@ -16,6 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/weathertrigger"
+	"github.com/showmeshsystems/showmesh/pkg/command"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/weatherdelay"
 )
@@ -308,7 +309,8 @@ const weatherDelayDecisionExpiredMessage = "The weather question expired before 
 // [handlers.weatherDelayRunStartOrChange], the same path start/cancel-night
 // themselves use. An operator's answer and that decision's own deadline
 // race here, as do two coordinators' timers after a restart, and claimed
-// is how exactly one of them acts.
+// is how exactly one of them acts. Each start carries a key of its own, so
+// its stops are sent every time and never answered from an earlier start.
 func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Time, pending store.PendingWeatherDelayDecisionRecord, res weatherDelayDecisionResolution, ac authContext, clientAddr string) (v1.WeatherDelayDecisionResponse, bool) {
 	answer := res.Answer
 	claimed, err := h.deps.WeatherDelayTrigger.ClearPendingWeatherDelayDecision(ctx, pending.ID)
@@ -344,10 +346,10 @@ func (h *handlers) weatherDelayResolveDecision(ctx context.Context, now time.Tim
 			h.logWarn("weather delay decision: failed to persist the dismiss suppression", "error", err)
 		}
 	case weathertrigger.AnswerDelay:
-		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, "", ac, clientAddr, nil, nil)
+		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindDelay, identity.AuditActionShowWeatherDelayStart, command.NewIdempotencyKey(), ac, clientAddr, nil, nil)
 		resp.Result = &result
 	case weathertrigger.AnswerCancelNight:
-		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, "", ac, clientAddr, h.weatherDelayCancelNightAfterDispatch, nil)
+		result := h.weatherDelayRunStartOrChange(ctx, now, weatherdelay.KindCancelNight, identity.AuditActionShowWeatherDelayCancelNight, command.NewIdempotencyKey(), ac, clientAddr, h.weatherDelayCancelNightAfterDispatch, nil)
 		resp.Result = &result
 	}
 

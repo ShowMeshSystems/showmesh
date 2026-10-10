@@ -85,6 +85,8 @@ type resumeHarness struct {
 	commands []string
 	args     [][]string
 	now      time.Time
+	// onStop, when set, runs as a stop command reaches the player.
+	onStop func()
 }
 
 func (r *resumeHarness) fppCommands() ([]string, [][]string) {
@@ -122,6 +124,9 @@ func newResumeHarnessWith(t *testing.T, weatherDelay func(*store.Store) WeatherD
 		r.args = append(r.args, body.Args)
 		r.mu.Unlock()
 		if strings.HasPrefix(body.Command, "Stop") {
+			if r.onStop != nil {
+				r.onStop()
+			}
 			r.obs.add(
 				statusObservation("player-01", fppStatusValueIdle, r.now),
 				playlistNameObservation("player-01", "", r.now),

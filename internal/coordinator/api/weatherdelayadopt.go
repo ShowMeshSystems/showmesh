@@ -109,11 +109,7 @@ func NewWeatherDelayAdopter(deps Dependencies, opts Options) *WeatherDelayAdopte
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &WeatherDelayAdopter{
-		h: &handlers{
-			deps: deps, clock: opts.Clock, logger: opts.Logger,
-			fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
-			fppCommandPollInterval:    opts.FPPCommandPollInterval,
-		},
+		h:      newBackgroundHandlers(deps, opts),
 		logger: opts.Logger, loggedStale: map[string]int64{},
 	}
 }

@@ -248,6 +248,18 @@ type handlers struct {
 
 func (h *handlers) now() time.Time { return h.clock() }
 
+// newBackgroundHandlers builds the *handlers a background loop runs on, with
+// every option a command dispatch reads. opts must already carry its defaults:
+// a zero FPP poll interval panics the first time a player is asked to confirm.
+func newBackgroundHandlers(deps Dependencies, opts Options) *handlers {
+	return &handlers{
+		deps: deps, clock: opts.Clock, logger: opts.Logger,
+		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
+		fppCommandPollInterval:    opts.FPPCommandPollInterval,
+		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
+	}
+}
+
 // notifyStreamHub pokes the SSE hub when one is wired, and does nothing
 // when a test builds a *handlers without one.
 func (h *handlers) notifyStreamHub() {
