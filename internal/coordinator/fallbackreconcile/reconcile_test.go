@@ -311,6 +311,51 @@ func TestServiceRefusalDoesNotClearPreviouslyPublishedProgram(t *testing.T) {
 	}
 }
 
+func TestServiceEmptyPlaylistIsNotRefusedAndAnOlderProgramExpires(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	audit := &recordingAuditWriter{}
+	svc := NewService(st, fakeSigner{}, audit, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+
+	svc.reconcileOnce(context.Background())
+	published, err := st.GetFallbackProgram(context.Background(), testInstanceUUID)
+	if err != nil {
+		t.Fatalf("GetFallbackProgram: %v", err)
+	}
+	audited := len(audit.entries)
+
+	emptied, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP:     &config.ShowPlaylistFPPBinding{InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: testPlaylistHash},
+		Entries: []config.ShowPlaylistEntry{},
+	})
+	if err != nil {
+		t.Fatalf("encode playlist: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: config.ShowPlaylistConfigKind, ObjectID: "main", Revision: 2, PayloadJSON: emptied, Source: "test",
+	}); err != nil {
+		t.Fatalf("create revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(context.Background(), config.ShowPlaylistConfigKind, "main", 2); err != nil {
+		t.Fatalf("activate revision: %v", err)
+	}
+
+	now = now.Add(fallbackcompile.ProgramTTL + time.Minute)
+	svc.reconcileOnce(context.Background())
+
+	if len(audit.entries) != audited {
+		t.Fatalf("an empty playlist must not be compiled, refused or audited; new entries: %+v", audit.entries[audited:])
+	}
+	rec, err := st.GetFallbackProgram(context.Background(), testInstanceUUID)
+	if err != nil {
+		t.Fatalf("GetFallbackProgram: %v", err)
+	}
+	if rec.Revision != published.Revision || now.Before(rec.ExpiresAt) {
+		t.Fatalf("the older program must be left alone and simply expire; revision %q want %q, expires %v, now %v", rec.Revision, published.Revision, rec.ExpiresAt, now)
+	}
+}
+
 // recordingCatalogDeployer is a fake [CatalogDeployer]: it records every
 // nodeID it was asked to auto-deploy, without dispatching anything real.
 // This package owns no HTTP or MQTT dependency of its own to do that with

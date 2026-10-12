@@ -7907,7 +7907,8 @@ paths:
         `showmesh-audio`. `mismatchPolicy` is permitted only when `runner`
         is `fpp`; `safeCueRef` is required iff `mismatchPolicy` is
         `safeCue`, and must name a same-show `show.cue` object. `entries`
-        is required and non-empty; each entry's `cue` must name a
+        is required; it may be empty only when `runner` is `fpp` (a
+        playlist with no songs bound runs no cues); each entry's `cue` must name a
         same-show `show.cue` object, entry ids must be unique, and two
         entries sharing the same `fpp.section`/`fpp.position` pair are
         refused (they derive the identical FPP entry key). This is a FULL
@@ -20005,7 +20006,7 @@ components:
         runner is fpp; showmeshAudio is permitted only when runner is
         showmesh-audio. mismatchPolicy is permitted only when runner is
         fpp; safeCueRef is required iff mismatchPolicy is safeCue.
-        entries is required and non-empty.
+        entries is required; it may be empty only when runner is fpp.
       required: [show, name, runner, entries]
       properties:
         show:
@@ -20029,7 +20030,6 @@ components:
           $ref: "#/components/schemas/ConfigShowPlaylistShowmeshAudio"
         entries:
           type: array
-          minItems: 1
           items:
             $ref: "#/components/schemas/ConfigShowPlaylistEntry"
     ShowPlaylistConfigResponse:

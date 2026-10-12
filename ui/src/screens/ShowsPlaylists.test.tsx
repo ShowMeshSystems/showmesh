@@ -687,11 +687,11 @@ describe('Shows · Playlists tab editing', () => {
       return withCues(kind, cues)
     }
 
-    function setupDraft(scopes: string[] = ['config:write']) {
+    function setupDraft(scopes: string[] = ['config:write'], model: Partial<Model> = {}) {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => withEmptyPlaylists(kind, [cueSummary(), cueSummary2()])
       stubs.listAssets = assetsEmpty
-      return renderWorkspace({ session: signedIn(scopes) })
+      return renderWorkspace({ session: signedIn(scopes), ...model })
     }
 
     it('renders nothing below the type gate until it is answered, and the footer says Type required', async () => {
@@ -724,6 +724,30 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('group', { name: 'Repeat' })).toBeInTheDocument()
       expect(screen.queryByRole('group', { name: /If the FPP playlist does not match/ })).not.toBeInTheDocument()
       expect(screen.getByRole('heading', { name: 'First entry' })).toBeInTheDocument()
+    })
+
+    it('creates an FPP playlist with no entries and no bound-cue control', async () => {
+      stubs.listFPPPlaylistDefinitions = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          definitions: [{ instanceUuid: 'uuid-1', playlistName: 'WinterRidge_Main', playlistHash: 'a'.repeat(64), capturedAt: '2026-08-30T18:00:00Z', receivedAt: '2026-08-30T18:00:00Z' }],
+        })
+      stubs.getShowPlaylist = () => Promise.reject(new ApiError('Not found.', 404))
+      const putSpy = vi.fn((_id: string, payload: ConfigShowPlaylist) => Promise.resolve(playlistResponse(payload, 'winter-main')))
+      stubs.putShowPlaylist = putSpy
+      setupDraft(['config:write'], { fpp: [makeFPPInstance('barn-player', { instanceUuid: 'uuid-1' })] })
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Winter Main' } })
+      expect(screen.queryByText('Bound cue')).not.toBeInTheDocument()
+      expect(screen.queryByRole('combobox', { name: /Bound cue/ })).not.toBeInTheDocument()
+      fireEvent.change(await screen.findByRole('combobox', { name: 'Instance' }), { target: { value: 'uuid-1' } })
+      fireEvent.change(await screen.findByRole('combobox', { name: 'FPP playlist' }), { target: { value: 'a'.repeat(64) } })
+      fireEvent.click(screen.getByRole('button', { name: 'Create playlist' }))
+      await waitFor(() => expect(putSpy).toHaveBeenCalled())
+      expect(putSpy.mock.calls[0]?.[1]).toMatchObject({ runner: 'fpp', entries: [] })
     })
 
     it('does not create with a taken id and offers to open the existing playlist', async () => {
@@ -761,6 +785,23 @@ describe('Shows · Playlists tab editing', () => {
   })
 
   describe('the combined table', () => {
+    it('warns on an FPP playlist with no cues bound and not on one with a cue bound', async () => {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => {
+        if (kind === 'show.playlist')
+          return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [summary(), summary({ id: 'p2', label: 'Bound Show' })] })
+        return withCues(kind, [])
+      }
+      stubs.listAssets = assetsEmpty
+      stubs.getShowPlaylist = (id: string) =>
+        Promise.resolve(playlistResponse(id === 'p1' ? fppPlaylist({ entries: [] }) : fppPlaylist({ name: 'Bound Show' }), id))
+      renderWorkspace({ session: signedIn(['config:write']) })
+      const empty = await screen.findByRole('row', { name: 'Edit Main Show' })
+      expect(within(empty).getByText('Runs no cues until songs are bound.')).toBeInTheDocument()
+      const bound = await screen.findByRole('row', { name: 'Edit Bound Show' })
+      expect(within(bound).queryByText(/Runs no cues/)).not.toBeInTheDocument()
+    })
+
     it('reads Show playlist / Media playlist in the Type column, and Runner faint "Not applicable" on the media row', async () => {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => {

@@ -1,6 +1,11 @@
 package fallbackcompile
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+)
 
 func TestBaseFixturePublishes(t *testing.T) {
 	f := newBaseFixture(t)
@@ -19,5 +24,21 @@ func TestBaseFixturePublishes(t *testing.T) {
 	}
 	if entry.Targets[0].Render == nil || entry.Targets[0].Render.Filename != "thriller.fseq" {
 		t.Fatalf("Entries[0].Targets[0].Render = %+v, want filename thriller.fseq", entry.Targets[0].Render)
+	}
+}
+
+func TestAnEmptyPlaylistOwesNoProgram(t *testing.T) {
+	f := newBaseFixture(t)
+	putPlaylist(t, f.st, "main", config.ShowPlaylistPayload{
+		Show: f.showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP:     &config.ShowPlaylistFPPBinding{InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: testPlaylistHash},
+		Entries: []config.ShowPlaylistEntry{},
+	})
+	hosts, err := ParticipatingFPPHosts(context.Background(), f.st)
+	if err != nil {
+		t.Fatalf("ParticipatingFPPHosts: %v", err)
+	}
+	if len(hosts) != 0 {
+		t.Fatalf("hosts = %v, want none: a playlist with no cues bound owes no program", hosts)
 	}
 }

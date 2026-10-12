@@ -600,6 +600,10 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
+	if len(p.Entries) == 0 {
+		report.Warning = appendWarning(report.Warning, "No songs are bound to cues, so this playlist runs no cues. Bind a song in the playlist.")
+	}
+
 	return report, nil
 }
 

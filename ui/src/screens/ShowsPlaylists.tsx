@@ -147,6 +147,7 @@ type CombinedRow = {
   detail: string
   typeLabel: string
   runnerLabel: string
+  warning: string | null
 }
 
 function combinedRows(playlists: readonly Playlist[], mediaPlaylists: readonly MediaPlaylist[]): CombinedRow[] {
@@ -157,6 +158,7 @@ function combinedRows(playlists: readonly Playlist[], mediaPlaylists: readonly M
     detail: row.detail,
     typeLabel: 'Show playlist',
     runnerLabel: row.runnerLabel,
+    warning: row.runner === 'fpp' && row.entriesBound === 0 ? 'Runs no cues until songs are bound.' : null,
   }))
   const mediaRows: CombinedRow[] = mediaPlaylists.map((playlist) => ({
     kind: 'media',
@@ -165,6 +167,7 @@ function combinedRows(playlists: readonly Playlist[], mediaPlaylists: readonly M
     detail: `${playlist.payload.repeat === 'none' ? 'No repeat' : `Repeat ${playlist.payload.repeat}`} · ${playlist.payload.items.length} ${playlist.payload.items.length === 1 ? 'item' : 'items'}`,
     typeLabel: 'Media playlist',
     runnerLabel: 'Not applicable',
+    warning: null,
   }))
   return [...showRows, ...mediaRows]
 }
@@ -268,6 +271,12 @@ export function ShowsPlaylists() {
                           {selected?.kind === row.kind && selected.id === row.id && <span className="sm-viewing">Editing</span>}
                           <br />
                           <span className="sm-small sm-muted">{row.detail}</span>
+                          {row.warning !== null && (
+                            <>
+                              <br />
+                              <StatusPair tone="warn" label={row.warning} />
+                            </>
+                          )}
                         </td>
                         <td className="sm-small sm-muted">{row.typeLabel}</td>
                         <td className="sm-small sm-muted">{row.kind === 'media' ? <span className="sm-faint">{row.runnerLabel}</span> : row.runnerLabel}</td>
@@ -467,10 +476,6 @@ function FPPPlaylistEditor({
         cue,
         fpp: { ...existing?.fpp, section: entry.section, position: entry.position },
       })
-    }
-    if (entries.length === 0) {
-      setSaveError('At least one imported entry must be bound to a cue; a playlist cannot save with no entries.')
-      return
     }
     if (storedMismatch === 'safeCue' && safeCueRef === '') {
       setSaveError('Safe cue requires selecting which cue to fall back to.')
@@ -1057,11 +1062,6 @@ function PlaylistDraft({
     items: [],
   })
   const [playlistHash, setPlaylistHash] = useState('')
-  const [entries, setEntries] = useState<{ state: 'idle' | 'loading' | 'loaded' | 'failed'; items: FPPPlaylistDefinitionEntry[] }>({
-    state: 'idle',
-    items: [],
-  })
-  const [boundCue, setBoundCue] = useState('')
   const [audioCue, setAudioCue] = useState('')
   const [creating, setCreating] = useState(false)
   const [taken, setTaken] = useState(false)
@@ -1083,25 +1083,6 @@ function PlaylistDraft({
     }
   }, [runner])
 
-  useEffect(() => {
-    if (runner !== 'fpp' || instanceUuid === '' || playlistHash === '') {
-      setEntries({ state: 'idle', items: [] })
-      return
-    }
-    let cancelled = false
-    setEntries({ state: 'loading', items: [] })
-    getFPPPlaylistDefinitionEntries(instanceUuid, playlistHash)
-      .then((response) => {
-        if (!cancelled) setEntries({ state: 'loaded', items: response.entries })
-      })
-      .catch(() => {
-        if (!cancelled) setEntries({ state: 'failed', items: [] })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [runner, instanceUuid, playlistHash])
-
   const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   const onNameChange = (value: string) => {
@@ -1116,14 +1097,13 @@ function PlaylistDraft({
   const fppInstances = model.fpp.filter((instance): instance is typeof instance & { instanceUuid: string } => instance.instanceUuid !== null)
   const availableDefinitions = instanceUuid === '' ? [] : latestDefinitionsByName(definitions.items, instanceUuid)
   const chosenDefinition = availableDefinitions.find((d) => d.playlistHash === playlistHash) ?? null
-  const firstEntry = entries.items[0] ?? null
 
   const canCreate =
     runner !== '' &&
     id !== '' &&
     (runner === 'showmesh-audio'
       ? audioCue !== ''
-      : chosenDefinition !== null && firstEntry !== null && boundCue !== '')
+      : chosenDefinition !== null)
 
   const create = () => {
     const activeRunner: Runner | '' = runner
@@ -1135,7 +1115,7 @@ function PlaylistDraft({
             name,
             runner: 'fpp',
             fpp: { instanceUuid: chosenDefinition!.instanceUuid, playlistName: chosenDefinition!.playlistName, playlistHash: chosenDefinition!.playlistHash },
-            entries: [{ id: randomUUIDv4(), cue: boundCue, fpp: { section: firstEntry!.section, position: firstEntry!.position } }],
+            entries: [],
           }
         : {
             show: showId,
@@ -1198,7 +1178,6 @@ function PlaylistDraft({
               setRunner(value as Runner)
               setInstanceUuid('')
               setPlaylistHash('')
-              setBoundCue('')
               setAudioCue('')
             }}
           />
@@ -1245,9 +1224,11 @@ function PlaylistDraft({
           )}
 
           <div>
-            <h3 className="sm-subsection__title">First entry</h3>
+            <h3 className="sm-subsection__title">{runner === 'fpp' ? 'FPP playlist' : 'First entry'}</h3>
             <p className="sm-small sm-muted">
-              The coordinator refuses a playlist with no entries, the same way it refuses a macro with no steps, so the first entry is part of creation.
+              {runner === 'fpp'
+                ? 'Songs are bound to cues in the playlist after it is created.'
+                : 'The coordinator refuses an audio playlist with no entries, the same way it refuses a macro with no steps, so the first entry is part of creation.'}
             </p>
             {runner === 'fpp' ? (
               <div className="sm-grid sm-grid--auto sm-stack-3">
@@ -1262,7 +1243,6 @@ function PlaylistDraft({
                         onChange={(e) => {
                           setInstanceUuid(e.target.value)
                           setPlaylistHash('')
-                          setBoundCue('')
                         }}
                       >
                         <option value="">Select an instance</option>
@@ -1290,34 +1270,12 @@ function PlaylistDraft({
                           value={playlistHash}
                           onChange={(e) => {
                             setPlaylistHash(e.target.value)
-                            setBoundCue('')
                           }}
                         >
                           <option value="">Select an FPP playlist</option>
                           {availableDefinitions.map((definition) => (
                             <option key={definition.playlistHash} value={definition.playlistHash}>
                               {definition.playlistName}
-                            </option>
-                          ))}
-                        </Select>
-                      )}
-                    </Field>
-                  ))}
-                {playlistHash !== '' &&
-                  (entries.state === 'loading' ? (
-                    <RuledStrip absence="loading" label="Reading" fact="Fetching the chosen definition's entries." />
-                  ) : entries.state === 'failed' ? (
-                    <RuledStrip absence="failed" label="Read failed" fact="Could not read the chosen definition's entries." />
-                  ) : firstEntry === null ? (
-                    <RuledStrip absence="empty" label="None" fact="The chosen definition has no entries." />
-                  ) : (
-                    <Field label="Bound cue">
-                      {(props) => (
-                        <Select {...props} value={boundCue} onChange={(e) => setBoundCue(e.target.value)}>
-                          <option value="">Select a cue</option>
-                          {cues.map((cue) => (
-                            <option key={cue.id} value={cue.id}>
-                              {cue.label}
                             </option>
                           ))}
                         </Select>

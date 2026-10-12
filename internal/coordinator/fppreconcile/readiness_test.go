@@ -1069,3 +1069,23 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		}
 	})
 }
+
+func TestPlaylistReadinessEmptyPlaylistIsAWarningNotAFailure(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	p.Entries = []config.ShowPlaylistEntry{}
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready || report.FailingCondition != "" {
+		t.Fatalf("Ready = %v, failing = %q (%s), want ready: an empty playlist only warns", report.Ready, report.FailingCondition, report.Reason)
+	}
+	if !strings.Contains(report.Warning, "runs no cues") {
+		t.Fatalf("Warning = %q, want it to say the playlist runs no cues", report.Warning)
+	}
+}

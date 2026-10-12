@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -391,11 +392,23 @@ func TestDecodeShowPlaylistPayloadEntriesAbsent(t *testing.T) {
 	}
 }
 
-func TestDecodeShowPlaylistPayloadEntriesEmpty(t *testing.T) {
+func TestDecodeShowPlaylistPayloadEntriesEmptyShowmeshAudioRefused(t *testing.T) {
 	j := `{"show": "halloween-2026", "name": "x", "runner": "showmesh-audio", "entries": []}`
 	_, verr := DecodeShowPlaylistPayload(j, alwaysTrueShowExists, alwaysTrueResolveCueSameShow("halloween-2026"))
 	if verr == nil || verr.Code != ValidationCodeEntriesEmpty || verr.Field != "entries" {
 		t.Fatalf("expected entries-empty, got %+v", verr)
+	}
+}
+
+func TestDecodeShowPlaylistPayloadEntriesEmptyFPPAccepted(t *testing.T) {
+	j := `{"show": "halloween-2026", "name": "x", "runner": "fpp", "entries": [],
+		"fpp": {"instanceUuid": "u", "playlistName": "p", "playlistHash": "` + strings.Repeat("a", 64) + `"}}`
+	p, verr := DecodeShowPlaylistPayload(j, alwaysTrueShowExists, alwaysTrueResolveCueSameShow("halloween-2026"))
+	if verr != nil {
+		t.Fatalf("expected an fpp playlist with no entries to decode, got %+v", verr)
+	}
+	if p.Entries == nil || len(p.Entries) != 0 {
+		t.Fatalf("Entries = %#v, want a non-nil empty slice so it encodes as []", p.Entries)
 	}
 }
 
