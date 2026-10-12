@@ -1146,8 +1146,9 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 
 	if offset == 0 {
 		if uploadLength > maxFileBytes {
+			s.logger.Warn("fppconnect: refused an upload over the per-file cap", "dir", dir, "name", name, "upload_length_bytes", uploadLength, "max_file_bytes", maxFileBytes)
 			o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
-				"upload length %d bytes exceeds the per-file cap of %d bytes", uploadLength, maxFileBytes), at)
+				"%s is larger than this node accepts. Raise the file size limit or upload a smaller file.", name), at)
 			return nil, 0, o, r, false
 		}
 		existingOnDisk, err := fppConnectDirBytes(s.assetDir)

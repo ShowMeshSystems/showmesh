@@ -74,7 +74,7 @@ func knownOperatorReason(err error) (string, bool) {
 		return reasonFileMissing, true
 	case errors.Is(err, syscall.ENOSPC):
 		return reasonDiskFull, true
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+	case errors.Is(err, context.DeadlineExceeded):
 		return reasonTimedOut, true
 	}
 	return "", false

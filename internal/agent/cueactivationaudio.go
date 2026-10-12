@@ -314,7 +314,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(revisionAt, activationStepStart), *act.ScheduledAtNs, position)
 		if audioOutcomeFailed(startOutcome) {
 			if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
-				return startUnalignedOnArrival(ctx, mgr, id, act, revisionAt, position, startOutcome.Reason, target)
+				return startUnalignedOnArrival(ctx, mgr, id, act, revisionAt, position, *act.ScheduledAtNs, target)
 			}
 			return "", nil, cueAudioFailure(act.CueID, "did not start", startOutcome.Reason)
 		}
@@ -399,7 +399,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 // reason (not apply-failed) once both actually succeed: the node is
 // playing, just not at the scheduled instant. A failed start or seek here
 // still returns an error: the fallback did not actually take effect.
-func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, revisionAt time.Time, position time.Duration, missedReason, mediaIdentity string) (string, *audioStartTriggerRecord, error) {
+func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, revisionAt time.Time, position time.Duration, scheduledAtNs int64, mediaIdentity string) (string, *audioStartTriggerRecord, error) {
 	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(revisionAt, unalignedFallbackStepStart))
 	if audioOutcomeFailed(startOutcome) {
 		return "", nil, cueAudioFailure(act.CueID, "did not start", startOutcome.Reason)
@@ -413,7 +413,17 @@ func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudi
 			Trigger: pkgaudio.StartTriggerCoordinator, CueID: act.CueID, MediaIdentity: mediaIdentity,
 		})
 	}
-	return fmt.Sprintf("Started on arrival instead of at the scheduled time: %s", missedReason), nil, nil
+	return startedLateReason(ctx, mgr, scheduledAtNs), nil, nil
+}
+
+// startedLateReason says how late a start that missed its scheduled time was.
+func startedLateReason(ctx context.Context, mgr *audio.Manager, scheduledAtNs int64) string {
+	mediaNow := mgr.MediaNow(ctx)
+	late := mediaNow.Time.Sub(time.Unix(0, scheduledAtNs)).Round(time.Millisecond)
+	if !mediaNow.Valid || late <= 0 {
+		return "Started late because the start time had already passed."
+	}
+	return fmt.Sprintf("Started late by %s because the start time had already passed.", late)
 }
 
 // cueAudioFailure names the Cue beside the node's own reason when that is

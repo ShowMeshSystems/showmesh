@@ -274,6 +274,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 			if retry {
 				// A build refusal (not ErrNoEngineBinding) must not
 				// consume the pending restore; see restoreOne's doc comment.
+				m.logf("audio session %s: restore attempt failed and is queued for another try: %v", id, err)
 				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
@@ -296,6 +297,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.logf("audio session %s: restore attempt failed and is queued for another try: %v", id, err)
 				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
@@ -332,6 +334,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 			}
 			if retry {
 				// Same reasoning as the Playing/Preparing branch above.
+				m.logf("audio session %s: restore attempt failed and is queued for another try: %v", id, err)
 				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
@@ -360,6 +363,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		// specifically, only a real engine error.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.logf("audio session %s: restore attempt failed and is queued for another try: %v", id, err)
 				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
@@ -371,6 +375,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.logf("audio session %s: restore attempt failed and is queued for another try: %v", id, err)
 				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}

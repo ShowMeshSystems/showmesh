@@ -732,11 +732,8 @@ func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(
 	if unalignedReason == "" {
 		t.Fatalf("value = %+v, want a non-empty unalignedReason", value)
 	}
-	if !strings.Contains(unalignedReason, "unaligned") && !strings.Contains(unalignedReason, "arrival") {
-		t.Fatalf("unalignedReason = %q, want it to say the start was unaligned/on arrival", unalignedReason)
-	}
-	if !strings.Contains(unalignedReason, pkgaudio.ReasonScheduledStartInPast) {
-		t.Fatalf("unalignedReason = %q, want it to name the missed instant", unalignedReason)
+	if want := "Started late by 1s because the start time had already passed."; unalignedReason != want {
+		t.Fatalf("unalignedReason = %q, want %q", unalignedReason, want)
 	}
 
 	snaps := mgr.Snapshot(context.Background())

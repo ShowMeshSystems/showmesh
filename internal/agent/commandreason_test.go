@@ -22,6 +22,8 @@ func TestOperatorReasonIsOnePlainLine(t *testing.T) {
 		{"sequence does not cover the surface", "render.surface.apply", uncovered, reasonSequenceLacksChannels},
 		{"missing file", "render.surface.apply", fmt.Errorf("opening: %w", fs.ErrNotExist), reasonFileMissing},
 		{"timeout", "audio.session.start", fmt.Errorf("start: %w", context.DeadlineExceeded), reasonTimedOut},
+		{"cancel is not a timeout", "audio.session.start", fmt.Errorf("start: %w", context.Canceled),
+			"This node could not run the audio request. Check this node's log."},
 		{"wrapped operator line wins", "asset.fetch",
 			fmt.Errorf("outer: %w", withOperatorReason(errors.New("sha mismatch"), "The file arrived damaged.")), "The file arrived damaged."},
 		{"unknown render failure", "render.surface.apply", errors.New("render.surface.apply: params.geometry is required"),

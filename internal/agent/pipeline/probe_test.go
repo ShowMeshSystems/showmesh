@@ -416,8 +416,10 @@ func TestProbeNDISendRealMachine(t *testing.T) {
 		t.Errorf("ndisink is present but this real run's stderr does not contain %q: got %q — the marker this package matches on was never actually exercised against real gst-launch-1.0 output",
 			ndiUnavailableReasonMarker, captured.StderrTail)
 	}
-	if !strings.Contains(got.Reason, "install the NDI SDK runtime") {
-		t.Errorf("Reason = %q, want the actionable NDI install pointer (ndiUnavailableReason's non-generic branch)", got.Reason)
+	for _, want := range []string{"NDI runtime not found", "NDI_RUNTIME_DIR_V6"} {
+		if !strings.Contains(got.Reason, want) {
+			t.Errorf("Reason = %q, want it to contain %q (ndiUnavailableReason's non-generic branch)", got.Reason, want)
+		}
 	}
 }
 

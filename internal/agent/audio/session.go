@@ -764,6 +764,7 @@ func (s *Session) dispatchLocked(invocation pkgaudio.InvocationID, revision pkga
 // holds s.mu.
 func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.OutcomeResult {
 	if err := s.persistLocked(); err != nil {
+		s.mgr.logf("audio session %s: failed to persist state after a command ran: %v", s.id, err)
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeFailed,
 			Reason:  "This ran, but the node could not save it. Check this node's disk.",
@@ -1008,7 +1009,8 @@ func (s *Session) applyResumePointLocked(point ResumePoint) error {
 	}
 	item := s.desired.Playlist.Items[point.Index]
 	if item.ItemID != point.ItemID {
-		return fmt.Errorf("resume point names item %q at index %d, but this session's playlist has %q there", point.ItemID, point.Index, item.ItemID)
+		s.mgr.logf("audio session %s: resume point names item %q at index %d, but the playlist has %q there", s.id, point.ItemID, point.Index, item.ItemID)
+		return &sentenceError{fmt.Sprintf("Item %q is not at position %d of this playlist. Start from the beginning.", point.ItemID, point.Index)}
 	}
 	s.currentIndex = point.Index
 	s.currentItemID = item.ItemID
@@ -1496,7 +1498,7 @@ func confirmLocked(want pkgaudio.State, outcomeIfConfirmed pkgaudio.Outcome, obs
 	if obs.ObservedAt.Before(dispatchedAt) {
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeUnconfirmable,
-			Reason:  "engine evidence predates this dispatch",
+			Reason:  reasonNotYetConfirmed,
 		}
 	}
 	if obs.State != want {
