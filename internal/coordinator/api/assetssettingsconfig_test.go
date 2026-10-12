@@ -509,3 +509,29 @@ func TestPutAssetsSettingsConfigRevisionPreconditionWiring(t *testing.T) {
 		t.Errorf("payload.contentBaseUrl = %v, want the matching-If-Match writer's value, which must have survived the refused stale write; body: %s", payload["contentBaseUrl"], getBody)
 	}
 }
+
+func TestPutAssetsSettingsConfigCreateOnlyRefusesOnceSaved(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(contentBaseURL string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken, "If-None-Match": "*"}
+		body := fmt.Sprintf(`{"contentBaseUrl":%q}`, contentBaseURL)
+		return doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", body, h))
+	}
+
+	if resp, body := put("http://coordinator.example:8080"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first create-only write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put("http://other.example:8080")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second create-only write: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["contentBaseUrl"] != "http://coordinator.example:8080" {
+		t.Errorf("contentBaseUrl = %v, want the first writer's value to survive", payload["contentBaseUrl"])
+	}
+}

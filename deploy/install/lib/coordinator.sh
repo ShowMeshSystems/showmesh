@@ -318,12 +318,12 @@ coord_asset_settings() {
   esac
   body="$(run_tmp)"
   PUBLIC_URL="$PUBLIC_URL" jq -n '{contentBaseUrl: env.PUBLIC_URL}' > "$body"
-  # Create-only: a setting saved in the UI between the read and this write is left alone.
+  # Create-only: a setting saved in the UI between the read and this write is left alone (the API answers 409).
   http_request PUT "$url" "$body" "$token" "If-None-Match: *"
   rm -f "$body"
   case "$HTTP_STATUS" in
     2*) ok "nodes will fetch show files from $PUBLIC_URL" ;;
-    412) ok "the content base URL was saved by someone else meanwhile and was left as it is" ;;
+    409|412) ok "the content base URL was saved by someone else meanwhile and was left as it is" ;;
     *) warn "The content base URL was not saved, so no node receives show files. $(problem_detail) Run: $cmd" ;;
   esac
 }
