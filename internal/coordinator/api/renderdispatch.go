@@ -115,12 +115,10 @@ func renderHandlerWriteDeadline() time.Duration {
 // assetsync.Publisher is declared at its own consumer — *broker.
 // BrokerManager already satisfies this with no adapter.
 //
-// AwaitResponse is render.surface.blackout's own fast path (build item 4,
-// dispatchRenderCommand's blackout branch): the same publish-and-wait
-// capability [AudioSessionPublisher] and [WeatherDelayPublisher] already
-// declare, and the identical *broker.BrokerManager already satisfies it.
-// Every other render.* action still confirms by polling an observation, as
-// before; only blackout ever calls AwaitResponse.
+// AwaitResponse publishes a command and waits for the node's own result
+// for that command id, the same publish-and-wait capability
+// [AudioSessionPublisher] and [WeatherDelayPublisher] declare. Every
+// render.* action dispatches through it; Publish stays for other callers.
 type RenderPublisher interface {
 	Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error
 	AwaitResponse(ctx context.Context, req broker.ResponseRequest) (broker.Message, error)
@@ -691,9 +689,9 @@ func renderRequestIdentityFor(in renderDispatchInput) renderRequestIdentity {
 
 // executeRenderDispatch records the command (idempotency-first: a replayed
 // key returns the existing row's own outcome rather than dispatching
-// again), publishes it to the node's cmd topic, and polls for
-// surface.pipeline.state evidence dated at or after dispatch that matches
-// in.DesiredState before returning. A nil error with a non-nil problem
+// again), publishes it to the node's cmd topic, and resolves it from the
+// node's own result for the command id. Only when no result decides it does
+// it poll for signal evidence dated at or after dispatch. A nil error with a non-nil problem
 // means "the request was refused"; a non-nil error means "something this
 // coordinator cannot attribute to the caller went wrong" (rendered as a
 // 500 by the caller).
@@ -764,64 +762,46 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 
 	dispatchedAt := now
 
-	// blackoutRunning is build item 4's fast path, populated only for
-	// render.surface.blackout: whether the node's own direct command
-	// result named a running frame writer for this surface. nil means no
-	// usable direct result arrived (AwaitResponse timed out, or this is
-	// any other action), and confirmation falls back to the ordinary
-	// surface.output.mode poll below.
-	var blackoutRunning *bool
-	// blackoutAwaitUnanswered is true only when the direct-result await
-	// itself timed out with no reply at all (broker.ErrResponseDeadlineExceeded):
-	// a node that could not answer one MQTT round trip within
-	// renderBlackoutResultAwaitDeadline is unlikely to start answering
-	// surface.output.mode polls either, so confirmation below takes a
-	// single fresh look rather than waiting out the full poll — build item
-	// 5. An undecodable reply (the OTHER default-case outcome) means the
-	// node clearly IS reachable, so that case still gets the ordinary poll.
-	var blackoutAwaitUnanswered bool
-	if in.Action == "render.surface.blackout" {
-		resultTopic, rterr := mqttproto.ResultTopic(in.NodeID, commandID)
-		if rterr != nil {
-			return v1.RenderCommandResult{}, nil, fmt.Errorf("build result topic: %w", rterr)
-		}
-		msg, awaitErr := h.deps.RenderPublisher.AwaitResponse(bgCtx, broker.ResponseRequest{
-			PublishTopic: topic, PublishPayload: rawEnv,
-			PublishQoS: mqttproto.CmdDeliveryPolicy.QoS, PublishRetain: mqttproto.CmdDeliveryPolicy.Retain,
-			ResponseTopic: resultTopic, ResponseQoS: mqttproto.ResultDeliveryPolicy.QoS,
-			Deadline: renderBlackoutResultAwaitDeadline,
-			Match: func(m broker.Message) bool {
-				return renderResultCorrelates(m.Payload, in.NodeID, commandID, in.IdempotencyKey, in.Action)
-			},
-		})
-		switch {
-		case awaitErr == nil:
-			blackoutRunning = renderBlackoutRunningFromResult(msg.Payload)
-		case errors.Is(awaitErr, broker.ErrResponseFailedBeforePublish), errors.Is(awaitErr, errRenderPublisherNotConfigured):
-			// Nothing reached the wire at all — the same real dispatch
-			// failure the plain Publish branch below reports. A publisher
-			// that was never wired in (noRenderPublisher, api.go) answers
-			// AwaitResponse with errRenderPublisherNotConfigured directly,
-			// never a broker attempt, so it belongs in this branch too:
-			// without it, this case fell to default below and was reported
-			// as "published, result just missing," confirming unconfirmed
-			// instead of failing loudly like every other render dispatch.
-			h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "publish failed: "+awaitErr.Error())
-			return v1.RenderCommandResult{}, nil, fmt.Errorf("publish command: %w", awaitErr)
-		default:
-			// The command WAS published; only its direct result is
-			// missing (deadline exceeded, or an undecodable reply).
-			// blackoutRunning stays nil, and confirmation falls back to
-			// the ordinary surface.output.mode poll below, unless this was
-			// specifically an unanswered await (build item 5's fast exit).
-			blackoutAwaitUnanswered = errors.Is(awaitErr, broker.ErrResponseDeadlineExceeded)
-		}
-	} else if err := h.deps.RenderPublisher.Publish(bgCtx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, rawEnv); err != nil {
-		// The command row already exists (state "pending", never
-		// dispatched) — that is an honest record of an attempted dispatch
-		// that could not reach the broker, not something to unwind.
-		h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "publish failed: "+err.Error())
-		return v1.RenderCommandResult{}, nil, fmt.Errorf("publish command: %w", err)
+	// Every render command waits for the node's own result for this command
+	// id: it is the primary evidence and wins over any signal reading.
+	// nodeResult stays nil when none arrived or it did not decode.
+	isBlackout := in.Action == "render.surface.blackout"
+	awaitDeadline := renderCommandConfirmDeadline
+	if isBlackout {
+		awaitDeadline = renderBlackoutResultAwaitDeadline
+	}
+	confirmUntil := time.Now().Add(renderCommandConfirmDeadline)
+	resultTopic, err := mqttproto.ResultTopic(in.NodeID, commandID)
+	if err != nil {
+		return v1.RenderCommandResult{}, nil, fmt.Errorf("build result topic: %w", err)
+	}
+	var nodeResult *mqttproto.ResultPayload
+	// awaitUnanswered is true only when the node sent no reply at all; an
+	// undecodable reply means the node is reachable and still gets the poll.
+	var awaitUnanswered bool
+	msg, awaitErr := h.deps.RenderPublisher.AwaitResponse(bgCtx, broker.ResponseRequest{
+		PublishTopic: topic, PublishPayload: rawEnv,
+		PublishQoS: mqttproto.CmdDeliveryPolicy.QoS, PublishRetain: mqttproto.CmdDeliveryPolicy.Retain,
+		ResponseTopic: resultTopic, ResponseQoS: mqttproto.ResultDeliveryPolicy.QoS,
+		Deadline: awaitDeadline,
+		Match: func(m broker.Message) bool {
+			return renderResultCorrelates(m.Payload, in.NodeID, commandID, in.IdempotencyKey, in.Action)
+		},
+	})
+	switch {
+	case awaitErr == nil:
+		nodeResult = renderNodeResult(msg.Payload)
+	case errors.Is(awaitErr, broker.ErrResponseFailedBeforePublish), errors.Is(awaitErr, errRenderPublisherNotConfigured):
+		// Nothing reached the wire. The command row stays "pending": an
+		// honest record of a dispatch that could not reach the broker.
+		h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "publish failed: "+awaitErr.Error())
+		return v1.RenderCommandResult{}, nil, fmt.Errorf("publish command: %w", awaitErr)
+	default:
+		awaitUnanswered = errors.Is(awaitErr, broker.ErrResponseDeadlineExceeded)
+	}
+	if isBlackout {
+		// A blackout's short result wait does not eat into its signal poll.
+		confirmUntil = time.Now().Add(renderCommandConfirmDeadline)
 	}
 
 	_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
@@ -835,20 +815,26 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	// evaluateRenderSurfaceState path can ever set it — a transport probe
 	// has no desired pipeline STATE to match and never reports one failed.
 	var pipelineFailed bool
-	switch in.Action {
-	case "render.transport.probe":
-		// No desired STATE to match (unlike apply/clear/restart): a probe
-		// that correctly reports the runtime absent is just as confirmed
-		// as one that reports it present — see confirmRenderTransportProbe.
-		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
-	case "render.surface.blackout":
+	nodeOutcome := ""
+	if nodeResult != nil {
+		nodeOutcome = nodeResult.Outcome
+	}
+	switch {
+	case nodeOutcome == mqttproto.OutcomeFailed || nodeOutcome == mqttproto.OutcomeRefused:
+		// The node refused or failed this command. No signal reading may
+		// confirm it, however fresh: a pipeline can be up with nothing drawn.
+		confirmed, outcomeState, outcomeReason = false, string(observation.StateCurrent), renderNodeFailureReason(*nodeResult)
+	case nodeOutcome == mqttproto.OutcomeConfirmed && !isBlackout && in.Action != "render.transport.probe":
+		confirmed, outcomeState, outcomeReason = true, string(observation.StateCurrent), renderNodeConfirmedReason(*nodeResult)
+	case isBlackout:
+		blackoutRunning := renderBlackoutRunningFromResult(nodeResult)
 		if blackoutRunning != nil && !*blackoutRunning {
 			// No render pipeline is running on this surface, so it is
 			// already dark: nothing will ever tick out a fresh
 			// surface.output.mode reading to poll for, and no stop may
 			// wait on one.
 			confirmed, outcomeState, outcomeReason = true, string(observation.StateCurrent), "no render pipeline is running on this surface, so it is already dark"
-		} else if blackoutAwaitUnanswered {
+		} else if awaitUnanswered {
 			// Build item 5: the node did not answer the direct-result await
 			// at all, so waiting out a further renderCommandConfirmDeadline
 			// poll for a surface.output.mode reading only delays reporting
@@ -863,25 +849,22 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 			// poll here — this is confirmed by surface.output.mode
 			// instead, the same evidence the node's own frame writer
 			// reports its forced black through.
-			confirmed, outcomeState, outcomeReason = h.confirmRenderBlackout(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
+			confirmed, outcomeState, outcomeReason = h.confirmRenderBlackout(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt, confirmUntil)
 		}
+	case in.Action == "render.transport.probe":
+		// No desired STATE to match (unlike apply/clear/restart): a probe
+		// that correctly reports the runtime absent is just as confirmed
+		// as one that reports it present. See confirmRenderTransportProbe.
+		// The answer is the reading itself, so any node result short of a
+		// failure still resolves from this signal read.
+		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt, confirmUntil)
 	default:
-		// render.pipeline.restart's wantState "running" is what the surface
-		// already was before this command (that is the whole point of a
-		// restart), so a naive receipt-time fence could trivially confirm
-		// off a pre-existing reading — Finding 4. evaluateRenderSurfaceState's
-		// ObservedAt fence already closes this: internal/agent/pipeline.
-		// runner.setState only stamps a fresh ObservedAt on a REAL state
-		// transition, and both cmdApply and cmdRestart unconditionally run
-		// stopCurrent+attemptStart (Starting, then Running), so a stale
-		// pre-dispatch "running" reading can never satisfy the fence — a
-		// restart-count movement check was tried here and reverted: the
-		// real agent's RestartCount increments only on a crash-driven
-		// restart (the exit branch in pipeline.runner.loop), never on an
-		// operator-issued one, so requiring it to move would make every
-		// render.pipeline.restart command time out. Confirmed against a
-		// real agent (test/integration/render_dispatch_test.go).
-		confirmed, outcomeState, outcomeReason, pipelineFailed = h.confirmRenderCommand(bgCtx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
+		// The fallback when no node result decided the command: a
+		// surface.pipeline.state transition dated at or after dispatch.
+		// evaluateRenderSurfaceState fences on the node's real transition
+		// time, so a reading from before this command never confirms it.
+		// Confirmed against a real agent (test/integration/render_dispatch_test.go).
+		confirmed, outcomeState, outcomeReason, pipelineFailed = h.confirmRenderCommand(bgCtx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt, confirmUntil)
 	}
 	resolvedAt := h.now()
 	outcome := "unconfirmed"
@@ -966,11 +949,10 @@ func (h *handlers) writeRenderAudit(ctx context.Context, now time.Time, kind ide
 // ResourceSurface rather than observation.ResourceFPP. nodeID is the node
 // THIS dispatch was sent to — see evaluateRenderSurfaceState for why that
 // matters.
-func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, wantState string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string, pipelineFailed bool) {
+func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, wantState string, dispatchedAt time.Time, absDeadline time.Time) (confirmed bool, outcomeState, outcomeReason string, pipelineFailed bool) {
 	if h.deps.Observations == nil {
 		return false, string(observation.StateNotCollected), "no observation source is configured", false
 	}
-	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
 	ticker := time.NewTicker(renderCommandPollInterval)
 	defer ticker.Stop()
 
@@ -1198,11 +1180,10 @@ const renderSignalTransportAvailable = "surface.transport.available"
 // confirmRenderCommand uses for surface.pipeline.state. nodeID is the node
 // THIS probe was dispatched to — see evaluateRenderTransportProbe for why
 // that matters, the same reason evaluateRenderSurfaceState takes it.
-func (h *handlers) confirmRenderTransportProbe(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+func (h *handlers) confirmRenderTransportProbe(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time, absDeadline time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	if h.deps.Observations == nil {
 		return false, string(observation.StateNotCollected), "no observation source is configured"
 	}
-	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
 	ticker := time.NewTicker(renderCommandPollInterval)
 	defer ticker.Stop()
 
@@ -1311,19 +1292,47 @@ func renderResultCorrelates(payload []byte, nodeID, commandID, idempotencyKey, a
 	return res.CommandID == commandID && res.IdempotencyKey == idempotencyKey && res.Action == action
 }
 
-// renderBlackoutRunningFromResult decodes payload as render.surface.
-// blackout's own direct result and reports the "running" field its
-// Evidence.Value carries (renderops.go's blackoutSurface), or nil when the
-// payload does not decode or carries no such field — a caller that gets
-// nil falls back to polling for real evidence rather than trusting an
-// absent or malformed direct result.
-func renderBlackoutRunningFromResult(payload []byte) *bool {
+// renderNodeResult decodes the node's own result for a render command, or
+// returns nil when the payload does not decode.
+func renderNodeResult(payload []byte) *mqttproto.ResultPayload {
 	env, err := mqttproto.DecodeEnvelope(payload)
 	if err != nil {
 		return nil
 	}
 	res, err := mqttproto.DecodeResultPayload(env)
-	if err != nil || res.Evidence == nil {
+	if err != nil {
+		return nil
+	}
+	return &res
+}
+
+// renderNodeFailureReason is the operator-visible reason for a command the
+// node failed or refused: the node's own reason text, unchanged.
+func renderNodeFailureReason(res mqttproto.ResultPayload) string {
+	if res.Reason != "" {
+		return res.Reason
+	}
+	return "The node did not carry out the command and gave no reason."
+}
+
+// renderNodeConfirmedReason names the pipeline state the node's own result
+// reported for a command it confirmed.
+func renderNodeConfirmedReason(res mqttproto.ResultPayload) string {
+	if res.Evidence != nil {
+		if v, ok := res.Evidence.Value.(map[string]any); ok {
+			if state, ok := v["state"].(string); ok && state != "" {
+				return fmt.Sprintf("surface.pipeline.state = %q (node result)", state)
+			}
+		}
+	}
+	return "The node confirmed the command."
+}
+
+// renderBlackoutRunningFromResult reports the "running" field of
+// render.surface.blackout's own result evidence (renderops.go's
+// blackoutSurface), or nil when res is nil or carries no such field.
+func renderBlackoutRunningFromResult(res *mqttproto.ResultPayload) *bool {
+	if res == nil || res.Evidence == nil {
 		return nil
 	}
 	v, ok := res.Evidence.Value.(map[string]any)
@@ -1350,11 +1359,10 @@ const renderSignalOutputMode = "surface.output.mode"
 // confirm against, so it is confirmed by the same draw-state signal
 // render.surface.apply/clear/restart never touch, never by
 // surface.pipeline.state.
-func (h *handlers) confirmRenderBlackout(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+func (h *handlers) confirmRenderBlackout(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time, absDeadline time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	if h.deps.Observations == nil {
 		return false, string(observation.StateNotCollected), "no observation source is configured"
 	}
-	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
 	ticker := time.NewTicker(renderCommandPollInterval)
 	defer ticker.Stop()
 

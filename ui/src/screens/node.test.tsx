@@ -671,6 +671,22 @@ describe('Node detail', () => {
     await waitFor(() => expect(stubs.probeRenderTransport).toHaveBeenCalledWith('media-garage', 'garage-door'))
   })
 
+  it('shows the node’s own reason when the node did not carry out an apply', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    const reason = 'render.surface.apply: starting frame writer: fseq: requested channel range is not covered by this file'
+    stubs.applyRenderSurface = vi.fn().mockResolvedValue({ outcome: 'unconfirmed', outcomeState: 'current', outcomeReason: reason, pipelineFailed: false })
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByLabelText('Sequence id')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Sequence id'), { target: { value: 'preshow-loop' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(screen.getByText(reason)).toBeInTheDocument())
+    expect(screen.getByText('Not confirmed')).toBeInTheDocument()
+    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument()
+  })
+
   it('renders a current beyond_threshold alignment row as a warn status, not a blank state', () => {
     renderScreen([
       node({
