@@ -160,9 +160,15 @@ export function ShowsCues() {
     ? deployGate.reason
     : activeShowId(model) !== showId
       ? 'This show is not the active show. Activate it to deploy its cue catalog.'
-      : nodeIds.length === 0
-        ? 'This show declares no nodes. Add a surface or audio node first.'
-        : undefined
+      : showAudioNodes.kind === 'failed'
+        ? showAudioNodes.reason
+        : installationAudioNodes.kind === 'failed'
+          ? installationAudioNodes.reason
+          : state.kind !== 'loaded' || showAudioNodes.kind === 'loading' || installationAudioNodes.kind === 'loading'
+            ? "Reading this show's nodes."
+            : nodeIds.length === 0
+              ? 'This show declares no nodes. Add a surface or audio node first.'
+              : undefined
 
   const closeInspector = () => { setCreating(false); setSelectedId(null) }
 

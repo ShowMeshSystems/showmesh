@@ -1298,6 +1298,20 @@ describe('Shows · Cues tab', () => {
       expect(await screen.findByText('Deployed with operator override: Two cues claim the same surface.')).toBeInTheDocument()
     })
 
+    it('shows the read failure, not "declares no nodes", when the installation audio nodes cannot be read', async () => {
+      stubs.getShow = () => showHead().then((r) => ({ ...r, payload: { ...r.payload, audioNodes: ['node-a'] } }))
+      stubs.listConfigObjects = (kind: string) =>
+        kind === 'audio.node' ? Promise.reject(new Error('boom')) : withContents(kind, [cueSummary()], [playlistSummary()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = (id: string) => Promise.resolve(cueResponse(cuePayload(), id))
+      stubs.getShowPlaylist = () => Promise.resolve(playlistResponse())
+      renderWorkspace({ session: signedIn(['config:write', 'cuecatalog:deploy']), currentRuns: activeRuns })
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      await waitFor(() => expect(button).toHaveAttribute('title', expect.not.stringContaining('declares no nodes')))
+      expect(button).toBeDisabled()
+      expect(button.getAttribute('title')).not.toBe("Reading this show's nodes.")
+    })
+
     it('stays disabled with a reason when this show is not the active show', async () => {
       setupDeploy({ currentRuns: { serverTime: '2026-08-30T21:00:00Z', activeShow: { configured: true, show: 'other-show', generation: 1 }, runs: [] } as never })
       const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
