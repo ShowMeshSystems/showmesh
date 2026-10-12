@@ -59,6 +59,15 @@ func withAudioEngineHeldNode(t *testing.T, node audioNodeConfig, ok bool) {
 	t.Cleanup(func() { audioEngineHeldNode = orig })
 }
 
+// withAudioConfiguredNode drives [audioConfiguredNode] deterministically,
+// matching withAudioEngineHeldNode's own injection convention.
+func withAudioConfiguredNode(t *testing.T, node audioNodeConfig, have bool) {
+	t.Helper()
+	orig := audioConfiguredNode
+	audioConfiguredNode = func() (audioNodeConfig, bool) { return node, have }
+	t.Cleanup(func() { audioConfiguredNode = orig })
+}
+
 // TestDetectAudioCapabilitiesNoEngineReturnsNil proves a node with no
 // usable audio engine (every render node, the development laptop)
 // advertises no audio capability at all.
@@ -718,5 +727,101 @@ func TestDetectAudioCapabilitiesHeldRouteReportsProbedChannelsNotSavedOnes(t *te
 	local, _ = detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
 	if outputs, _ := local.Attributes["outputs"].([]map[string]any); len(outputs) != 0 || local.Attributes["discoveryComplete"] != false {
 		t.Errorf("held route with no earlier evidence: outputs %v complete %v, want none and partial", outputs, local.Attributes["discoveryComplete"])
+	}
+}
+
+func heldRouteMissPass(t *testing.T, present bool) capability.Set {
+	t.Helper()
+	routes := []audio.RouteEvidence{{Device: "hw:CARD=Other,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}}}
+	if present {
+		routes = append(routes, audio.RouteEvidence{Device: "hw:CARD=M4,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}})
+	}
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true, HasHardwareCards: true, HardwareEnumerated: true, Routes: routes})
+	return detectAudioCapabilities(context.Background())
+}
+
+func heldRouteAdvertised(set capability.Set) bool {
+	local, ok := set.Lookup("audio.output.local")
+	if !ok {
+		return false
+	}
+	routes, _ := local.Attributes["routes"].([]string)
+	for _, r := range routes {
+		if r == "hw:CARD=M4,DEV=0" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestHeldRouteMissingFromTwoPassesStopsReadingAvailable(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	heldRouteMissCounts.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	t.Cleanup(heldRouteMissCounts.reset)
+	withAudioEngineAvailable(t, true, "")
+	node := audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}
+	withAudioEngineHeldNode(t, node, true)
+	withAudioConfiguredNode(t, node, true)
+
+	if set := heldRouteMissPass(t, true); !heldRouteAdvertised(set) {
+		t.Fatal("route present: want it advertised")
+	}
+	set := heldRouteMissPass(t, false)
+	if !heldRouteAdvertised(set) {
+		t.Fatal("one missed pass: want the route still advertised so a slow probe does not flap it")
+	}
+
+	set = heldRouteMissPass(t, false)
+	if heldRouteAdvertised(set) {
+		t.Fatal("two missed passes: want the route no longer advertised")
+	}
+	local, _ := set.Lookup("audio.output.local")
+	missing, _ := local.Attributes["missingRoutes"].([]map[string]any)
+	if len(missing) != 1 || missing[0]["route"] != "hw:CARD=M4,DEV=0" || !strings.Contains(missing[0]["reason"].(string), "M4") {
+		t.Fatalf("missingRoutes = %v, want the held route with a reason naming the interface", missing)
+	}
+	if local.Attributes["discoveryComplete"] != true {
+		t.Fatalf("discoveryComplete = %v, want true so the other routes stay offered while a held route is missing", local.Attributes["discoveryComplete"])
+	}
+	if outputs, _ := local.Attributes["outputs"].([]map[string]any); len(outputs) != 1 {
+		t.Fatalf("outputs = %v, want the one remaining route offered", outputs)
+	}
+
+	set = heldRouteMissPass(t, true)
+	if !heldRouteAdvertised(set) {
+		t.Fatal("route reappeared: want it advertised again on the next pass")
+	}
+	if local, _ := set.Lookup("audio.output.local"); local.Attributes["missingRoutes"] != nil {
+		t.Fatalf("missingRoutes = %v after the route returned, want none", local.Attributes["missingRoutes"])
+	}
+}
+
+func TestHeldRouteMissingIsReportedWhenTheEngineFailedToBuild(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	heldRouteMissCounts.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	t.Cleanup(heldRouteMissCounts.reset)
+	withAudioEngineAvailable(t, false, "the output did not open")
+	withAudioEngineHeldNode(t, audioNodeConfig{}, false)
+	withAudioConfiguredNode(t, audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}, true)
+
+	heldRouteMissPass(t, false)
+	set := heldRouteMissPass(t, false)
+	local, _ := set.Lookup("audio.output.local")
+	missing, _ := local.Attributes["missingRoutes"].([]map[string]any)
+	if len(missing) != 1 || missing[0]["route"] != "hw:CARD=M4,DEV=0" {
+		t.Fatalf("missingRoutes = %v, want the configured route reported while the engine is down", missing)
+	}
+}
+
+func TestHeldRouteMissCountIgnoresIncompleteEnumeration(t *testing.T) {
+	heldRouteMissCounts.reset()
+	t.Cleanup(heldRouteMissCounts.reset)
+	held := audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0"}
+	for i := 0; i < 3; i++ {
+		if gone := heldRouteMissCounts.observe(nil, held, true, false); len(gone) != 0 {
+			t.Fatalf("incomplete pass %d marked %v gone, want none", i, gone)
+		}
 	}
 }

@@ -1023,6 +1023,51 @@ describe('Node detail · Sync status', () => {
     })
   }
 
+  async function missingRouteLines() {
+    const copy = 'Route M4: the device is not connected. Reconnect it or pick another route in Node routing.'
+    const lines = () => screen.queryAllByRole('paragraph').filter((line) => line.textContent === copy)
+    await waitFor(() => expect(lines()).not.toHaveLength(0))
+    return lines()
+  }
+
+  it('names a held route the node reports as gone', async () => {
+    renderScreen([
+      node({
+        capabilities: [
+          {
+            id: 'audio.output.local',
+            version: 1,
+            attributes: { missingRoutes: [{ route: 'hw:CARD=M4,DEV=0', reason: 'Interface hw:CARD=M4 is no longer found on this node.' }] },
+          },
+        ],
+      }),
+    ])
+
+    expect(await missingRouteLines()).toHaveLength(1)
+  })
+
+  it('names a card once when its program and LTC routes are both gone', async () => {
+    const reason = 'Interface hw:CARD=M4 is no longer found on this node.'
+    renderScreen([
+      node({
+        capabilities: [
+          {
+            id: 'audio.output.local',
+            version: 1,
+            attributes: {
+              missingRoutes: [
+                { route: 'hw:CARD=M4,DEV=0', reason },
+                { route: 'hw:CARD=M4,DEV=1', reason },
+              ],
+            },
+          },
+        ],
+      }),
+    ])
+
+    expect(await missingRouteLines()).toHaveLength(1)
+  })
+
   it('shows the sync block for a node that carries the audio capability', async () => {
     renderScreen([audioNodeWithSync()])
 

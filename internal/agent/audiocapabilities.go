@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -66,6 +68,11 @@ var audioEngineAvailable = func() (bool, string) { return false, "no playback en
 // never claims to hold anything.
 var audioEngineHeldNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
 
+// audioConfiguredNode reports the audio.node settings the operator last
+// saved, whether or not the engine built from them is healthy: a route that
+// fails to open is still the route the operator is waiting on.
+var audioConfiguredNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
+
 // routeEvidenceCache remembers each device's last genuinely-successful
 // probe: a held device probes EBUSY (zero on every field), so only an
 // earlier pass has real evidence to substitute.
@@ -116,6 +123,95 @@ func (c *routeEvidenceCache) reset() {
 	defer c.mu.Unlock()
 	c.routes = map[string]audio.RouteEvidence{}
 }
+
+// heldRouteMissLimit is how many consecutive complete enumeration passes a
+// held route may be absent from before it stops reading Available.
+const heldRouteMissLimit = 2
+
+// heldRouteMisses counts, per configured device, the consecutive complete
+// enumeration passes that did not list it.
+type heldRouteMisses struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+// observe records one enumeration pass and returns the configured devices
+// that have now been missing for heldRouteMissLimit passes. An incomplete
+// pass changes nothing, so a failed listing never counts as a miss.
+func (h *heldRouteMisses) observe(devices []string, configured audioNodeConfig, haveConfigured, complete bool) map[string]bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !haveConfigured {
+		h.counts = nil
+		return nil
+	}
+	listed := make(map[string]bool, len(devices))
+	for _, dev := range devices {
+		listed[dev] = true
+	}
+	next := map[string]int{}
+	gone := map[string]bool{}
+	for _, dev := range []string{configured.ProgramRoute, configured.LTCRoute} {
+		if dev == "" {
+			continue
+		}
+		n := h.counts[dev]
+		switch {
+		case listed[dev]:
+			n = 0
+		case complete:
+			n++
+		}
+		next[dev] = n
+		if n >= heldRouteMissLimit {
+			gone[dev] = true
+		}
+	}
+	h.counts = next
+	return gone
+}
+
+// reset clears the counters. Test-only, like routeEvidenceCache.reset.
+func (h *heldRouteMisses) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.counts = nil
+}
+
+var heldRouteMissCounts = &heldRouteMisses{}
+
+// audioOutputLister lists this node's outputs without opening one, a
+// package-level var matching audioDiscoverer's own injection convention.
+var audioOutputLister = audio.ListOutputs
+
+// audioDiscoveryRecord keeps the last full discovery, so the periodic watch
+// can reuse its probe evidence instead of probing again.
+type audioDiscoveryRecord struct {
+	mu   sync.Mutex
+	d    audio.Discovery
+	have bool
+}
+
+func (r *audioDiscoveryRecord) store(d audio.Discovery) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.d, r.have = d, true
+}
+
+func (r *audioDiscoveryRecord) get() (audio.Discovery, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.d, r.have
+}
+
+// reset forgets the discovery. Test-only, like routeEvidenceCache.reset.
+func (r *audioDiscoveryRecord) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.d, r.have = audio.Discovery{}, false
+}
+
+var lastAudioDiscovery = &audioDiscoveryRecord{}
 
 // lastKnownGoodRoutes is this node's single route-evidence cache,
 // process-lifetime state shared across every detectAudioCapabilities
@@ -224,11 +320,37 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	// false with an empty reason is a clean "no PipeWire here" absence,
 	// not a failure, and does not block eviction.
 	pipeWireFailed := !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != ""
-	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated && !pipeWireFailed)
+	complete := d.HardwareEnumerated && !d.Truncated && !pipeWireFailed
+	lastKnownGoodRoutes.update(d.Routes, complete)
+	lastAudioDiscovery.store(d)
 	if !d.EngineUsable {
 		return nil
 	}
+	configured, haveConfigured := audioConfiguredNode()
+	devices := make([]string, 0, len(d.Routes))
+	for _, r := range d.Routes {
+		devices = append(devices, r.Device)
+	}
+	return audioCapabilitiesFor(d, heldRouteMissCounts.observe(devices, configured, haveConfigured, complete))
+}
 
+// redetectHeldRouteCapabilities is the periodic watch's pass. It counts
+// misses from a listing that opens no device and rebuilds the audio
+// capabilities from the last full discovery's probe evidence.
+func redetectHeldRouteCapabilities(ctx context.Context) (capability.Set, bool) {
+	d, ok := lastAudioDiscovery.get()
+	if !ok || !d.EngineUsable {
+		return nil, false
+	}
+	listing := audioOutputLister(ctx, audioEnumerator, audioPipeWireEnumerator)
+	configured, haveConfigured := audioConfiguredNode()
+	return audioCapabilitiesFor(d, heldRouteMissCounts.observe(listing.Devices, configured, haveConfigured, listing.Complete)), true
+}
+
+// audioCapabilitiesFor builds the advertised audio capabilities from one
+// discovery's evidence and the configured routes that have gone missing.
+func audioCapabilitiesFor(d audio.Discovery, gone map[string]bool) capability.Set {
+	d.Routes = slices.DeleteFunc(slices.Clone(d.Routes), func(r audio.RouteEvidence) bool { return gone[r.Device] })
 	set := capability.Set{}
 	if ok, _ := audioEngineAvailable(); ok {
 		set = append(set, capability.Capability{ID: "audio.engine", Version: 1})
@@ -238,15 +360,26 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	heldNode, heldOK := audioEngineHeldNode()
-	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, heldNode, heldOK))
+	trustedNode := heldNode
+	if gone[trustedNode.ProgramRoute] {
+		trustedNode.ProgramRoute = ""
+	}
+	if gone[trustedNode.LTCRoute] {
+		trustedNode.LTCRoute = ""
+	}
+	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, trustedNode, heldOK))
 
-	if len(usable) > 0 {
+	if len(usable) > 0 || len(gone) > 0 {
 		attrs := routeAttributes(usable)
 		outputs, missing := outputEvidence(usable)
 		attrs["outputs"] = outputs
-		complete, reason := discoveryCompleteness(d, missing)
-		attrs["discoveryComplete"] = complete
-		if !complete {
+		discovered, reason := discoveryCompleteness(d, missing)
+		if len(gone) > 0 {
+			missingRoutes := goneRouteAttributes(gone)
+			attrs["missingRoutes"] = missingRoutes
+		}
+		attrs["discoveryComplete"] = discovered
+		if !discovered {
 			attrs["discoveryIncompleteReason"] = reason
 		}
 		set = append(set, capability.Capability{
@@ -262,6 +395,24 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	return set
+}
+
+// goneRouteAttributes names each configured route that has gone missing, sorted
+// so the advertisement is stable between passes.
+func goneRouteAttributes(gone map[string]bool) []map[string]any {
+	devices := make([]string, 0, len(gone))
+	for dev := range gone {
+		devices = append(devices, dev)
+	}
+	sort.Strings(devices)
+	out := make([]map[string]any, 0, len(devices))
+	for _, dev := range devices {
+		out = append(out, map[string]any{
+			"route":  dev,
+			"reason": fmt.Sprintf("Interface %s is no longer found on this node. Reconnect it or pick another route.", audio.RouteInterface(dev)),
+		})
+	}
+	return out
 }
 
 // withHeldRouteTrusted returns routes with any entry matching heldNode's

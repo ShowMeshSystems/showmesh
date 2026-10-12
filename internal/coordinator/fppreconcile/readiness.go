@@ -270,6 +270,10 @@ const (
 	// LTC-capable route and its audio.node names no LTC channel. Warning
 	// only, never a failure: a program-only node is a valid configuration.
 	ReadinessAudioLTCCapableUnconfigured ReadinessCondition = "audio-ltc-capable-unconfigured"
+	// ReadinessAudioRouteMissing: a node's stored program or LTC route is
+	// among the routes the node reports as gone. Warning only, never a
+	// failure.
+	ReadinessAudioRouteMissing ReadinessCondition = "audio-route-missing"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -627,6 +631,14 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// Condition 18: a node that can send timecode has none configured.
 	// Never a failure. See [audioLTCCapableUnconfiguredReadiness].
 	if warning, err := audioLTCCapableUnconfiguredReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 19: a node reports its stored program or LTC interface as
+	// gone. Never a failure. See [audioRouteMissingReadiness].
+	if warning, err := audioRouteMissingReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
@@ -1432,7 +1444,7 @@ func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store, p
 	return "", nil
 }
 
-// audioLTCCapableUnconfiguredReadiness is condition 17, scoped like
+// audioLTCCapableUnconfiguredReadiness is condition 18, scoped like
 // [audioLTCSeparateLocalClockReadiness]. A node whose Hello advertises an
 // LTC-capable route and whose audio.node names no LTC channel runs without
 // timecode it could have produced; omitting the LTC fields stays valid.
@@ -1550,4 +1562,89 @@ func audioNodeLocalClockWarning(nodeID string, p config.AudioNodePayload) string
 	return fmt.Sprintf(
 		"node %q sends LTC out %s and program audio out %s, and nothing says the two run on one local clock, so timecode will drift against the music. Move LTC onto the program interface, or name this node's local clock to record that they share a clock.",
 		nodeID, ltc, program)
+}
+
+// audioRouteMissingReadiness is condition 19, scoped like
+// [audioLTCSeparateLocalClockReadiness]. The node's own capability
+// advertisement lists a held route it has stopped finding; a node that has
+// not advertised, or advertises no such route, says nothing here.
+func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return "", nil
+	}
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	warning := ""
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		carriesAudio := false
+		for _, e := range catalog.Entries {
+			if e.Outputs.Audio != nil {
+				carriesAudio = true
+				break
+			}
+		}
+		if !carriesAudio {
+			continue
+		}
+		payload, ok, err := activeAudioNodePayload(ctx, st, n.NodeID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			continue
+		}
+		rec, err := st.GetNode(ctx, n.NodeID)
+		if errors.Is(err, store.ErrNodeNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
+		}
+		if rec.Hello == nil {
+			continue
+		}
+		gone := goneRoutes(rec.Hello.Capabilities)
+		if gone[payload.ProgramRoute] {
+			warning = appendWarning(warning, fmt.Sprintf(
+				"Node %s no longer reports its program interface %s. Reconnect it or pick another route in Node routing.",
+				n.NodeID, config.AudioNodeRouteInterface(payload.ProgramRoute)))
+		}
+		if payload.LTCRoute != "" && payload.LTCRoute != payload.ProgramRoute && gone[payload.LTCRoute] {
+			warning = appendWarning(warning, fmt.Sprintf(
+				"Node %s no longer reports its LTC interface %s. Reconnect it or pick another route in Node routing.",
+				n.NodeID, config.AudioNodeRouteInterface(payload.LTCRoute)))
+		}
+	}
+	return warning, nil
+}
+
+// goneRoutes is the set of routes caps lists under audio.output.local's
+// missingRoutes attribute.
+func goneRoutes(caps capability.Set) map[string]bool {
+	c, ok := caps.Lookup("audio.output.local")
+	if !ok {
+		return nil
+	}
+	items, _ := c.Attributes["missingRoutes"].([]any)
+	gone := map[string]bool{}
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			if route, ok := m["route"].(string); ok {
+				gone[route] = true
+			}
+		}
+	}
+	return gone
 }

@@ -172,6 +172,20 @@ function reportsCountNotNames(capability: Capability): boolean {
   return values.some((value) => typeof value === 'number') && !values.some((value) => Array.isArray(value))
 }
 
+/** Short names of the held routes the node reports as gone, in the order it reports them. */
+function missingRouteNames(node: Node): string[] {
+  const raw = node.capabilities.find((c) => c.id === 'audio.output.local')?.attributes?.missingRoutes
+  if (!Array.isArray(raw)) return []
+  const names = new Set<string>()
+  for (const item of raw) {
+    const route = (item as { route?: unknown } | null)?.route
+    if (typeof route === 'string' && route !== '') {
+      names.add(route.replace(/^(plug)?(hw|dmix|dsnoop):(CARD=)?/, '').split(',')[0] ?? route)
+    }
+  }
+  return [...names]
+}
+
 function surfaceDisplay(surface: ShowSurfaceConfigResponse): string {
   const output = surface.payload.output
   if (output.transport === 'hdmi') return output.hdmi?.display ?? ''
@@ -770,6 +784,7 @@ export function NodeDetail() {
 
   const hasAudioCapability = node.capabilities.some((capability) => capability.id.startsWith('audio.'))
   const countNotNamesCapability = node.capabilities.find(reportsCountNotNames)
+  const missingRoutes = missingRouteNames(node)
 
   const saveLabel = () => {
     setSavingLabel(true)
@@ -1015,6 +1030,11 @@ export function NodeDetail() {
             )}
           </p>
         )}
+        {missingRoutes.map((name) => (
+          <p key={name} className="sm-section__footnote">
+            Route {name}: the device is not connected. Reconnect it or pick another route in Node routing.
+          </p>
+        ))}
         <CueCatalogControls nodeId={node.nodeId} gate={gate} />
       </Section>
 

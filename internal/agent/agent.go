@@ -418,6 +418,7 @@ func Run() int {
 	// still rebuild when this node's own engine cannot produce sound —
 	// otherwise a broken output pipeline never recovers short of an
 	// agent restart or an artificial revision bump.
+	audioConfiguredNode = audioBind.currentNode
 	audioBind.SetNodeBrokenCheck(func() bool {
 		ok, _ := audioEngine.Available()
 		return !ok
@@ -519,6 +520,14 @@ func Run() int {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1
 	}
+
+	go func() {
+		ticker := time.NewTicker(heldRouteRedetectInterval)
+		defer ticker.Stop()
+		runHeldRouteRedetect(sigCtx, ticker.C, audioBind.currentNode, func() {
+			scheduleHeldRouteRedetection(sigCtx, conn, cfg, bootID, startedAt, fppConnectStatus, logger)
+		})
+	}()
 
 	heartbeatDone := make(chan struct{})
 	go func() {
