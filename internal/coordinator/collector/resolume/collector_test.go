@@ -1448,7 +1448,7 @@ func TestTransitionTriggeredSurveyAppliesTheLoadWindow(t *testing.T) {
 	// word "unknown" again.
 	ready := findSignal(t, obs, LayerReadySignal(3000000000001))
 	rs, ok := ready.Value.(string)
-	if !ok || !contains(rs, "load window") {
+	if !ok || !contains(rs, "just connected") {
 		t.Errorf("layer 3000000000001 readiness after the transition = %v, want it to name the reopened load window — the SAME layer must not silently carry phase 1's unrelated unknown reason forward as if nothing changed", ready.Value)
 	}
 }

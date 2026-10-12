@@ -357,7 +357,7 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 // comment.
 func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.Drawing == "" {
-		reason := "this surface has no active frame writer (e.g. a test-pattern-only pipeline with no FSEQ assigned)"
+		reason := "this surface is not playing a sequence, for example it shows a test pattern only."
 		return []observation.Observation{
 			notCollected(res, SignalSurfaceTimelineState, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID), reason, rep.receivedAt),

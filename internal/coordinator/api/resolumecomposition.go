@@ -99,7 +99,7 @@ const maxResolumeCompositionUploadBytes = 16 * 1024 * 1024
 // route's own arguments to [payloadTooLargeProblem], named so the wording
 // only needs to change in one place.
 const resolumeCompositionUploadNoun = "a Resolume composition file"
-const resolumeCompositionUploadAdvice = " Real composition files are typically well under 3 MB, check that the correct file was selected."
+const resolumeCompositionUploadAdvice = " Composition files are usually under 3 MB. Check that the right file was selected."
 
 // ProblemTypeResolumeCompositionTooLarge is this endpoint's own 413 class
 // (Track D seam D-2a). Defined here rather than in problem.go: this seam
@@ -123,7 +123,7 @@ func payloadTooLargeProblem(maxBytes int64, noun, advice string) v1.Problem {
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
 		Detail: fmt.Sprintf(
-			"the uploaded file exceeds this coordinator's %d byte upload limit for %s; nothing was stored.%s",
+			"The file is over the %d byte upload limit for %s. Nothing was stored.%s",
 			maxBytes, noun, advice,
 		),
 	}
@@ -203,7 +203,7 @@ func (h *handlers) handleGetResolumeComposition(w http.ResponseWriter, r *http.R
 	obj, err := h.deps.Config.GetConfigObject(r.Context(), resolumeCompositionConfigKind, objectID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no Resolume composition has been uploaded yet; upload a composition file to create one"))
+			"No Resolume composition has been uploaded yet. Upload a composition file."))
 		return
 	}
 	if err != nil {
@@ -219,7 +219,7 @@ func (h *handlers) handleGetResolumeComposition(w http.ResponseWriter, r *http.R
 		// make this endpoint panic or fabricate a revision that does not
 		// exist.
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no Resolume composition has been uploaded yet; upload a composition file to create one"))
+			"No Resolume composition has been uploaded yet. Upload a composition file."))
 		return
 	}
 

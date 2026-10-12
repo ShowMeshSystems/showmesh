@@ -145,8 +145,7 @@ func resolumeActionReplayConflictProblem(existingID, existingAction, requestedAc
 		Title:  "Idempotency key already used for a different action",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q); this request names a different action %q. "+
-				"Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (action %q), not action %q. Use a new key.",
 			existingID, existingAction, requestedAction),
 	}
 }
@@ -186,8 +185,7 @@ func resolumeActionRequestBodyTooLargeProblem() v1.Problem {
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
 		Detail: fmt.Sprintf(
-			"the request body exceeds this endpoint's %d byte limit; an action name, an idempotency key, and at "+
-				"most two short parameters never legitimately need more",
+			"The request body is over the %d byte limit. Send only the action, the key and its parameters.",
 			maxResolumeActionRequestBodyBytes),
 	}
 }
@@ -324,8 +322,7 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	rawParams, hasParams := top["params"]
 	if hasParams && isJSONNull(rawParams) {
 		p := invalidParameterProblem(fmt.Sprintf(
-			"params must not be null for action %q; omit the field entirely (or send {}), since an explicit null is not "+
-				"the same as an omitted field", desc.Name))
+			"params must not be null for action %q. Leave it out or send {}.", desc.Name))
 		return nil, &p
 	}
 
@@ -377,8 +374,7 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 		}
 		sort.Strings(expected)
 		p := invalidParameterProblem(fmt.Sprintf(
-			"params contains unrecognized key(s) for action %q: %s (a typo'd parameter name is refused rather than "+
-				"silently ignored; this action expects: %s)", desc.Name, strings.Join(unknown, ", "), strings.Join(expected, ", ")))
+			"Unrecognized params for action %q: %s. This action expects: %s.", desc.Name, strings.Join(unknown, ", "), strings.Join(expected, ", ")))
 		return nil, &p
 	}
 
@@ -396,7 +392,7 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 			return nil, &p
 		case isJSONNull(raw):
 			p := invalidParameterProblem(fmt.Sprintf(
-				"params.%s must not be null (an explicit null is not the same as an omitted field)", def.Name))
+				"params.%s must not be null. Leave it out instead.", def.Name))
 			return nil, &p
 		default:
 			val, err := decodeResolumeActionParamValue(def, raw)
@@ -422,7 +418,7 @@ func decodeResolumeActionParamValue(def ResolumeActionParam, raw json.RawMessage
 			return nil, fmt.Errorf("must be a string")
 		}
 		if s == "" {
-			return nil, fmt.Errorf("must not be an empty string (an explicit empty string is not the same as omitted or null)")
+			return nil, fmt.Errorf("must not be an empty string. Leave it out instead")
 		}
 		return s, nil
 	case ResolumeActionParamBool:
@@ -509,7 +505,7 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(bodyBytes, &top); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(
-			`request body must be a JSON object matching {"action":string,"idempotencyKey":string,"params":object?}`))
+			"The body must be JSON with action, idempotencyKey and optional params."))
 		return
 	}
 

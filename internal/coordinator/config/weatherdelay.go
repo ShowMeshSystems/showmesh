@@ -502,7 +502,7 @@ func decodeWeatherDelayNWS(top map[string]json.RawMessage) (WeatherDelayNWSTrigg
 		eventTypes = *eventTypesPtr
 	}
 	if enabled && contact == "" {
-		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.contact", Detail: "triggers.nws.contact is required when triggers.nws.enabled is true; the National Weather Service alerts API requires a contact in the User-Agent header"}
+		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.contact", Detail: "triggers.nws.contact is required when the NWS trigger is on. Add a contact."}
 	}
 	if enabled && len(eventTypes) == 0 {
 		return WeatherDelayNWSTriggerPayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "triggers.nws.eventTypes", Detail: "triggers.nws.eventTypes must not be empty when triggers.nws.enabled is true"}

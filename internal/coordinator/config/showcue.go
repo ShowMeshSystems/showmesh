@@ -451,7 +451,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	if outputs.Announcement != nil && outputs.Audio == nil {
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs.announcement",
-			Detail: "outputs.announcement requires outputs.audio: an announcement with no audio to play is a policy with no subject",
+			Detail: "outputs.announcement requires outputs.audio. Add an audio output or remove the announcement.",
 		}
 	}
 
@@ -471,7 +471,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	if outputs.LTC != nil && outputs.Announcement != nil {
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs.ltc",
-			Detail: "outputs.ltc must not be combined with outputs.announcement. A node has one LTC generator, and it belongs to the program audio, not the announcement session.",
+			Detail: "outputs.ltc cannot be combined with outputs.announcement. Remove one of them.",
 		}
 	}
 
@@ -595,7 +595,7 @@ func decodeShowCueTargets(fields map[string]json.RawMessage, path string, audioN
 	if targetPresent && targetsPresent {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: path,
-			Detail: fmt.Sprintf(`%s must not declare both "target" and "targets": "target" is the deprecated one-element form of "targets"`, path),
+			Detail: fmt.Sprintf("%s must not declare both \"target\" and \"targets\". Keep \"targets\" only.", path),
 		}
 	}
 
@@ -618,7 +618,7 @@ func decodeShowCueTargets(fields map[string]json.RawMessage, path string, audioN
 	if isJSONNull(raw) {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldNull, Field: targetsField,
-			Detail: targetsField + " must not be null; omit it, or use an empty array, to resolve the default target",
+			Detail: targetsField + " must not be null. Leave it out or use an empty array for the default target.",
 		}
 	}
 	var targets []string
@@ -761,7 +761,7 @@ func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(s
 	} else if duckGainPresent {
 		return ShowCueAnnouncementOutput{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs.announcement.duckGainDb",
-			Detail: "outputs.announcement.duckGainDb must be absent unless policy is \"duck\": an ignored field would read as an applied one",
+			Detail: "outputs.announcement.duckGainDb applies only when policy is \"duck\". Remove it.",
 		}
 	}
 

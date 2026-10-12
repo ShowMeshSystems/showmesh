@@ -166,7 +166,7 @@ func (h *handlers) dispatchRenderCommand(w http.ResponseWriter, r *http.Request,
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxRenderCommandRequestBodyBytes+1))
 	if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeProblem(w, h.logger, now, invalidParameterProblem("request body must be a JSON object matching {\"sequenceId\":string?,\"idempotencyKey\":string?}"))
+		writeProblem(w, h.logger, now, invalidParameterProblem("The body must be JSON with optional fields sequenceId and idempotencyKey."))
 		return
 	}
 
@@ -338,10 +338,10 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, base.Active.ShowID))
 		return nil, &p, nil
 	case len(fseqMatches) == 0:
-		p := invalidParameterProblem(fmt.Sprintf("no fseq asset found for surface %q (sequence %q) in show %q; %d current asset(s) exist for that sequence but none is an fseq", surfaceID, sequenceID, base.Active.ShowID, len(sequenceMatches)))
+		p := invalidParameterProblem(fmt.Sprintf("Surface %q has no FSEQ file for sequence %q in show %q. %d other file(s) exist for it. Upload the FSEQ.", surfaceID, sequenceID, base.Active.ShowID, len(sequenceMatches)))
 		return nil, &p, nil
 	case len(fseqMatches) > 1:
-		p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current fseq assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(fseqMatches), sequenceID, nodeID, base.Active.ShowID))
+		p := invalidParameterProblem(fmt.Sprintf("%d FSEQ files match sequence %q for node %q in show %q. Remove the extras so one remains.", len(fseqMatches), sequenceID, nodeID, base.Active.ShowID))
 		return nil, &p, nil
 	}
 	asset := fseqMatches[0]
@@ -389,7 +389,7 @@ type renderSurfaceBase struct {
 // read its own store.
 func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surfaceID string) (renderSurfaceBase, *v1.Problem, error) {
 	if h.deps.AssetManifests == nil || h.deps.Config == nil {
-		p := invalidParameterProblem("this coordinator has no asset store or config store wired in; render.surface.apply cannot resolve an assignment")
+		p := invalidParameterProblem("The coordinator's asset or config storage is not available, so the sequence cannot be assigned.")
 		return renderSurfaceBase{}, &p, nil
 	}
 
@@ -420,7 +420,7 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 		return renderSurfaceBase{}, nil, fmt.Errorf("resolve active show: %w", err)
 	}
 	if !active.Configured {
-		p := invalidParameterProblem("no active show is configured; render.surface.apply has no show to resolve an assignment against")
+		p := invalidParameterProblem("No show is active, so there is no sequence to assign. Activate a show first.")
 		return renderSurfaceBase{}, &p, nil
 	}
 	if payload.Show != active.ShowID {
@@ -1053,7 +1053,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	if o.Absence == observation.StateNotCollected {
 		if o.CollectedAt.Before(notBefore) {
 			return false, string(observation.StateNotCollected), fmt.Sprintf(
-				"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
+				"No pipeline reading has arrived since this command was sent at %s. The latest is from %s via %s.",
 				notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src), false
 		}
 		if wantState == mqttproto.RenderPipelineStateStopped {
@@ -1077,7 +1077,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	switch changedOutcome {
 	case changedAtNotCollected:
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.pipeline.changed_at for node %s is not collected (%s); cannot confirm a real transition happened", nodeID, changedDetail), false
+			"Node %s has not reported when its pipeline last changed (%s), so the change cannot be confirmed.", nodeID, changedDetail), false
 	case changedAtUnparsable:
 		return false, string(observation.StateCollectionFailed), fmt.Sprintf(
 			"surface.pipeline.changed_at for node %s could not be read as evidence: %s", nodeID, changedDetail), false
@@ -1090,7 +1090,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	}
 	if transitionAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.pipeline.state transition has arrived since this command was dispatched at %s; the most recent transition was at %s, via %s, and predates dispatch",
+			"No pipeline change has arrived since this command was sent at %s. The latest was at %s via %s.",
 			notBefore.Format(time.RFC3339), transitionAt.Format(time.RFC3339), src), false
 	}
 
@@ -1440,7 +1440,7 @@ func (h *handlers) evaluateRenderOutputMode(ctx context.Context, nodeID, surface
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.output.mode reading has arrived since this command was dispatched at %s; the most recent reading was observed at %s, via %s, and predates dispatch",
+			"No output mode reading has arrived since this command was sent at %s. The latest is from %s via %s.",
 			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
 	}
 	state := o.StateAt(h.now())

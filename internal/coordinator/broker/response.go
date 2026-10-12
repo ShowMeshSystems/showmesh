@@ -69,7 +69,7 @@ const pendingWaiterBuffer = 4
 // blocking when disconnected). Per ADR-008, broker loss is a
 // management-plane failure that must never block or panic the caller: this
 // error fails the one operation attempted and nothing else.
-var ErrBrokerUnavailable = errors.New("broker: not connected to mqtt broker")
+var ErrBrokerUnavailable = errors.New("the MQTT broker is not connected")
 
 // ErrPublishNotAuthorized mirrors internal/agent/mqtt.go's error of the
 // same name and the same reasoning: the broker accepted the publish
@@ -78,7 +78,7 @@ var ErrBrokerUnavailable = errors.New("broker: not connected to mqtt broker")
 // ADR-024 decision 10 this is a permanent, credential-related condition, not
 // a transient failure, and callers should be able to tell it apart with
 // errors.Is rather than parsing a generic error string.
-var ErrPublishNotAuthorized = errors.New("broker: publish rejected by broker (not authorized)")
+var ErrPublishNotAuthorized = errors.New("the MQTT broker refused the message as not authorized")
 
 // ErrResponseDeadlineExceeded is returned by AwaitResponse when Deadline
 // elapses (measured from the publish, not from the subscribe — see that
@@ -86,7 +86,7 @@ var ErrPublishNotAuthorized = errors.New("broker: publish rejected by broker (no
 // matching Match. This is a distinct, stated outcome, never collapsed into
 // a bare error and never confused with success: the macro executor (Wave 2)
 // is expected to map it to its own "unconfirmed" step outcome.
-var ErrResponseDeadlineExceeded = errors.New("broker: deadline exceeded waiting for a live matching response")
+var ErrResponseDeadlineExceeded = errors.New("no matching reply arrived in time")
 
 // ErrResponseFailedBeforePublish wraps any error AwaitResponse returns for
 // which nothing reached the wire: deadline validation, response-topic
@@ -96,7 +96,7 @@ var ErrResponseDeadlineExceeded = errors.New("broker: deadline exceeded waiting 
 // reached the wire" from a failure at or after a successful publish, which
 // is what determines whether dispatch evidence such as PublishAttempted
 // and dispatchedAt may be recorded as non-null.
-var ErrResponseFailedBeforePublish = errors.New("broker: response wait failed before any publish was attempted")
+var ErrResponseFailedBeforePublish = errors.New("nothing was sent")
 
 // ErrInvalidResponseTopic is wrapped by the error AwaitResponse returns
 // when ResponseTopic is empty or contains an MQTT wildcard character ('+'
@@ -111,7 +111,7 @@ var ErrResponseFailedBeforePublish = errors.New("broker: response wait failed be
 // every inbound topic on the dispatch path for a case this step's action
 // schema does not produce; rejecting it here keeps that undefined territory
 // from being reachable at all rather than leaving it silently wrong.
-var ErrInvalidResponseTopic = errors.New("broker: invalid response topic")
+var ErrInvalidResponseTopic = errors.New("the response topic is not valid")
 
 // validateResponseTopic rejects an empty topic or one containing an MQTT
 // wildcard character. See [ErrInvalidResponseTopic]'s doc comment for why
@@ -121,7 +121,7 @@ func validateResponseTopic(topic string) error {
 		return fmt.Errorf("%w: topic must not be empty", ErrInvalidResponseTopic)
 	}
 	if strings.ContainsAny(topic, "+#") {
-		return fmt.Errorf("%w: %q: response topics may not contain an MQTT wildcard ('+' or '#')", ErrInvalidResponseTopic, topic)
+		return fmt.Errorf("%w: %q must not contain the wildcards + or #", ErrInvalidResponseTopic, topic)
 	}
 	return nil
 }

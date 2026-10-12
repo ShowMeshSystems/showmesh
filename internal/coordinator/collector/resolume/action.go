@@ -604,14 +604,14 @@ func identityGateRefusal(snap SurveySnapshot, now time.Time) (reason string, ref
 	}
 	if age := now.Sub(snap.IdentityObservedAt); age > MaxIdentityEvidenceAge {
 		return fmt.Sprintf(
-			"the composition identity reading is %s old (checked at %s), past the %s limit for an action to rely on it. A fresh check has been requested.",
+			"the composition check is %s old (at %s), past the %s limit. A fresh check was requested. Retry shortly.",
 			age.Round(time.Second), snap.IdentityObservedAt.Format(time.RFC3339), MaxIdentityEvidenceAge), true, true
 	}
 	if snap.Identity == IdentityTrue {
 		return "", false, false
 	}
 	return fmt.Sprintf(
-		"composition identity is not confirmed (last checked %s, state %q); an action is not dispatched until identity is confirmed",
+		"the composition is not confirmed (last checked %s, state %q), so the action was not sent",
 		snap.IdentityObservedAt.Format(time.RFC3339), snap.Identity), true, false
 }
 

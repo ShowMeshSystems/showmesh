@@ -78,7 +78,7 @@ func (h *handlers) blackoutAllRenderSurfaces(ctx context.Context, now time.Time,
 			InstanceID:    renderSurfaceListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindRender,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list declared show.surface objects, so no blackout could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("The surfaces could not be listed, so no blackout was sent: %v", err),
 		}}
 	}
 	if len(surfaces) == 0 {

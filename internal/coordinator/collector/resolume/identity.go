@@ -141,7 +141,7 @@ func CheckIdentity(ck IdentityCheck) IdentityResult {
 	if resolvedCount == 0 {
 		return IdentityResult{
 			Outcome: IdentityUnknown,
-			Reason:  "no sampled clip id resolved yet; if Resolume just restarted, this typically clears within the first few seconds as it finishes loading the composition",
+			Reason:  "no sampled clip has been found yet. If Resolume just restarted, this clears in a few seconds.",
 		}
 	}
 
@@ -193,9 +193,9 @@ func CheckIdentity(ck IdentityCheck) IdentityResult {
 		result.ActualDeckKnown = true
 		result.ActualDeck = ck.DeckRecheck.CurrentSelectedID
 		result.ActualDeckName = ck.DeckRecheck.CurrentSelectedName
-		result.Reason = "the selected deck changed while this check was running, so the missing clips do not mean the composition is stale"
+		result.Reason = "the selected deck changed during this check, so missing clips do not mean the composition is stale"
 	} else {
-		result.Reason = "the selected deck changed while this check was running and could not be identified again, so the missing clips do not mean the composition is stale"
+		result.Reason = "the deck changed during this check and could not be identified, so missing clips do not mean the composition is stale"
 	}
 	return result
 }

@@ -60,7 +60,7 @@ func ResolveDeck(tc *TrackedComposition, reference string) (ObjectID, error) {
 			positions[i] = fmt.Sprintf("position %d", m.position)
 		}
 		return 0, fmt.Errorf(
-			"more than one deck in the current composition is named %q (at %s); rename one of them in Resolume to disambiguate",
+			"more than one deck is named %q (at %s). Rename one of them in Resolume",
 			reference, strings.Join(positions, ", "))
 	}
 }
@@ -89,7 +89,7 @@ func ResolveLayer(tc *TrackedComposition, reference string) (ObjectID, error) {
 			positions[i] = fmt.Sprintf("layerIndex %d", l.Index)
 		}
 		return 0, fmt.Errorf(
-			"more than one layer in the current composition is named %q (%s); rename one of them in Resolume to disambiguate",
+			"more than one layer is named %q (%s). Rename one of them in Resolume",
 			reference, strings.Join(positions, ", "))
 	}
 }
@@ -126,7 +126,7 @@ func ResolveColumn(tc *TrackedComposition, deckReference, columnReference string
 			positions[i] = fmt.Sprintf("columnIndex %d", c.Index)
 		}
 		return 0, fmt.Errorf(
-			"more than one column named %q was found on deck %q (%s); rename one of them in Resolume to disambiguate",
+			"more than one column is named %q on deck %q (%s). Rename one of them in Resolume",
 			columnReference, deckReference, strings.Join(positions, ", "))
 	}
 }
@@ -273,7 +273,7 @@ func resolveClipCandidates(matched []clipCandidate, ref ClipReference, deckDesc 
 		// "add a layer" stays the correct advice for the whole refusal.
 		if len(layerCounts) == 1 {
 			return 0, fmt.Errorf(
-				"more than one clip named %q %s (%s), and they share a layer, so they cannot be told apart; rename one in Resolume and upload again",
+				"more than one clip named %q %s (%s), all on one layer; rename one in Resolume and upload again",
 				ref.Clip, scope, strings.Join(layers, ", "))
 		}
 		return 0, fmt.Errorf(

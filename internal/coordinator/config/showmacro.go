@@ -299,7 +299,7 @@ func decodeLocalFallback(fields map[string]json.RawMessage, field string) (ShowM
 	if class == showMacroLocalFallbackReduced {
 		return ShowMacroLocalFallback{}, &ValidationError{
 			Code: ValidationCodeLocalFallbackReduced, Field: field + ".class",
-			Detail: "localFallback class \"reduced\" is not accepted: no delivery path exists to a node for it yet",
+			Detail: "localFallback class \"reduced\" is not available yet. Choose another class.",
 		}
 	}
 	if !showMacroLocalFallbackClasses[class] {

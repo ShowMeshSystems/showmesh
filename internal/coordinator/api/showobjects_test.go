@@ -1097,7 +1097,7 @@ func TestPutShowSurfaceRefusesConflictOnSameNodeAndShow(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("overlapping surface status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	if want := `channelRange: The surface "Matrix Left" already uses channels 1 to 3600 on this node. Choose channels outside that range or move one surface to another node.`; !strings.Contains(problemDetail(t, body), want) {
+	if want := `channelRange: The surface "Matrix Left" already uses channels 1 to 3600 on this node. Choose other channels.`; !strings.Contains(problemDetail(t, body), want) {
 		t.Fatalf("body = %s, want detail %q", body, want)
 	}
 

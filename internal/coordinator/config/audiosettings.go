@@ -331,7 +331,7 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		if _, present := top[old]; present {
 			return AudioSettingsPayload{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: old,
-				Detail: fmt.Sprintf("%s was a linear amplitude multiplier and no longer exists; use %s, which is in decibels (0 dB is unity)", old, replacement),
+				Detail: fmt.Sprintf("%s no longer exists. Use %s, in decibels, where 0 dB is unity.", old, replacement),
 			}
 		}
 	}
@@ -402,7 +402,7 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 	if duckGainDb >= maxDuckTargetGainDb || duckGainDb < minDuckTargetGainDb {
 		return AudioSettingsPayload{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "duckTargetGainDb",
-			Detail: fmt.Sprintf("duckTargetGainDb is in decibels and must be negative and at least %v dB: 0 dB or louder does not duck anything, and %v dB is already silence", minDuckTargetGainDb, minDuckTargetGainDb),
+			Detail: fmt.Sprintf("duckTargetGainDb must be negative and no lower than %v dB, since %v dB is silence.", minDuckTargetGainDb, minDuckTargetGainDb),
 		}
 	}
 

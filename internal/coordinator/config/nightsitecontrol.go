@@ -304,7 +304,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 	if info.Integration != ShowActionIntegrationMQTT || info.MQTTExpectKind == "" || info.MQTTExpectKind == MQTTExpectKindNone {
 		return NightInterlockRule{}, &ValidationError{
 			Code: ValidationCodeInterlockSignalNotConfirmable, Field: field + ".signal",
-			Detail: fmt.Sprintf("signal %q must be an mqtt action that expects a response other than \"none\". Set an expected response on that action so this rule can read its result.", signal),
+			Detail: fmt.Sprintf("signal %q must be an MQTT action that expects a response. Set an expected response on that action.", signal),
 		}
 	}
 	// A "block" rule that can never observe a negative answer can only
@@ -358,7 +358,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 		if hasOnUnavailable || hasOverridePolicy {
 			return NightInterlockRule{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: field,
-				Detail: "an \"observe\" interlock never withholds and must not set onUnavailable or overridePolicy",
+				Detail: "an \"observe\" rule never blocks, so onUnavailable and overridePolicy do not apply. Remove them.",
 			}
 		}
 	case NightInterlockPostureBlock:
@@ -380,7 +380,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 		if overridePolicy == NightInterlockOverridePolicyNone && nightInterlockPhaseRequiresOverride[phase] {
 			return NightInterlockRule{}, &ValidationError{
 				Code: ValidationCodeInterlockShutdownPhaseRequiresOverride, Field: field + ".overridePolicy",
-				Detail: fmt.Sprintf("phase %q ends the night. Set overridePolicy to \"authorized-operator\" here, not \"none\", so there is always a way to end the night by hand.", phase),
+				Detail: fmt.Sprintf("phase %q ends the night, so it needs a manual override. Set overridePolicy to \"authorized-operator\".", phase),
 			}
 		}
 		rule.OnUnavailable = onUnavailable
@@ -532,7 +532,7 @@ func decodeNightSiteControl(top map[string]json.RawMessage, sessionShow string, 
 	if len(fields) == 0 {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "siteControl",
-			Detail: "siteControl configures none of requestThermalProfile, presentationPowerOn, or presentationPowerOff; omit siteControl entirely rather than configuring nothing",
+			Detail: "siteControl sets no thermal profile, power-on or power-off action. Add one, or remove siteControl.",
 		}
 	}
 
@@ -679,7 +679,7 @@ func decodeNightPresentationPowerOff(fields map[string]json.RawMessage, sessionS
 		if !attested {
 			return NightPresentationPowerOff{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "siteControl.presentationPowerOff.immediateSafeAttestation",
-				Detail: "immediateSafeAttestation must be true to select \"immediate\"; use \"after-actions\" for a target that is not safe for immediate removal",
+				Detail: "immediateSafeAttestation must be true to select \"immediate\". Set it, or use \"after-actions\".",
 			}
 		}
 		off.ImmediateSafeAttestation = true
@@ -805,7 +805,7 @@ func decodeNightPrerequisite(raw json.RawMessage, field, sessionShow string, act
 	if action == selfAction {
 		return NightPrerequisite{}, &ValidationError{
 			Code: ValidationCodePowerOffPrerequisiteCycle, Field: field + ".action",
-			Detail: fmt.Sprintf("prerequisite action %q is this same presentation power-off binding's own action; a removal policy may not invoke itself", action),
+			Detail: fmt.Sprintf("prerequisite action %q is the power-off action itself. Remove it from prerequisites.", action),
 		}
 	}
 

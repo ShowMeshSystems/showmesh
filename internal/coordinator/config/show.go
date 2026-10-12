@@ -102,7 +102,7 @@ func ValidateShowObjectID(field, id string) *ValidationError {
 	if err := mqttproto.ValidateNodeID(id); err != nil {
 		return &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: field,
-			Detail: fmt.Sprintf("%s must be 1-64 characters of lowercase letters, digits, and hyphens, and must not start or end with a hyphen", field),
+			Detail: fmt.Sprintf("%s must be 1 to 64 lowercase letters, digits or hyphens, not starting or ending with a hyphen.", field),
 		}
 	}
 	return nil
@@ -228,7 +228,7 @@ func decodeShowInstanceSelection(top map[string]json.RawMessage, key string) (*[
 		if err := mqttproto.ValidateNodeID(id); err != nil {
 			return nil, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: field,
-				Detail: fmt.Sprintf("%s must be 1-64 characters of lowercase letters, digits, and hyphens, and must not start or end with a hyphen", field),
+				Detail: fmt.Sprintf("%s must be 1 to 64 lowercase letters, digits or hyphens, not starting or ending with a hyphen.", field),
 			}
 		}
 		if seen[id] {

@@ -433,11 +433,11 @@ func (c *Collector) SilentSinceConnect(instanceID string) (silent bool, reason s
 
 	if lastMsgAt, everPublished := c.store.latestReceivedAt(instanceID); everPublished {
 		return true, fmt.Sprintf(
-			"connected to the broker but has received no message on any subscribed topic for host %q since %s",
+			"connected to the broker, but host %q has sent nothing since %s. Check the player's MQTT settings.",
 			instanceID, lastMsgAt.Format(time.RFC3339))
 	}
 	return true, fmt.Sprintf(
-		"connected to the broker since %s but has never received a message on any subscribed topic for host %q",
+		"connected to the broker since %s, but host %q has never sent anything. Check the player's MQTT settings.",
 		connectedAt.Format(time.RFC3339), instanceID)
 }
 

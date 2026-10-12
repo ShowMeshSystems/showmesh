@@ -128,7 +128,7 @@ func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind, showF
 // exactly the "quietly returning everything" failure GET
 // /config/show.surface?node= exists to avoid.
 func unsupportedNodeFilterProblem(kind string) v1.Problem {
-	return invalidParameterProblem(fmt.Sprintf(`"node" is not a supported filter for kind %q; only show.surface objects carry a node`, kind))
+	return invalidParameterProblem(fmt.Sprintf("\"node\" is not a filter for kind %q. Only show.surface supports it.", kind))
 }
 
 func (h *handlers) handleListShowActions(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +227,7 @@ func (h *handlers) refuseShowChange(ctx context.Context, kind, id, incomingShow 
 	p := mapValidationError(&config.ValidationError{
 		Code: config.ValidationCodeCrossShowReference, Field: "show",
 		Detail: fmt.Sprintf(
-			"show is immutable: %s %q belongs to show %q and cannot be moved to show %q by a PUT; author a new %s in show %q instead",
+			"%s %q belongs to show %q and cannot move to show %q. Create a new %s in show %q instead.",
 			kind, id, head.Show, incomingShow, kind, incomingShow),
 	})
 	return &p, nil
@@ -462,7 +462,7 @@ const ProblemTypeShowActionResolumeIntegrationBlockedByMacroFallback = ProblemBa
 func showActionResolumeIntegrationBlockedProblem(actionID, macroID, stepID string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeShowActionResolumeIntegrationBlockedByMacroFallback,
-		Title:  "Action refused: a stored macro step declares the wrong local fallback for a Resolume action",
+		Title:  "A stored macro step has the wrong local fallback for a Resolume action",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
 			"action %q cannot become a resolume action: show.macro %q step %q references it with a localFallback.class "+
@@ -699,7 +699,7 @@ func parseRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1.Probl
 
 	if ifNoneMatch != "" {
 		if ifNoneMatch != "*" {
-			p := invalidParameterProblem(`If-None-Match only supports the literal value "*", asserting that no revision has been activated for this id yet`)
+			p := invalidParameterProblem("If-None-Match only supports \"*\", meaning nothing is saved under this id yet.")
 			return revisionPrecondition{}, &p
 		}
 		return revisionPrecondition{Mode: revisionPreconditionIfNoneMatchCreate}, nil
@@ -760,7 +760,7 @@ func configRevisionConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Pr
 	var detail string
 	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
 		detail = fmt.Sprintf(
-			`If-None-Match: "*" requires %s %q to have no active revision yet, but it is already at revision %d`,
+			"%s %q already exists at revision %d. Send If-Match with that revision to update it.",
 			e.kind, e.id, e.actualRevision)
 	} else {
 		detail = fmt.Sprintf(
@@ -910,7 +910,7 @@ func decodeConfigDeleteConfirmBody(r *http.Request) *v1.Problem {
 	}
 	if !req.Confirm {
 		p := invalidParameterProblem(
-			"deleting a configuration object requires an explicit {\"confirm\":true} body, so a mis-issued call cannot quietly remove it")
+			"Deleting needs a body of {\"confirm\":true}. Send it to confirm the delete.")
 		return &p
 	}
 	return nil

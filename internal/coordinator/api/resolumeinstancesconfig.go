@@ -150,10 +150,10 @@ func decodeResolumeInstancesConfigPutBody(body io.Reader) ([]config.ResolumeInst
 
 	instancesRaw, present := top["instances"]
 	if !present {
-		return nil, errors.New(`"instances" is required and was absent; pass an empty array ("instances": []) to deliberately configure zero instances`)
+		return nil, errors.New("\"instances\" is required; send \"instances\": [] to configure none")
 	}
 	if bytes.Equal(bytes.TrimSpace(instancesRaw), []byte("null")) {
-		return nil, errors.New(`"instances" must not be null; pass an empty array ("instances": []) to deliberately configure zero instances`)
+		return nil, errors.New("\"instances\" must not be null; send \"instances\": [] to configure none")
 	}
 
 	var wire []v1.ConfigResolumeInstance
@@ -305,8 +305,7 @@ func (h *handlers) handlePutResolumeInstancesConfig(w http.ResponseWriter, r *ht
 // ten seconds, no restart needed — Track G seam G-2 applies ADR-036 to this
 // kind from the start rather than shipping the restart-snapshot defect
 // fpp.endpoints had to be corrected out of.
-const resolumeInstancesRestartRequiredReason = "this change is already in effect: the Resolume collector set follows " +
-	"this configuration within about ten seconds. No restart is needed."
+const resolumeInstancesRestartRequiredReason = "This change is already in effect. No restart is needed."
 
 func mapResolumeInstancesConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, instances []config.ResolumeInstance) v1.ResolumeInstancesConfigResponse {
 	payload := v1.ConfigResolumeInstancesPayload{Instances: make([]v1.ConfigResolumeInstance, 0, len(instances))}

@@ -687,7 +687,7 @@ func scanNightSessionForbiddenKeys(raw string) *ValidationError {
 		return verr
 	}
 	return scanForbiddenKeysRec(generic, "", nightSessionDurationKeys, ValidationCodeDuplicateRestDuration,
-		"%s repeats a duration the resting FSEQ file already sets. Remove this field and let the FSEQ set the duration.")
+		"%s repeats a duration the resting FSEQ file already sets. Remove this field.")
 }
 
 // scanForbiddenKeysRec is scanNightSessionForbiddenKeys' recursive walker.
@@ -830,7 +830,7 @@ func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow st
 		if isJSONNull(raw) {
 			return NightSessionResting{}, &ValidationError{
 				Code: ValidationCodeFieldNull, Field: "resting.backgroundAudio",
-				Detail: "resting.backgroundAudio must not be null; omit it entirely to configure no background audio",
+				Detail: "resting.backgroundAudio must not be null. Leave it out for no background audio.",
 			}
 		}
 		backgroundFields, verr := decodeRequiredObject(fields, "backgroundAudio", "resting.backgroundAudio")
@@ -1029,7 +1029,7 @@ func decodeNightSessionBedTargets(fields map[string]json.RawMessage, path string
 	if isJSONNull(raw) {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldNull, Field: path,
-			Detail: fmt.Sprintf("%s must not be null; omit it, or use an empty array, for the existing per-node behavior", path),
+			Detail: fmt.Sprintf("%s must not be null. Leave it out or use an empty array.", path),
 		}
 	}
 	var targets []string

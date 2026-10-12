@@ -243,7 +243,7 @@ func mqttNestedBoolSignal(doc rawDoc, sig observation.SignalID, innerKey string)
 // what lets that positive answer win once both sources are wired in —
 // this function does not and must not know that.
 func warningsSignals(doc rawDoc) []SignalValue {
-	const absentReason = `FPP omits the warnings key from /api/fppd/status; the MQTT warnings topic reports the list positively`
+	const absentReason = "FPP's status does not list warnings. The MQTT warnings topic carries them."
 
 	raw, ok := doc["warnings"]
 	if !ok {

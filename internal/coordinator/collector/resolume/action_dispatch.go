@@ -173,7 +173,7 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, w dispatchWin
 		return refusedOutcome(name, fmt.Sprintf("clip id %s is not part of the uploaded composition", clipID))
 	}
 	if !layerKnown {
-		return refusedOutcome(name, fmt.Sprintf("the uploaded composition does not identify which layer owns clip %s, so its launch cannot be confirmed", clipID))
+		return refusedOutcome(name, fmt.Sprintf("clip %s has no known layer in the uploaded composition, so its launch cannot be confirmed", clipID))
 	}
 
 	baseline := w.beginBaseline(ctx)
@@ -405,7 +405,7 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindo
 		var latest time.Time
 		for _, l := range layers {
 			if s.expired() {
-				return false, time.Time{}, fmt.Sprintf("the confirming read of every tracked layer did not finish before the deadline (stopped at layer %s)", l.ID)
+				return false, time.Time{}, fmt.Sprintf("checking the layers did not finish in time. It stopped at layer %s.", l.ID)
 			}
 			layer, readAt, err := d.readLayer(s.ctx, l.ID)
 			if err != nil {
@@ -569,13 +569,13 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, w dispatc
 	// unguarded read would make an unreadable baseline look like "already off".
 	if baseLayer.Bypassed.Presence != PresencePresent || baseLayer.Bypassed.Param == nil {
 		return refusedOutcome(name,
-			"this layer's bypass parameter could not be read, so its current session-scoped parameter id is not known and this command cannot be dispatched")
+			"this layer's bypass setting could not be read, so the command was not sent. Retry.")
 	}
 	parameterID := baseLayer.Bypassed.Param.ID
 	currentBypassed, ok := baseLayer.Bypassed.Bool()
 	if !ok {
 		return refusedOutcome(name,
-			"this layer's bypass parameter answered with no value, so its current state is not known and this command cannot be dispatched")
+			"this layer's bypass setting came back empty, so the command was not sent. Retry.")
 	}
 	alreadySatisfied := currentBypassed == want
 
@@ -643,13 +643,13 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, w dispatc
 	// Go zero value is 0.0, setLayerMaster's own darkening direction.
 	if baseLayer.Master.Presence != PresencePresent || baseLayer.Master.Param == nil {
 		return refusedOutcome(name,
-			"this layer's master parameter could not be read, so its current session-scoped parameter id is not known and this command cannot be dispatched")
+			"this layer's master level could not be read, so the command was not sent. Retry.")
 	}
 	parameterID := baseLayer.Master.Param.ID
 	currentMaster, ok := baseLayer.Master.Float()
 	if !ok {
 		return refusedOutcome(name,
-			"this layer's master parameter answered with no value, so its current state is not known and this command cannot be dispatched")
+			"this layer's master level came back empty, so the command was not sent. Retry.")
 	}
 
 	// Range-validated against Arena's own declared bounds for this specific
