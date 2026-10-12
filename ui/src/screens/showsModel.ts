@@ -14,6 +14,7 @@ import type {
   Node,
   ResolvedFrom,
   ShowCueConfigResponse,
+  ShowSurfaceConfigResponse,
 } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
@@ -664,4 +665,23 @@ export function explicitListExcludeConflictError(explicitList: readonly string[]
     return "This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude."
   }
   return null
+}
+
+/** Every node the coordinator deploys a show's catalog to, in first-seen order: surfaces, each cue's resolved audio and announcement nodes, and LTC targets. */
+export function showDeclaredNodes(params: {
+  surfaces: readonly ShowSurfaceConfigResponse[]
+  showAudioNodes: readonly string[]
+  cues: readonly ShowCueConfigResponse[]
+  defaultNodeId: string | null
+}): string[] {
+  const resolve = (output: { targets?: string[]; excludeNodes?: string[] } | undefined) =>
+    output === undefined
+      ? []
+      : resolveAudioNodes({ explicitList: output.targets ?? [], showAudioNodes: params.showAudioNodes, excludeNodes: output.excludeNodes ?? [], defaultNodeId: params.defaultNodeId }).nodes
+  const nodes = [
+    ...params.surfaces.map((s) => s.payload.node),
+    ...params.showAudioNodes,
+    ...params.cues.flatMap((c) => [...resolve(c.payload.outputs.audio), ...resolve(c.payload.outputs.announcement), c.payload.outputs.ltc?.target ?? '']),
+  ]
+  return [...new Set(nodes.filter((n) => n !== ''))]
 }

@@ -13,15 +13,17 @@ import {
   type ConfigShowCue,
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
+  type ShowSurfaceConfigResponse,
 } from '../api'
-import { Button, Callout, DeletePanel, Field, Input, Notice, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, ConfirmDialog, DeletePanel, Field, Input, Notice, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
-import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
+import { fetchShowContents, fetchShowCues, fetchShowPlaylists, fetchShowSurfaces } from './showsData'
+import { useShowCatalogDeploy, type NodeDeployRow } from './cueCatalogDeploy'
 import {
   CUE_OUTPUT_CHIP,
   excludeNodesError,
@@ -30,7 +32,9 @@ import {
   type CueOutputKind,
   type CueRow,
   cueActivationSummary,
+  activeShowId,
   cueRows,
+  showDeclaredNodes,
   formatBytes,
   installationDefaultAudioNode,
   audioOnlyNodesWarning,
@@ -44,7 +48,7 @@ type ShowActionOption = { id: string; label: string }
 
 type ListState =
   | { kind: 'loading' }
-  | { kind: 'loaded'; cues: ShowCueConfigResponse[]; playlists: ShowPlaylistConfigResponse[]; assets: Asset[]; actions: ShowActionOption[] }
+  | { kind: 'loaded'; cues: ShowCueConfigResponse[]; playlists: ShowPlaylistConfigResponse[]; surfaces: ShowSurfaceConfigResponse[]; assets: Asset[]; actions: ShowActionOption[] }
   | { kind: 'failed'; reason: string }
 
 function useCues(showId: string): { state: ListState; reload: () => void; upsertCue: (response: ShowCueConfigResponse) => void } {
@@ -56,8 +60,8 @@ function useCues(showId: string): { state: ListState; reload: () => void; upsert
     setState({ kind: 'loading' })
     fetchShowContents(showId)
       .then(async (contents) => {
-        const [cues, playlists] = await Promise.all([fetchShowCues(contents.cues), fetchShowPlaylists(contents.playlists)])
-        if (!cancelled) setState({ kind: 'loaded', cues, playlists, assets: contents.assets, actions: contents.actions })
+        const [cues, playlists, surfaces] = await Promise.all([fetchShowCues(contents.cues), fetchShowPlaylists(contents.playlists), fetchShowSurfaces(contents.surfaces)])
+        if (!cancelled) setState({ kind: 'loaded', cues, playlists, surfaces, assets: contents.assets, actions: contents.actions })
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
@@ -89,6 +93,18 @@ export function ShowsCues() {
   const { id: showId = '' } = useParams<{ id: string }>()
   const model = useModelContext()
   const { state, reload, upsertCue } = useCues(showId)
+  const showAudioNodes = useShowAudioNodes(showId)
+  const installationAudioNodes = useAudioNodes()
+  const nodeIds =
+    state.kind === 'loaded' && showAudioNodes.kind === 'loaded' && installationAudioNodes.kind === 'loaded'
+      ? showDeclaredNodes({
+          surfaces: state.surfaces,
+          showAudioNodes: showAudioNodes.audioNodes,
+          cues: state.cues,
+          defaultNodeId: installationDefaultAudioNode(installationAudioNodes.nodes),
+        })
+      : []
+  const catalogDeploy = useShowCatalogDeploy(nodeIds)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [filterText, setFilterText] = useState('')
@@ -139,6 +155,21 @@ export function ShowsCues() {
   const existingIds = state.cues.map((c) => c.id)
   const actionLabels = new Map(state.actions.map((a) => [a.id, a.label]))
 
+  const deployGate = evaluateScope(model.session, model.sessionFetchFailed, 'cuecatalog:deploy')
+  const deployReason = !deployGate.allowed
+    ? deployGate.reason
+    : activeShowId(model) !== showId
+      ? 'This show is not the active show. Activate it to deploy its cue catalog.'
+      : showAudioNodes.kind === 'failed'
+        ? showAudioNodes.reason
+        : installationAudioNodes.kind === 'failed'
+          ? installationAudioNodes.reason
+          : state.kind !== 'loaded' || showAudioNodes.kind === 'loading' || installationAudioNodes.kind === 'loading'
+            ? "Reading this show's nodes."
+            : nodeIds.length === 0
+              ? 'This show declares no nodes. Add a surface or audio node first.'
+              : undefined
+
   const closeInspector = () => { setCreating(false); setSelectedId(null) }
 
   return (
@@ -153,17 +184,25 @@ export function ShowsCues() {
           id="cue-list"
           title="Cues in this show"
           aside={
-            <Button
-              variant="primary"
-              onClick={() => {
-                setCreating(true)
-                setSelectedId(null)
-              }}
-            >
-              New cue
-            </Button>
+            <ButtonRow>
+              <DeployCatalogButton
+                deploy={catalogDeploy}
+                gate={deployGate}
+                reason={deployReason}
+              />
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setCreating(true)
+                  setSelectedId(null)
+                }}
+              >
+                New cue
+              </Button>
+            </ButtonRow>
           }
         >
+          <DeployOutcome deploy={catalogDeploy} />
           <p className="sm-small sm-muted">Select a cue to edit it in the panel on the right. Editing a cue changes every playlist that uses it.</p>
           <div className="sm-inline-row sm-stack-3">
             <Input aria-label="Filter cues" placeholder="Filter cues…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
@@ -253,6 +292,57 @@ export function ShowsCues() {
         )}
       </aside>
     </Panes>
+  )
+}
+
+type CatalogDeploy = ReturnType<typeof useShowCatalogDeploy>
+
+function DeployCatalogButton({ deploy, gate, reason }: { deploy: CatalogDeploy; gate: ReturnType<typeof evaluateScope>; reason: string | undefined }) {
+  return (
+    <>
+      <Button disabled={reason !== undefined || deploy.deploying} title={reason} onClick={() => void deploy.deploy()}>
+        {deploy.deploying ? 'Deploying…' : 'Deploy cue catalog'}
+      </Button>
+      {deploy.conflicts.length > 0 && (
+        <Button variant="danger" disabled={!gate.allowed || deploy.deploying} title={gate.allowed ? undefined : gate.reason} onClick={deploy.deployAnyway}>
+          Deploy anyway
+        </Button>
+      )}
+    </>
+  )
+}
+
+const DEPLOY_TONE = { confirmed: 'good', unconfirmed: 'warn', pending: 'pending', conflict: 'bad', refused: 'bad', failed: 'bad' } as const
+const DEPLOY_LABEL: Record<NodeDeployRow['status'], string> = { confirmed: 'Confirmed', unconfirmed: 'Unconfirmed', pending: 'Still resolving', conflict: 'Refused', refused: 'Refused', failed: 'Failed' }
+
+function DeployOutcome({ deploy }: { deploy: CatalogDeploy }) {
+  return (
+    <>
+      {deploy.rows.length > 0 && (
+        <div className="sm-outcome" role="status" aria-label="Cue catalog deploy outcome">
+          {deploy.rows.map((row) => (
+            <div key={row.nodeId} className="sm-stack-2">
+              <StatusPair tone={DEPLOY_TONE[row.status]} label={`${row.nodeId} · ${DEPLOY_LABEL[row.status]}`} />
+              <p className="sm-outcome__detail">{row.reason}</p>
+              {row.overridden.length > 0 && <p className="sm-outcome__detail">Deployed with operator override: {row.overridden.join('; ')}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      <ConfirmDialog
+        open={deploy.confirmingOverride}
+        title="Deploy anyway?"
+        detail={
+          <>
+            <p className="sm-body">{deploy.conflicts.map((r) => `${r.nodeId}: ${r.reason}`).join(' ')}</p>
+            <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed catalog.</p>
+          </>
+        }
+        confirmLabel="Deploy anyway"
+        onConfirm={deploy.confirmDeployAnyway}
+        onCancel={() => deploy.setConfirmingOverride(false)}
+      />
+    </>
   )
 }
 
