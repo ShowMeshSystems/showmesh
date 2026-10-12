@@ -291,7 +291,7 @@ describe('Shows · activation', () => {
     fireEvent.change(await screen.findByRole('combobox', { name: 'Show to activate' }), { target: { value: 'hallowed-hollow-2026' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
-    expect(screen.getByText(/saved by other-operator/)).toBeInTheDocument()
+    expect(screen.getByText(/other-operator saved a newer version/)).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
   })
 

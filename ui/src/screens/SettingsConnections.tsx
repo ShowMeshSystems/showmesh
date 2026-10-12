@@ -237,7 +237,7 @@ export function SettingsConnections() {
               setNewPassword('')
               setMqttOutcome({ savedAt: Date.now() })
             } else if (outcome.kind === 'taken') {
-              setMqttOutcome({ error: 'Someone else configured the event feed while this was open. Reload and start again.' })
+              setMqttOutcome({ error: 'Someone else changed the event feed. Reload and start again.' })
             } else {
               setMqttOutcome({ error: outcome.reason })
             }
@@ -285,7 +285,7 @@ export function SettingsConnections() {
       <NotWiredBanner
         what="Test"
         missing="test endpoint for a configured connection"
-        detail="Health comes from the coordinator's polling. There is no live test button."
+        detail="Health comes from the coordinator's polling."
       />
 
       <Section id="st-fpp" title="FPP players">
@@ -438,8 +438,7 @@ export function SettingsConnections() {
                     </div>
                     {rowDirty && loadedRow !== undefined && (
                       <p className="sm-small sm-muted">
-                        The saved value is <span className="sm-data">{loadedRow.url}</span> and the coordinator is
-                        still polling it. Nothing changes until you save.
+                        Still polling the saved value <span className="sm-data">{loadedRow.url}</span> until you save.
                       </p>
                     )}
                     {health !== null ? (
@@ -532,7 +531,7 @@ export function SettingsConnections() {
             <div className="sm-stack-3" data-testid="mqtt-hosts">
               <p className="sm-field__label">Players on this feed</p>
               <p className="sm-small sm-muted">
-                Add one row per player: its id, and the host name FPP publishes under (usually the same).
+                One row per player: its id and the host name FPP publishes under.
               </p>
               <div className="sm-panel sm-stack-4">
                 {hosts.map((row, index) => (
@@ -910,7 +909,7 @@ function FPPConnectSettings() {
     const file = Number(maxFileBytes)
     const total = Number(maxAssetDirBytes)
     if (!Number.isSafeInteger(file) || file < 1 || !Number.isSafeInteger(total) || total < file) {
-      setError('Both limits must be whole bytes, and the total asset-directory limit must be at least the per-file limit.')
+      setError('Use whole bytes. The total limit must be at least the per-file limit.')
       return
     }
     setSaving(true)

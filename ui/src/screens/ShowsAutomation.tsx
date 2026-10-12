@@ -297,8 +297,7 @@ export function ShowsAutomation() {
           }
         >
           <p className="sm-small sm-muted">
-            A macro is what an operator fires. Actions are its steps, in order, and never run on their own in a show, except by direct invoke or a cue
-            that names one.
+            An operator fires a macro. Its actions run as steps, in order.
           </p>
           <div className="sm-inline-row sm-stack-3">
             <Input aria-label="Filter macros and actions" placeholder="Filter macros and actions…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
@@ -347,9 +346,9 @@ export function ShowsAutomation() {
         </Section>
 
         <Section id="au-macros" title="Macros" aside={<span className="sm-small sm-muted">{visibleMacros.length}</span>}>
-          <p className="sm-small sm-muted">Select a step to edit how it runs. Editing a step's own action changes every macro that uses it.</p>
+          <p className="sm-small sm-muted">Select a step to edit it. Editing an action changes every macro that uses it.</p>
           {visibleMacros.length === 0 ? (
-            <RuledStrip absence="empty" label="None" fact="No macro matches here." />
+            <RuledStrip absence="empty" label="None" fact="No matching macros." />
           ) : (
             visibleMacros.map((macro) => {
               const draft = macroDrafts[macro.id]
@@ -386,7 +385,7 @@ export function ShowsAutomation() {
         <MacroHistory showId={showId} onOpenRun={(runId) => setAside({ kind: 'run', runId })} />
 
         <Section id="au-actions" title="Actions" aside={<span className="sm-small sm-muted">{visibleActions.length}</span>}>
-          <p className="sm-small sm-muted">An action's row edits the action itself, its target, its safety class, and what counts as confirmation.</p>
+          <p className="sm-small sm-muted">Select an action to edit its target, safety class and confirmation.</p>
           <h3 className="sm-subsection__title">
             In a macro <span className="sm-small sm-muted">· {inMacro.length}</span>
           </h3>
@@ -394,7 +393,7 @@ export function ShowsAutomation() {
           <h3 className="sm-subsection__title sm-stack-4">
             Not in a macro <span className="sm-small sm-muted">· {notInMacro.length}</span>
           </h3>
-          <p className="sm-small sm-muted">Reachable only by a direct invoke, or by a cue that names it and locks in the version. No macro will ever fire it.</p>
+          <p className="sm-small sm-muted">Fired only by a direct invoke or a cue that names it.</p>
           <ActionTable actions={notInMacro} macros={macros} bindings={bindingMap} canInvoke={canInvoke} usedByColumn={false} onOpenAction={(id) => setAside({ kind: 'action-edit', actionId: id })} />
         </Section>
       </div>
@@ -680,7 +679,7 @@ function ActionTable({
           {actions.length === 0 ? (
             <tr>
               <td colSpan={4}>
-                <RuledStrip absence="empty" label="None" fact="No action matches here." />
+                <RuledStrip absence="empty" label="None" fact="No matching actions." />
               </td>
             </tr>
           ) : (
@@ -794,7 +793,7 @@ function macroSaveBlockReason(
       if (current.actionId.trim() === '') return 'A step needs an action.'
       if (current.stepId.trim() === '') return 'A step needs an id.'
       if (steps.some((s, j) => j !== stepIndex && s.id === current.stepId.trim())) return `The id "${current.stepId}" already names another step in this macro.`
-      if (current.fallbackReason.trim() === '') return 'State what happens locally while the coordinator is unreachable, in your own words.'
+      if (current.fallbackReason.trim() === '') return 'Say what happens while the coordinator is unreachable.'
       continue
     }
     const s = steps[i]
@@ -970,11 +969,11 @@ function StepEditor({
             </Select>
           )}
         </Field>
-        <Field label="Reason" help="Required, in your own words. This is what an operator reads while the coordinator is unreachable.">
+        <Field label="Reason" help="What an operator reads while the coordinator is unreachable.">
           {(props) => <Input {...props} value={fallbackReason} onChange={(e) => setFallbackReason(e.target.value)} />}
         </Field>
         <p className="sm-small sm-faint">
-          A <span className="sm-data">reduced</span> fallback is not offered by this schema: only none, coordinator-required, and silence are accepted.
+          A <span className="sm-data">reduced</span> fallback is not available.
         </p>
       </div>
 
@@ -1017,7 +1016,7 @@ function StepEditor({
         disallowedReason={canAuthor.allowed ? undefined : canAuthor.reason}
         onDelete={remove}
       >
-        <p className="sm-small sm-muted">Deleting a macro does not delete its steps' actions; those remain, reachable by direct invoke or another macro.</p>
+        <p className="sm-small sm-muted">Deletes the macro only. Its actions stay.</p>
       </DeletePanel>
     </div>
   )
@@ -1448,8 +1447,8 @@ function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (va
           label="Match value"
           help={
             value.expectKind === 'match'
-              ? 'Must be present. The empty string is a legal value: an empty box here is answered, not blank.'
-              : 'Optional. An absent value accepts receipt with no equality check.'
+              ? 'Required. An empty box matches an empty reply.'
+              : 'Optional. Empty accepts any reply.'
           }
         >
           {(props) => <Input {...props} className="sm-data" value={value.expectValue} onChange={(e) => onChange({ ...value, expectValue: e.target.value })} />}
@@ -1480,7 +1479,7 @@ function ResolumeTarget({
     return (
       <div className="sm-inspector__group">
         <p className="sm-eyebrow sm-flat">resolume target</p>
-        <RuledStrip absence="failed" label="Read failed" fact={actionsState.reason} detail="The save stays withheld; there is no fallback to a guessed action list." />
+        <RuledStrip absence="failed" label="Read failed" fact={actionsState.reason} detail="Saving is off until the action list loads." />
       </div>
     )
   }
@@ -1563,8 +1562,8 @@ function AudioTarget({
         showAudioNodesState={showAudioNodesState}
         nodesState={nodesState}
       />
-      <p className="sm-small sm-faint">Announcements and the resting bed play on every resolved node; other actions use the first.</p>
-      <Field label="Session" help="Minted by the caller, not looked up: the pkg/audio session id this operation targets.">
+      <p className="sm-small sm-faint">Announcements and the resting bed play on every node. Others use the first.</p>
+      <Field label="Session" help="The audio session id this operation targets.">
         {(props) => <Input {...props} className="sm-data" value={value.audioSessionId} onChange={(e) => onChange({ ...value, audioSessionId: e.target.value })} />}
       </Field>
       <Field label="Operation">
@@ -1584,7 +1583,7 @@ function AudioTarget({
           {assetsState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Fetching this show's uploaded audio assets." />}
           {assetsState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={assetsState.reason} />}
           {assetsState.kind === 'loaded' && (
-            <Field label="Media" help="The audio file this operation sends to the node. Selecting one sets the session's source role to announcement.">
+            <Field label="Media" help="The audio file to play. It plays as an announcement.">
               {(props) => (
                 <Select
                   {...props}
@@ -1622,7 +1621,7 @@ function AudioTarget({
       {(value.audioAction === 'audio.gain.set' || value.audioAction === 'audio.gain.fade') && (
         <Field
           label={value.audioAction === 'audio.gain.set' ? 'Gain' : 'Target gain'}
-          help="Decibels only. 0 dB unity, -60 dB silence, +12 dB the ceiling. The pre-decibel linear gain is refused at authoring time."
+          help="Decibels. 0 is unity, -60 is silence, +12 is the most."
         >
           {(props) => (
             <div className="sm-inline-row">
@@ -1632,7 +1631,7 @@ function AudioTarget({
           )}
         </Field>
       )}
-      <p className="sm-small sm-faint">No expect block: confirmation for audio is the node's own reply, not an authored match.</p>
+      <p className="sm-small sm-faint">The node's reply confirms an audio action.</p>
     </div>
   )
 }
@@ -1665,7 +1664,7 @@ function SafetyClassBlock({
         <>
           <Segmented<SafetyClass | ''> label="Safety class" value={mqttValue} options={SAFETY_CLASS_OPTIONS} onChange={onMqttChange} />
           <p className="sm-small sm-muted">
-            No default in the schema, so no default here. It decides which permission invoking this action needs and whether an interlock can withhold it. Stored as{' '}
+            Sets who may run this action. Stored as{' '}
             <span className="sm-data">none</span>, <span className="sm-data">blackout</span>, <span className="sm-data">stop</span>, or <span className="sm-data">powerOff</span>.
           </p>
         </>
@@ -1673,8 +1672,7 @@ function SafetyClassBlock({
         <>
           <Segmented<SafetyClass> label="Safety class" value={derivedClass} options={SAFETY_CLASS_OPTIONS} onChange={() => {}} disabled />
           <p className="sm-small sm-muted">
-            Derived from <span className="sm-data">{decidedBy}</span>. Not settable directly: the coordinator refuses a safetyClass that disagrees with the target's own
-            registered class.
+            Set by <span className="sm-data">{decidedBy}</span>. It cannot be changed here.
           </p>
         </>
       ) : (
@@ -1708,7 +1706,7 @@ function IdempotencyBlock({ value, onChange }: { value: IdempotencyChoice; onCha
         ]}
         onChange={onChange}
       />
-      <p className="sm-small sm-muted">Leave this undeclared unless the action’s effect has been verified. Some night-session bindings require an explicit declaration.</p>
+      <p className="sm-small sm-muted">Declare this only after checking what the action does.</p>
     </div>
   )
 }
@@ -1891,7 +1889,7 @@ function ActionDraft({
         />
         <p className="sm-small sm-faint">
           Stored as <span className="sm-data">fpp</span>, <span className="sm-data">mqtt</span>, <span className="sm-data">resolume</span>, or{' '}
-          <span className="sm-data">audio</span>. Immutable once created. Changing where an action points is a new action, not an edit.
+          <span className="sm-data">audio</span>. Fixed once created.
         </p>
       </div>
 
@@ -2122,7 +2120,7 @@ function ActionEditor({
             <p className="sm-data">{integration}</p>
           </div>
         </div>
-        <p className="sm-small sm-faint">Both immutable. Pointing this somewhere else means a new action and a step change.</p>
+        <p className="sm-small sm-faint">Both are fixed. To point elsewhere, make a new action.</p>
       </div>
 
       {integration === 'fpp' && <FppTarget value={fppValue} onChange={setFppValue} fppInstances={model.fpp} />}
@@ -2154,7 +2152,7 @@ function ActionEditor({
               ))}
               .
             </p>
-            <p className="sm-attn__detail">Saving changes what that macro does tonight; it does not change the macro's own revision.</p>
+            <p className="sm-attn__detail">Saving changes what that macro does tonight.</p>
           </div>
         </div>
       )}
@@ -2192,7 +2190,7 @@ function ActionEditor({
         onDelete={remove}
       >
         {macroUsages.length > 0 ? (
-          <p className="sm-small sm-muted">Deleting this action leaves its steps in every macro that used it pointing at nothing.</p>
+          <p className="sm-small sm-muted">Every macro step that uses this action will point at nothing.</p>
         ) : (
           <p className="sm-small sm-muted">Not used by any macro in this show.</p>
         )}
@@ -2304,7 +2302,7 @@ function MacroDraft({
 
       <div className="sm-inspector__group">
         <Field label="Label">{(props) => <Input {...props} value={label} onChange={(e) => onLabelChange(e.target.value)} />}</Field>
-        <Field label="Id" help="Immutable once created. Interlocks and night session cues name macros by id.">
+        <Field label="Id" help="Fixed once created.">
           {(props) => <Input {...props} className="sm-data" value={id} onChange={(e) => onIdChange(e.target.value)} />}
         </Field>
         <Field label="Description · optional" help="One line, read above the step list.">
@@ -2322,7 +2320,7 @@ function MacroDraft({
               <button type="button" className="sm-linkbutton" onClick={() => setCreatingAction(true)}>
                 New action
               </button>{' '}
-              if the one you need does not exist yet, the draft is kept.
+              keeps this draft.
             </>
           }
         >
@@ -2351,12 +2349,11 @@ function MacroDraft({
             </Select>
           )}
         </Field>
-        <Field label="Fallback reason" help="Required and non-empty even when the class is none. It is what an operator reads while the coordinator is unreachable.">
+        <Field label="Fallback reason" help="Required. What an operator reads while the coordinator is unreachable.">
           {(props) => <Input {...props} value={fallbackReason} onChange={(e) => setFallbackReason(e.target.value)} />}
         </Field>
         <p className="sm-small sm-muted">
-          On-failure and on-unconfirmed both start at <span className="sm-data">continue</span> and are not asked here: a macro run always runs every step. Change them in
-          the step editor when a step needs to deviate.
+          On-failure and on-unconfirmed start at <span className="sm-data">continue</span>. Change them in the step editor.
         </p>
       </div>
 
@@ -2463,8 +2460,7 @@ function RunViewer({ runId, onClose }: { runId: string; onClose: () => void }) {
       </ol>
       {run.attributionDegraded && (
         <p className="sm-small">
-          <StatusPair tone="warn" label="Attribution degraded" /> This run's own audit write may not be durable. Each step's outcome above is still what was
-          observed.
+          <StatusPair tone="warn" label="Attribution degraded" /> This run may be missing from the audit log. The step outcomes above are correct.
         </p>
       )}
 

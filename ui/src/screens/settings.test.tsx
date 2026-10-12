@@ -402,7 +402,7 @@ describe('Settings › Connections', () => {
     expect(screen.getByLabelText('Host id')).toHaveValue('barn-player')
     expect(screen.getByLabelText('Host name')).toHaveValue('FPP-Barn')
     expect(screen.getByText('Player id', { selector: '.sm-field__label' })).toBeVisible()
-    expect(screen.getByText(/Add one row per player: its id, and the host name FPP publishes under/)).toBeInTheDocument()
+    expect(screen.getByText(/One row per player/)).toBeInTheDocument()
   })
 
   it('removing a host entry sends the map without it', async () => {
@@ -891,7 +891,7 @@ describe('Settings › Render recovery', () => {
 
     renderAt('/settings/recovery')
 
-    await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Nothing saved yet/)).toBeInTheDocument())
     expect(screen.queryByRole('heading', { name: 'What happens when weather stops the show' })).not.toBeInTheDocument()
   })
 })
@@ -960,8 +960,8 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay')
 
-    await waitFor(() => expect(screen.getByText(/Nothing has been written for weather delay yet/)).toBeInTheDocument())
-    expect(screen.getByText('No power group is configured.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/Nothing saved yet/)).toBeInTheDocument())
+    expect(screen.getByText('No power groups.')).toBeInTheDocument()
   })
 
   it('saves the alert repeat count and target nodes, every field optional', async () => {
@@ -1327,7 +1327,7 @@ describe('Settings › Node routing', () => {
     expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled()
 
     fireEvent.change(channelsInput, { target: { value: '1, 3' } })
-    expect(await screen.findByText(/already claimed by program channels/)).toBeInTheDocument()
+    expect(await screen.findByText(/already carries program/)).toBeInTheDocument()
 
     fireEvent.change(channelsInput, { target: { value: '1, 2' } })
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
@@ -1690,7 +1690,7 @@ describe('Settings › Node routing', () => {
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('audio-node-01'))
       await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Audio node' })).not.toBeInTheDocument())
-      expect(screen.getByText('No audio.node object has ever been configured.')).toBeInTheDocument()
+      expect(screen.getByText('No audio nodes.')).toBeInTheDocument()
     })
 
     it('renders the coordinator’s refusal verbatim and keeps the node open when the delete is refused', async () => {
@@ -1800,6 +1800,20 @@ describe('Settings › Node routing › choices from the node', () => {
     stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', revisions: [] })
     stubs.getAudioRoutingChoices = () => (choiceBody instanceof Error ? Promise.reject(choiceBody) : Promise.resolve(choiceBody))
   }
+
+  it('names an output by its short name and keeps the full device string as the title', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, choices({ routes: [{ ...m4Route, shortName: 'M4' }] }))
+    renderAt('/settings/node-routing', { nodes: [] })
+    const option = await screen.findByRole('option', { name: 'M4, 4 channels' })
+    expect(option).toHaveAttribute('title', M4)
+    expect(option).toHaveValue(M4)
+  })
+
+  it('names an output by its full device string when the node reports no short name', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, choices())
+    renderAt('/settings/node-routing', { nodes: [] })
+    expect(await screen.findByRole('option', { name: `${M4}, 4 channels` })).toBeInTheDocument()
+  })
 
   it('offers program groups and only the LTC channels the chosen group leaves free, then saves the choice', async () => {
     setUp(
@@ -1950,7 +1964,7 @@ describe('Settings › Node routing › choices from the node', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     fireEvent.click(await screen.findByRole('radio', { name: /Channels 1 and 2/ }))
-    const message = 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
+    const message = 'No channel is left for timecode. Turn LTC off or pick other program channels.'
     expect(screen.getAllByText(message)).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Save routing' })).toHaveAttribute('title', message)
   })
@@ -2175,7 +2189,7 @@ describe('Settings › Node routing › PTP clock', () => {
     renderAt('/settings/node-routing', { nodes: [] })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
@@ -2196,7 +2210,7 @@ describe('Settings › Node routing › PTP clock', () => {
     renderAt('/settings/node-routing', { nodes: [] })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))

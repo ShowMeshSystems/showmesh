@@ -294,7 +294,7 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    await waitFor(() => expect(screen.getByText(/0 of 72 clips are ambiguous/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/0 of 72 clips share a name/)).toBeInTheDocument())
     const heading = screen.getByRole('heading', { name: 'Clips that cannot be named' })
     const section = heading.closest('section')
     expect(section).not.toBeNull()

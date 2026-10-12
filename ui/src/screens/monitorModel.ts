@@ -248,7 +248,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       rows: observationRows(node.render, 'render'),
       absent:
         node.render.length === 0
-          ? 'This node has never published a render observation. That is not the same as a render path that is failing.'
+          ? 'This node has never reported render state.'
           : null,
     },
     {
@@ -261,7 +261,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       ),
       absent:
         node.audio.length === 0
-          ? 'This node has never claimed an audio capability, so there is nothing to observe. That is not the same as an audio path that is failing.'
+          ? 'This node has never advertised audio.'
           : null,
     },
     {
@@ -269,7 +269,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       rows: observationRows(node.clock, 'clock').map((row) => ({ ...row, label: row.label.replace(/^node\.clock\.ptp\./, '') })),
       absent:
         node.clock.length === 0
-          ? 'This node has never published a clock report. That is not the same as a clock that is failing.'
+          ? 'This node has never reported its clock.'
           : null,
     },
   ]
@@ -311,7 +311,7 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
           ? instance.instanceUuid === null
             ? 'The endpoint has not reported a SystemUUID yet.'
             : null
-          : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Re-association is held for an explicit inventory decision.`,
+          : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Acknowledge the replacement to rebind it.`,
       tone: instance.instanceUuidChange === null ? (instance.instanceUuid === null ? 'unknown' : 'pending') : 'warn',
     },
   ]
@@ -326,7 +326,7 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
         rows: observations,
         absent:
           observations.length === 0
-            ? 'This endpoint has not reported an FPP observation. That is not the same as an FPP path that is failing.'
+            ? 'This FPP has never reported.'
             : null,
       },
     ],

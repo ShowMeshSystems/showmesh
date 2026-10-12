@@ -311,10 +311,10 @@ export function SettingsWeatherDelay() {
       ) : (
         <>
           {state.response.revision === 0 && state.response.source === 'default' && (
-            <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for weather delay yet. These are the coordinator's own defaults." />
+            <RuledStrip absence="unobserved" label="Default" fact="Nothing saved yet. These are the defaults." />
           )}
 
-          <Section id="st-weatherdelay-alert" title="Alert" detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it.">
+          <Section id="st-weatherdelay-alert" title="Alert" detail="The alert, power groups and triggers are each optional.">
             <div className="sm-grid sm-grid--auto">
               <WeatherAlertAssetPicker
                 label="Delay alert"
@@ -366,7 +366,7 @@ export function SettingsWeatherDelay() {
           <Section
             id="st-weatherdelay-power"
             title="Power groups"
-            detail="ShowMesh never switches power itself. Each group's dark heartbeat is for an installation's own power controller to watch."
+            detail="ShowMesh never switches power. Your power controller watches each group."
             aside={
               <Button variant="quiet" size="compact" onClick={addPowerGroup}>
                 Add power group
@@ -374,7 +374,7 @@ export function SettingsWeatherDelay() {
             }
           >
             {powerGroups.length === 0 ? (
-              <RuledStrip absence="empty" label="No power groups" fact="No power group is configured." />
+              <RuledStrip absence="empty" label="No power groups" fact="No power groups." />
             ) : (
               powerGroups.map((group) => (
                 <div key={group.key} className="sm-panel sm-grid sm-stack-3">
@@ -437,7 +437,7 @@ export function SettingsWeatherDelay() {
 
           <Section id="st-weatherdelay-triggers" title="Automatic triggers" detail="A trigger may start a delay; it may never end one.">
             <div className="sm-grid sm-grid--auto">
-              <Field label="Answer window (seconds)" help="How long a trigger waits for an operator before starting a delay on its own. Defaults to 30.">
+              <Field label="Answer window (seconds)" help="How long a trigger waits for an answer before it delays. Default 30.">
                 {(props) => (
                   <Input
                     {...props}
@@ -451,7 +451,7 @@ export function SettingsWeatherDelay() {
                   />
                 )}
               </Field>
-              <Field label="Cancel answer window (seconds)" help="The longer window used when too little of the night would remain. Defaults to 180.">
+              <Field label="Cancel answer window (seconds)" help="The wait when the night is nearly over. Default 180.">
                 {(props) => (
                   <Input
                     {...props}
@@ -465,7 +465,7 @@ export function SettingsWeatherDelay() {
                   />
                 )}
               </Field>
-              <Field label="Restart minutes" help="Below this much night remaining after a warning expires, the question becomes delay or cancel. Defaults to 15.">
+              <Field label="Restart minutes" help="With less night left than this, the question offers cancel. Default 15.">
                 {(props) => (
                   <Input
                     {...props}
@@ -479,7 +479,7 @@ export function SettingsWeatherDelay() {
                   />
                 )}
               </Field>
-              <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. 0 suppresses nothing. Defaults to 30.">
+              <Field label="Dismiss quiet minutes" help="How long Dismiss silences the same warning. 0 is no silence. Default 30.">
                 {(props) => (
                   <Input
                     {...props}
@@ -499,7 +499,7 @@ export function SettingsWeatherDelay() {
           <Section
             id="st-weatherdelay-nws"
             title="Weather service poller"
-            detail="Reads only event type, severity and expiry from the United States National Weather Service alerts API, never its warning text. Disabled by default."
+            detail="Reads US National Weather Service alerts. Off by default."
           >
             <Choice
               type="checkbox"

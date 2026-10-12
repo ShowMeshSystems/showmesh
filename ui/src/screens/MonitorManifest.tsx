@@ -85,7 +85,7 @@ export function MonitorManifest() {
         {state.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for every node's asset manifest." />
         ) : nodes.length === 0 && state.kind === 'loaded' ? (
-          <RuledStrip absence="empty" label="None" fact="No node is declared, so there is nothing to check." />
+          <RuledStrip absence="empty" label="None" fact="No nodes." />
         ) : (
           <Panes
             inspectorOpen={selectedManifest !== null}
@@ -118,8 +118,7 @@ export function MonitorManifest() {
                 </Table>
               </TableWrap>
               <p className="sm-section__footnote">
-                An asset gap is inferred from the show's own asset rows, not from a stored link. An extra asset is never
-                an error and never a basis for deletion.
+                An extra asset is not an error.
               </p>
             </div>
             <aside>
@@ -184,7 +183,7 @@ function EmptyList({ manifest, fact }: { manifest: NodeAssetManifest; fact: stri
         absence="unobserved"
         label="No verdict"
         fact="This node has not reported its assets yet."
-        detail={manifest.reason ?? "An empty list here doesn't mean nothing is missing; nothing has been checked yet."}
+        detail={manifest.reason ?? 'Nothing has been checked yet.'}
       />
     )
   }
@@ -231,7 +230,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
               <div>
                 <p className="sm-inspector__value sm-data">surfaces {gap.surfaces.join(', ')}</p>
                 <p className="sm-inspector__detail">
-                  Inferred from the show's own asset rows, not from a stored surface-to-sequence link.
+                  Worked out from this show's asset list.
                 </p>
               </div>
             </div>
@@ -249,7 +248,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
               <span className="sm-inspector__label sm-data">{asset.filename}</span>
               <div>
                 <p className="sm-inspector__value sm-data" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</p>
-                <p className="sm-inspector__detail">Never an error and never a basis for deletion. No delete control is offered here.</p>
+                <p className="sm-inspector__detail">Not an error. Leave it in place.</p>
               </div>
             </div>
           ))

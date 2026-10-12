@@ -179,7 +179,7 @@ export function Monitor() {
                 absence="empty"
                 label="Clear"
                 fact="Nothing has asked for an operator."
-                detail="That is not proof the show looks right, only that nothing has asked for you."
+                detail="That is not proof the show looks right."
               />
             ) : (
               items.map((item) => {
@@ -302,7 +302,7 @@ export function Monitor() {
                 </TableWrap>
                 {model.eventsGap && (
                   <p className="sm-section__footnote">
-                    Some history is permanently lost to retention, so this stream has a gap.
+                    Older history was dropped, so this list has a gap.
                   </p>
                 )}
               </>
@@ -470,7 +470,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
             {acknowledging ? 'Acknowledging…' : 'Acknowledge replacement'}
           </Button>
         )}
-        <Button disabled={!recoveryGate.allowed || clearingObservation || instance.instanceUuid === null} title={!recoveryGate.allowed ? recoveryGate.reason : instance.instanceUuid === null ? 'FPP has not reported an instance UUID.' : 'Clears only this FPP UUID’s stored playlist-entry observation and sequence anchor.'} onClick={clearObservation}>
+        <Button disabled={!recoveryGate.allowed || clearingObservation || instance.instanceUuid === null} title={!recoveryGate.allowed ? recoveryGate.reason : instance.instanceUuid === null ? 'FPP has not reported an instance UUID.' : 'Clears the stored playlist position for this FPP only.'} onClick={clearObservation}>
           {clearingObservation ? 'Clearing observation…' : 'Clear playlist observation'}
         </Button>
       </div>
@@ -564,7 +564,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
           absence="empty"
           label="None"
           fact="No instance UUID"
-          detail="This endpoint has not reported an instance UUID, so no fallback program can be addressed to it."
+          detail="This FPP has not reported its UUID, so it cannot take a fallback program."
         />
       ) : list.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Reading this host's fallback program." />
@@ -594,7 +594,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
               absence="noPermission"
               label="No permission"
               fact="This device may not read fallback programs."
-              detail="Reading a host's acknowledgement needs fpp:fallback, held by admin and scheduler roles."
+              detail="Sign in with an admin or scheduler role."
             />
           ) : detail.kind === 'failed' ? (
             <RuledStrip absence="failed" label="Read failed" fact={detail.message} />

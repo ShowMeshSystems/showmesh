@@ -199,7 +199,7 @@ function ManifestEmptyRow({ manifest, fact }: { manifest: NodeAssetManifest; fac
         absence="unobserved"
         label="No verdict"
         fact="This node has not reported its assets yet."
-        detail={manifest.reason ?? "An empty list here doesn't mean nothing is missing; nothing has been checked yet."}
+        detail={manifest.reason ?? 'Nothing has been checked yet.'}
       />
     )
   }
@@ -332,7 +332,7 @@ function MissingAssignmentRepair({ nodeId, gate }: { nodeId: string; gate: Retur
   const title = !gate.allowed ? gate.reason : catalog !== null && !catalog.configured ? 'No active-show cue catalog is configured.' : undefined
   return (
     <div className="sm-stack-2">
-      <p className="sm-small">This node has not reported rendering this surface. Redeploy the cue catalog to restore it.</p>
+      <p className="sm-small">This node is not rendering this surface. Redeploy the cue catalog.</p>
       <ButtonRow>
         <Button variant="primary" disabled={blocked} title={title} onClick={() => deploy()}>
           {deploying ? 'Redeploying…' : 'Redeploy cue catalog'}
@@ -373,7 +373,7 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
 
   return (
     <div className="sm-stack-2">
-      <Field label="Sequence id" help="The active show resolves this sequence’s current FSEQ asset; FPP’s catalog is not inferred here.">
+      <Field label="Sequence id" help="A sequence id from the active show.">
         {(field) => <Input {...field} value={sequenceId} onChange={(event) => setSequenceId(event.target.value)} placeholder="e.g. preshow-loop" />}
       </Field>
       <ButtonRow>
@@ -573,7 +573,7 @@ function DriftRecordingSection({ nodeId, hasAudioCapability, gate }: { nodeId: s
         <RuledStrip
           absence="unobserved"
           label="No audio output"
-          fact="This node advertises no audio.* capability, so it can never receive an alignment sample to record."
+          fact="This node has no audio output, so it cannot record drift."
         />
       </Section>
     )
@@ -757,7 +757,7 @@ export function NodeDetail() {
           stamp="Not found"
           eyebrow={`${nodeId} · not found`}
           title="This coordinator has no record of this node"
-          detail="No node in the current snapshot carries this id. It may never have reported in, or it may have been removed from inventory."
+          detail="It may never have reported, or it was removed."
           actions={
             <Link className="sm-btn sm-btn--primary" to="/monitor/fleet">
               Back to Fleet
@@ -881,12 +881,12 @@ export function NodeDetail() {
           label="Not reporting"
           fact={
             lastWillSaysGone
-              ? `Last will received at ${formatClock(lastWill.observedAt) ?? 'an unrecorded time'}, so the agent went away rather than the network dropping.`
+              ? `Last will received at ${formatClock(lastWill.observedAt) ?? 'an unrecorded time'}. The agent stopped.`
               : lastWillCollected
-                ? 'This node is not reporting. Its last-will record still says the agent was online, so nothing here explains the absence.'
-                : 'This node is not reporting. No last will was received, so nothing here distinguishes the agent going away from the network dropping.'
+                ? 'This node is not reporting. The cause is unknown.'
+                : 'This node is not reporting. The agent stopped or the network dropped.'
           }
-          detail="Everything below is its last known state: configuration is still stored and still valid."
+          detail="Everything below is its last known state."
         />
       )}
 
@@ -1018,14 +1018,12 @@ export function NodeDetail() {
           <p className="sm-section__footnote">
             {!hasAudioCapability && (
               <>
-                This node advertises no <span className="sm-data">audio.*</span> capability, so it has no audio routing to configure, which is
-                different from an audio path that is failing.{' '}
+                This node advertises no <span className="sm-data">audio.*</span> capability.{' '}
               </>
             )}
             {countNotNamesCapability !== undefined && (
               <>
-                <span className="sm-data">{countNotNamesCapability.id}</span> reports a count but no names, which is why the related field has to
-                be typed by hand.
+                <span className="sm-data">{countNotNamesCapability.id}</span> reports a count but no names. Type the output name.
               </>
             )}
           </p>
@@ -1131,7 +1129,7 @@ export function NodeDetail() {
 
       <Section id="nd-assets" title="Assets held locally">
         <p className="sm-small sm-muted">
-          This lists assets that are missing, uncovered, or unexpected. It does not confirm what the node correctly holds.
+          Missing, uncovered and unexpected assets only.
         </p>
 
         {manifestState.kind === 'loading' && (
@@ -1285,9 +1283,9 @@ This device has never returned an asset list.{' '}
       <Section id="nd-danger" title="Remove this node">
         <div className="sm-panel">
           <p className="sm-small sm-muted">
-            Undeclaring drops this node from inventory{orphanText}. Files already on the node&rsquo;s disk are not removed.
+            Removes this node from inventory{orphanText}. Files on its disk stay.
           </p>
-          <Field label={`Type ${node.nodeId} to confirm`} help="Asks for the node id before it proceeds. This is not the unsaved-changes dialog.">
+          <Field label={`Type ${node.nodeId} to confirm`} help="Type the node id exactly.">
             {(props) => <Input {...props} value={confirmText} onChange={(e) => setConfirmText(e.target.value)} />}
           </Field>
           {removeError !== null && <RuledStrip absence="failed" label="Refused" fact={removeError} />}

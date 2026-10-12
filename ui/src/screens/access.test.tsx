@@ -368,7 +368,7 @@ describe('Access', () => {
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: nightSession({ attributionDegraded: true }) })
     renderScreen()
-    await waitFor(() => expect(screen.getByText(/no authorizing principal recorded/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/no principal recorded/)).toBeInTheDocument())
   })
 
   it('does not render the attribution row when attributionDegraded is false', async () => {
@@ -377,7 +377,7 @@ describe('Access', () => {
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: nightSession({ attributionDegraded: false }) })
     renderScreen()
     await waitFor(() => expect(screen.getByText('Audit store')).toBeInTheDocument())
-    expect(screen.queryByText(/no authorizing principal recorded/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no principal recorded/)).not.toBeInTheDocument()
   })
 
   it('prints no claimed-by and no claimed-at for bootstrap', async () => {

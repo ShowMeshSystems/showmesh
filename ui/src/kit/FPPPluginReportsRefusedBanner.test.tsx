@@ -21,9 +21,7 @@ describe('FPPPluginReportsRefusedBanner', () => {
         <FPPPluginReportsRefusedBanner instances={[{ instanceId: 'bench-fpp' }]} />
       </MemoryRouter>,
     )
-    expect(
-      screen.getByText('FPP bench-fpp reports are being refused. Open Monitor and clear the playlist observation.'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/FPP bench-fpp reports are refused/)
     const link = screen.getByRole('link', { name: 'Open Monitor' })
     expect(link.getAttribute('href')).toBe('/monitor/fleet?resource=fpp%3Abench-fpp')
   })

@@ -158,7 +158,7 @@ export function nextTransition(model: Model): NextTransition {
     return { known: false, reason: 'The playhead position has not been observed.' }
   }
   if (remaining.state !== 'current') {
-    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
+    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the next transition time is unknown.` }
   }
   return { known: true, remainingSeconds: Math.max(0, remaining.value), source: instance.instanceId }
 }
@@ -223,7 +223,7 @@ export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
   if (audio.pinnedMaxGainDb === null) {
     return audio.reason !== '' ? `Pinned ceiling: none. ${audio.reason}` : 'This session pinned no background-audio ceiling.'
   }
-  return `Pinned ceiling for this running session: ${audio.pinnedMaxGainDb} dB. This session locked that in when it started; later config changes do not affect it.`
+  return `Ceiling for this session: ${audio.pinnedMaxGainDb} dB, fixed when it started.`
 }
 
 /**
@@ -265,7 +265,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
             key: 'stopHold',
             label: 'Stopped',
             tone: 'bad' as const,
-            fact: `${hold.reason} Nothing starts until Resume, which starts the show playlist from its first song.${
+            fact: `${hold.reason} Resume starts the show playlist from its first song.${
               hold.principal === undefined || hold.principal === '' ? '' : ` Stopped by ${hold.principal}.`
             }`,
           },
@@ -309,7 +309,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       label: session.attributionDegraded ? 'Attribution degraded' : 'Attribution complete',
       tone: session.attributionDegraded ? 'bad' : 'good',
       fact: session.attributionDegraded
-        ? 'A step was dispatched with no authorizing principal recorded. This never clears for the rest of the session.'
+        ? 'A step ran with no principal recorded. This stays for the session.'
         : 'Every dispatch this session has an authorizing principal recorded.',
     },
     {
@@ -459,7 +459,7 @@ export function plannedBackgroundAudio(audio: NightBackgroundAudio): PlannedBack
     return { kind: 'unavailable', fact: plan.reason !== '' ? plan.reason : 'The planned background audio could not be read.' }
   }
   if (!plan.configured) {
-    return { kind: 'not_configured', fact: 'This night session has no background audio. Add it to the night definition if the night needs it.' }
+    return { kind: 'not_configured', fact: 'No background audio. Add it in the night definition.' }
   }
   const transition =
     plan.itemTransition === 'crossfade' && plan.crossfadeMs !== null

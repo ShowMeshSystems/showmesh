@@ -788,7 +788,7 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Prepare site' }))
     expect(calls).toHaveLength(0)
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByLabelText(/Stop whatever is playing on/)).toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: /Stop what is playing on/ })).toBeChecked()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
     expect(calls[0]?.[0]).toBe('prepare-site')
     expect(calls[0]?.[1]).toEqual(expect.any(String))
@@ -805,7 +805,7 @@ describe('Live Control', () => {
     const outcome = describeFPPOutcome(result, 'Next item')
     expect(outcome.tone).toBe('warn')
     expect(outcome.label).toBe('Not confirmed')
-    expect(outcome.detail).toContain('Nothing has yet reported that it took effect')
+    expect(outcome.detail).toContain('Not confirmed yet')
   })
 
   it('confirms only from evidence that post-dates the command', () => {
@@ -815,7 +815,7 @@ describe('Live Control', () => {
       dispatchedAt: '2026-08-28T21:05:42Z',
       resolvedAt: '2026-08-28T21:05:44Z',
     } as unknown as FPPCommandResult
-    expect(describeFPPOutcome(result, 'Next item').detail).toContain('confirmed by observed evidence')
+    expect(describeFPPOutcome(result, 'Next item').detail).toMatch(/, confirmed /)
   })
 
   it('gives a row only to observations that name a surface', () => {
@@ -894,7 +894,7 @@ describe('Live Control', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start playlist' }))
 
     expect(received).toEqual(['main-player', 'Standard Show', true, 'refuse'])
-    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+    expect(await screen.findByText(/, confirmed /)).toBeInTheDocument()
   })
 
   it('offers FPP’s own imported playlist names as a dropdown, preselecting the one reported as playing', async () => {
@@ -963,7 +963,7 @@ describe('Live Control', () => {
     stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ definitions: [] })
     renderScreen({ fpp: [fppInstance()], session: commandAllowedSession })
     expect(screen.getByLabelText('Playlist name')).toBeInTheDocument()
-    expect(screen.getByText(/coordinator has reported no imported playlists/)).toBeInTheDocument()
+    expect(screen.getByText(/Type the exact playlist name/)).toBeInTheDocument()
   })
 
   it('renders a start-playlist busy conflict distinguishably from a generic Refused outcome, and its own CTA resends ifBusy: replace', async () => {
@@ -996,7 +996,7 @@ describe('Live Control', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start anyway (replace what is currently playing)' }))
     expect(calls).toHaveLength(2)
     expect(calls[1]).toEqual(['main-player', 'Standard Show', false, 'replace'])
-    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+    expect(await screen.findByText(/, confirmed /)).toBeInTheDocument()
   })
 
   it('falls back to the generic Refused outcome for a non-conflict start-playlist failure', async () => {
@@ -1026,7 +1026,7 @@ describe('Live Control', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop after this item' }))
 
     expect(received).toEqual(['main-player', false])
-    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+    expect(await screen.findByText(/, confirmed /)).toBeInTheDocument()
   })
 
   it('sends afterLoop: true for "Stop after this loop"', async () => {
@@ -1045,7 +1045,7 @@ describe('Live Control', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop after this loop' }))
 
     expect(received).toEqual(['main-player', true])
-    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+    expect(await screen.findByText(/, confirmed /)).toBeInTheDocument()
   })
 
   it('keeps the graceful-stop buttons in the transport button row, undescribed, matching the mock', () => {
@@ -1077,7 +1077,7 @@ describe('Live Control', () => {
     })
     expect(screen.getByText('Now playing not reported')).toBeInTheDocument()
     expect(
-      screen.getByText('This coordinator does not serve current-run state, so program audio has no row here.'),
+      screen.getByText(/does not report what program audio is playing/),
     ).toBeInTheDocument()
   })
 
@@ -1268,7 +1268,7 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
 
     expect(await within(region).findByText('Invalid JSON')).toBeInTheDocument()
-    expect(within(region).getByText(/The payload was not sent\. It is not valid JSON, so it never reached the coordinator/)).toBeInTheDocument()
+    expect(within(region).getByText(/Not sent\. The payload is not valid JSON/)).toBeInTheDocument()
     expect(stubs.applyAudioSession).not.toHaveBeenCalled()
   })
 
@@ -1281,7 +1281,7 @@ describe('Live Control', () => {
       fireEvent.change(within(region).getByLabelText('Params (JSON)'), { target: { value: payload } })
       fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
       expect(await within(region).findByText('Invalid JSON')).toBeInTheDocument()
-      expect(within(region).getByText(/The payload was not sent\. It must be a JSON object/)).toBeInTheDocument()
+      expect(within(region).getByText(/Not sent\. The payload must be a JSON object/)).toBeInTheDocument()
     }
     expect(stubs.applyAudioSession).not.toHaveBeenCalled()
   })
@@ -1335,7 +1335,7 @@ describe('Live Control', () => {
 
     const button = await screen.findByRole('button', { name: /Audio sessions/ })
     await waitFor(() => expect(button).toBeDisabled())
-    expect(button.getAttribute('title')).toContain('No node advertises an audio engine')
+    expect(button.getAttribute('title')).toContain('No audio node is declared')
   })
 
   it('collapses the target, known sessions and transport into one drawer behind one button, with a one-line summary on the section itself', async () => {

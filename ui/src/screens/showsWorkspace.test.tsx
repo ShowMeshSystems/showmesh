@@ -247,7 +247,7 @@ describe('Shows · Playlists tab', () => {
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
     renderWorkspace()
-    await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
   })
 
   it('lists a playlist and selects it for editing', async () => {

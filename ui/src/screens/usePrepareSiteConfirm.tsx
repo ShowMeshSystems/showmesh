@@ -27,7 +27,7 @@ function useNightFppInstances(open: boolean): readonly string[] | null {
 
 export function prepareSiteStopLabel(instances: readonly string[] | null): string {
   const where = instances === null || instances.length === 0 ? "this night's FPP players" : instances.join(' and ')
-  return `Stop whatever is playing on ${where}. Other FPP players keep playing. Leave this off when FPP's own schedule started this.`
+  return `Stop what is playing on ${where}. Leave off if FPP's own schedule started it.`
 }
 
 // One confirm dialog for every Prepare site button. send receives whether
@@ -48,7 +48,7 @@ export function usePrepareSiteConfirm(send: (stopFppPlayback: boolean) => void):
       title="Prepare the site?"
       detail={
         <>
-          <p className="sm-body">This sets up everything for the night. It is accepted here, then the session reports what it does.</p>
+          <p className="sm-body">This sets up everything for the night. The session reports what it does.</p>
           <Choice type="checkbox" checked={stop} onChange={(event) => setStop(event.target.checked)} label={prepareSiteStopLabel(instances)} />
         </>
       }

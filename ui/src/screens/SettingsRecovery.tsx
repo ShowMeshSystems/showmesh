@@ -21,12 +21,12 @@ const IDLE_OPTIONS: readonly { value: 'black' | 'hold' | 'diagnostic'; title: st
   {
     value: 'hold',
     title: 'Hold the last frame',
-    consequence: 'A frozen frame is indistinguishable from a running show. Only pick this if someone is watching the monitor.',
+    consequence: 'A frozen frame looks like a running show. Pick this only if someone is watching.',
   },
   {
     value: 'diagnostic',
     title: 'Diagnostic pattern',
-    consequence: 'Unmistakably not show content. Useful during setup, never with an audience present.',
+    consequence: 'Clearly not show content. For setup, never with an audience.',
   },
 ]
 
@@ -136,13 +136,13 @@ export function SettingsRecovery() {
             absence="stale"
             label="Read this first"
             fact="Idle output is what the audience sees when a pipeline has failed."
-            detail="On failure, output goes black rather than holding the last frame. Restarts are bounded, so a broken pipeline stops retrying instead of flickering at the audience."
+            detail="Black is the default. A broken pipeline stops retrying after its limit."
           />
           {state.response.revision === 0 && state.response.source === 'default' && (
-            <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for render recovery yet. These are the coordinator's own defaults." />
+            <RuledStrip absence="unobserved" label="Default" fact="Nothing saved yet. These are the defaults." />
           )}
 
-          <Section id="st-idle" title="Idle output" detail="What a render pipeline puts out when it has nothing to render.">
+          <Section id="st-idle" title="Idle output" detail="What a render pipeline shows while idle.">
             <RadioCardList
               label="What a pipeline puts out when idle"
               value={idleOutput}
@@ -162,7 +162,7 @@ export function SettingsRecovery() {
             />
           </Section>
 
-          <Section id="st-restart" title="Restart policy" detail="The pipeline supervisor backs off between restarts, and gives up rather than looping forever.">
+          <Section id="st-restart" title="Restart policy" detail="Restarts slow down each time, then stop.">
             <div className="sm-grid sm-grid--auto">
               <Field label="Initial delay" help="1 to 60 seconds before the first retry.">
                 {(props) => (
@@ -243,7 +243,7 @@ export function SettingsRecovery() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-      <p className="sm-small sm-faint">Saving does not restart anything now. It changes what happens the next time a pipeline fails.</p>
+      <p className="sm-small sm-faint">Saving restarts nothing. It applies the next time a pipeline fails.</p>
     </>
   )
 }

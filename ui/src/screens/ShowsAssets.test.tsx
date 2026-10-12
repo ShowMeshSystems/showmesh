@@ -141,7 +141,7 @@ describe('Shows · Assets tab', () => {
     setup(['asset:write'], [])
     const region = await screen.findByRole('region', { name: "This show's current assets, one row per file, scrollable" })
     await waitFor(() => expect(within(region).getByText('None')).toBeInTheDocument())
-    expect(within(region).getByText('No asset matches here.')).toBeInTheDocument()
+    expect(within(region).getByText('No matching assets.')).toBeInTheDocument()
   })
 
   it('a read failure is reported distinctly, with a retry', async () => {
@@ -213,7 +213,7 @@ describe('Shows · Assets tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'One node' }))
     const submit = screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement
     expect(submit).toBeDisabled()
-    expect(submit).toHaveAttribute('title', 'Identity needs a target. There is no default.')
+    expect(submit).toHaveAttribute('title', expect.stringMatching(/target/i))
   })
 
   it('picking an .fseq file infers mediaType fseq and submits it', async () => {
@@ -340,7 +340,7 @@ describe('Shows · Assets tab', () => {
     fireEvent.click(submit)
     expect(await screen.findByText('Rolled back')).toBeInTheDocument()
     expect(
-      screen.getByText('These bytes matched a superseded version, which is now current again; the previously current version is now superseded.'),
+      screen.getByText(/current again/),
     ).toBeInTheDocument()
   })
 

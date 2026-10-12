@@ -82,6 +82,7 @@ import {
 } from '../app/emergencyStop'
 import { EmergencyStopOutcome } from '../app/EmergencyStopOutcome'
 import { useModelContext } from '../app/ModelContext'
+import { audioNodeIdentityText, useFleetNodes } from './audioRouteModel'
 import { RESUME_CONFIRM_TITLE, useCurrentNightSession, useResumeShow } from '../app/stopHold'
 import { useWeatherDelay } from '../app/WeatherDelayContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -424,7 +425,7 @@ export function LiveControl() {
           setNightOutcome({
             tone: 'warn',
             label: 'Accepted',
-            detail: `${command} was accepted. The coordinator answers 202 and reports nothing further here; Show Night carries the session's own state.${reason === undefined || reason === '' ? '' : ` ${reason}`}`,
+            detail: `${command} was accepted. Show Night shows what the session does.${reason === undefined || reason === '' ? '' : ` ${reason}`}`,
           })
         })
         .catch((err: unknown) => {
@@ -469,7 +470,7 @@ export function LiveControl() {
             label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
             fact={
               runsAbsence === 'unavailable'
-                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
+                ? 'This coordinator does not report what program audio is playing.'
                 : 'Reading current-run state for program audio.'
             }
           />
@@ -479,7 +480,7 @@ export function LiveControl() {
             absence="unobserved"
             label="Unobserved"
             fact="No output has reported what it is doing."
-            detail="No render or audio observation has reached this coordinator. That is not the same as nothing running."
+            detail="Outputs may still be running."
           />
         ) : (
           <>
@@ -558,7 +559,7 @@ export function LiveControl() {
               variant="danger"
               size="gloved"
               disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? 'Stops every configured FPP instance and any configured stop actions, such as stopping audio or blacking out Resolume.' : emergencyGate.reason}
+              title={emergencyGate.allowed ? 'Stops every FPP instance and runs the site stop actions.' : emergencyGate.reason}
               onClick={() => setStopConfirmOpen(true)}
             >
               Stop
@@ -570,7 +571,7 @@ export function LiveControl() {
               variant="danger"
               size="gloved"
               disabled={!emergencyGate.allowed || emergencyBusy !== false}
-              title={emergencyGate.allowed ? 'Stop, plus forces an active night session into its power-down sequence immediately.' : emergencyGate.reason}
+              title={emergencyGate.allowed ? 'Stops everything, then powers the night session down.' : emergencyGate.reason}
               onClick={() => setPowerDownConfirmOpen(true)}
             >
               Stop and power down
@@ -587,7 +588,7 @@ export function LiveControl() {
               <Button
                 size="gloved"
                 disabled={!emergencyGate.allowed || hardStopArmBusy}
-                title={emergencyGate.allowed ? 'Hard stop does everything Stop and power down does, plus abandons an active night session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it.' : emergencyGate.reason}
+                title={emergencyGate.allowed ? 'Stops everything and abandons the night session now. Arm first, then Fire.' : emergencyGate.reason}
                 onClick={armHardStop}
               >
                 Arm hard stop
@@ -615,7 +616,7 @@ export function LiveControl() {
               disabled={!weatherDelayGate.allowed || weatherDelay.busy !== false}
               title={
                 weatherDelayGate.allowed
-                  ? 'Stops the display and starts the configured weather alert. The show is dark for as long as this stays active; resume tonight when it is safe.'
+                  ? 'Stops the display and starts the weather alert. Dark until you resume.'
                   : weatherDelayGate.reason
               }
               onClick={weatherDelay.start}
@@ -628,7 +629,7 @@ export function LiveControl() {
               disabled={!weatherDelayGate.allowed || weatherDelay.busy !== false}
               title={
                 weatherDelayGate.allowed
-                  ? 'Stops the display, starts the configured cancel-night alert, and runs the normal graceful power-down. The show will not resume tonight.'
+                  ? 'Stops the display, starts the cancel alert and powers down. No resume tonight.'
                   : weatherDelayGate.reason
               }
               onClick={weatherDelay.cancelNight}
@@ -745,7 +746,7 @@ export function LiveControl() {
                 ) : (
                   <Field
                     label="Playlist name"
-                    help="The coordinator has reported no imported playlists for this instance; type the exact name."
+                    help="Type the exact playlist name."
                   >
                     {(field) => (
                       <Input
@@ -860,7 +861,7 @@ export function LiveControl() {
           title="Start the night and its first cycle?"
           detail={
             <>
-              <p className="sm-body">This commits the armed definition and starts the show. It is accepted here, then the session reports what it does.</p>
+              <p className="sm-body">This starts the show. The session reports what it does.</p>
               <Choice
                 type="checkbox"
                 checked={skipEnterShowLead}
@@ -901,10 +902,7 @@ export function LiveControl() {
         onRun={(id) => invokeAction(id)}
       />
 
-      <Callout>
-        Brightness ceiling and site control are set on the Night Session and enforced automatically; there are no
-        separate controls for them here. All lists above are scoped to the active show.
-      </Callout>
+      <Callout>Lists above cover the active show only.</Callout>
       </>}
       />
     </>
@@ -946,7 +944,7 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
   return (
     <div className="sm-outcome">
       <StatusPair tone="warn" label="Accepted" />
-      <p className="sm-outcome__detail">Each node reports its own outcome below; this is not a report that it finished playing.</p>
+      <p className="sm-outcome__detail">Accepted, not finished. Each node reports its own outcome below.</p>
       {state.aligned && state.scheduledAtNs !== null && (
         <p className="sm-small">
           <StatusPair tone="good" label="Aligned" />
@@ -1101,7 +1099,7 @@ function Announcements({ show }: { show: string | null }) {
                 {!cue.uploaded && (
                   <p className="sm-small sm-muted">
                     {cue.sequence === null
-                      ? 'This cue declares no audio output, so there is nothing to play.'
+                      ? 'This cue has no audio output.'
                       : 'Its audio asset has not been uploaded.'}{' '}
                     <Link to="/assets">Show Assets</Link>
                   </p>
@@ -1288,12 +1286,12 @@ function parseAudioSessionApplyParams(raw: string): { params: Record<string, unk
     parsed = JSON.parse(trimmed)
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    return { error: `The payload was not sent. It is not valid JSON, so it never reached the coordinator: ${reason}.` }
+    return { error: `Not sent. The payload is not valid JSON: ${reason}.` }
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     const kind = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed
     return {
-      error: `The payload was not sent. It must be a JSON object (sourceRole, media, playlist, outputs, mixPolicy), not ${kind}.`,
+      error: `Not sent. The payload must be a JSON object, not ${kind}.`,
     }
   }
   return { params: parsed as Record<string, unknown> }
@@ -1305,6 +1303,7 @@ function parseAudioSessionApplyParams(raw: string): { params: Record<string, unk
  * 2026-09-02 by Eric's later owner placement ruling that this method belongs on Live Control.
  */
 function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string | null; nowIso: string | null }) {
+  const fleet = useFleetNodes()
   const nodesState = useAudioNodes()
   const actionsState = useAudioActionSessions(show)
   const [reloadKey, setReloadKey] = useState(0)
@@ -1383,7 +1382,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
     ? dispatchTitle
     : alignedGroup.length > 1
       ? undefined
-      : 'Name at least one more node: an aligned start of a single node is an ordinary start.'
+      : 'Name at least one more node to align with.'
 
   const run = useCallback((action: string, call: () => Promise<AudioSessionCommandResult>) => {
     call()
@@ -1433,7 +1432,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
             : nodesState.kind === 'failed'
               ? nodesState.reason
               : nodesState.kind === 'loaded' && nodesState.nodes.length === 0
-                ? 'No node advertises an audio engine. Settings › Node routing is where an audio.node object is declared.'
+                ? 'No audio node is declared. Add one in Settings › Node routing.'
                 : audioSummary
         }
         onClick={() => setDrawerOpen(true)}
@@ -1461,15 +1460,15 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                 <Select {...props} value={nodeId} onChange={(event) => setSelectedNodeId(event.target.value)}>
                   {nodesState.kind === 'loaded' &&
                     nodesState.nodes.map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id}
+                      <option key={node.id} value={node.id} title={node.label}>
+                        {audioNodeIdentityText(node, fleet)}
                       </option>
                     ))}
                 </Select>
               )}
             </Field>
             {options.length > 0 && (
-              <Field label="Known sessions" help="Fills the session id below. A session neither source knows can still be typed there.">
+              <Field label="Known sessions" help="Fills the session id below.">
                 {(props) => (
                   <Select
                     {...props}
@@ -1526,7 +1525,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
               <RuledStrip
                 absence="unobserved"
                 label="No sessions observed"
-                fact="No audio session has ever reported to this coordinator. Type the session id the show action or night session uses."
+                fact="No audio session has reported. Type the session id."
               />
             )}
             <Field label="Session id">
@@ -1550,7 +1549,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
             ) : (
               <Field
                 label="Revision override"
-                help="Use only if the automatic value above is stuck. Type the number as digits; it can be larger than a spinner allows."
+                help="Digits only. Use when the automatic value above is stuck."
                 error={overrideError ?? undefined}
               >
                 {(props) => (
@@ -1651,7 +1650,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                 </div>
                 <Field
                   label="Start at"
-                  help="Start time in nanoseconds; leave empty to start on arrival. If that time has already passed, the node refuses the start instead of starting late."
+                  help="Nanoseconds. Empty starts on arrival. A time already past is refused."
                   error={scheduledAtNsError ?? undefined}
                 >
                   {(props) => (
@@ -1669,7 +1668,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                 <div className="sm-volume">
                   <Field
                     label="Align with"
-                    help="Other node ids, comma separated. The coordinator prepares every node, picks ONE instant from the node holding program plus LTC, and starts them all at it."
+                    help="Other node ids, comma separated. All start at the same instant."
                   >
                     {(props) => (
                       <Input
@@ -1692,10 +1691,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
 
               <div className="sm-panel">
                 <h3 className="sm-subsection__title">Timeline</h3>
-                <p className="sm-small sm-muted">
-                  This node's scheduled-playback timeline. A signal with no value says why it has none; nothing here is
-                  inferred from anything else this node reports.
-                </p>
+                <p className="sm-small sm-muted">This node's scheduled-playback timeline.</p>
                 <DefinitionStrip
                   items={timelineRows.map((row) => ({
                     term: row.label,
@@ -1780,10 +1776,10 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
               <div className="sm-panel">
                 <h3 className="sm-subsection__title">Apply session</h3>
                 <p className="sm-small sm-muted">
-                  Replaces this session&rsquo;s definition on the node: sourceRole, media, playlist, outputs and mixPolicy. Mirrors the JSON
-                  <code className="sm-data"> showmeshctl audio session apply</code> takes as its params argument.
+                  Replaces this session&rsquo;s definition on the node. Same JSON as
+                  <code className="sm-data"> showmeshctl audio session apply</code>.
                 </p>
-                <Field label="Params (JSON)" help="Raw JSON object. Leave empty to apply with no params, matching the CLI's optional argument.">
+                <Field label="Params (JSON)" help="A JSON object. Empty applies with no params.">
                   {(props) => (
                     <Textarea
                       {...props}
@@ -1929,7 +1925,7 @@ function RunList({
                       setOutcome({
                         tone: 'warn',
                         label: 'Accepted',
-                        detail: `${item.id} was accepted. Each step reports its own outcome; this is not a report that it finished.`,
+                        detail: `${item.id} was accepted, not finished. Each step reports its own outcome.`,
                       }),
                     )
                     .catch((err: unknown) =>

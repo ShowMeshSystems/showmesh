@@ -10,11 +10,11 @@ export function StaleWriteStrip({ stale, onReload }: { stale: StaleWrite; onRelo
     <RuledStrip
       absence="failed"
       label="Stale write"
-      fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
+      fact={`${stale.changedBy ?? 'Someone'} saved a newer version ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
       detail={
         <>
           {stale.changedFields.length === 0 ? (
-            'No stored field differs, so the other write saved the same content.'
+            'The other save had the same content.'
           ) : (
             <>
               Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.

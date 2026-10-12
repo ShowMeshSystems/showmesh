@@ -51,7 +51,7 @@ export const NIGHT_LIFECYCLE_GROUPS: readonly { id: string; title: string; comma
       ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
       ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
       ['power-down-presentation', 'Power down presentation', 'Powers down the presentation. A configured check can block it.'],
-      ['end-session', 'End session', 'Abandons the session immediately. Nothing blocks this; run Prepare site again to start fresh.'],
+      ['end-session', 'End session', 'Abandons the session now. Run Prepare site to start fresh.'],
     ],
   },
 ]
@@ -209,14 +209,14 @@ export function describeFPPOutcome(result: FPPCommandResult, action: string): Co
     return {
       tone: 'good',
       label: 'Last command',
-      detail: `${action} ${sent}${resolved === null ? '' : `, confirmed by observed evidence ${resolved}`}. ${result.outcomeReason}`.trim(),
+      detail: `${action} ${sent}${resolved === null ? '' : `, confirmed ${resolved}`}. ${result.outcomeReason}`.trim(),
     }
   }
   if (result.outcome === 'unconfirmed') {
     return {
       tone: 'warn',
       label: 'Not confirmed',
-      detail: `${action} ${sent}. Nothing has yet reported that it took effect. ${result.outcomeReason}`.trim(),
+      detail: `${action} ${sent}. Not confirmed yet. ${result.outcomeReason}`.trim(),
     }
   }
   return {
@@ -485,7 +485,7 @@ export function describeAudioSessionOutcome(result: AudioSessionCommandResult, a
     return {
       tone: 'warn',
       label: 'Dispatched',
-      detail: `${action}: dispatched. The node's session engine cannot corroborate it. That is expected on this build, not a transport failure. ${result.reason}`.trim() + replaySuffix + attributionSuffix,
+      detail: `${action}: dispatched. This node cannot confirm it. ${result.reason}`.trim() + replaySuffix + attributionSuffix,
     }
   }
   return {
@@ -605,6 +605,6 @@ export function describeAlignedStart(result: AlignedAudioStartResult): CommandOu
       `on ${result.selection.clockNodeId}'s media clock` +
       (result.selection.clockErrorBoundKnown
         ? '.'
-        : '. The clock stated no error bound, so the lead carries no allowance for clock uncertainty.'),
+        : '. The clock reported no error bound.'),
   }
 }

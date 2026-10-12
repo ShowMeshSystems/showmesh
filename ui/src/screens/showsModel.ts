@@ -376,7 +376,7 @@ export function surfaceRenderStatus(nodes: readonly Node[], nodeId: string, surf
     return {
       tone: 'unknown',
       label: 'Not claimed',
-      detail: `${node.label ?? node.nodeId} has never reported rendering this surface. The configuration is stored; nothing confirms a node picked it up.`,
+      detail: `${node.label ?? node.nodeId} has never reported rendering this surface.`,
       unclaimed: true,
     }
   }
@@ -634,7 +634,7 @@ export function audioOnlyNodesWarning(nodeNames: readonly string[]): { headline:
   const plural = nodeNames.length > 1
   const names = joinNames(nodeNames)
   return {
-    headline: `${names} will play this cue as show audio, not as an announcement, and stop${plural ? '' : 's'} the audio already playing there.`,
+    headline: `${names} will play this as show audio and stop${plural ? '' : 's'} the audio already playing.`,
     explanation: `Add ${plural ? 'them' : names} to the announcement nodes to play it over that audio.`,
   }
 }
@@ -662,7 +662,7 @@ export function excludeNodesError(showAudioNodes: readonly string[], excludeNode
 /** Mirrors the coordinator's refusal of excludeNodes alongside an explicit node list on the same object (ADR-049 decision 10). */
 export function explicitListExcludeConflictError(explicitList: readonly string[], excludeNodes: readonly string[]): string | null {
   if (explicitList.length > 0 && excludeNodes.length > 0) {
-    return "This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude."
+    return 'Exclude has no effect with an audio node list. Clear one of them.'
   }
   return null
 }

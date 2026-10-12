@@ -188,10 +188,8 @@ export function Access() {
             term: 'Reads are open',
             value: (
               <>
-                Anyone who can reach this coordinator can view the show without signing in. That is deliberate:
-                a credential problem must never cost an operator sight of a running show. Close it with{' '}
-                <span className="sm-data">SHOWMESH_API_CLOSE_READS</span> if the port is exposed beyond the show
-                network.
+                Anyone on the network can view the show without signing in. To close it, set{' '}
+                <span className="sm-data">SHOWMESH_API_CLOSE_READS</span>.
               </>
             ),
           },
@@ -296,11 +294,10 @@ export function Access() {
         <RuledStrip
           absence="unavailable"
           label="Audit store"
-          fact="Whether the audit store can currently be written is not reported by the coordinator."
+          fact="The coordinator does not report whether the audit store is writable."
           detail={
             <>
-              Four of the night commands refuse outright rather than run unattributed, so an unwritable audit
-              store stops them rather than silently losing who did what.{' '}
+              Four night commands refuse to run when the audit store cannot be written.{' '}
               {auditGate.allowed ? (
                 <Link to="/monitor/activity">Open the log</Link>
               ) : (
@@ -313,7 +310,7 @@ export function Access() {
           <RuledStrip
             absence="failed"
             label="This session"
-            fact="At least one step was dispatched with no authorizing principal recorded. How many, and which, are not reported."
+            fact="At least one step ran with no principal recorded. Which steps is not reported."
           />
         )}
       </Section>
@@ -437,7 +434,7 @@ function AdministrationPanel({
 }) {
   const isSelf = isSignedInPrincipal(session, principal)
   const reservedReason = principal.reserved
-    ? 'The Resolume recovery principal cannot be re-roled, disabled or re-credentialed here.'
+    ? 'The Resolume recovery principal cannot be changed here.'
     : null
   const gateReason = !writeGate.allowed ? writeGate.reason : reservedReason
   const controlsDisabled = !writeGate.allowed || principal.reserved

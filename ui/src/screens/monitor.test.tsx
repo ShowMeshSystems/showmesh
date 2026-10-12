@@ -262,7 +262,7 @@ describe('Monitor · Fleet', () => {
       { seq: 1, recordedAt: '2026-08-28T21:02:14Z', occurredAt: null, source: 'broker', resource: { kind: 'node', id: 'n' }, category: 'lifecycle', severity: 'warning', summary: 'last will', details: {}, correlationId: null },
     ] as unknown as Event[]
     renderScreen({ events, eventsGap: true, snapshotReceivedAt: Date.now() })
-    expect(screen.getByText(/permanently lost to retention/)).toBeInTheDocument()
+    expect(screen.getByText(/this list has a gap/)).toBeInTheDocument()
   })
 })
 

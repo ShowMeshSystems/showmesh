@@ -290,7 +290,7 @@ describe('ADR-049 decision 10: the show names its audio nodes once', () => {
   })
 
   it('refuses excludeNodes alongside an explicit list on the same object', () => {
-    expect(explicitListExcludeConflictError(['a'], ['b'])).toBe("This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude.")
+    expect(explicitListExcludeConflictError(['a'], ['b'])).toMatch(/Exclude has no effect/)
     expect(explicitListExcludeConflictError(['a'], [])).toBeNull()
     expect(explicitListExcludeConflictError([], ['b'])).toBeNull()
   })
@@ -367,13 +367,13 @@ describe('nodesWithoutAnnouncement', () => {
 describe('audioOnlyNodesWarning', () => {
   it('names one node with singular verbs', () => {
     expect(audioOnlyNodesWarning(['node-b'])).toEqual({
-      headline: 'node-b will play this cue as show audio, not as an announcement, and stops the audio already playing there.',
+      headline: 'node-b will play this as show audio and stops the audio already playing.',
       explanation: 'Add node-b to the announcement nodes to play it over that audio.',
     })
   })
   it('joins several nodes with and and says them', () => {
     expect(audioOnlyNodesWarning(['a', 'b', 'c'])).toEqual({
-      headline: 'a, b and c will play this cue as show audio, not as an announcement, and stop the audio already playing there.',
+      headline: 'a, b and c will play this as show audio and stop the audio already playing.',
       explanation: 'Add them to the announcement nodes to play it over that audio.',
     })
   })

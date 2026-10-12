@@ -119,7 +119,7 @@ export function Dashboard() {
             absence="loading"
             label="Not heard from"
             fact="The night session has not reported to this device yet."
-            detail="The stream announces a change, not a state, so this stays blank until the session reports or a read succeeds."
+            detail="This fills in when the session next reports."
           />
         ) : (
           <div className="sm-dashboard__verdicts">
@@ -158,7 +158,7 @@ export function Dashboard() {
             stamp="Clear"
             eyebrow="Attention · empty"
             title="Nothing needs you"
-            detail="No failed, held, or unknown conditions are reported. That is not proof the show looks right, only that nothing has asked for you."
+            detail="Nothing has asked for you. That is not proof the show looks right."
           />
         ) : rendered.length === 0 ? (
           <RuledStrip

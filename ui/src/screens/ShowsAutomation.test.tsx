@@ -225,8 +225,8 @@ describe('Shows · Automation tab', () => {
 
   it('a show with no macro or action is a settled empty, distinct from a read failure', async () => {
     setup(['config:write'], [], [])
-    expect(await screen.findByText('No macro matches here.')).toBeInTheDocument()
-    expect(screen.getAllByText('No action matches here.')).toHaveLength(2)
+    expect(await screen.findByText('No matching macros.')).toBeInTheDocument()
+    expect(screen.getAllByText('No matching actions.')).toHaveLength(2)
   })
 
   it('a read failure is reported distinctly, with a retry', async () => {
@@ -308,7 +308,7 @@ describe('Shows · Automation tab', () => {
     fireEvent.change(reasonInput, { target: { value: '' } })
     const save = screen.getByRole('button', { name: 'Save macro' })
     expect(save).toBeDisabled()
-    expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
+    expect(save).toHaveAttribute('title', expect.stringMatching(/coordinator is unreachable/))
   })
 
   it('a stale macro step save is refused and writes nothing', async () => {
@@ -538,7 +538,7 @@ describe('Shows · Automation tab', () => {
       fireEvent.change(reasonInput, { target: { value: '' } })
       const save = screen.getByRole('button', { name: 'Save macro' })
       expect(save).toBeDisabled()
-      expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
+      expect(save).toHaveAttribute('title', expect.stringMatching(/coordinator is unreachable/))
     })
 
     it('blocks save when a step other than the one open has no fallback reason', async () => {

@@ -51,12 +51,12 @@ const MODE_OPTIONS: readonly { value: ConfigShowModePayload['mode']; title: stri
   {
     value: 'show',
     title: 'Show mode',
-    consequence: 'For a live audience. Output holds instead of guessing, and destructive changes confirm twice.',
+    consequence: 'For a live audience. Output holds, and destructive changes confirm twice.',
   },
   {
     value: 'program',
     title: 'Program mode',
-    consequence: 'For setup and authoring. No audience is assumed, so changes apply freely.',
+    consequence: 'For setup and authoring. Changes apply freely.',
   },
 ]
 
@@ -158,13 +158,13 @@ export function SettingsMode() {
               variant="primary"
               onClick={apply}
               disabled={alreadyActive || saving || !gate.allowed}
-              title={!gate.allowed ? gate.reason : alreadyActive ? `${requestedMode === 'show' ? 'Show' : 'Program'} mode is already active, so there is nothing to apply.` : undefined}
+              title={!gate.allowed ? gate.reason : alreadyActive ? `${requestedMode === 'show' ? 'Show' : 'Program'} mode is already active.` : undefined}
             >
               {saving ? 'Applying…' : 'Apply mode'}
             </Button>
             {alreadyActive && (
               <span className="sm-small sm-faint">
-                {requestedMode === 'show' ? 'Show' : 'Program'} mode is already active, so there is nothing to apply.
+                {requestedMode === 'show' ? 'Show' : 'Program'} mode is already active.
               </span>
             )}
             <div className="sm-push-end">

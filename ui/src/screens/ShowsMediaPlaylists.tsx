@@ -85,7 +85,7 @@ function buildMediaPlaylistPayload(show: string, draft: BedDraft): { ok: true; v
     }
     items.push({ kind: 'asset', show, sequence: item.sequence.trim(), target: item.target.trim() })
   }
-  if (items.length === 0) return { ok: false, error: 'A media playlist needs at least one item, the same way a show.playlist cannot save empty.' }
+  if (items.length === 0) return { ok: false, error: 'A media playlist needs at least one item.' }
   const maxGainDb = Number(draft.maxGainDb)
   if (draft.maxGainDb.trim() === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
     return { ok: false, error: 'Maximum gain (ceiling) must be a number no greater than 0 dB.' }
@@ -93,7 +93,7 @@ function buildMediaPlaylistPayload(show: string, draft: BedDraft): { ok: true; v
   const fadeOutText = draft.fadeOutMs.trim()
   const fadeInText = draft.fadeInMs.trim()
   if ((fadeOutText === '') !== (fadeInText === '')) {
-    return { ok: false, error: 'Fade-out and fade-in must be configured together, or both left empty for an instant cut.' }
+    return { ok: false, error: 'Set fade-out and fade-in together, or leave both empty.' }
   }
   if (draft.itemTransition === 'crossfade' && draft.crossfadeMs.trim() === '') {
     return { ok: false, error: 'Crossfade duration is required when item transition is crossfade.' }
@@ -321,7 +321,7 @@ export function MediaPlaylistEditor({
         disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
         onDelete={remove}
       >
-        <p className="sm-small sm-muted">A tombstone: nothing else in this codebase's reference graph names a media.playlist id, so deleting one orphans nothing.</p>
+        <p className="sm-small sm-muted">Nothing else uses this playlist.</p>
       </DeletePanel>
     </Section>
   )
@@ -395,8 +395,7 @@ export function MediaPlaylistDraft({
   return (
     <Section id="mp-editor" title="New media playlist" eyebrow="media.playlist">
       <p className="sm-small sm-faint">
-        The coordinator refuses a media playlist with no items, the same way it refuses a show.playlist with no
-        entries, so the first item is part of creation.
+        A media playlist needs at least one item.
       </p>
       <Field label="Id" help="Immutable once created.">
         {(p) => <Input {...p} className="sm-data" value={id} onChange={(e) => onIdChange(e.target.value)} />}

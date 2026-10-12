@@ -212,10 +212,10 @@ export function SurfaceEditor({
         {fixedNode !== undefined ? (
           <Field label="Node">{(props) => <Input {...props} className="sm-data" value={fixedNode} disabled readOnly />}</Field>
         ) : (
-        <Field label="Node" help="Declared nodes advertising a render capability. The coordinator does not check that this node is currently online.">
+        <Field label="Node" help="Nodes that can render. A node listed may be offline.">
           {(props) =>
             nodeOptions.length === 0 ? (
-              <RuledStrip absence="empty" label="None" fact="No declared node advertises a render capability yet." />
+              <RuledStrip absence="empty" label="None" fact="No node can render yet." />
             ) : (
               <Select {...props} value={node} onChange={(e) => setNode(e.target.value)}>
                 <option value="">Choose a node…</option>
@@ -255,7 +255,7 @@ export function SurfaceEditor({
           <Field label="Start channel">
             {(props) => <Input {...props} className="sm-data" value={startChannel} onChange={(e) => setStartChannel(e.target.value)} />}
           </Field>
-          <Field label="Channel count" help="Derived from geometry; the coordinator requires it to equal width × height × channels-per-pixel exactly.">
+          <Field label="Channel count" help="Width × height × channels per pixel.">
             {(props) => <Input {...props} className="sm-data" value={channelCount.toLocaleString()} disabled readOnly />}
           </Field>
         </div>
@@ -263,7 +263,7 @@ export function SurfaceEditor({
 
       <div className="sm-inspector__group">
         <h3 className="sm-subsection__title">Output</h3>
-        <p className="sm-small sm-muted">Exactly one transport. NDI working does not mean HDMI also works on the same node.</p>
+        <p className="sm-small sm-muted">Pick one transport.</p>
         <Segmented
           label="Transport"
           value={transport}
@@ -278,7 +278,7 @@ export function SurfaceEditor({
         ) : (
           <Field
             label="HDMI display"
-            help="This node's display.hdmi capability reports an outputs count, not display names, so this is typed by hand."
+            help="Type the display name. This node does not report names."
           >
             {(props) => <Input {...props} value={hdmiDisplay} onChange={(e) => setHdmiDisplay(e.target.value)} />}
           </Field>
@@ -337,7 +337,7 @@ export function SurfaceEditor({
           disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
           onDelete={remove}
         >
-          <p className="sm-small sm-muted">Deleting a surface stops the node from resolving it; the node's own output configuration is not touched.</p>
+          <p className="sm-small sm-muted">The node stops rendering this surface. Its output settings stay.</p>
         </DeletePanel>
       )}
     </div>

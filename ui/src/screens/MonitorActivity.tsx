@@ -74,7 +74,7 @@ export function MonitorActivity() {
             explanation={
               model.oldestRetainedSeq === null
                 ? 'No event is currently retained.'
-                : `The oldest event still retained is seq ${model.oldestRetainedSeq}. Anything earlier is gone, not merely unfetched.`
+                : `The oldest event kept is seq ${model.oldestRetainedSeq}. Earlier events are gone.`
             }
           />
         )}

@@ -16,11 +16,11 @@ type ReimportState =
   | { phase: 'resent'; detail: string; skipped: boolean }
   | { phase: 'unconfirmed'; reason: string }
 
-const NO_ANSWER = 'The FPP host gave no usable answer. Update the ShowMesh plugin on that host if it is out of date, then try again.'
-const NO_NEW_COPY = `No new copy of this playlist arrived within ${REIMPORT_TIMEOUT_MS / 1000} seconds. The stored copy may already be current; if the playlist still looks wrong, check the FPP host and try again.`
+const NO_ANSWER = 'The FPP host did not answer. Update its ShowMesh plugin, then try again.'
+const NO_NEW_COPY = `No new copy arrived in ${REIMPORT_TIMEOUT_MS / 1000} seconds. Check the FPP host, then try again.`
 
-const ALREADY_CURRENT = 'The FPP host sent its playlists again and ShowMesh already had this one, so nothing changed.'
-const SOME_NOT_RESENT = 'The FPP host did not resend some playlists. Restart the ShowMesh plugin on that host to clear this, then try again.'
+const ALREADY_CURRENT = 'ShowMesh already had this playlist. Nothing changed.'
+const SOME_NOT_RESENT = 'The FPP host did not resend some playlists. Restart its ShowMesh plugin.'
 
 function unconfirmedReason(err: unknown): string {
   return err instanceof ApiError && err.status === 502 ? NO_ANSWER : describeApiError(err)
@@ -108,7 +108,7 @@ export function ReimportControl({
   onLanded: () => void
 }) {
   const { state, start } = useReimport(instanceId, instanceUuid, playlistName, onLanded)
-  const reason = blockedReason ?? (instanceId === null ? 'This FPP host is not connected to the coordinator, so it cannot be asked to send the playlist again.' : null)
+  const reason = blockedReason ?? (instanceId === null ? 'This FPP host is not connected to the coordinator.' : null)
   const busy = state.phase === 'requesting' || state.phase === 'sent'
 
   return (
@@ -120,7 +120,7 @@ export function ReimportControl({
       {state.phase === 'sent' && (
         <p className="sm-verdict" role="status">
           <StatusPair tone="pending" label="Sent" />
-          <span className="sm-verdict__detail">The FPP host agreed to send this playlist again. Waiting for the new copy to arrive.</span>
+          <span className="sm-verdict__detail">Asked. Waiting for the new copy from the FPP host.</span>
         </p>
       )}
       {state.phase === 'landed' && (

@@ -255,7 +255,7 @@ describe('Show Night', () => {
     const readouts = evidenceReadouts(session({ attributionDegraded: true }), '2026-08-28T21:07:00Z')
     const attribution = readouts.find((entry) => entry.key === 'attribution')
     expect(attribution?.tone).toBe('bad')
-    expect(attribution?.fact).toContain('never clears')
+    expect(attribution?.fact).toContain('stays for the session')
   })
 
   it('makes the boundary unknown when the observed position is stale', () => {
@@ -265,7 +265,7 @@ describe('Show Night', () => {
     } as unknown as FPPInstance
     const next = nextTransition({ ...initialModel(), fpp: [instance] })
     expect(next.known).toBe(false)
-    if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
+    if (!next.known) expect(next.reason).toContain('next transition time is unknown')
   })
 
   it('reads the countdown from fpp.position.remaining.seconds directly, not derived from seconds_played', () => {
@@ -478,7 +478,7 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(await screen.findByText('No-op')).toBeInTheDocument()
     expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
-    expect(screen.getByText(/reports idempotent_no_op/)).toBeInTheDocument()
+    expect(screen.getByText(/changed nothing/)).toBeInTheDocument()
   })
 
   it('surfaces attributionDegraded on the reported outcome', async () => {
@@ -486,7 +486,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     await screen.findByText('Accepted')
-    expect(screen.getByText(/attributionDegraded/)).toBeInTheDocument()
+    expect(screen.getByText(/no principal recorded/)).toBeInTheDocument()
   })
 
   it('sends skipEnterShowLead: true for start-night only when the late-start box is checked', () => {
@@ -536,7 +536,7 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     expect(calls).toHaveLength(0)
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByLabelText(/Stop whatever is playing on/)).toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: /Stop what is playing on/ })).toBeChecked()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
     expect(calls[0]?.[0]).toBe('prepare-site')
     expect(calls[0]?.[4]).toBe(true)
@@ -555,7 +555,7 @@ describe('Show Night', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByLabelText(/Stop whatever is playing on/))
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Stop what is playing on/ }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Prepare site' }))
     expect(calls[0]?.[4]).toBe(false)
   })
@@ -567,7 +567,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     expect(
-      await within(screen.getByRole('dialog')).findByLabelText(/Stop whatever is playing on main-player and barn-player\. Other FPP players keep playing/),
+      await within(screen.getByRole('dialog')).findByRole('checkbox', { name: /Stop what is playing on main-player and barn-player\./ }),
     ).toBeInTheDocument()
   })
 
@@ -654,7 +654,7 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
     expect(await screen.findByText('Not dispatched')).toBeInTheDocument()
-    expect(screen.getByText(/was not dispatched and nothing was recorded, so this is not a failed command/)).toBeInTheDocument()
+    expect(screen.getByText(/was not sent/)).toBeInTheDocument()
     expect(screen.queryByText('Refused')).not.toBeInTheDocument()
   })
 
@@ -980,8 +980,7 @@ describe('Show Night', () => {
         backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [], nodesNotPlaying: [] },
       }),
     })
-    expect(screen.getByText(/Pinned ceiling for this running session: -18 dB/)).toBeInTheDocument()
-    expect(screen.getByText(/later config changes do not affect it/)).toBeInTheDocument()
+    expect(screen.getByText(/Ceiling for this session: -18 dB, fixed when it started/)).toBeInTheDocument()
   })
 
   it('says so honestly when the pinned ceiling is null because nothing is configured', () => {
@@ -1196,7 +1195,7 @@ describe('Show Night', () => {
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
-    expect(screen.getByText(/saved by other-operator/)).toBeInTheDocument()
+    expect(screen.getByText(/other-operator saved a newer version/)).toBeInTheDocument()
   })
 
   it('treats clearing the active pointer as a confirmed, deliberate sharp control', async () => {
@@ -1364,7 +1363,7 @@ describe('Show Night', () => {
 
     fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '999' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
-    expect(await screen.findByText(/Lights fade-out must be a whole number of milliseconds from 1000 to 86400000/)).toBeInTheDocument()
+    expect(await screen.findByText(/Lights fade-out must be a whole number from 1000 to 86400000 ms/)).toBeInTheDocument()
     expect(captured.body).toBeNull()
 
     fireEvent.change(screen.getByLabelText('Lights fade-out (ms)'), { target: { value: '' } })
@@ -1510,7 +1509,7 @@ describe('Show Night', () => {
     const select = await screen.findByLabelText('Audio asset')
     expect(select).toHaveValue('')
     expect(select).toHaveAttribute('aria-invalid', 'true')
-    expect(await screen.findByText('This audio asset no longer exists in the current asset list. Pick a different asset or remove the item.')).toBeInTheDocument()
+    expect(await screen.findByText(/This audio asset no longer exists/)).toBeInTheDocument()
   })
 
   it('refuses to save a background audio item whose stored asset no longer exists', async () => {
@@ -1523,7 +1522,7 @@ describe('Show Night', () => {
     await openWinterRidgeDefinition()
     await screen.findByLabelText('Audio asset')
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
-    expect(await screen.findByText("Background audio item 1's audio asset no longer exists in the current asset list. Pick a different asset or remove the item.")).toBeInTheDocument()
+    expect(await screen.findByText(/Background audio item 1 names a missing asset/)).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
   })
 
@@ -1532,7 +1531,7 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const helpText = "This file's own duration is how long the resting cycle runs; nothing else sets that length."
+    const helpText = /sets how long the resting cycle runs/
     const sequenceSelect = await screen.findByLabelText('Resting sequence')
     const describedBy = sequenceSelect.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()
@@ -1548,7 +1547,7 @@ describe('Show Night', () => {
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
     expect(
-      await screen.findByText('Audio assets already registered in the store, listed by name and the node they play on.'),
+      await screen.findByText(/Listed by name and the node it plays on/),
     ).toBeInTheDocument()
   })
 
@@ -1559,10 +1558,10 @@ describe('Show Night', () => {
     await openWinterRidgeDefinition()
     // Enter resting starts with no cues in this fixture; add one so both phases render an Offset field.
     fireEvent.click(screen.getAllByRole('button', { name: 'Add step' })[1]!)
-    const help = screen.getAllByText(/a negative value fires before it\.$/)
+    const help = screen.getAllByText(/Negative is before\.$/)
     expect(help).toHaveLength(2)
-    expect(help[0]).toHaveTextContent('Milliseconds from the end of the resting sequence; a negative value fires before it.')
-    expect(help[1]).toHaveTextContent("Milliseconds from the show's observed completion; a negative value fires before it.")
+    expect(help[0]).toHaveTextContent(/end of the resting sequence/)
+    expect(help[1]).toHaveTextContent(/end of the show/)
   })
 
   it('sends the site control subsection with its authored bindings', async () => {
@@ -1614,7 +1613,7 @@ describe('Show Night', () => {
     await openWinterRidgeDefinition()
     fireEvent.change(screen.getByLabelText('Fade-in (ms)'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
-    expect(await screen.findByText('Background audio fade-out and fade-in must be configured together, or both left empty for an instant cut.')).toBeInTheDocument()
+    expect(await screen.findByText(/Set background audio fade-out and fade-in together/)).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
   })
 
@@ -2136,7 +2135,7 @@ describe('ShowNight stop hold', () => {
     }
     renderScreen({ nightSession: session({ stopHold: hold }), session: nightCommandSession })
     expect(screen.getByText('Stopped')).toBeInTheDocument()
-    expect(screen.getByText(/Nothing starts until Resume/)).toBeInTheDocument()
+    expect(screen.getByText(/Resume starts the show playlist/)).toBeInTheDocument()
     const resume = screen.getByRole('button', { name: 'Resume' })
     expect(resume).toBeEnabled()
     fireEvent.click(resume)

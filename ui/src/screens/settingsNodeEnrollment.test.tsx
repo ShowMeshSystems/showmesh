@@ -97,7 +97,7 @@ describe('SettingsNodeEnrollment', () => {
         coordinatorUrl: 'https://coordinator.example',
       })
     renderScreen()
-    await waitFor(() => expect(screen.getByText('No enrollment codes have been minted. Mint one above to add a node.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('No enrollment codes.')).toBeInTheDocument())
 
     expect(screen.queryByText('ABCD-2345')).not.toBeInTheDocument()
 

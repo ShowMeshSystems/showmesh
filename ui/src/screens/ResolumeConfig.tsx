@@ -205,7 +205,7 @@ export function ResolumeConfig() {
           stamp="Not found"
           eyebrow={`${instanceId} · not found`}
           title="This coordinator has no record of this Resolume instance"
-          detail="No instance in the current snapshot carries this id. It may never have reported in, or it may no longer be configured."
+          detail="It may never have reported, or it is no longer configured."
           actions={
             <Link className="sm-btn sm-btn--primary" to="/monitor/fleet">
               Back to Fleet
@@ -402,15 +402,14 @@ export function ResolumeConfig() {
                       <>
                         Arena currently has deck{' '}
                         {selectedDeckSignal !== undefined && selectedDeckSignal.state === 'current' ? String(selectedDeckSignal.value) : 'an unreported deck'}{' '}
-                        selected, which matches the stored map. A different selected deck would report{' '}
-                        <span className="sm-data">deck_mismatch</span> rather than guessing.
+                        selected, which matches the stored map.
                       </>
                     ) : (
                       identifiedVerdict.detail
                     )}
                   </p>
                 ) : (
-                  <p className="sm-section__footnote">Arena has not reported whether the stored map still identifies the current composition.</p>
+                  <p className="sm-section__footnote">Arena has not reported whether the stored map matches its composition.</p>
                 )}
 
                 {uploadError !== null && <RuledStrip absence="failed" label="Upload refused" fact={uploadError} />}
@@ -457,7 +456,7 @@ export function ResolumeConfig() {
             return (
               <>
                 {ambiguous.length === 0 ? (
-                  <RuledStrip absence="empty" label="None" fact={`0 of ${total} clips are ambiguous. Every action naming a clip resolves to exactly one object.`} />
+                  <RuledStrip absence="empty" label="None" fact={`0 of ${total} clips share a name.`} />
                 ) : (
                   <>
                     <StatusPair tone="warn" label={`${ambiguous.length} of ${total}`} />
@@ -502,9 +501,9 @@ export function ResolumeConfig() {
             )
           })()
         ) : compositionState.kind === 'none' ? (
-          <RuledStrip absence="empty" label="None" fact="No composition is stored, so there is nothing to check for name collisions." />
+          <RuledStrip absence="empty" label="None" fact="No composition stored." />
         ) : (
-          <RuledStrip absence="unobserved" label="Unknown" fact="The stored composition has not been read, so ambiguous clips cannot be listed." />
+          <RuledStrip absence="unobserved" label="Unknown" fact="The stored composition has not been read." />
         )}
       </Section>
 
@@ -803,7 +802,7 @@ function ResolumeSignalsSection({
       <RuledStrip
         absence="unavailable"
         label="Unavailable"
-        fact="Timecode lock is not something Arena reports, so there is nothing to collect and nothing to retry."
+        fact="Arena does not report timecode lock."
       />
     </Section>
   )

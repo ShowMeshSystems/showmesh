@@ -197,7 +197,7 @@ export function ShowsWorkspace() {
       {readiness.results !== null && (
         <div className="sm-panel sm-stack-4">
           {readiness.results.length === 0 ? (
-            <p className="sm-small sm-muted">No FPP-runner playlist in this show to check. ShowMesh-audio playlists have no readiness concept.</p>
+            <p className="sm-small sm-muted">No FPP playlists to check.</p>
           ) : (
             readiness.results.map((r) => (
               <p key={r.playlistId} className="sm-small">
@@ -241,7 +241,7 @@ export function ShowsTabPlaceholder({ tab }: { tab: string }) {
       stamp="Soon"
       eyebrow={`${tab} · not rebuilt`}
       title="This tab has not been rebuilt yet"
-      detail="The operator UI is being rebuilt one screen at a time against Show Authoring.dc.html. This tab is still in the queue. Its controls are recorded in docs/ui-rebuild/CONTROL-INVENTORY.md and nothing has been dropped."
+      detail="This tab is still being rebuilt."
     />
   )
 }

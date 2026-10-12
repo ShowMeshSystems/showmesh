@@ -21,6 +21,7 @@ import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
+import { audioNodeIdentityText, useFleetNodes } from './audioRouteModel'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists, fetchShowSurfaces } from './showsData'
 import { useShowCatalogDeploy, type NodeDeployRow } from './cueCatalogDeploy'
@@ -203,7 +204,7 @@ export function ShowsCues() {
           }
         >
           <DeployOutcome deploy={catalogDeploy} />
-          <p className="sm-small sm-muted">Select a cue to edit it in the panel on the right. Editing a cue changes every playlist that uses it.</p>
+          <p className="sm-small sm-muted">Select a cue to edit it. Editing a cue changes every playlist that uses it.</p>
           <div className="sm-inline-row sm-stack-3">
             <Input aria-label="Filter cues" placeholder="Filter cues…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
             <Segmented label="Filter by output" value={filterKind} options={KIND_FILTERS} onChange={setFilterKind} />
@@ -225,7 +226,7 @@ export function ShowsCues() {
             <h3 className="sm-subsection__title">
               Not in any playlist <span className="sm-small sm-muted">· {unreachable.length}</span>
             </h3>
-            <p className="sm-small sm-muted">Authored but unreachable. Bind it to a playlist entry, or leave it as a safe-cue target.</p>
+            <p className="sm-small sm-muted">Nothing fires these. Bind one to a playlist entry to use it.</p>
             <CueTable
               title="Not in any playlist"
               hideTitle
@@ -245,7 +246,7 @@ export function ShowsCues() {
               Directly activatable <span className="sm-small sm-muted">· {announcements.length}</span>
             </h3>
             <p className="sm-small sm-muted">
-              Announcements are not playlist entries. An operator fires them from Live Control, and they duck the background bed without touching FPP.
+              An operator fires these from Live Control.
             </p>
             <CueTable
               title="Directly activatable"
@@ -389,7 +390,7 @@ function CueTable({
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={3}>
-                  <RuledStrip absence="empty" label="None" fact="No cue matches here." />
+                  <RuledStrip absence="empty" label="None" fact="No matching cues." />
                 </td>
               </tr>
             ) : (
@@ -493,11 +494,6 @@ function offsetHelp(frameRateState: LtcFrameRateState): string {
   return frameRateState.kind === 'loaded' ? `hh:mm:ss.ff at ${frameRateState.fps} fps.` : 'hh:mm:ss. Frame rate unavailable.'
 }
 
-/** LiveControl.tsx's node picker and monitorModel.ts's capabilityGroups share this convention: id and label joined by a middle dot, collapsed to the bare id when the label is just the id. */
-function nodeIdentityText(node: { id: string; label: string }): string {
-  return node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id
-}
-
 function TargetNodeField({
   label,
   value,
@@ -509,7 +505,8 @@ function TargetNodeField({
   onChange: (value: string) => void
   nodesState: AudioNodesState
 }) {
-  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
+  const fleet = useFleetNodes()
+  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Reading audio nodes." />
   if (nodesState.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
   if (nodesState.nodes.length === 0) {
     return (
@@ -538,7 +535,7 @@ function TargetNodeField({
           <option value="">Resolve to the program+ltc node</option>
           {nodesState.nodes.map((node) => (
             <option key={node.id} value={node.id}>
-              {nodeIdentityText(node)}
+              {audioNodeIdentityText(node, fleet)}
             </option>
           ))}
           {notDeclared && <option value={value}>{value} (not declared)</option>}
@@ -550,7 +547,7 @@ function TargetNodeField({
 
 
 /** The coordinator's own refusal of a cue whose only output is show actions. */
-const ACTIONS_ONLY_REASON = 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.'
+const ACTIONS_ONLY_REASON = 'A cue needs a render, audio, LTC or announcement output. Add one.'
 
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
@@ -618,6 +615,7 @@ function CueEditor({
   const [actions, setActions] = useState<string[]>(cue?.payload.outputs.actions ?? [])
   const audioNodes = useAudioNodes()
   const showAudioNodesState = useShowAudioNodes(showId)
+  const fleet = useFleetNodes()
   const ltcFrameRateState = useLtcFrameRate()
   const fps = ltcFrameRateState.kind === 'loaded' ? ltcFrameRateState.fps : null
   const [saving, setSaving] = useState(false)
@@ -667,7 +665,7 @@ function CueEditor({
   else if (kinds.has('audio') && audioAsset === '') blockReason = 'Audio needs an asset selected.'
   else if (name.trim() === '') blockReason = 'A cue needs a name.'
   else if (id.trim() === '') blockReason = 'A cue needs an id.'
-  else if (isNew && existingIds.includes(id)) blockReason = `The id "${id}" already names another cue in this show; edit that cue instead or choose a different id.`
+  else if (isNew && existingIds.includes(id)) blockReason = `The id "${id}" is taken in this show. Choose another.`
   else if (kinds.has('announcement') && announcementPolicy === 'duck') {
     const gain = Number(duckGainDb)
     if (!Number.isFinite(gain) || gain >= 0 || gain < -60) blockReason = 'Duck level must be a negative number, at least -60 dB.'
@@ -706,7 +704,11 @@ function CueEditor({
       : []
   const audioOnlyWarning =
     audioNodes.kind === 'loaded' && audioOnlyNodes.length > 0
-      ? audioOnlyNodesWarning(audioOnlyNodes.map((id) => nodeIdentityText(audioNodes.nodes.find((n) => n.id === id) ?? { id, label: id })))
+      ? audioOnlyNodesWarning(audioOnlyNodes.map((id) => {
+          const node = audioNodes.nodes.find((n) => n.id === id)
+          return node === undefined ? id : audioNodeIdentityText(node, fleet)
+        }),
+      )
       : null
 
   const activationDraft: CueActivationDraft = {
@@ -936,7 +938,7 @@ function CueEditor({
             showAudioNodesState={showAudioNodesState}
             nodesState={audioNodes}
           />
-          <p className="sm-field__help">These nodes play this cue's audio. On a node that is not also an announcement node, it plays as show audio.</p>
+          <p className="sm-field__help">These nodes play this cue's audio.</p>
         </div>
       )}
 
@@ -991,7 +993,7 @@ function CueEditor({
             nodesState={audioNodes}
           />
           <p className="sm-field__help">
-            On these nodes the cue plays as an announcement over the audio already playing. A node must also be an audio node to play anything.
+            These nodes play the cue over the audio already playing.
           </p>
           {audioOnlyWarning !== null && <Notice tone="warn" live="status" headline={audioOnlyWarning.headline} explanation={audioOnlyWarning.explanation} />}
         </div>

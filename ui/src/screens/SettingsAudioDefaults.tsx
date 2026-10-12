@@ -128,7 +128,7 @@ export function SettingsAudioDefaults() {
       return
     }
     if (!Number.isInteger(duckRestoreFadeMs) || duckRestoreFadeMs <= 0) {
-      setSaveError('Duck restore fade duration must be a whole number of milliseconds, greater than zero.')
+      setSaveError('Duck restore fade must be a whole number of milliseconds above 0.')
       return
     }
     if (!Number.isFinite(driftMs) || driftMs < 0) {
@@ -140,11 +140,11 @@ export function SettingsAudioDefaults() {
       return
     }
     if (!Number.isInteger(deliveryBoundMs) || deliveryBoundMs < 0 || deliveryBoundMs > 60000) {
-      setSaveError('Scheduled start delivery bound must be a whole number of milliseconds between 0 and 60000.')
+      setSaveError('Scheduled start delivery bound must be a whole number from 0 to 60000 ms.')
       return
     }
     if (!Number.isInteger(marginMs) || marginMs < 0 || marginMs > 60000) {
-      setSaveError('Scheduled start margin must be a whole number of milliseconds between 0 and 60000.')
+      setSaveError('Scheduled start margin must be a whole number from 0 to 60000 ms.')
       return
     }
     for (const [label, raw] of [
@@ -158,7 +158,7 @@ export function SettingsAudioDefaults() {
       }
     }
     if (!Number.isInteger(fallbackWindowMs) || fallbackWindowMs < 0 || fallbackWindowMs > 10000) {
-      setSaveError('MultiSync fallback window must be a whole number of milliseconds between 0 and 10000.')
+      setSaveError('MultiSync fallback window must be a whole number from 0 to 10000 ms.')
       return
     }
     if (!Number.isInteger(startLeadMs) || startLeadMs < 0 || startLeadMs > 5000) {

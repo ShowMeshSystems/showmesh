@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { getShow, readShowAudioNodes, type AudioNodeSummary } from '../api'
 import { Button, ChoiceGroup, RuledStrip } from '../kit'
 import { describeApiError } from '../domain/session'
+import { audioNodeIdentityText, hasRouteLabel, useFleetNodes } from './audioRouteModel'
+import { AudioNodeRoute } from './audioRouteName'
 import { installationDefaultAudioNode, resolveAudioNodes, resolvedNodesFact } from './showsModel'
 
 export type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
@@ -38,17 +40,6 @@ export function useShowAudioNodes(showId: string): ShowAudioNodesState {
   return state
 }
 
-/** Id and label joined by a middle dot, collapsed to the bare id when the label adds nothing (ShowsCues.tsx/ShowNight.tsx's own convention). */
-function nodeLabel(nodes: readonly AudioNodeSummary[], id: string): string {
-  const node = nodes.find((n) => n.id === id)
-  if (node === undefined) return id
-  return node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id
-}
-
-function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
-  return node.label !== '' && node.label !== node.id ? node.label : undefined
-}
-
 /**
  * ADR-049 decision 10's editor for a cue audio/announcement output, a night
  * bed, or a show.action audio target: while the object carries its own
@@ -81,6 +72,7 @@ export function AudioNodesResolutionField({
   nodesState: AudioNodesState
 }) {
   const [editingOwnList, setEditingOwnList] = useState(false)
+  const fleet = useFleetNodes()
   const errorNotice = excludeError !== undefined && (
     <span className="sm-field__error">
       <span aria-hidden="true">✕</span>
@@ -124,7 +116,7 @@ export function AudioNodesResolutionField({
         <ChoiceGroup
           label={label}
           help={`${ownLabel.charAt(0).toUpperCase()}${ownLabel.slice(1)}'s own list. Plays on exactly these nodes.`}
-          options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
+          options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: hasRouteLabel(node) ? <AudioNodeRoute node={node} /> : undefined }))}
           value={explicitValue}
           onChange={onExplicitChange}
         />
@@ -161,7 +153,11 @@ export function AudioNodesResolutionField({
   const showAudioNodes = showAudioNodesState.audioNodes
   const defaultNodeId = installationDefaultAudioNode(nodesState.nodes)
   const resolved = resolveAudioNodes({ explicitList: [], showAudioNodes, excludeNodes: excludeValue, defaultNodeId })
-  const resolvedWithLabels = { ...resolved, nodes: resolved.nodes.map((id) => nodeLabel(nodesState.nodes, id)) }
+  const resolvedWithLabels = { ...resolved, nodes: resolved.nodes.map((id) => {
+      const node = nodesState.nodes.find((n) => n.id === id)
+      return node === undefined ? id : audioNodeIdentityText(node, fleet)
+    }),
+  }
 
   return (
     <div className="sm-inspector__group">
@@ -173,7 +169,7 @@ export function AudioNodesResolutionField({
           error={excludeError}
           options={showAudioNodes.map((id) => {
             const node = nodesState.nodes.find((n) => n.id === id)
-            return { value: id, label: id, secondary: node === undefined ? undefined : nodeSecondaryText(node) }
+            return { value: id, label: id, secondary: node !== undefined && hasRouteLabel(node) ? <AudioNodeRoute node={node} /> : undefined }
           })}
           value={excludeValue}
           onChange={onExcludeChange}

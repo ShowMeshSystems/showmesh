@@ -181,7 +181,7 @@ describe('Shows · Presentation tab', () => {
 
   it('a show with no surface is a settled empty, distinct from loading and from a read failure', async () => {
     setup(['config:write'], [])
-    expect(await screen.findByText('This show has no surface configured.')).toBeInTheDocument()
+    expect(await screen.findByText('No surfaces yet.')).toBeInTheDocument()
   })
 
   it('a read failure is reported distinctly, with a retry', async () => {

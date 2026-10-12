@@ -13,6 +13,8 @@ import {
 } from '../api'
 import { Button, ButtonRow, ChoiceGroup, DeletePanel, Field, Input, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { hasRouteLabel } from './audioRouteModel'
+import { AudioNodeRoute } from './audioRouteName'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
@@ -39,10 +41,6 @@ function useAudioNodes(): AudioNodesState {
     }
   }, [])
   return state
-}
-
-function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
-  return node.label !== '' && node.label !== node.id ? node.label : undefined
 }
 
 type DetailState =
@@ -254,7 +252,7 @@ export function ShowDetail() {
             <span className="sm-field__label">Id</span>
             <p className="sm-input sm-data sm-muted">{id}</p>
             <span className="sm-field__help">
-              Fixed at creation. Every cue, surface and asset in this show is keyed on it, so it cannot change.
+              Fixed at creation.
             </span>
           </div>
           <Field label="Notes" help="For whoever operates this next, including you in eleven months.">
@@ -282,8 +280,8 @@ export function ShowDetail() {
           ) : (
             <ChoiceGroup
               label="Audio nodes"
-              help="Every cue, announcement, and night bed plays on these nodes unless it excludes one."
-              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
+              help="Cues, announcements and the night bed play on these nodes."
+              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: hasRouteLabel(node) ? <AudioNodeRoute node={node} /> : undefined }))}
               value={audioNodes}
               onChange={(value) => {
                 setAudioNodes(value)
@@ -307,8 +305,7 @@ export function ShowDetail() {
           </Tiles>
         )}
         <p className="sm-section__footnote">
-          Each of these is its own revisioned object, so editing a cue creates a cue revision, not an opaque revision
-          of the whole show.
+          Each is saved on its own, with its own history.
         </p>
       </Section>
 
@@ -354,7 +351,7 @@ export function ShowDetail() {
           <p className="sm-small sm-muted">
             {active
               ? 'This is the active show. It cannot be deleted until another show is made active.'
-              : "Deleting a show removes only the show object itself. Its cues, playlists, surfaces and other objects stay until they are deleted on their own."}
+              : 'Deletes the show only. Its cues, playlists and surfaces stay until deleted.'}
           </p>
         </DeletePanel>
       </Section>

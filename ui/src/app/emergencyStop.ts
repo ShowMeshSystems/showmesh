@@ -25,7 +25,7 @@ export const STOP_CONFIRM_TITLE = 'Stop every configured FPP instance now?'
 export const STOP_CONFIRM_DETAIL = 'Your stop actions also run, such as stopping audio or blacking out Resolume.'
 export const STOP_POWER_DOWN_CONFIRM_TITLE = 'Stop and power down now?'
 export const STOP_POWER_DOWN_CONFIRM_DETAIL =
-  'Every configured FPP instance stops, your stop actions run, and an active night session goes straight to its power-down.'
+  'Every FPP instance stops, your stop actions run and the night powers down.'
 
 /** [emergencyStop]/[emergencyStopPowerDown]/[fireEmergencyStopHardStop] share one result shape and one refusal path. */
 export type EmergencyOutcomeState =
