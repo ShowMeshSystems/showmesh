@@ -1149,6 +1149,49 @@ describe('Node detail · Cue catalog override', () => {
     expect(screen.getByText(new RegExp('program-audio-route:media-garage:usb-interface'))).toBeInTheDocument()
   })
 
+  it('says a surface has no assignment and redeploys the cue catalog without naming a sequence', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
+    stubs.deployNodeCueCatalog = vi.fn().mockResolvedValue({ outcome: 'confirmed', reason: 'The node confirmed the catalog.', revision: 3 })
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Redeploy cue catalog' })).toBeEnabled())
+    expect(screen.getByText('This node has not reported rendering this surface. Redeploy the cue catalog to restore it.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Redeploy cue catalog' }))
+    await waitFor(() => expect(stubs.deployNodeCueCatalog).toHaveBeenCalledWith('media-garage', undefined))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmed'))
+  })
+
+  it('keeps the missing-assignment redeploy disabled when no cue catalog is configured', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    stubs.getNodeCueCatalog = () => Promise.resolve({ ...catalogResponse(), configured: false })
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Redeploy cue catalog' })).toBeDisabled())
+  })
+
+  it('offers Deploy anyway from the missing-assignment redeploy after a claim conflict', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
+    stubs.deployNodeCueCatalog = vi.fn().mockRejectedValueOnce(claimConflictError()).mockResolvedValue({ outcome: '', revision: 3 })
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Redeploy cue catalog' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Redeploy cue catalog' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy anyway' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
+    const dialog = await screen.findByRole('dialog', { name: /deploy anyway/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Deploy anyway' }))
+    await waitFor(() => expect(stubs.deployNodeCueCatalog).toHaveBeenLastCalledWith('media-garage', true))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Still resolving'))
+  })
+
   // Acceptance: "Deploy anyway" opens an in-page confirmation naming the
   // conflict, never a native window.confirm, and issues no deploy on cancel.
   it('opens a kit confirmation naming the conflict and issues no deploy when cancelled', async () => {

@@ -815,7 +815,33 @@ describe('Live Control', () => {
     )
     expect(rows).toHaveLength(1)
     expect(rows[0]?.name).toBe('front')
-    expect(rows[0]?.doing).toBe('running at 40 fps')
+    expect(rows[0]?.doing).toBe('Running at 40 fps, output not reported')
+  })
+
+  it('shows a held-black surface as black, not as playing its held sequence', () => {
+    const held = [
+      observation('surface.pipeline.state', 'running'),
+      observation('surface.frames.rate', 39.999),
+      observation('surface.output.mode', 'blackout'),
+      observation('surface.content.fseq_filename', 'kpop 2026 MH Test.fseq'),
+    ]
+    renderScreen({ nodes: [node('barn', held)] })
+    const row = screen.getByRole('row', { name: /front/ })
+    expect(within(row).getByText(/Held black/)).toBeInTheDocument()
+    expect(within(row).queryByText('kpop 2026 MH Test.fseq')).not.toBeInTheDocument()
+  })
+
+  it('names the sequence and frame rate while a cue is drawing', () => {
+    const drawing = [
+      observation('surface.pipeline.state', 'running'),
+      observation('surface.frames.rate', 39.999),
+      observation('surface.output.mode', 'content'),
+      observation('surface.content.fseq_filename', 'kpop 2026 MH Test.fseq'),
+    ]
+    renderScreen({ nodes: [node('barn', drawing)] })
+    const row = screen.getByRole('row', { name: /front/ })
+    expect(within(row).getByText(/Drawing at 40 fps/)).toBeInTheDocument()
+    expect(within(row).getByText('kpop 2026 MH Test.fseq')).toBeInTheDocument()
   })
 
   it('reads the transport from the FPP instance’s own signals', () => {
