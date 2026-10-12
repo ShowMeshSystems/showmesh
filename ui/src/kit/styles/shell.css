@@ -79,12 +79,23 @@
   min-width: 0;
 }
 
-/* The principal gives way first, so a long name never pushes the stop pair off the bar. */
+/* The name gives way first, so a long name never pushes Sign out or the stop pair off the bar. */
 .sm-chrome__principal {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sm-chrome__principal > :first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sm-chrome__principal > :not(:first-child) {
+  flex-shrink: 0;
 }
 
 .sm-brand {
