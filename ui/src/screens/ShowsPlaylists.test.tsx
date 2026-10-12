@@ -736,7 +736,7 @@ describe('Shows · Playlists tab editing', () => {
       const putSpy = vi.fn((_id: string, payload: ConfigShowPlaylist) => Promise.resolve(playlistResponse(payload, 'winter-main')))
       stubs.putShowPlaylist = putSpy
       setupDraft(['config:write'], { fpp: [makeFPPInstance('barn-player', { instanceUuid: 'uuid-1' })] })
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
