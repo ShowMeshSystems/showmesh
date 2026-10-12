@@ -317,36 +317,32 @@ function NodeSurfaceEditor({
 
 /** A node holding no assignment for a surface is repaired by the show's cue catalog deploy; no sequence is named. */
 function MissingAssignmentRepair({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
-  const [deploying, setDeploying] = useState(false)
-  const [outcome, setOutcome] = useState<RenderOutcome | null>(null)
-  const redeploy = () => {
-    setDeploying(true)
-    setOutcome(null)
-    deployNodeCueCatalog(nodeId)
-      .then((result) =>
-        setOutcome({
-          tone: result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : 'bad',
-          label: result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1),
-          detail: result.reason ?? 'The cue catalog was sent to this node.',
-        }),
-      )
-      .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: describeApiError(err) }))
-      .finally(() => setDeploying(false))
-  }
+  const { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway } = useCueCatalogDeploy(nodeId)
+  const configured = catalog?.configured === true
+  const blocked = !gate.allowed || deploying || !configured
+  const title = !gate.allowed ? gate.reason : catalog !== null && !catalog.configured ? 'No active-show cue catalog is configured.' : undefined
   return (
     <div className="sm-stack-2">
-      <p className="sm-small">This node holds no render assignment for this surface. Redeploy the cue catalog to restore it.</p>
+      <p className="sm-small">This node has not reported rendering this surface. Redeploy the cue catalog to restore it.</p>
       <ButtonRow>
-        <Button variant="primary" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={redeploy}>
+        <Button variant="primary" disabled={blocked} title={title} onClick={() => deploy()}>
           {deploying ? 'Redeploying…' : 'Redeploy cue catalog'}
         </Button>
+        {conflictDetail !== null && (
+          <Button variant="danger" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={deployAnyway}>
+            Deploy anyway
+          </Button>
+        )}
       </ButtonRow>
-      {outcome !== null && (
+      {conflictDetail !== null && <p className="sm-outcome__detail">Refused: {conflictDetail}</p>}
+      {error !== null && <p className="sm-outcome__detail">{error}</p>}
+      {result !== null && (
         <div className="sm-outcome" role="status">
-          <StatusPair tone={outcome.tone} label={outcome.label} />
-          <p className="sm-outcome__detail">{outcome.detail}</p>
+          <StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)} />
+          <p className="sm-outcome__detail">{result.reason ?? 'The cue catalog was sent to this node.'}</p>
         </div>
       )}
+      <ConfirmDialog open={confirmingOverride} title="Deploy anyway?" detail={<p className="sm-body">{conflictDetail}</p>} confirmLabel="Deploy anyway" onConfirm={confirmDeployAnyway} onCancel={() => setConfirmingOverride(false)} />
     </div>
   )
 }
@@ -401,7 +397,8 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
 }
 
 /** The node's copy is a deployable projection; it is never fabricated from capability advertisements. */
-function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
+/** The node's cue catalog and its deploy, including the refusal that Deploy anyway overrides. */
+function useCueCatalogDeploy(nodeId: string) {
   const [catalog, setCatalog] = useState<CueCatalogResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   // conflictDetail is the overridable 409's own `detail` text (the real
@@ -435,6 +432,11 @@ function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType
     setConfirmingOverride(false)
     deploy(true)
   }
+  return { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway }
+}
+
+function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
+  const { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway } = useCueCatalogDeploy(nodeId)
   const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
   return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><ButtonRow><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={() => deploy()}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button>{conflictDetail !== null && <Button variant="danger" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={deployAnyway}>Deploy anyway</Button>}</ButtonRow></>}{conflictDetail !== null && <p className="sm-outcome__detail">Refused: {conflictDetail}</p>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p>{result.overriddenConditions !== undefined && result.overriddenConditions.length > 0 && <p className="sm-outcome__detail">Deployed with operator override: {result.overriddenConditions.map((c) => c.claim).join('; ')}</p>}</div>}<ConfirmDialog open={confirmingOverride} title="Deploy anyway?" detail={<><p className="sm-body">{conflictDetail}</p><p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed revision.</p></>} confirmLabel="Deploy anyway" onConfirm={confirmDeployAnyway} onCancel={() => setConfirmingOverride(false)} /></div>
 }

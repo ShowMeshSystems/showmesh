@@ -281,7 +281,7 @@ export function outputRows(model: Model, nowIso: string | null): OutputRow[] {
         key: `${node.nodeId}:${surfaceId}`,
         name: surfaceId,
         where: `${node.nodeId} · ${outputKind(node)}`,
-        doing: output.label,
+        doing: output.detail === null ? output.label : `${output.label}. ${output.detail}`,
         content: output.playing,
         tone: EVIDENCE_TONE[evidenceState],
         evidence:

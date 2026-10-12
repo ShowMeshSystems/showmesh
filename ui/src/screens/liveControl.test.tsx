@@ -827,7 +827,7 @@ describe('Live Control', () => {
     ]
     renderScreen({ nodes: [node('barn', held)] })
     const row = screen.getByRole('row', { name: /front/ })
-    expect(within(row).getByText('Held black')).toBeInTheDocument()
+    expect(within(row).getByText(/Held black/)).toBeInTheDocument()
     expect(within(row).queryByText('kpop 2026 MH Test.fseq')).not.toBeInTheDocument()
   })
 
