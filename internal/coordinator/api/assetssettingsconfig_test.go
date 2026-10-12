@@ -64,6 +64,22 @@ func TestPutAssetsSettingsConfigAuthAndScope(t *testing.T) {
 	})
 }
 
+func TestGetAssetsSettingsConfigNotSavedYetSaysSoPlainly(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	const want = "Asset delivery settings have not been saved yet. Save them to create them."
+	if got := fmt.Sprint(decodeMap(t, body)["detail"]); got != want {
+		t.Errorf("detail = %q, want %q", got, want)
+	}
+}
+
 func TestGetAssetsSettingsConfigRequiresConfigWriteScope(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	viewer := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)

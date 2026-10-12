@@ -640,6 +640,54 @@ describe('Settings › Content delivery', () => {
   })
 })
 
+describe('Settings › Content delivery on a fresh install', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('shows the form with defaults and no raw API text, and Save creates the settings', async () => {
+    stubs.getAssetsSettingsConfig = () => notConfigured('Asset delivery settings have not been saved yet. Save them to create them.')
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'assets.settings', revisions: [] })
+    const put = vi.fn(() => Promise.resolve({ revision: 1, payload: { contentBaseUrl: 'http://10.0.0.5:8080', maxUploadBytes: 2147483648, syncIntervalSeconds: 300, inventoryIntervalSeconds: 120 }, updatedAt: '2026-08-30T21:00:00Z', createdByPrincipalName: 'erbartos' }))
+    stubs.putAssetsSettingsConfig = put
+
+    renderAt('/settings/delivery')
+
+    expect(await screen.findByText('Nothing is saved yet. These are the defaults. Save to keep them.')).toBeInTheDocument()
+    expect(screen.queryByText(/PUT one to create/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Read failed')).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('300')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('120')).toBeInTheDocument()
+
+    const save = screen.getByRole('button', { name: 'Save delivery' })
+    expect(save).toBeEnabled()
+    fireEvent.change(screen.getByLabelText('Content base URL'), { target: { value: 'http://10.0.0.5:8080' } })
+    fireEvent.click(save)
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put).toHaveBeenCalledWith({ contentBaseUrl: 'http://10.0.0.5:8080', maxUploadBytes: 2147483648, syncIntervalSeconds: 300, inventoryIntervalSeconds: 120 })
+    expect(screen.queryByText('Save failed')).not.toBeInTheDocument()
+  })
+
+  it('shows the coordinator one-line refusal for a malformed content base URL', async () => {
+    stubs.getAssetsSettingsConfig = () => notConfigured('Asset delivery settings have not been saved yet. Save them to create them.')
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'assets.settings', revisions: [] })
+    stubs.putAssetsSettingsConfig = () =>
+      Promise.reject(new ApiError('Content base URL must look like http://<coordinator address>:8080.', 400, 'https://showmesh.dev/problems/invalid-parameter'))
+
+    renderAt('/settings/delivery')
+
+    await screen.findByText('Nothing is saved yet. These are the defaults. Save to keep them.')
+    fireEvent.change(screen.getByLabelText('Content base URL'), { target: { value: 'http:///10.0.0.5:8080' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save delivery' }))
+
+    expect(await screen.findByText('Content base URL must look like http://<coordinator address>:8080.')).toBeInTheDocument()
+  })
+})
+
 describe('Settings › Render recovery', () => {
   afterEach(() => {
     cleanup()

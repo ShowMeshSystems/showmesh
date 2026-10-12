@@ -59,7 +59,7 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no assets.settings configuration has been created yet; PUT one to create it"))
+			"Asset delivery settings have not been saved yet. Save them to create them."))
 		return
 	}
 	if err != nil {
@@ -68,7 +68,7 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	}
 	if obj.CurrentRevision == 0 {
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no assets.settings configuration has been created yet; PUT one to create it"))
+			"Asset delivery settings have not been saved yet. Save them to create them."))
 		return
 	}
 

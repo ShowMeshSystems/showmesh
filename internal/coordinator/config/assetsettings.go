@@ -238,6 +238,13 @@ func parseInetAtonIPv4(host string) net.IP {
 	return net.IPv4(b[0], b[1], b[2], b[3])
 }
 
+// operatorMessage is an error that is a finished sentence for the operator, which errors.New rejects.
+type operatorMessage string
+
+func (m operatorMessage) Error() string { return string(m) }
+
+const errContentBaseURLShape = operatorMessage("Content base URL must look like http://<coordinator address>:8080.")
+
 // ValidateAssetSettings validates one assets.settings config payload: a
 // positive upload limit, a positive sync interval, a positive inventory
 // interval, and — only when non-empty, since an empty ContentBaseURL is
@@ -266,24 +273,15 @@ func ValidateAssetSettings(s AssetSettings) error {
 		return nil
 	}
 	u, err := url.Parse(s.ContentBaseURL)
-	if err != nil {
-		return fmt.Errorf("assets.settings: contentBaseUrl %q is not a valid URL: %w", s.ContentBaseURL, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("assets.settings: contentBaseUrl %q must use http or https", s.ContentBaseURL)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("assets.settings: contentBaseUrl %q must include a host", s.ContentBaseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errContentBaseURLShape
 	}
 	if u.User != nil {
-		return fmt.Errorf("assets.settings: contentBaseUrl must not include userinfo/credentials")
+		return operatorMessage("Content base URL must not contain a user name or password. Remove it.")
 	}
 	if ContentBaseURLIsLoopback(s.ContentBaseURL) {
-		return fmt.Errorf("set assets.settings with `showmeshctl assets settings set --content-base-url <url>` "+
-			"using an address every render node can reach, not %q: a node fetching asset bytes from a loopback "+
-			"or unspecified address fetches from ITSELF, not from this coordinator, or %s if this coordinator "+
-			"has not migrated yet",
-			s.ContentBaseURL, envAssetContentBaseURL)
+		return operatorMessage("Content base URL must be an address the nodes can reach, not this machine's own. " +
+			"Use http://<coordinator address>:8080.")
 	}
 	return nil
 }

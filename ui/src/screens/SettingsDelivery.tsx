@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  ApiError,
   getAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,
   listAssets,
@@ -9,14 +10,17 @@ import {
 import { Button, ButtonRow, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { guardedSave, type SaveOutcome } from '../domain/save'
+import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { formatBytes } from './showsModel'
 
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AssetsSettingsConfigResponse }
+  | { kind: 'unsaved' }
   | { kind: 'failed'; reason: string }
+
+const DEFAULTS = { contentBaseUrl: '', maxUploadBytes: 2 * 1024 * 1024 * 1024, syncIntervalSeconds: 300, inventoryIntervalSeconds: 120 }
 
 export function SettingsDelivery() {
   const model = useModelContext()
@@ -49,7 +53,17 @@ export function SettingsDelivery() {
         setDirty(false)
       })
       .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setState({ kind: 'unsaved' })
+          setContentBaseUrl(DEFAULTS.contentBaseUrl)
+          setMaxUploadBytes(String(DEFAULTS.maxUploadBytes))
+          setSyncIntervalSeconds(String(DEFAULTS.syncIntervalSeconds))
+          setInventoryIntervalSeconds(String(DEFAULTS.inventoryIntervalSeconds))
+          setDirty(false)
+          return
+        }
+        setState({ kind: 'failed', reason: describeApiError(err) })
       })
     return () => {
       cancelled = true
@@ -71,18 +85,18 @@ export function SettingsDelivery() {
   }, [])
 
   const discard = () => {
-    if (state.kind !== 'loaded') return
-    setContentBaseUrl(state.response.payload.contentBaseUrl)
-    setMaxUploadBytes(String(state.response.payload.maxUploadBytes))
-    setSyncIntervalSeconds(String(state.response.payload.syncIntervalSeconds))
-    setInventoryIntervalSeconds(String(state.response.payload.inventoryIntervalSeconds))
+    if (state.kind === 'loading' || state.kind === 'failed') return
+    const base = state.kind === 'loaded' ? state.response.payload : DEFAULTS
+    setContentBaseUrl(base.contentBaseUrl)
+    setMaxUploadBytes(String(base.maxUploadBytes))
+    setSyncIntervalSeconds(String(base.syncIntervalSeconds))
+    setInventoryIntervalSeconds(String(base.inventoryIntervalSeconds))
     setDirty(false)
     setSaveError(null)
   }
 
   const save = () => {
-    if (state.kind !== 'loaded') return
-    const loaded = state.response
+    if (state.kind !== 'loaded' && state.kind !== 'unsaved') return
     const maxUpload = Number(maxUploadBytes)
     const sync = Number(syncIntervalSeconds)
     const inventory = Number(inventoryIntervalSeconds)
@@ -93,17 +107,28 @@ export function SettingsDelivery() {
     setSaving(true)
     setSaveError(null)
     setStale(null)
-    guardedSave({
-      loaded,
-      read: getAssetsSettingsConfig,
-      write: () =>
-        putAssetsSettingsConfig({
-          contentBaseUrl,
-          maxUploadBytes: maxUpload,
-          syncIntervalSeconds: sync,
-          inventoryIntervalSeconds: inventory,
-        }),
-    })
+    const write = () =>
+      putAssetsSettingsConfig({
+        contentBaseUrl,
+        maxUploadBytes: maxUpload,
+        syncIntervalSeconds: sync,
+        inventoryIntervalSeconds: inventory,
+      })
+    const outcomePromise: Promise<SaveOutcome<AssetsSettingsConfigResponse>> =
+      state.kind === 'loaded'
+        ? guardedSave({ loaded: state.response, read: getAssetsSettingsConfig, write })
+        : guardedCreate({ read: getAssetsSettingsConfig, write }).then((created) =>
+            created.kind === 'created'
+              ? { kind: 'saved', response: created.response }
+              : {
+                  kind: 'unreadable',
+                  reason:
+                    created.kind === 'taken'
+                      ? 'Delivery settings were saved by someone else just now. Reload the page.'
+                      : created.reason,
+                },
+          )
+    outcomePromise
       .then((outcome) => {
         if (outcome.kind === 'saved') {
           setState({ kind: 'loaded', response: outcome.response })
@@ -172,11 +197,15 @@ export function SettingsDelivery() {
         <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
       ) : (
         <Section id="st-sync" title="Distribution">
+          {state.kind === 'unsaved' && (
+            <p className="sm-small sm-muted">Nothing is saved yet. These are the defaults. Save to keep them.</p>
+          )}
           <div className="sm-grid sm-form-column">
             <Field label="Content base URL">
               {(props) => (
                 <Input
                   {...props}
+                  placeholder="http://<coordinator address>:8080"
                   value={contentBaseUrl}
                   onChange={(e) => {
                     setContentBaseUrl(e.target.value)
@@ -236,7 +265,7 @@ export function SettingsDelivery() {
         <Button
           variant="primary"
           onClick={save}
-          disabled={!dirty || saving || state.kind !== 'loaded' || !gate.allowed}
+          disabled={saving || (state.kind === 'loaded' ? !dirty : state.kind !== 'unsaved') || !gate.allowed}
           title={gate.allowed ? undefined : gate.reason}
         >
           {saving ? 'Saving…' : 'Save delivery'}
