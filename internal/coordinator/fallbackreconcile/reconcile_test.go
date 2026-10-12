@@ -344,11 +344,50 @@ func TestServiceEmptyPlaylistIsNotRefusedAndItsProgramIsWithdrawn(t *testing.T) 
 
 	svc.reconcileOnce(context.Background())
 
-	if len(audit.entries) != audited {
-		t.Fatalf("an empty playlist must not be compiled, refused or audited; new entries: %+v", audit.entries[audited:])
+	for _, e := range audit.entries[audited:] {
+		if e.Action != auditActionWithdraw || e.Target != testInstanceUUID {
+			t.Fatalf("an empty playlist must only be audited as a withdrawal; new entry: %+v", e)
+		}
+	}
+	if len(audit.entries) != audited+1 {
+		t.Fatalf("want exactly one withdraw audit entry for %q; new entries: %+v", testInstanceUUID, audit.entries[audited:])
 	}
 	if _, err := st.GetFallbackProgram(context.Background(), testInstanceUUID); !errors.Is(err, store.ErrFallbackProgramNotFound) {
 		t.Fatalf("the program of a host with no cues must be withdrawn, got %v (published revision %q)", err, published.Revision)
+	}
+}
+
+func TestServiceWithdrawDeletesOnlyTheNonParticipatingHostsProgram(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	audit := &recordingAuditWriter{}
+	svc := NewService(st, fakeSigner{}, audit, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+	svc.reconcileOnce(context.Background())
+
+	const otherHost = "M4-00000000000000000000000000000001"
+	if err := st.PutFallbackProgram(context.Background(), store.FallbackProgramRecord{
+		FPPInstanceUUID: otherHost, PackageID: "pkg-other", Revision: "rev-other", ShowID: "halloween",
+		ProgramJSON: "{}", SignatureB64: "AA==", ExpiresAt: now.Add(time.Hour), CompiledAt: now,
+	}); err != nil {
+		t.Fatalf("put other host program: %v", err)
+	}
+
+	svc.reconcileOnce(context.Background())
+
+	if _, err := st.GetFallbackProgram(context.Background(), testInstanceUUID); err != nil {
+		t.Fatalf("the participating host's program must stay: %v", err)
+	}
+	if _, err := st.GetFallbackProgram(context.Background(), otherHost); !errors.Is(err, store.ErrFallbackProgramNotFound) {
+		t.Fatalf("the withdrawn host's program must be deleted, got %v", err)
+	}
+	var withdrawn []string
+	for _, e := range audit.entries {
+		if e.Action == auditActionWithdraw {
+			withdrawn = append(withdrawn, e.Target)
+		}
+	}
+	if len(withdrawn) != 1 || withdrawn[0] != otherHost {
+		t.Fatalf("withdraw audit targets = %v, want only %q", withdrawn, otherHost)
 	}
 }
 
