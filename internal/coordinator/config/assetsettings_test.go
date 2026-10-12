@@ -258,13 +258,13 @@ func TestValidateAssetSettingsAcceptsRoutableContentBaseURL(t *testing.T) {
 // TestValidateAssetSettingsContentBaseURLMessages pins one plain line per
 // refusal, each ending in the right form or the action to take.
 func TestValidateAssetSettingsContentBaseURLMessages(t *testing.T) {
-	const shape = "Content base URL must look like http://<coordinator address>:8080."
+	const shape = "Content base URL must look like http://<coordinator address>:<port>."
 	cases := []struct{ name, url, want string }{
 		{"no host", "http:///192.168.1.10:8080", shape},
 		{"not a url", "not a url", shape},
 		{"wrong scheme", "ftp://coordinator.example", shape},
 		{"userinfo", "https://user:pass@coordinator.example", "Content base URL must not contain a user name or password. Remove it."},
-		{"loopback", "http://localhost:8080", "Content base URL must be an address the nodes can reach, not this machine's own. Use http://<coordinator address>:8080."},
+		{"loopback", "http://localhost:8080", "Content base URL must be an address the nodes can reach, not this machine's own. Use http://<coordinator address>:<port>."},
 	}
 	for _, c := range cases {
 		s := testAssetSettings

@@ -243,7 +243,7 @@ type operatorMessage string
 
 func (m operatorMessage) Error() string { return string(m) }
 
-const errContentBaseURLShape = operatorMessage("Content base URL must look like http://<coordinator address>:8080.")
+const errContentBaseURLShape = operatorMessage("Content base URL must look like http://<coordinator address>:<port>.")
 
 // ValidateAssetSettings validates one assets.settings config payload: a
 // positive upload limit, a positive sync interval, a positive inventory
@@ -281,7 +281,7 @@ func ValidateAssetSettings(s AssetSettings) error {
 	}
 	if ContentBaseURLIsLoopback(s.ContentBaseURL) {
 		return operatorMessage("Content base URL must be an address the nodes can reach, not this machine's own. " +
-			"Use http://<coordinator address>:8080.")
+			"Use http://<coordinator address>:<port>.")
 	}
 	return nil
 }

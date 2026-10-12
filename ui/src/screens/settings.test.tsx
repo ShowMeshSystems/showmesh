@@ -671,12 +671,25 @@ describe('Settings › Content delivery on a fresh install', () => {
     expect(screen.queryByText('Save failed')).not.toBeInTheDocument()
   })
 
+  it('keeps the failure view when the 404 means the settings could not be saved', async () => {
+    stubs.getAssetsSettingsConfig = () =>
+      Promise.reject(new ApiError('The data volume is unwritable. Fix it and restart.', 404, 'https://showmesh.dev/problems/assets-settings-not-stored'))
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+
+    renderAt('/settings/delivery')
+
+    expect(await screen.findByText('The data volume is unwritable. Fix it and restart.')).toBeInTheDocument()
+    expect(screen.getByText('Read failed')).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing is saved yet/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save delivery' })).toBeDisabled()
+  })
+
   it('shows the coordinator one-line refusal for a malformed content base URL', async () => {
     stubs.getAssetsSettingsConfig = () => notConfigured('Asset delivery settings have not been saved yet. Save them to create them.')
     stubs.listAssets = () => Promise.resolve({ assets: [] })
     stubs.getAssetsSettingsConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'assets.settings', revisions: [] })
     stubs.putAssetsSettingsConfig = () =>
-      Promise.reject(new ApiError('Content base URL must look like http://<coordinator address>:8080.', 400, 'https://showmesh.dev/problems/invalid-parameter'))
+      Promise.reject(new ApiError('Content base URL must look like http://<coordinator address>:<port>.', 400, 'https://showmesh.dev/problems/invalid-parameter'))
 
     renderAt('/settings/delivery')
 
@@ -684,7 +697,7 @@ describe('Settings › Content delivery on a fresh install', () => {
     fireEvent.change(screen.getByLabelText('Content base URL'), { target: { value: 'http:///10.0.0.5:8080' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save delivery' }))
 
-    expect(await screen.findByText('Content base URL must look like http://<coordinator address>:8080.')).toBeInTheDocument()
+    expect(await screen.findByText('Content base URL must look like http://<coordinator address>:<port>.')).toBeInTheDocument()
   })
 })
 

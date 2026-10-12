@@ -74,6 +74,9 @@ func TestGetAssetsSettingsConfigNotSavedYetSaysSoPlainly(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
 	}
+	if got := fmt.Sprint(decodeMap(t, body)["type"]); got != ProblemTypeResourceNotFound {
+		t.Errorf("type = %q, want %q", got, ProblemTypeResourceNotFound)
+	}
 	const want = "Asset delivery settings have not been saved yet. Save them to create them."
 	if got := fmt.Sprint(decodeMap(t, body)["detail"]); got != want {
 		t.Errorf("detail = %q, want %q", got, want)
@@ -266,6 +269,9 @@ func TestGetAssetsSettingsConfigDeferredMigrationStatesItRatherThanReportingNoth
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	if got := fmt.Sprint(decodeMap(t, body)["type"]); got != ProblemTypeAssetsSettingsNotStored {
+		t.Errorf("type = %q, want %q", got, ProblemTypeAssetsSettingsNotStored)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
 	if strings.Contains(detail, "has been created yet") {

@@ -302,23 +302,30 @@ coord_admin() {
 
 # coord_asset_settings saves the content base URL once, so nodes can fetch files; a saved value is never touched.
 coord_asset_settings() {
-  [ "${ADMIN_READY:-0}" -eq 1 ] || return 0
   step "Saving the address nodes fetch show files from"
-  local token cmd="showmeshctl assets settings set --content-base-url $PUBLIC_URL"
-  token="$(env_get "$CTL_ENV" SHOWMESH_CTL_TOKEN)"
-  http_request GET "http://127.0.0.1:$HTTP_PORT/api/v1/config/assets.settings" "" "$token"
-  case "$HTTP_STATUS" in
-    200) ok "the address nodes fetch show files from is already saved"; return 0 ;;
-    404) ;;
-    *) warn "Could not check the content base URL. Run: $cmd"; return 0 ;;
-  esac
-  local log
-  log="$(run_tmp)"
-  if run_step "saving the content base URL $PUBLIC_URL" "$log" /usr/local/bin/showmeshctl assets settings set --content-base-url "$PUBLIC_URL"; then
-    ok "nodes will fetch show files from $PUBLIC_URL"
-  else
-    warn "The content base URL was not saved, so no node receives show files. Run: $cmd"
+  local cmd="showmeshctl assets settings set --content-base-url $PUBLIC_URL"
+  if [ "${ADMIN_READY:-0}" -ne 1 ]; then
+    info "The content base URL was not saved because there is no administrator yet. Set it in the UI under Settings, Content delivery."
+    return 0
   fi
+  local url="http://127.0.0.1:$HTTP_PORT/api/v1/config/assets.settings" token body
+  token="$(env_get "$CTL_ENV" SHOWMESH_CTL_TOKEN)"
+  http_request GET "$url" "" "$token"
+  case "$HTTP_STATUS" in
+    200) ok "the content base URL is already saved and was left as it is"; return 0 ;;
+    404) ;;
+    *) warn "The content base URL could not be read. $(problem_detail) Run: $cmd"; return 0 ;;
+  esac
+  body="$(run_tmp)"
+  PUBLIC_URL="$PUBLIC_URL" jq -n '{contentBaseUrl: env.PUBLIC_URL}' > "$body"
+  # Create-only: a setting saved in the UI between the read and this write is left alone.
+  http_request PUT "$url" "$body" "$token" "If-None-Match: *"
+  rm -f "$body"
+  case "$HTTP_STATUS" in
+    2*) ok "nodes will fetch show files from $PUBLIC_URL" ;;
+    412) ok "the content base URL was saved by someone else meanwhile and was left as it is" ;;
+    *) warn "The content base URL was not saved, so no node receives show files. $(problem_detail) Run: $cmd" ;;
+  esac
 }
 
 coord_check_broker() {

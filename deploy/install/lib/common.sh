@@ -355,15 +355,16 @@ lan_address() {
   printf '%s' "$addr"
 }
 
-# http_request METHOD URL [BODY_FILE] [TOKEN] sets HTTP_STATUS, HTTP_BODY, HTTP_CONTENT_TYPE and HTTP_RETRY_AFTER.
+# http_request METHOD URL [BODY_FILE] [TOKEN] [HEADER] sets HTTP_STATUS, HTTP_BODY, HTTP_CONTENT_TYPE and HTTP_RETRY_AFTER.
 http_request() {
-  local method="$1" url="$2" body_file="${3:-}" token="${4:-}" out hdr
+  local method="$1" url="$2" body_file="${3:-}" token="${4:-}" extra_header="${5:-}" out hdr
   out="$(run_tmp)"
   hdr="$(run_tmp)"
   local err
   err="$(run_tmp)"
   local args=(-sS -m 15 -X "$method" -o "$out" -D "$hdr" -w '%{http_code}')
   [ -n "$body_file" ] && args+=(-H 'Content-Type: application/json' --data-binary "@$body_file")
+  [ -n "$extra_header" ] && args+=(-H "$extra_header")
   if [ -n "$token" ]; then
     HTTP_STATUS="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl "${args[@]}" -K - "$url" 2>"$err")" || HTTP_STATUS="000"
   else

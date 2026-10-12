@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ApiError,
+  PROBLEM_TYPE,
   getAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,
   listAssets,
@@ -54,7 +55,7 @@ export function SettingsDelivery() {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        if (err instanceof ApiError && err.status === 404) {
+        if (err instanceof ApiError && err.status === 404 && err.problemType !== PROBLEM_TYPE.assetsSettingsNotStored) {
           setState({ kind: 'unsaved' })
           setContentBaseUrl(DEFAULTS.contentBaseUrl)
           setMaxUploadBytes(String(DEFAULTS.maxUploadBytes))
@@ -205,7 +206,7 @@ export function SettingsDelivery() {
               {(props) => (
                 <Input
                   {...props}
-                  placeholder="http://<coordinator address>:8080"
+                  placeholder="http://<coordinator address>:<port>"
                   value={contentBaseUrl}
                   onChange={(e) => {
                     setContentBaseUrl(e.target.value)

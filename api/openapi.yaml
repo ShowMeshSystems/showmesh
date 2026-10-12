@@ -4171,12 +4171,14 @@ paths:
         mirroring `GET /config/resolume.instances`'s identical
         always-sensitive posture. `404` when no revision has ever been
         activated, which carries two distinct facts and states which one
-        in `detail`: nothing has ever been configured here, or this
+        in `detail`: nothing has ever been configured here (`type` is
+        `resource-not-found`), or this
         coordinator's startup migration of one or more of
         `SHOWMESH_ASSET_CONTENT_BASE_URL`/`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`/
         `SHOWMESH_ASSET_SYNC_INTERVAL`/`SHOWMESH_ASSET_INVENTORY_INTERVAL`
         into its store could not be persisted, in which case a
-        configuration IS in effect. `SHOWMESH_ASSET_DIR` is never part of
+        configuration IS in effect and `type` is
+        `https://showmesh.dev/problems/assets-settings-not-stored`. `SHOWMESH_ASSET_DIR` is never part of
         this kind (ADR-039 decision 2) and stays environment-only.
         `restartRequired` is always `false`: the live asset sync service
         follows this configuration promptly with no restart (ADR-036
@@ -17478,6 +17480,7 @@ components:
             - https://showmesh.dev/problems/show-config-domain-provenance-refused
             - https://showmesh.dev/problems/show-config-prerequisites-empty
             - https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle
+            - https://showmesh.dev/problems/assets-settings-not-stored
             - https://showmesh.dev/problems/interlock-shutdown-phase-requires-override
             - https://showmesh.dev/problems/interlock-signal-no-false-answer
             - https://showmesh.dev/problems/macro-run-already-in-flight
