@@ -13,13 +13,13 @@ import (
 )
 
 // heldRouteRedetectInterval is how often a node with a configured audio
-// route re-enumerates its interfaces, so an unplugged one is noticed
+// route lists its interfaces again, so an unplugged one is noticed
 // without a reconnect or a rebind.
 const heldRouteRedetectInterval = 30 * time.Second
 
 // runHeldRouteRedetect calls detect on every tick while the node has a
-// configured route, whether or not its engine is healthy. It only detects:
-// it never rebinds the engine or restarts a session.
+// configured route, whether or not its engine is healthy. It only lists:
+// it never opens a device, rebinds the engine or restarts a session.
 func runHeldRouteRedetect(ctx context.Context, ticks <-chan time.Time, configured func() (audioNodeConfig, bool), detect func()) {
 	for {
 		select {
@@ -36,7 +36,7 @@ func runHeldRouteRedetect(ctx context.Context, ticks <-chan time.Time, configure
 	}
 }
 
-// scheduleHeldRouteRedetection is the watch's audio-only detection. It
+// scheduleHeldRouteRedetection is the watch's listing-only detection. It
 // skips the tick while a detection is running, and republishes hello only
 // when the advertised routes changed: an unchanged hello would still make
 // the coordinator resend this node's audio settings every tick.
@@ -52,10 +52,10 @@ func scheduleHeldRouteRedetection(ctx context.Context, pub Publisher, cfg config
 func runHeldRouteRedetection(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, status *fppConnectHTTPStatus, logger *slog.Logger, gen uint64) {
 	detectCtx, cancel := context.WithTimeout(ctx, capabilityDetectionTimeout)
 	defer cancel()
-	audioCaps := detectAudioCapabilities(detectCtx)
+	audioCaps, ok := redetectHeldRouteCapabilities(detectCtx)
 
 	cached, have := detectedCapabilityCache.snapshot()
-	if !have || !capabilityGate.isCurrent(gen) {
+	if !ok || !have || !capabilityGate.isCurrent(gen) {
 		return
 	}
 	if advertisedAudioRoutes(cached) == advertisedAudioRoutes(audioCaps) {

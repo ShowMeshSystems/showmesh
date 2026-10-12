@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -386,5 +387,36 @@ func TestDiscoverPipeWireReportsTruncation(t *testing.T) {
 	pw := DiscoverPipeWire(context.Background(), fakePipeWireEnumerator{present: true, nodes: nodes})
 	if !pw.Truncated || len(pw.Routes) != maxProbedDevices {
 		t.Errorf("Truncated=%v routes=%d, want true and %d", pw.Truncated, len(pw.Routes), maxProbedDevices)
+	}
+}
+
+func TestListOutputsNamesEveryOutputWithoutOpeningOne(t *testing.T) {
+	fakeGstLaunch(t)
+	withProbeRunner(t, func(ctx context.Context, path string, argv []string) (string, bool) {
+		t.Errorf("ListOutputs opened %s", deviceFromArgv(argv))
+		return "", false
+	})
+	enum := fakeEnumerator{devices: []string{"null", "hw:CARD=M4,DEV=0", "hw:CARD=Other,DEV=0"}, hasCards: true}
+
+	got := ListOutputs(context.Background(), enum, fakePipeWireEnumerator{present: true, nodes: []PipeWireNode{{Name: "alsa_output.usb-M4"}}})
+	want := []string{"hw:CARD=M4,DEV=0", "hw:CARD=Other,DEV=0", "alsa_output.usb-M4"}
+	if !got.Complete || !slices.Equal(got.Devices, want) {
+		t.Fatalf("ListOutputs = %+v, want complete with %v", got, want)
+	}
+	if got := ListOutputs(context.Background(), enum, fakePipeWireEnumerator{}); !got.Complete || len(got.Devices) != 2 {
+		t.Fatalf("no PipeWire on the host: ListOutputs = %+v, want the two ALSA outputs, complete", got)
+	}
+}
+
+func TestListOutputsIsIncompleteWhenAListingFails(t *testing.T) {
+	enum := fakeEnumerator{devices: []string{"hw:CARD=M4,DEV=0"}, hasCards: true}
+	for name, got := range map[string]OutputListing{
+		"aplay -L": ListOutputs(context.Background(), fakeEnumerator{devicesErr: errBoom}, fakePipeWireEnumerator{}),
+		"aplay -l": ListOutputs(context.Background(), fakeEnumerator{cardsErr: errBoom}, fakePipeWireEnumerator{}),
+		"pw-dump":  ListOutputs(context.Background(), enum, fakePipeWireEnumerator{present: true, nodesErr: errBoom}),
+	} {
+		if got.Complete {
+			t.Errorf("%s failed: ListOutputs = %+v, want incomplete so no miss is counted", name, got)
+		}
 	}
 }

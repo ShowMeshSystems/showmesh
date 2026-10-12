@@ -258,6 +258,36 @@ func Discover(ctx context.Context, enum Enumerator) Discovery {
 	return d
 }
 
+// OutputListing is the output devices a node lists at one moment. Complete
+// is false when a listing failed, so an absent device is then unknown.
+type OutputListing struct {
+	Devices  []string
+	Complete bool
+}
+
+// ListOutputs names the ALSA candidates and PipeWire sinks from the listings
+// [Discover] and [DiscoverPipeWire] read. It never opens a device, so it is
+// safe to call while a show is playing.
+func ListOutputs(ctx context.Context, enum Enumerator, pw PipeWireEnumerator) OutputListing {
+	nodes, present, pwErr := pw.Nodes(ctx)
+	devices, err := enum.Devices(ctx)
+	if err != nil {
+		return OutputListing{}
+	}
+	hasCards, err := enum.HasHardwareCards(ctx)
+	if err != nil {
+		return OutputListing{}
+	}
+	listed := CandidateDevices(devices, hasCards)
+	if !present {
+		return OutputListing{Devices: listed, Complete: true}
+	}
+	for _, n := range nodes {
+		listed = append(listed, n.Name)
+	}
+	return OutputListing{Devices: listed, Complete: pwErr == nil}
+}
+
 // RouteInterface is the interface an output route leaves through: one
 // ALSA card is one sample clock, so "hw:CARD=M4,DEV=0" and
 // "hw:CARD=M4,DEV=1" share "hw:CARD=M4". Any other form, such as a

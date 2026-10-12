@@ -1286,7 +1286,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-route-missing` | shipped | a node's stored program or LTC route is no longer among the routes the node reports; the interface is unplugged or failed; warning only, never `failingCondition` |
 
 **`cue-multisync-trigger-missing`, `fpp-multisync-disabled`,
-`audio-node-not-multisync-remote`, `audio-nodes-defaulted`,
+`audio-node-not-multisync-remote`, `audio-nodes-defaulted`, `version-mismatch`,
 `audio-ltc-separate-local-clock`, `audio-ltc-capable-unconfigured` and
 `audio-route-missing` are warning-only, not a `failingCondition`.** Every condition above the
 `cue-multisync-trigger-missing` row can make `ready` false; these never do (ADR-051 decisions 2 and 4: a Cue with an

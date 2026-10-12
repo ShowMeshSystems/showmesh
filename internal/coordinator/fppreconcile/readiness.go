@@ -1444,7 +1444,7 @@ func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store, p
 	return "", nil
 }
 
-// audioLTCCapableUnconfiguredReadiness is condition 17, scoped like
+// audioLTCCapableUnconfiguredReadiness is condition 18, scoped like
 // [audioLTCSeparateLocalClockReadiness]. A node whose Hello advertises an
 // LTC-capable route and whose audio.node names no LTC channel runs without
 // timecode it could have produced; omitting the LTC fields stays valid.

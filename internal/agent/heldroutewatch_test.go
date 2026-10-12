@@ -10,40 +10,118 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
+const (
+	watchedRoute = "hw:CARD=M4,DEV=0"
+	otherRoute   = "hw:CARD=Other,DEV=0"
+)
+
+func resetHeldRouteWatchState(t *testing.T) {
+	t.Helper()
+	for _, reset := range []func(){lastKnownGoodRoutes.reset, heldRouteMissCounts.reset, lastAudioDiscovery.reset} {
+		reset()
+		t.Cleanup(reset)
+	}
+}
+
+// withAudioOutputListing makes every watch tick list exactly devices.
+func withAudioOutputListing(t *testing.T, devices ...string) {
+	t.Helper()
+	orig := audioOutputLister
+	audioOutputLister = func(context.Context, audio.Enumerator, audio.PipeWireEnumerator) audio.OutputListing {
+		return audio.OutputListing{Devices: devices, Complete: true}
+	}
+	t.Cleanup(func() { audioOutputLister = orig })
+}
+
+// failOnAudioProbe fails the test if anything runs the probing discovery.
+func failOnAudioProbe(t *testing.T) {
+	t.Helper()
+	orig := audioDiscoverer
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		t.Error("a watch tick ran the probing discovery, which opens every card")
+		return audio.Discovery{}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+}
+
+type listingEnumerator struct{ devices []string }
+
+func (e listingEnumerator) Devices(context.Context) ([]string, error) { return e.devices, nil }
+func (e listingEnumerator) HasHardwareCards(context.Context) (bool, error) {
+	return len(e.devices) > 0, nil
+}
+
+type absentPipeWire struct{}
+
+func (absentPipeWire) Nodes(context.Context) ([]audio.PipeWireNode, bool, error) {
+	return nil, false, nil
+}
+
 func TestHeldRouteRedetectNoticesAGoneDeviceWithoutAReconnect(t *testing.T) {
-	lastKnownGoodRoutes.reset()
-	heldRouteMissCounts.reset()
-	t.Cleanup(lastKnownGoodRoutes.reset)
-	t.Cleanup(heldRouteMissCounts.reset)
+	resetHeldRouteWatchState(t)
 	withAudioEngineAvailable(t, true, "")
-	const dev = "hw:CARD=M4,DEV=0"
-	node := audioNodeConfig{ProgramRoute: dev, ProgramChannels: []int{1, 2}}
+	node := audioNodeConfig{ProgramRoute: watchedRoute, ProgramChannels: []int{1, 2}}
 	withAudioEngineHeldNode(t, node, true)
 	withAudioConfiguredNode(t, node, true)
-	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true, HasHardwareCards: true, HardwareEnumerated: true,
-		Routes: []audio.RouteEvidence{{Device: "hw:CARD=Other,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}}}})
+	heldRouteMissPass(t, true)
+	failOnAudioProbe(t)
+	withAudioOutputListing(t, otherRoute)
 
 	ticks := make(chan time.Time)
-	passes := make(chan struct{})
+	passes := make(chan capability.Set)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		runHeldRouteRedetect(ctx, ticks, func() (audioNodeConfig, bool) { return node, true }, func() {
-			detectAudioCapabilities(ctx)
-			passes <- struct{}{}
+			set, _ := redetectHeldRouteCapabilities(ctx)
+			passes <- set
 		})
 	}()
-	for i := 0; i < 2; i++ {
-		ticks <- time.Time{}
-		<-passes
+	ticks <- time.Time{}
+	if set := <-passes; !heldRouteAdvertised(set) {
+		t.Fatal("one missed listing: want the route still advertised")
 	}
+	ticks <- time.Time{}
+	set := <-passes
 	cancel()
 	<-done
 
-	gone := heldRouteMissCounts.observe(nil, node, true, false)
-	if !gone[dev] {
-		t.Fatalf("after two periodic passes gone = %v, want %s missing", gone, dev)
+	if heldRouteAdvertised(set) {
+		t.Fatal("two missed listings: want the route no longer advertised")
+	}
+	local, _ := set.Lookup("audio.output.local")
+	if missing, _ := local.Attributes["missingRoutes"].([]map[string]any); len(missing) != 1 || missing[0]["route"] != watchedRoute {
+		t.Fatalf("missingRoutes = %v, want %s", local.Attributes["missingRoutes"], watchedRoute)
+	}
+
+	withAudioOutputListing(t, otherRoute, watchedRoute)
+	set, _ = redetectHeldRouteCapabilities(context.Background())
+	local, _ = set.Lookup("audio.output.local")
+	if !heldRouteAdvertised(set) || local.Attributes["missingRoutes"] != nil {
+		t.Fatalf("route listed again: advertised %v missingRoutes %v, want it back and none missing", heldRouteAdvertised(set), local.Attributes["missingRoutes"])
+	}
+}
+
+func TestHeldRouteWatchTickOpensNoDevice(t *testing.T) {
+	resetCapabilityCacheForTest(t)
+	resetCapabilityGateForTest(t)
+	resetHeldRouteWatchState(t)
+	withAudioEngineAvailable(t, false, "the output did not open")
+	withAudioConfiguredNode(t, audioNodeConfig{ProgramRoute: watchedRoute, ProgramChannels: []int{1, 2}}, true)
+	detectedCapabilityCache.store(heldRouteMissPass(t, true))
+
+	failOnAudioProbe(t)
+	origEnum, origPW := audioEnumerator, audioPipeWireEnumerator
+	audioEnumerator, audioPipeWireEnumerator = listingEnumerator{devices: []string{otherRoute}}, absentPipeWire{}
+	t.Cleanup(func() { audioEnumerator, audioPipeWireEnumerator = origEnum, origPW })
+
+	pub := newFakePublisher()
+	for i := 0; i < 3; i++ {
+		heldRouteRedetectTick(t, pub)
+	}
+	if calls := pub.snapshot(); len(calls) != 1 {
+		t.Fatalf("published %d messages, want the one hello reporting the route missing from the listing alone", len(calls))
 	}
 }
 
@@ -65,16 +143,15 @@ func heldRouteRedetectTick(t *testing.T, pub *fakePublisher) {
 func TestHeldRouteRedetectionPublishesHelloOnlyWhenTheRoutesChange(t *testing.T) {
 	resetCapabilityCacheForTest(t)
 	resetCapabilityGateForTest(t)
-	lastKnownGoodRoutes.reset()
-	heldRouteMissCounts.reset()
-	t.Cleanup(lastKnownGoodRoutes.reset)
-	t.Cleanup(heldRouteMissCounts.reset)
+	resetHeldRouteWatchState(t)
 	withAudioEngineAvailable(t, false, "the output did not open")
 	withAudioConfiguredNode(t, audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}, true)
 
 	render := capability.Capability{ID: "render.surface", Version: 1}
 	detectedCapabilityCache.store(append(capability.Set{render}, heldRouteMissPass(t, true)...))
 	pub := newFakePublisher()
+	failOnAudioProbe(t)
+	withAudioOutputListing(t, otherRoute, watchedRoute)
 
 	for i := 0; i < 3; i++ {
 		heldRouteRedetectTick(t, pub)
@@ -83,7 +160,7 @@ func TestHeldRouteRedetectionPublishesHelloOnlyWhenTheRoutesChange(t *testing.T)
 		t.Fatalf("published %d messages over three unchanged ticks, want none", len(calls))
 	}
 
-	heldRouteMissPass(t, false)
+	withAudioOutputListing(t, otherRoute)
 	for i := 0; i < 4; i++ {
 		heldRouteRedetectTick(t, pub)
 	}
