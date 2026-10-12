@@ -58,6 +58,22 @@ func TestReportRenderCommandResultUnconfirmedFailedExitsRenderPipelineDown(t *te
 	}
 }
 
+// A command the node failed prints the node's own reason and never exits 0.
+func TestReportRenderCommandResultNodeFailurePrintsTheNodeReason(t *testing.T) {
+	const reason = "render.surface.apply: starting frame writer: fseq: requested channel range is not covered by this file"
+	var buf bytes.Buffer
+	code := reportRenderCommandResult(&buf, "render apply", renderCommandResult{
+		Action: "render.surface.apply", NodeID: "media-01", SurfaceID: "wall-1", CommandID: "c1",
+		Outcome: "unconfirmed", OutcomeState: "current", OutcomeReason: reason,
+	})
+	if code != exitCommandUnconfirmed {
+		t.Fatalf("exit = %d, want exitCommandUnconfirmed (9)", code)
+	}
+	if want := "unconfirmed: render.surface.apply on media-01/wall-1: " + reason + " (command c1)\n"; buf.String() != want {
+		t.Fatalf("output = %q, want %q", buf.String(), want)
+	}
+}
+
 func TestReportRenderCommandResultUnconfirmedOtherwiseExitsCommandUnconfirmed(t *testing.T) {
 	var buf bytes.Buffer
 	code := reportRenderCommandResult(&buf, "render apply", renderCommandResult{

@@ -4130,7 +4130,7 @@ export interface components {
             serverTime: string;
             command: components["schemas"]["RenderCommandResult"];
         };
-        /** @description What happened to one dispatched (or replayed) render.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved, decided by confirming `surface.pipeline.state` evidence dated at or after dispatch. */
+        /** @description What happened to one dispatched (or replayed) render.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved. The node's own result for the command decides it: a command the node failed or refused is "unconfirmed" with the node's reason in outcomeReason. Signal evidence dated at or after dispatch decides it only when no node result does. */
         RenderCommandResult: {
             commandId: string;
             idempotencyKey: string;
