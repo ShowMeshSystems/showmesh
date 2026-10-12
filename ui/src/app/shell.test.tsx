@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, CSRFRejectedError, TooManyRequestsError } from '../api'
@@ -577,6 +577,73 @@ describe('app shell', () => {
       </ModelContext.Provider>,
     )
     expect(await screen.findByText('Signed out on this device')).toBeInTheDocument()
+  })
+
+  describe('the bar at phone width', () => {
+    /** jsdom has no matchMedia; this answers each `(max-width: Npx)` query as a viewport `width` px wide would. */
+    function stubViewport(width: number) {
+      vi.stubGlobal('matchMedia', (query: string) => {
+        const max = /max-width:\s*(\d+)px/.exec(query)
+        return {
+          matches: max !== null && width <= Number(max[1]),
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }
+      })
+    }
+    afterEach(() => vi.unstubAllGlobals())
+
+    function renderSignedIn(width: number) {
+      stubViewport(width)
+      getShowActiveMock.mockResolvedValue(showActiveConfig('main-show'))
+      getShowModeConfigMock.mockResolvedValue(showModeConfig({ pinned: false }))
+      renderShell({ session: authenticatedSession(), connection: { kind: 'live' } as Model['connection'] })
+      return { bar: within(screen.getByRole('banner')), rail: within(screen.getByRole('navigation', { name: 'Primary' })) }
+    }
+
+    it('keeps the show picker, mode badge, name and Sign out on the bar above 720px', async () => {
+      const { bar, rail } = renderSignedIn(721)
+      expect(await bar.findByRole('button', { name: /Show\s*main-show/ })).toBeInTheDocument()
+      expect(await bar.findByRole('button', { name: 'show' })).toBeInTheDocument()
+      expect(bar.getByText('operator-a')).toBeInTheDocument()
+      expect(bar.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+      expect(bar.getByText('Live')).toBeInTheDocument()
+      expect(rail.queryByText('operator-a')).not.toBeInTheDocument()
+      expect(rail.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument()
+    })
+
+    it('drops the show picker and mode badge at 720px and below, and never reads them', async () => {
+      const { bar } = renderSignedIn(720)
+      expect(bar.getByText('Live')).toBeInTheDocument()
+      await act(async () => {})
+      expect(screen.queryByRole('button', { name: /Show\s*main-show/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'show' })).not.toBeInTheDocument()
+      expect(getShowActiveMock).not.toHaveBeenCalled()
+      expect(getShowModeConfigMock).not.toHaveBeenCalled()
+    })
+
+    it('moves the name and Sign out into the rail drawer at 720px and below, with no overflow menu', () => {
+      const { bar, rail } = renderSignedIn(390)
+      expect(rail.getByText('operator-a')).toBeInTheDocument()
+      expect(rail.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+      expect(bar.queryByText('operator-a')).not.toBeInTheDocument()
+      expect(bar.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+      expect(bar.getByText('Live')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument()
+    })
+
+    it('runs the sign-out confirm step inside the rail drawer', () => {
+      const { rail } = renderSignedIn(390)
+      fireEvent.click(rail.getByRole('button', { name: 'Sign out' }))
+      expect(logoutMock).not.toHaveBeenCalled()
+      fireEvent.click(rail.getByRole('button', { name: 'Cancel' }))
+      expect(logoutMock).not.toHaveBeenCalled()
+      fireEvent.click(rail.getByRole('button', { name: 'Sign out' }))
+      fireEvent.click(rail.getByRole('button', { name: 'Confirm sign out' }))
+      expect(logoutMock).toHaveBeenCalledExactlyOnceWith(undefined)
+    })
   })
 
   it('lists the not-found table’s old addresses, grouped as the mock draws them', () => {

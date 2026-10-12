@@ -4,13 +4,14 @@ import { Drawer } from './Drawer'
 
 export type Connection = 'live' | 'degraded' | 'lost' | 'unknown'
 
-/**
- * True once the viewport is at or below `breakpoint`. False during SSR, the
- * first paint, and in a test environment without `matchMedia` (this repo's
- * jsdom setup does not stub it).
- */
+/** Whether the viewport is at or below `breakpoint` right now. False without `matchMedia` (SSR, and jsdom unless a test stubs it). */
+function matchesNarrow(breakpoint: number): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${breakpoint}px)`).matches
+}
+
+/** True while the viewport is at or below `breakpoint`, read on the first render so nothing mounts for one frame and then leaves. */
 function useNarrow(breakpoint: number): boolean {
-  const [narrow, setNarrow] = useState(false)
+  const [narrow, setNarrow] = useState(() => matchesNarrow(breakpoint))
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
     const query = window.matchMedia(`(max-width: ${breakpoint}px)`)
@@ -22,12 +23,18 @@ function useNarrow(breakpoint: number): boolean {
   return narrow
 }
 
+/** Below this width the bar keeps only the brand, now-playing and connection; the account moves to the rail drawer. */
+const PHONE_BREAKPOINT = 720
+
 type ChromeProps = {
+  /** Not rendered at phone width. */
   showPicker: ReactNode
+  /** Not rendered at phone width. */
   mode: ReactNode
   /** Title, position, cycle, time to next transition. Truncates. */
   nowPlaying: ReactNode
   connection: ReactNode
+  /** Not rendered at phone width, where `RailAccount` carries it instead. */
   principal: ReactNode
 }
 
@@ -36,44 +43,24 @@ type ChromeProps = {
  * puts the first nav group behind it: fix the wrap, never the offset.
  */
 export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal }: ChromeProps) {
-  const compact = useNarrow(720)
-  const [overflowOpen, setOverflowOpen] = useState(false)
+  const phone = useNarrow(PHONE_BREAKPOINT)
   return (
     <header className="sm-chrome" data-chrome>
       <div className="sm-chrome__left">
         <span className="sm-brand" aria-hidden="true">SM</span>
-        <span className="sm-chrome__divider" aria-hidden="true" />
-        {showPicker}
-        {mode}
+        {!phone && (
+          <>
+            <span className="sm-chrome__divider" aria-hidden="true" />
+            {showPicker}
+            {mode}
+          </>
+        )}
       </div>
       <div className="sm-chrome__now">{nowPlaying}</div>
       <div className="sm-chrome__right">
-        {compact ? (
+        {connection}
+        {!phone && (
           <>
-            <button
-              type="button"
-              className="sm-chrome-toggle"
-              aria-haspopup="true"
-              aria-expanded={overflowOpen}
-              aria-label="More"
-              onClick={() => setOverflowOpen((v) => !v)}
-            >
-              <span aria-hidden="true">⋯</span>
-            </button>
-            {overflowOpen && (
-              <>
-                <div className="sm-chrome-overflow-scrim" onClick={() => setOverflowOpen(false)} aria-hidden="true" />
-                <div className="sm-chrome-overflow" role="menu">
-                  {connection}
-                  <span className="sm-chrome__divider" aria-hidden="true" />
-                  {principal}
-                </div>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            {connection}
             <span className="sm-chrome__divider" aria-hidden="true" />
             {principal}
           </>
@@ -169,6 +156,13 @@ export function RailLink({ to, children, badge, sub }: { to: string; children: s
 
 export function RailBadge({ tone, count }: { tone: 'bad' | 'warn' | 'live'; count: ReactNode }) {
   return <span className={`sm-rail__badge sm-rail__badge--${tone}`}>{count}</span>
+}
+
+/** The signed-in name and Sign out, inside the rail drawer. Renders only at phone width, where the bar no longer carries them. */
+export function RailAccount({ children }: { children: ReactNode }) {
+  const phone = useNarrow(PHONE_BREAKPOINT)
+  if (!phone) return null
+  return <div className="sm-rail__account">{children}</div>
 }
 
 /** Sits below the nav links, pinned to the rail's bottom edge. */

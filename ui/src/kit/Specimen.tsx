@@ -550,6 +550,13 @@ export function Specimen() {
                 <p className="sm-rail__group">System</p>
                 <span className="sm-rail__link sm-spec-rail__link">Monitor<RailBadge tone="warn" count={3} /></span>
                 <span className="sm-rail__link sm-spec-rail__link">Settings</span>
+                <div className="sm-rail__footer">
+                  <div className="sm-rail__account">
+                    <span className="sm-small sm-muted">operator</span>
+                    <Button variant="quiet" size="compact">Sign out</Button>
+                    <span className="sm-small sm-faint">Phone width only. Wider, the bar carries these.</span>
+                  </div>
+                </div>
               </nav>
               <div className="sm-spec-shell__pane">
                 <p className="sm-meta sm-faint">Rail states</p>

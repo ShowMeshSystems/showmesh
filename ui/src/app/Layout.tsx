@@ -10,6 +10,7 @@ import {
   Notice,
   Popover,
   Rail,
+  RailAccount,
   RailFooter,
   RailGroup,
   RailLink,
@@ -871,6 +872,13 @@ export function Layout() {
   // Shared with SignedOutPlate below: one credential form, so the plate's
   // own "Sign in" CTA in `main` focuses the same field the band above does.
   const signedOutBand = useSignedOutBand()
+  // On the bar above phone width and in the rail drawer below it; the kit mounts exactly one of the two.
+  const account = (
+    <>
+      <span className="sm-small sm-muted">{principal}</span>
+      {signIn.kind === 'signed_in' && <SignOutControl />}
+    </>
+  )
 
   return (
     <WeatherDelayProvider>
@@ -880,12 +888,7 @@ export function Layout() {
         mode={<ShellMode model={model} signInKind={signIn.kind} />}
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
-        principal={
-          <>
-            <span className="sm-small sm-muted">{principal}</span>
-            {signIn.kind === 'signed_in' && <SignOutControl />}
-          </>
-        }
+        principal={account}
       />
       <ChromeProgress value={fppElapsedFraction(model.fpp[0])} label="Position of the current item" />
       {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (
@@ -929,6 +932,7 @@ export function Layout() {
           <RailLink to="/monitor">Monitor</RailLink>
           <RailLink to="/settings">Settings</RailLink>
           <RailFooter>
+            <RailAccount>{account}</RailAccount>
             <RailBuild />
           </RailFooter>
         </Rail>
