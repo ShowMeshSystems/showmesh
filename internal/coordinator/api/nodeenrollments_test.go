@@ -41,6 +41,7 @@ const enrollTestPublicKey = "dGVzdC1wdWJsaWMta2V5LXRlc3QtcHVibGljLWtleSE="
 
 type enrollHarness struct {
 	api       *API
+	deps      Dependencies
 	st        *store.Store
 	ids       identity.Service
 	clock     *movableClock
@@ -81,7 +82,7 @@ func newEnrollHarness(t *testing.T, cfg enrollment.Config, brokerDir string) *en
 	}
 	deps.NodeEnrollment = enrollment.NewService(st, svc, enrollment.NewBrokerFiles(brokerDir), cfg)
 	api := New(deps, Options{Clock: clock.now, Logger: testLogger()})
-	return &enrollHarness{api: api, st: st, ids: svc, clock: clock, admin: map[string]string{"Authorization": "Bearer " + token}, brokerDir: brokerDir}
+	return &enrollHarness{api: api, deps: deps, st: st, ids: svc, clock: clock, admin: map[string]string{"Authorization": "Bearer " + token}, brokerDir: brokerDir}
 }
 
 func (h *enrollHarness) do(t *testing.T, method, target, body string, headers map[string]string, host string) (*http.Response, []byte) {
@@ -369,6 +370,29 @@ func TestNodeRoleTokenCanRegisterFPPConnectUploadAndCannotWriteConfig(t *testing
 	}
 	if resp, body := h.do(t, http.MethodPost, "/api/v1/node-enrollments", `{"nodeId":"x1"}`, node, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("mint with the node token: status = %d, want 403; body %s", resp.StatusCode, body)
+	}
+}
+
+func TestNodeRoleTokenReadsWhenReadsAreClosedAndNothingPrivileged(t *testing.T) {
+	h := newEnrollHarness(t, enrollment.Config{}, newBrokerConfigDir(t, ""))
+	minted, _ := h.mint(t, `{"nodeId":"render-01"}`, http.StatusCreated)
+	_, raw := h.redeem(t, minted.Code)
+	node := map[string]string{"Authorization": "Bearer " + decodeRedeemed(t, raw).APIToken}
+	closed := New(h.deps, Options{CloseReads: true, Clock: h.clock.now, Logger: testLogger()})
+
+	get := func(headers map[string]string) int {
+		resp, _ := doRawRequest(t, closed.Handler, newJSONRequest(t, http.MethodGet, "/api/v1/nodes", "", headers))
+		return resp.StatusCode
+	}
+	if got := get(nil); got != http.StatusUnauthorized {
+		t.Fatalf("read with no credential and reads closed: status = %d, want 401", got)
+	}
+	if got := get(node); got != http.StatusOK {
+		t.Fatalf("read with the node token and reads closed: status = %d, want 200", got)
+	}
+	resp, body := doRawRequest(t, closed.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/principals", `{"name":"x","kind":"machine","role":"admin"}`, node))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("principal create with the node token: status = %d, want 403; body %s", resp.StatusCode, body)
 	}
 }
 
