@@ -2095,6 +2095,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/release.settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The newest-release check settings
+         * @description Requires `config:write`. Whether the coordinator asks GitHub for the newest release, and how often. Never `404`s: when nothing has been written, the payload is what the coordinator runs with, reported with `revision` `0` and `source` `"default"`.
+         */
+        get: operations["getReleaseSettingsConfig"];
+        /**
+         * Change the newest-release check settings
+         * @description Requires `config:write` (admin only). A partial update: a field left out keeps its stored value, and a `null` or unknown field is refused with `400`. `checkIntervalSeconds` under 300 is refused with `400`. On success, appends a new immutable revision and activates it in the same transaction as its audit log entry (ADR-024 decision 11), and the running check follows at once with no restart. Refused with `409` while `SHOWMESH_RELEASE_CHECK` or `SHOWMESH_RELEASE_CHECK_INTERVAL` is still set in the coordinator's environment (ADR-039 decision 4). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         */
+        put: operations["putReleaseSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/show.emergencystop": {
         parameters: {
             query?: never;
@@ -5488,6 +5514,31 @@ export interface components {
             kind: string;
             revision: number;
             payload: components["schemas"]["ConfigEmergencyStopPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description The release.settings payload as a response carries it. */
+        ConfigReleaseSettingsPayload: {
+            /** @description Whether the coordinator asks GitHub for the newest release. */
+            enabled: boolean;
+            /** @description How often it asks, in seconds. At least 300. */
+            checkIntervalSeconds: number;
+        };
+        /** @description The body PUT /config/release.settings accepts. Each field is optional: one left out keeps its stored value (ADR-039 decision 5). A field that is present must not be `null`. */
+        ConfigReleaseSettingsPutPayload: {
+            enabled?: boolean;
+            checkIntervalSeconds?: number;
+        };
+        /** @description The body of GET and PUT /config/release.settings. `revision` `0` with `source` `"default"` means nothing has been written and the payload is what the coordinator runs with. */
+        ReleaseSettingsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigReleaseSettingsPayload"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -12656,6 +12707,76 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getReleaseSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseSettingsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putReleaseSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigReleaseSettingsPutPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseSettingsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -1,27 +1,28 @@
 import { useEffect, useState } from 'react'
-import { getSystemVersions, type SystemComponentVersion, type SystemRelease, type SystemVersionsResponse } from '../api'
-import { CopyButton, DefinitionStrip, Notice, RuledStrip, Section, StatusPair, Table, TableWrap, type Definition } from '../kit'
-import { describeApiError } from '../domain/session'
+import {
+  getReleaseSettingsConfig,
+  putReleaseSettingsConfig,
+  refreshSystemVersions,
+  type ReleaseSettingsConfigResponse,
+  type SystemComponentVersion,
+  type SystemRelease,
+  type SystemVersionsResponse,
+} from '../api'
+import { Button, ButtonRow, Choice, CopyButton, DefinitionStrip, Input, Notice, RuledStrip, Section, StatusPair, Table, TableWrap, type Definition } from '../kit'
+import { useModelContext } from '../app/ModelContext'
+import { describeApiError, evaluateScope } from '../domain/session'
+import { guardedSave } from '../domain/save'
 import { formatDateClock } from '../domain/time'
+import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
 
 type Load = { kind: 'loading' } | { kind: 'loaded'; response: SystemVersionsResponse } | { kind: 'failed'; reason: string }
 
+/** The store keeps system versions current, so this block follows it and never fetches on its own. */
 function useSystemVersions(): Load {
-  const [state, setState] = useState<Load>({ kind: 'loading' })
-  useEffect(() => {
-    let cancelled = false
-    getSystemVersions()
-      .then((response) => {
-        if (!cancelled) setState({ kind: 'loaded', response })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  return state
+  const model = useModelContext()
+  if (model.systemVersions !== null) return { kind: 'loaded', response: model.systemVersions }
+  if (model.systemVersionsFailure !== null) return { kind: 'failed', reason: describeApiError(model.systemVersionsFailure.error) }
+  return { kind: 'loading' }
 }
 
 function ComponentRow({ kind, component }: { kind: string; component: SystemComponentVersion }) {
@@ -112,11 +113,6 @@ function VersionsBody({ response }: { response: SystemVersionsResponse }) {
   )
 }
 
-function intervalText(seconds: number): string {
-  if (seconds % 3600 === 0) return seconds === 3600 ? 'Every hour' : `Every ${seconds / 3600} hours`
-  return `Every ${Math.round(seconds / 60)} minutes`
-}
-
 /** The release check's last result, as one sentence. */
 function releaseResult(release: SystemRelease): string {
   if (!release.checkEnabled) return 'The release check is turned off.'
@@ -124,9 +120,75 @@ function releaseResult(release: SystemRelease): string {
   return release.available ? `Release ${release.tag} is available.` : `${release.tag} is the newest release. Nothing to install.`
 }
 
-/** Settings: the release check's setting and its last result. The setting is read-only here. */
+const MIN_INTERVAL_MINUTES = 5
+
+type SettingsLoad = { kind: 'loading' } | { kind: 'loaded'; response: ReleaseSettingsConfigResponse } | { kind: 'failed'; reason: string }
+
+/** Settings: the release check's editable setting and its last result. */
 export function SettingsReleaseCheck() {
-  const load = useSystemVersions()
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const versions = useSystemVersions()
+  const [attempt, setAttempt] = useState(0)
+  const [load, setLoad] = useState<SettingsLoad>({ kind: 'loading' })
+  const [enabled, setEnabled] = useState(true)
+  const [minutes, setMinutes] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [stale, setStale] = useState<StaleWrite | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoad({ kind: 'loading' })
+    getReleaseSettingsConfig()
+      .then((response) => {
+        if (cancelled) return
+        setLoad({ kind: 'loaded', response })
+        setEnabled(response.payload.enabled)
+        setMinutes(String(response.payload.checkIntervalSeconds / 60))
+        setDirty(false)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoad({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
+
+  const save = async () => {
+    if (load.kind !== 'loaded') return
+    const interval = Number(minutes)
+    if (!Number.isFinite(interval) || interval < MIN_INTERVAL_MINUTES) {
+      setError(`The check interval is too short. Set it to ${MIN_INTERVAL_MINUTES} minutes or more.`)
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setStale(null)
+    try {
+      const loaded = load.response
+      const outcome = await guardedSave({
+        loaded,
+        read: getReleaseSettingsConfig,
+        write: () => putReleaseSettingsConfig({ enabled, checkIntervalSeconds: Math.round(interval * 60) }, loaded.revision),
+      })
+      if (outcome.kind === 'saved') {
+        setAttempt((n) => n + 1)
+        refreshSystemVersions()
+      } else if (outcome.kind === 'stale') {
+        setStale(outcome)
+      } else {
+        setError(outcome.reason)
+      }
+    } catch (err: unknown) {
+      setError(describeApiError(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <Section
       id="st-release-check"
@@ -134,32 +196,70 @@ export function SettingsReleaseCheck() {
       detail="The coordinator asks GitHub for the newest release. It installs nothing."
     >
       {load.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the release check." />
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the release check setting." />
       ) : load.kind === 'failed' ? (
         <RuledStrip absence="failed" label="Read failed" fact={load.reason} />
       ) : (
-        <ReleaseCheckBody release={load.response.release} />
+        <>
+          <Choice
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => {
+              setEnabled(e.target.checked)
+              setDirty(true)
+            }}
+            label="Check GitHub for a newer release"
+          />
+          <div className="sm-grid sm-form-column sm-stack-3">
+            <label className="sm-field">
+              <span className="sm-field__label">Minutes between checks</span>
+              <Input
+                type="number"
+                min={MIN_INTERVAL_MINUTES}
+                value={minutes}
+                onChange={(e) => {
+                  setMinutes(e.target.value)
+                  setDirty(true)
+                }}
+              />
+            </label>
+          </div>
+          <ButtonRow>
+            <Button
+              variant="primary"
+              disabled={!dirty || saving || !gate.allowed}
+              title={gate.allowed ? undefined : gate.reason}
+              onClick={() => void save()}
+            >
+              {saving ? 'Saving…' : 'Save release check'}
+            </Button>
+          </ButtonRow>
+        </>
       )}
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
+      {error !== null && <RuledStrip absence="failed" label="Save failed" fact={error} />}
+      {versions.kind === 'loaded' && <ReleaseCheckResult release={versions.response.release} />}
+      {versions.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={versions.reason} />}
     </Section>
   )
 }
 
-function ReleaseCheckBody({ release }: { release: SystemRelease }) {
-  const items: Definition[] = [
-    { term: 'Check', value: release.checkEnabled ? 'On' : 'Off' },
-    { term: 'Interval', value: intervalText(release.checkIntervalSeconds) },
-    { term: 'Last answer', value: formatDateClock(release.checkedAt) ?? 'None yet' },
-  ]
+function ReleaseCheckResult({ release }: { release: SystemRelease }) {
+  const items: Definition[] = [{ term: 'Last answer', value: formatDateClock(release.checkedAt) ?? 'None yet' }]
   return (
     <>
       <DefinitionStrip items={items} />
       <p>{releaseResult(release)}</p>
       {release.tag !== null && release.problem !== null && <p className="sm-small sm-muted">{release.problem}</p>}
       {release.available && <InstallCommand release={release} />}
-      <p className="sm-small sm-muted">
-        Change it with <span className="sm-data">SHOWMESH_RELEASE_CHECK</span> and{' '}
-        <span className="sm-data">SHOWMESH_RELEASE_CHECK_INTERVAL</span> on the coordinator, then restart it.
-      </p>
     </>
   )
 }

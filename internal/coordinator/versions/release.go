@@ -40,6 +40,15 @@ type Fetcher interface {
 // ErrNoRelease means the repository answered and has no published release.
 var ErrNoRelease = errors.New("versions: no published release")
 
+// ErrRefused means the release host answered and refused the request, as GitHub does past its rate limit.
+var ErrRefused = errors.New("versions: release host refused the request")
+
+// Settings is whether and how often the check runs.
+type Settings struct {
+	Enabled  bool
+	Interval time.Duration
+}
+
 // Status is the cached release check answer a request reads.
 type Status struct {
 	Enabled  bool
@@ -53,25 +62,44 @@ type Status struct {
 
 // Checker runs the release check on a timer and keeps the last answer.
 type Checker struct {
-	fetch    Fetcher
-	interval time.Duration
-	now      func() time.Time
-	logger   *slog.Logger
-	publish  func(Status)
+	fetch   Fetcher
+	now     func() time.Time
+	logger  *slog.Logger
+	publish func(Status)
+	changed chan struct{}
 
-	mu     sync.Mutex
-	status Status
+	mu      sync.Mutex
+	status  Status
+	lastErr error
 }
 
-// NewChecker builds a Checker. A nil fetch or enabled false turns the check off.
+// NewChecker builds a Checker. A nil fetch turns the check off whatever the settings say.
 // publish, when set, receives the status after every check.
-func NewChecker(fetch Fetcher, enabled bool, interval time.Duration, now func() time.Time, logger *slog.Logger, publish func(Status)) *Checker {
-	if interval <= 0 {
-		interval = DefaultCheckInterval
+func NewChecker(fetch Fetcher, settings Settings, now func() time.Time, logger *slog.Logger, publish func(Status)) *Checker {
+	c := &Checker{fetch: fetch, now: now, logger: logger, publish: publish, changed: make(chan struct{}, 1)}
+	c.status.Enabled, c.status.Interval = c.effective(settings)
+	return c
+}
+
+func (c *Checker) effective(s Settings) (bool, time.Duration) {
+	if s.Interval <= 0 {
+		s.Interval = DefaultCheckInterval
 	}
-	return &Checker{
-		fetch: fetch, interval: interval, now: now, logger: logger, publish: publish,
-		status: Status{Enabled: enabled && fetch != nil, Interval: interval},
+	return s.Enabled && c.fetch != nil, s.Interval
+}
+
+// SetSettings applies new settings to the running checker: the timer restarts
+// on the new interval, and a check that was off runs as soon as it is turned on.
+func (c *Checker) SetSettings(s Settings) {
+	c.mu.Lock()
+	c.status.Enabled, c.status.Interval = c.effective(s)
+	if c.lastErr != nil {
+		c.status.Problem = problemText(c.lastErr, c.status.Interval)
+	}
+	c.mu.Unlock()
+	select {
+	case c.changed <- struct{}{}:
+	default:
 	}
 }
 
@@ -85,22 +113,37 @@ func (c *Checker) Status() Status {
 	return c.status
 }
 
-// Run checks once at start and then every interval until ctx ends.
+// Run checks when the check is on, then every interval, until ctx ends.
+// It follows SetSettings without a restart.
 func (c *Checker) Run(ctx context.Context) {
-	if !c.Status().Enabled {
-		if c.publish != nil {
-			c.publish(c.Status())
-		}
-		return
-	}
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
+	wasEnabled := false
 	for {
-		c.CheckOnce(ctx)
+		s := c.Status()
+		switch {
+		case s.Enabled && !wasEnabled:
+			c.CheckOnce(ctx)
+		case !s.Enabled && c.publish != nil:
+			c.publish(s)
+		}
+		wasEnabled = s.Enabled
+
+		var tick <-chan time.Time
+		var timer *time.Timer
+		if s.Enabled {
+			timer = time.NewTimer(s.Interval)
+			tick = timer.C
+		}
 		select {
 		case <-ctx.Done():
+		case <-tick:
+			c.CheckOnce(ctx)
+		case <-c.changed:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
 		}
 	}
 }
@@ -112,8 +155,9 @@ func (c *Checker) CheckOnce(ctx context.Context) {
 		return
 	}
 	c.mu.Lock()
+	c.lastErr = err
 	if err != nil {
-		c.status.Problem = problemText(err)
+		c.status.Problem = problemText(err, c.status.Interval)
 	} else {
 		c.status.Release, c.status.CheckedAt, c.status.Problem = &rel, c.now(), ""
 	}
@@ -127,11 +171,26 @@ func (c *Checker) CheckOnce(ctx context.Context) {
 	}
 }
 
-func problemText(err error) string {
-	if errors.Is(err, ErrNoRelease) {
+func problemText(err error, interval time.Duration) string {
+	switch {
+	case errors.Is(err, ErrNoRelease):
 		return "GitHub lists no published ShowMesh release yet."
+	case errors.Is(err, ErrRefused):
+		return "GitHub refused the request. The coordinator tries again in " + intervalText(interval) + "."
 	}
 	return "GitHub could not be reached. The coordinator will try again."
+}
+
+// intervalText words an interval as whole hours when it is one, and minutes otherwise.
+func intervalText(d time.Duration) string {
+	unit, n := "minute", int(d.Round(time.Minute)/time.Minute)
+	if d >= time.Hour && d%time.Hour == 0 {
+		unit, n = "hour", int(d/time.Hour)
+	}
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // Observations renders a status as the three coordinator.release.* signals.
@@ -175,15 +234,17 @@ type GitHubFetcher struct {
 	UserAgent string
 }
 
-// NewGitHubFetcher builds the fetcher the coordinator runs with.
+// NewGitHubFetcher builds the fetcher the coordinator runs with. It lists
+// releases because GitHub's "latest" route leaves out every prerelease.
 func NewGitHubFetcher(userAgent string) *GitHubFetcher {
 	return &GitHubFetcher{
 		Client:    &http.Client{Timeout: 15 * time.Second},
-		URL:       "https://api.github.com/repos/" + Repository + "/releases/latest",
+		URL:       "https://api.github.com/repos/" + Repository + "/releases?per_page=10",
 		UserAgent: userAgent,
 	}
 }
 
+// LatestRelease returns the listed release with the highest version, prereleases included and drafts left out.
 func (f *GitHubFetcher) LatestRelease(ctx context.Context) (Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
 	if err != nil {
@@ -196,21 +257,36 @@ func (f *GitHubFetcher) LatestRelease(ctx context.Context) (Release, error) {
 		return Release{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNotFound {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
 		return Release{}, ErrNoRelease
-	}
-	if resp.StatusCode != http.StatusOK {
+	case http.StatusForbidden, http.StatusTooManyRequests:
+		return Release{}, fmt.Errorf("%w: HTTP %d", ErrRefused, resp.StatusCode)
+	default:
 		return Release{}, fmt.Errorf("versions: release host answered HTTP %d", resp.StatusCode)
 	}
-	var body struct {
+	var body []struct {
 		TagName     string    `json:"tag_name"`
 		PublishedAt time.Time `json:"published_at"`
+		Draft       bool      `json:"draft"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return Release{}, fmt.Errorf("versions: decode release: %w", err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&body); err != nil {
+		return Release{}, fmt.Errorf("versions: decode releases: %w", err)
 	}
-	if body.TagName == "" {
+	var newest Release
+	var newestVersion semver
+	for _, r := range body {
+		v, ok := parse(r.TagName)
+		if r.Draft || !ok {
+			continue
+		}
+		if newest.Tag == "" || compare(v, newestVersion) > 0 {
+			newest, newestVersion = Release{Tag: r.TagName, PublishedAt: r.PublishedAt}, v
+		}
+	}
+	if newest.Tag == "" {
 		return Release{}, ErrNoRelease
 	}
-	return Release{Tag: body.TagName, PublishedAt: body.PublishedAt}, nil
+	return newest, nil
 }

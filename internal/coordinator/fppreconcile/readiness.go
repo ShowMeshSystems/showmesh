@@ -606,9 +606,9 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
-	// Condition 17: one warning per node on a version the coordinator's
-	// compatibility rule does not accept. Never a failure.
-	warnings, err := versionMismatchReadiness(ctx, st)
+	// Condition 17: one warning per node this playlist uses that runs a version
+	// the coordinator's compatibility rule does not accept. Never a failure.
+	warnings, err := versionMismatchReadiness(ctx, st, p)
 	if err != nil {
 		return Report{}, err
 	}
@@ -619,8 +619,21 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	return report, nil
 }
 
-// versionMismatchReadiness returns [ReadinessVersionMismatch]'s warnings, in node id order.
-func versionMismatchReadiness(ctx context.Context, st *store.Store) ([]string, error) {
+// versionMismatchReadiness returns [ReadinessVersionMismatch]'s warnings, in
+// node id order, for the nodes one of p's cues has an output on. Like the
+// other catalog conditions it reports nothing unless p's show is the active one.
+func versionMismatchReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) ([]string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return nil, nil
+	}
+	playlistCues := make(map[string]bool, len(p.Entries))
+	for _, e := range p.Entries {
+		playlistCues[e.Cue] = true
+	}
 	nodes, err := st.ListNodes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fppreconcile: list nodes: %w", err)
@@ -631,8 +644,20 @@ func versionMismatchReadiness(ctx context.Context, st *store.Store) ([]string, e
 		if n.Hello == nil {
 			continue
 		}
-		if w := versions.NodeWarning(n.NodeID, n.Hello.AgentVersion, version.Version); w != "" {
-			warnings = append(warnings, w)
+		w := versions.NodeWarning(n.NodeID, n.Hello.AgentVersion, version.Version)
+		if w == "" {
+			continue
+		}
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return nil, fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		for _, e := range catalog.Entries {
+			o := e.Outputs
+			if playlistCues[e.CueID] && (o.Render != nil || o.Audio != nil || o.LTC != nil || o.Announcement != nil) {
+				warnings = append(warnings, w)
+				break
+			}
 		}
 	}
 	return warnings, nil

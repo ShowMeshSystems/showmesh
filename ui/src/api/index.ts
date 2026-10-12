@@ -324,6 +324,8 @@ export type {
   SystemVersionsResponse,
   SystemComponentVersion,
   SystemRelease,
+  ReleaseSettingsConfigResponse,
+  ConfigReleaseSettingsPutPayload,
 } from './domain'
 export {
   useModel,
@@ -351,6 +353,9 @@ export {
   listFallbackPrograms,
   getFallbackProgram,
   getSystemVersions,
+  refreshSystemVersions,
+  getReleaseSettingsConfig,
+  putReleaseSettingsConfig,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

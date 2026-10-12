@@ -102,6 +102,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdToken(rest, stdout, stderr, clock)
 	case "system":
 		return cmdSystem(rest, stdout, stderr, clock)
+	case "release":
+		return cmdRelease(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -512,6 +514,8 @@ Commands:
                            revoke an API token (write; refused 409 if this is the last
                            credential able to reach principal:write, ADR-039)
   system versions          every component's version, a warning per mismatch, and the newest release
+  release settings get     show the newest-release check settings: on or off, and how often
+  release settings set     change them (write); only the flags passed are changed
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

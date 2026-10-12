@@ -10,9 +10,11 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/version"
 )
 
-// ReleaseStatusReader returns the cached newest-release answer without waiting on the network.
-type ReleaseStatusReader interface {
+// ReleaseChecker returns the cached newest-release answer without waiting on
+// the network, and takes new settings for the running check.
+type ReleaseChecker interface {
 	Status() versions.Status
+	SetSettings(versions.Settings)
 }
 
 const (

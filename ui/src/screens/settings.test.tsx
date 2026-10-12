@@ -55,7 +55,7 @@ vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
   return {
     ...actual,
-    getSystemVersions: () => new Promise(() => {}),
+    getReleaseSettingsConfig: () => new Promise(() => {}),
     getFPPEndpointsConfig: (...args: never[]) => stubs.getFPPEndpointsConfig(...args),
     putFPPEndpointsConfig: (...args: never[]) => stubs.putFPPEndpointsConfig(...args),
     getFPPEndpointsConfigRevisions: (...args: never[]) => stubs.getFPPEndpointsConfigRevisions(...args),

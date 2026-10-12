@@ -64,10 +64,6 @@ var deploymentPostureEnvVars = map[string]string{
 		"enrolled node, set by the installer beside that broker's address",
 	"SHOWMESH_NODE_MQTT_PASSWORD": "ADR-055 decision 8: the shared login an external broker hands every " +
 		"enrolled node, set by the installer beside that broker's address",
-	"SHOWMESH_RELEASE_CHECK": "whether this host may reach GitHub to ask for the newest release is a property " +
-		"of the host's network, decided when the coordinator is stood up; defaults on and never blocks a request",
-	"SHOWMESH_RELEASE_CHECK_INTERVAL": "how often that same outbound request is made; the checker's timer is " +
-		"built once at startup, defaults to six hours",
 }
 
 // tuningKnobEnvVars is a third group: values explicitly documented in
@@ -135,6 +131,8 @@ var retiredEnvVars = map[string]string{
 	"SHOWMESH_ASSET_CONTENT_BASE_URL":   "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_SYNC_INTERVAL":      "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_INVENTORY_INTERVAL": "Track G seam G-4's migration to the assets.settings store-backed kind",
+	"SHOWMESH_RELEASE_CHECK":            "migrated to the release.settings store-backed kind",
+	"SHOWMESH_RELEASE_CHECK_INTERVAL":   "migrated to the release.settings store-backed kind",
 }
 
 // retiredRefusesToStartEnvVars is the narrowest group of all: a variable

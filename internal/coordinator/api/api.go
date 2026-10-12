@@ -87,8 +87,12 @@ type Dependencies struct {
 	// *StatusStore — so no withDefaults() entry is needed.
 	FPPConnectStatus *fppconnectpush.StatusStore
 
-	// Releases is the newest-release check's cached answer. Nil reads as turned off.
-	Releases ReleaseStatusReader
+	// Releases is the newest-release check. Nil reads as turned off.
+	Releases ReleaseChecker
+	// ReleaseSettingsEnvVarsSet refuses release.settings writes while a retired
+	// variable is still set; ReleaseSettingsMigrationDeferred says its migration could not be stored.
+	ReleaseSettingsEnvVarsSet        bool
+	ReleaseSettingsMigrationDeferred bool
 
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
@@ -2123,6 +2127,9 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/assets.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/assets.settings", h.writeGuard(&scopeConfigWrite, h.handlePutAssetsSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/assets.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfigRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/release.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/release.settings", h.writeGuard(&scopeConfigWrite, h.handlePutReleaseSettingsConfig))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

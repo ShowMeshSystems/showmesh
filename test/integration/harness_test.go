@@ -1019,7 +1019,8 @@ func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordi
 		"SHOWMESH_MQTT_PASSWORD=" + mqttPassword,
 		"SHOWMESH_DATA_DIR=" + cfg.dataDir,
 		"SHOWMESH_LOG_LEVEL=debug",
-		// No integration test may reach GitHub.
+		// No integration test may reach GitHub. The coordinator migrates this
+		// retired variable into release.settings on first start, so the check is stored off.
 		"SHOWMESH_RELEASE_CHECK=false",
 	}
 	// Step 3 review finding 4.12's own tests exposed this gap while being

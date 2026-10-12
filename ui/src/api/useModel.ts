@@ -129,6 +129,8 @@ type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinition
 // host's full signed-program read.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
 type SchemaSystemVersionsResponse = components['schemas']['SystemVersionsResponse']
+type SchemaReleaseSettingsConfigResponse = components['schemas']['ReleaseSettingsConfigResponse']
+type SchemaConfigReleaseSettingsPutPayload = components['schemas']['ConfigReleaseSettingsPutPayload']
 type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
@@ -290,6 +292,22 @@ export function listFallbackPrograms(): Promise<SchemaFallbackProgramListRespons
 
 export function getSystemVersions(): Promise<SchemaSystemVersionsResponse> {
   return store.getSystemVersions()
+}
+
+export function getReleaseSettingsConfig(): Promise<SchemaReleaseSettingsConfigResponse> {
+  return store.getReleaseSettingsConfig()
+}
+
+export function putReleaseSettingsConfig(
+  payload: SchemaConfigReleaseSettingsPutPayload,
+  ifMatchRevision?: number,
+): Promise<SchemaReleaseSettingsConfigResponse> {
+  return store.putReleaseSettingsConfig(payload, ifMatchRevision)
+}
+
+/** Refetches the model's system versions now, for a caller that just changed what they report. */
+export function refreshSystemVersions(): void {
+  store.refreshSystemVersions()
 }
 
 export function getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {

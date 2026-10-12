@@ -38,7 +38,6 @@ vi.mock('../api', async () => {
     getShowSurface: (...args: never[]) => nodeStubs.getShowSurface(...args),
     getNodeAssetManifest: (...args: never[]) => nodeStubs.getNodeAssetManifest(...args),
     getFPPPlaylistEntryReconciliation: (...args: never[]) => reconciliationStubs.getFPPPlaylistEntryReconciliation(...args),
-    getSystemVersions: () => new Promise(() => {}),
   }
 })
 

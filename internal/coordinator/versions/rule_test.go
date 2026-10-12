@@ -56,6 +56,13 @@ func TestNewer(t *testing.T) {
 		{"v0.2.0", "0.2.0-rc1", true},
 		{"v0.2.0-rc1", "0.2.0", false},
 		{"v0.2.0", "dev", false},
+		{"v0.2.0", "0.2.0-3-gabc1234", false},
+		{"v0.2.0", "0.2.0-3-gabc1234-dirty", false},
+		{"v0.2.0", "0.2.0-dirty", false},
+		{"v0.2.0", "0.2.0-rc.1-dirty", true},
+		{"v0.2.1", "0.2.0-3-gabc1234", true},
+		{"v0.2.0", "0.2.0-rc1-3-gabc1234", true},
+		{"v0.2.0-rc2", "0.2.0-rc1", true},
 		{"nightly", "0.2.0", false},
 	} {
 		if got := Newer(tc.release, tc.current); got != tc.want {
@@ -65,7 +72,7 @@ func TestNewer(t *testing.T) {
 }
 
 func TestInstallCommandNamesTheTaggedRelease(t *testing.T) {
-	want := "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.2.0/get-showmesh.sh | sudo bash"
+	want := "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.2.0/get-showmesh.sh | sudo bash -s -- --yes"
 	if got := InstallCommand("v0.2.0"); got != want {
 		t.Errorf("InstallCommand = %q, want %q", got, want)
 	}
@@ -81,5 +88,16 @@ func TestNodeWarningNamesBothVersionsOnlyOnAMismatch(t *testing.T) {
 	}
 	if got := NodeWarning("node-1", "", "0.2.0"); got != "" {
 		t.Errorf("a node that reported no version warned: %q", got)
+	}
+}
+
+func TestNodeWarningNamesNoInstallWhenTheCoordinatorRunsNoPublishedVersion(t *testing.T) {
+	for coordinator, want := range map[string]string{
+		"dev":              "Node node-1 runs 0.2.0. The coordinator runs dev.",
+		"0.2.0-3-gabc1234": "Node node-1 runs 0.2.0. The coordinator runs 0.2.0-3-gabc1234.",
+	} {
+		if got := NodeWarning("node-1", "0.2.0", coordinator); got != want {
+			t.Errorf("NodeWarning with coordinator %q = %q, want %q", coordinator, got, want)
+		}
 	}
 }

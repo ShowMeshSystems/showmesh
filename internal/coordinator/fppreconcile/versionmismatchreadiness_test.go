@@ -40,21 +40,32 @@ func versionReadyFixture(t *testing.T, st *store.Store) (report func() Report) {
 	}
 }
 
-func TestPlaylistReadinessWarnsOncePerMismatchedNode(t *testing.T) {
+func TestPlaylistReadinessWarnsOnlyForAMismatchedNodeThePlaylistUses(t *testing.T) {
 	st := openTestStore(t)
 	report := versionReadyFixture(t, st)
 	putNodeVersion(t, st, "node-1", "0.1.5")
-	putNodeVersion(t, st, "node-2", "0.2.0")
-	putNodeVersion(t, st, "node-3", "0.1.9")
+	// node-unused is declared and mismatched, and no cue of this playlist has an output on it.
+	declareNode(t, st, "node-unused")
+	putNodeVersion(t, st, "node-unused", "0.1.0")
 
 	r := report()
 	if !r.Ready || r.FailingCondition != "" {
 		t.Fatalf("Ready = %v, FailingCondition = %q: a version mismatch is a warning, never a failure", r.Ready, r.FailingCondition)
 	}
-	want := "Node node-1 runs 0.1.5. Install 0.2.0 on it to match the coordinator.; " +
-		"Node node-3 runs 0.1.9. Install 0.2.0 on it to match the coordinator."
-	if r.Warning != want {
+	if want := "Node node-1 runs 0.1.5. Install 0.2.0 on it to match the coordinator."; r.Warning != want {
 		t.Fatalf("Warning = %q, want %q", r.Warning, want)
+	}
+}
+
+func TestPlaylistReadinessDoesNotWarnForAShowThatIsNotActive(t *testing.T) {
+	st := openTestStore(t)
+	report := versionReadyFixture(t, st)
+	putNodeVersion(t, st, "node-1", "0.1.5")
+	putShow(t, st, "show-2", "Show Two")
+	putActiveShow(t, st, "show-2")
+
+	if r := report(); strings.Contains(r.Warning, "Node node-1 runs") {
+		t.Fatalf("Warning = %q, want no version warning for a playlist whose show is not active", r.Warning)
 	}
 }
 

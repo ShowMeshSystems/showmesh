@@ -15,7 +15,7 @@ const systemVersionsNode = `{"id":"node-a","version":"0.2.0","reason":null,"mism
 
 const systemVersionsPlugin = `{"id":"player-1","version":null,"reason":"The FPP plugin does not report its version.","mismatch":false,"warning":null}`
 
-const systemInstall = "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh | sudo bash"
+const systemInstall = "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh | sudo bash -s -- --yes"
 
 func systemVersionsBody(release string) string {
 	return `{"serverTime":"2026-10-12T18:05:00Z","coordinator":{"version":"0.2.0"},"nodes":[` + systemVersionsNode +

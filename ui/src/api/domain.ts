@@ -538,6 +538,8 @@ export type FallbackProgramListResponse = components['schemas']['FallbackProgram
 export type SystemVersionsResponse = components['schemas']['SystemVersionsResponse']
 export type SystemComponentVersion = components['schemas']['SystemComponentVersion']
 export type SystemRelease = components['schemas']['SystemRelease']
+export type ReleaseSettingsConfigResponse = components['schemas']['ReleaseSettingsConfigResponse']
+export type ConfigReleaseSettingsPutPayload = components['schemas']['ConfigReleaseSettingsPutPayload']
 export type FallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 
 /**
@@ -628,6 +630,13 @@ export interface Model {
   currentRunsReceivedAt: number | null
   /** True when the latest authoritative current-runs fetch failed. */
   currentRunsFetchFailed: boolean
+  /**
+   * The last `GET /system/versions` answer. Refetched on connect, on the
+   * store's 30 second refresh tick, and when a node reports a new agent version.
+   */
+  systemVersions: SystemVersionsResponse | null
+  /** The error from the latest system versions fetch, or null when it succeeded. */
+  systemVersionsFailure: { error: unknown } | null
   /**
    * Track D seam D-4: every configured Resolume instance, exactly as
    * `Snapshot.resolume` carries them — an empty array on a coordinator
@@ -760,6 +769,8 @@ export function initialModel(): Model {
     currentRuns: null,
     currentRunsReceivedAt: null,
     currentRunsFetchFailed: false,
+    systemVersions: null,
+    systemVersionsFailure: null,
     resolume: [],
     auditStore: null,
     nightSession: null,

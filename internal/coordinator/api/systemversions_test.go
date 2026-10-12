@@ -15,9 +15,10 @@ import (
 
 type releaseStatusFake struct{ status versions.Status }
 
-func (f releaseStatusFake) Status() versions.Status { return f.status }
+func (f releaseStatusFake) Status() versions.Status       { return f.status }
+func (f releaseStatusFake) SetSettings(versions.Settings) {}
 
-func getSystemVersions(t *testing.T, releases ReleaseStatusReader) v1.SystemVersionsResponse {
+func getSystemVersions(t *testing.T, releases ReleaseChecker) v1.SystemVersionsResponse {
 	t.Helper()
 	orig := version.Version
 	t.Cleanup(func() { version.Version = orig })
@@ -98,7 +99,7 @@ func TestSystemVersionsWithACachedReleaseAnswer(t *testing.T) {
 	if got.CheckedAt == nil || *got.CheckedAt != "2026-10-12T18:00:00Z" || got.PublishedAt == nil || *got.PublishedAt != "2026-10-10T12:00:00Z" {
 		t.Fatalf("times = %v, %v", got.CheckedAt, got.PublishedAt)
 	}
-	want := "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh | sudo bash"
+	want := "curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh | sudo bash -s -- --yes"
 	if got.InstallCommand == nil || *got.InstallCommand != want {
 		t.Fatalf("installCommand = %v, want %q", got.InstallCommand, want)
 	}

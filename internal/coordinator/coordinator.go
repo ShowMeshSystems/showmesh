@@ -698,23 +698,25 @@ func Run() int {
 		logger.Warn("node enrollment cannot hand out broker logins until this is fixed", "reason", err.Error())
 	}
 
-	// The newest-release check: its answer is cached for the API and stored as observations.
-	var releaseFetcher versions.Fetcher
-	if cfg.ReleaseCheckEnabled {
-		releaseFetcher = versions.NewGitHubFetcher("showmesh-coordinator/" + version.Version)
-	}
-	releaseChecker := versions.NewChecker(releaseFetcher, cfg.ReleaseCheckEnabled, cfg.ReleaseCheckInterval, time.Now, logger, func(s versions.Status) {
-		if err := st.ReplaceObservations(ctx, versions.Observations(s, version.Version, time.Now())); err != nil {
-			logger.Error("coordinator: failed to store release check observations", "error", err)
-			return
-		}
-		notifyHub()
-	})
+	// The newest-release check: its answer is cached for the API and stored as
+	// observations. Its settings are the stored release.settings kind (ADR-039).
+	releaseSettings, releaseSettingsMigrationDeferred := resolveReleaseSettings(ctx, st, identitySvc, cfg.ReleaseSettingsEnvVarsSet,
+		config.ReleaseSettings{Enabled: cfg.ReleaseCheckEnabled, CheckInterval: cfg.ReleaseCheckInterval}, time.Now, logger)
+	releaseChecker := versions.NewChecker(versions.NewGitHubFetcher("showmesh-coordinator/"+version.Version),
+		versions.Settings{Enabled: releaseSettings.Enabled, Interval: releaseSettings.CheckInterval}, time.Now, logger, func(s versions.Status) {
+			if err := st.ReplaceObservations(ctx, versions.Observations(s, version.Version, time.Now())); err != nil {
+				logger.Error("coordinator: failed to store release check observations", "error", err)
+				return
+			}
+			notifyHub()
+		})
 
 	apiDeps := api.Dependencies{
-		Releases:             releaseChecker,
-		NodeEnrollment:       enrollmentSvc,
-		CoordinatorPublicKey: coordinatorPublicKey,
+		Releases:                         releaseChecker,
+		ReleaseSettingsEnvVarsSet:        cfg.ReleaseSettingsEnvVarsSet,
+		ReleaseSettingsMigrationDeferred: releaseSettingsMigrationDeferred,
+		NodeEnrollment:                   enrollmentSvc,
+		CoordinatorPublicKey:             coordinatorPublicKey,
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
 		// inbound MQTT message — also feeds each node's freshly computed

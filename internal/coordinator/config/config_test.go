@@ -1203,18 +1203,48 @@ func TestConfigLogValueAssetContentBaseURLVisible(t *testing.T) {
 }
 
 func TestReleaseCheckSettingsFromEnv(t *testing.T) {
-	env := map[string]string{"SHOWMESH_RELEASE_CHECK": "false", "SHOWMESH_RELEASE_CHECK_INTERVAL": "1m"}
+	env := map[string]string{}
 	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 
 	cfg, err := LoadConfigFrom(lookup)
 	if err != nil {
 		t.Fatalf("LoadConfigFrom: %v", err)
 	}
-	if cfg.ReleaseCheckEnabled || cfg.ReleaseCheckInterval != time.Minute {
-		t.Fatalf("enabled = %v, interval = %v, want off and 1m", cfg.ReleaseCheckEnabled, cfg.ReleaseCheckInterval)
+	if cfg.ReleaseSettingsEnvVarsSet {
+		t.Fatal("ReleaseSettingsEnvVarsSet is true with neither variable set")
 	}
-	env["SHOWMESH_RELEASE_CHECK"] = "true"
+
+	env["SHOWMESH_RELEASE_CHECK"], env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "false", "10m"
+	cfg, err = LoadConfigFrom(lookup)
+	if err != nil {
+		t.Fatalf("LoadConfigFrom: %v", err)
+	}
+	if cfg.ReleaseCheckEnabled || cfg.ReleaseCheckInterval != 10*time.Minute || !cfg.ReleaseSettingsEnvVarsSet {
+		t.Fatalf("enabled = %v, interval = %v, set = %v, want off, 10m and set", cfg.ReleaseCheckEnabled, cfg.ReleaseCheckInterval, cfg.ReleaseSettingsEnvVarsSet)
+	}
+	env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "1m"
 	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at least 5m0s") {
 		t.Fatalf("LoadConfigFrom = %v, want the interval refused", err)
+	}
+}
+
+func TestReleaseSettingsPayloadRoundTripsAndRefusesAShortInterval(t *testing.T) {
+	want := ReleaseSettings{Enabled: false, CheckInterval: 15 * time.Minute}
+	raw, err := EncodeReleaseSettingsPayload(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != `{"enabled":false,"checkIntervalSeconds":900}` {
+		t.Fatalf("payload = %s", raw)
+	}
+	if got, err := DecodeReleaseSettingsPayload(raw); err != nil || got != want {
+		t.Fatalf("decoded = %+v, %v, want %+v", got, err, want)
+	}
+	if d := DefaultReleaseSettings(); !d.Enabled || d.CheckInterval != 21600*time.Second || ReleaseSettingsProblem(d) != "" {
+		t.Fatalf("default = %+v, want on, 21600 seconds and valid", d)
+	}
+	want300 := "The check interval is too short. Set it to 300 seconds or more."
+	if got := ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 299 * time.Second}); got != want300 {
+		t.Fatalf("problem = %q, want %q", got, want300)
 	}
 }
