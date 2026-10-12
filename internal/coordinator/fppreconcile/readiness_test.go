@@ -1089,3 +1089,18 @@ func TestPlaylistReadinessEmptyPlaylistIsAWarningNotAFailure(t *testing.T) {
 		t.Fatalf("Warning = %q, want it to say the playlist runs no cues", report.Warning)
 	}
 }
+
+func TestPlaylistReadinessEmptyPlaylistWarningSurvivesAnEarlyFailure(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash64("missing"), "cue-1", "mainPlaylist", 0, "", "")
+	p.Entries = []config.ShowPlaylistEntry{}
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready || !strings.Contains(report.Warning, "runs no cues") {
+		t.Fatalf("Ready = %v, Warning = %q, want a failure that still carries the empty-playlist warning", report.Ready, report.Warning)
+	}
+}

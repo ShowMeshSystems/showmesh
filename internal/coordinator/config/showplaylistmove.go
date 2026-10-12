@@ -67,8 +67,8 @@ type PlaylistMoveNewEntry struct {
 }
 
 // PlaylistMovePlan is the whole result of moving a playlist. Proposed is
-// only meaningful when at least one entry is carried over: a playlist
-// cannot be saved with no entries.
+// only meaningful when an entry is carried over or the runner is fpp, which
+// may hold no entries.
 type PlaylistMovePlan struct {
 	Entries    []PlaylistMoveEntry
 	Unassigned []PlaylistMoveNewEntry
@@ -76,7 +76,9 @@ type PlaylistMovePlan struct {
 }
 
 // CanSave reports whether Proposed would be accepted by the playlist write.
-func (p PlaylistMovePlan) CanSave() bool { return len(p.Proposed.Entries) > 0 }
+func (p PlaylistMovePlan) CanSave() bool {
+	return len(p.Proposed.Entries) > 0 || p.Proposed.Runner == ShowPlaylistRunnerFPP
+}
 
 // PlanPlaylistMove computes how current's cue assignments carry over to the
 // FPP playlist whose hash and entries are newHash and newEntries. Saved

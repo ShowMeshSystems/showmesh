@@ -383,9 +383,9 @@ func decodeShowPlaylistShowmeshAudio(top map[string]json.RawMessage, runner stri
 	return &ShowPlaylistShowmeshAudio{Repeat: repeat}, nil
 }
 
-// decodeShowPlaylistEntries decodes the required "entries" array, which
-// may be empty only for runner "fpp" (a playlist with no songs bound yet). Duplicate entry ids and duplicate (section, position) pairs are
-// both refused: the first because an entry id must be unique to be
+// decodeShowPlaylistEntries decodes the required "entries" array, which may
+// be empty only for runner "fpp" (a playlist with no songs bound yet).
+// Duplicate entry ids and duplicate (section, position) pairs are both refused: the first because an entry id must be unique to be
 // addressable, the second because two entries at the same section and
 // position derive the identical entry key (TRACK-H-H1-SPEC.md section
 // 3.1) and no runtime evidence could ever tell them apart. Two entries

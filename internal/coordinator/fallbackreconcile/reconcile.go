@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -217,7 +218,28 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 	if missingAck && s.catalogDeployer != nil {
 		s.autoDeployStaleCatalogs(ctx, s.now())
 	}
+	s.withdrawNonParticipating(ctx, hosts)
 	s.recordExecutorKeyPresence(ctx, hosts, s.now())
+}
+
+// withdrawNonParticipating removes the stored program of every host that no
+// longer runs a cue, so a fallback never fires cues the operator has unbound.
+func (s *Service) withdrawNonParticipating(ctx context.Context, participating []string) {
+	stored, err := s.st.ListFallbackPrograms(ctx)
+	if err != nil {
+		s.logger.Warn("fallback reconcile: list stored programs failed", "error", err)
+		return
+	}
+	for _, rec := range stored {
+		if slices.Contains(participating, rec.FPPInstanceUUID) {
+			continue
+		}
+		if err := s.st.DeleteFallbackProgram(ctx, rec.FPPInstanceUUID); err != nil {
+			s.logger.Warn("fallback reconcile: withdraw program failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
+			continue
+		}
+		s.logger.Info("fallback reconcile: withdrew program of a host with no cues", "fppInstanceUuid", rec.FPPInstanceUUID)
+	}
 }
 
 // ObservationSource names this package on the observations it writes. It

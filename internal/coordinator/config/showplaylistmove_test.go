@@ -177,8 +177,22 @@ func TestPlanPlaylistMoveDuplicateFilenames(t *testing.T) {
 func TestPlanPlaylistMoveAllDropped(t *testing.T) {
 	plan := planMove(movePlaylist(moveEntry("a", "ca", "mainPlaylist", 0, "A.fseq")), moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Other.fseq")})
 	wantDropped(t, plan, "a")
-	if plan.CanSave() || len(plan.Proposed.Entries) != 0 {
-		t.Fatalf("a playlist with every entry dropped must not be saveable: %+v", plan.Proposed)
+	if len(plan.Proposed.Entries) != 0 || !plan.CanSave() {
+		t.Fatalf("an fpp playlist with every entry dropped is saveable with no entries: %+v", plan.Proposed)
+	}
+	plan.Proposed.Runner = ShowPlaylistRunnerShowmeshAudio
+	if plan.CanSave() {
+		t.Fatal("a non-fpp playlist with no entries must not be saveable")
+	}
+}
+
+func TestPlanPlaylistMoveEmptyFPPPlaylist(t *testing.T) {
+	plan := planMove(movePlaylist(), moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq")})
+	if !plan.CanSave() || plan.Proposed.FPP.PlaylistHash != moveTestHash || len(plan.Proposed.Entries) != 0 {
+		t.Fatalf("an empty fpp playlist must move to the newest definition: %+v", plan.Proposed)
+	}
+	if len(plan.Unassigned) != 1 {
+		t.Fatalf("unassigned = %+v", plan.Unassigned)
 	}
 }
 
