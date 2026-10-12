@@ -26,7 +26,7 @@ import (
 func nightAudioCueTestHandlers(t *testing.T) (*handlers, *store.Store, *fakeAudioPublisher) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

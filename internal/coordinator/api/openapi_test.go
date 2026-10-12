@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,27 +61,46 @@ import (
 // worked around.
 func loadOpenAPIDocument(t *testing.T) any {
 	t.Helper()
+	openAPIDocumentJSON.once.Do(func() {
+		openAPIDocumentJSON.bytes, openAPIDocumentJSON.err = readOpenAPIDocumentAsJSON()
+	})
+	if openAPIDocumentJSON.err != nil {
+		t.Fatal(openAPIDocumentJSON.err)
+	}
+
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(openAPIDocumentJSON.bytes))
+	if err != nil {
+		t.Fatalf("decoding api/openapi.yaml for jsonschema: %v", err)
+	}
+	return doc
+}
+
+// openAPIDocumentJSON holds api/openapi.yaml re-encoded as JSON, converted
+// once per test binary. Each caller still decodes its own tree from it,
+// because [strictSchemaOverlay] mutates the tree it is given.
+var openAPIDocumentJSON struct {
+	once  sync.Once
+	bytes []byte
+	err   error
+}
+
+func readOpenAPIDocumentAsJSON() ([]byte, error) {
 	path := filepath.Join("..", "..", "..", "api", "openapi.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
 	var generic any
 	if err := yaml.Unmarshal(raw, &generic); err != nil {
-		t.Fatalf("parsing %s as YAML: %v", path, err)
+		return nil, fmt.Errorf("parsing %s as YAML: %w", path, err)
 	}
 
 	jsonBytes, err := json.Marshal(generic)
 	if err != nil {
-		t.Fatalf("re-encoding %s as JSON: %v", path, err)
+		return nil, fmt.Errorf("re-encoding %s as JSON: %w", path, err)
 	}
-
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(jsonBytes))
-	if err != nil {
-		t.Fatalf("decoding %s for jsonschema: %v", path, err)
-	}
-	return doc
+	return jsonBytes, nil
 }
 
 // newOpenAPICompiler builds a [jsonschema.Compiler] with a STRICT overlay of

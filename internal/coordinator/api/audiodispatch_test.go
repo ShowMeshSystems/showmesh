@@ -258,7 +258,7 @@ func newAudioDispatchTestSetup(t *testing.T, now func() time.Time) *audioDispatc
 	t.Helper()
 	dir := t.TempDir()
 	storeDir := filepath.Join(dir, "db")
-	st, err := store.Open(context.Background(), storeDir, nil, store.WithClock(now))
+	st, err := openTestStore(context.Background(), storeDir, nil, store.WithClock(now))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

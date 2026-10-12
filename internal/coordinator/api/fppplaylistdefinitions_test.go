@@ -35,7 +35,7 @@ type fppPlaylistDefinitionTestSetup struct {
 func newFPPPlaylistDefinitionTestSetup(t *testing.T, now func() time.Time) *fppPlaylistDefinitionTestSetup {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(now))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(now))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

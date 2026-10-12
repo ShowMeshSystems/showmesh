@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // TestSnapshotSurvivesAuditStoreEntirelyUnreachable is this PR's own rule
@@ -27,7 +26,7 @@ import (
 // closed" error, the same shape a genuinely unreachable store produces.
 func TestSnapshotSurvivesAuditStoreEntirelyUnreachable(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil)
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

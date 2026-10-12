@@ -37,7 +37,7 @@ func newTestDiscoveryDeps(t *testing.T, now func() time.Time, nodes *fakeNodeLis
 	t.Helper()
 	dir := t.TempDir()
 	storeDir = filepath.Join(dir, "db")
-	st, err := store.Open(context.Background(), storeDir, nil, store.WithClock(now))
+	st, err := openTestStore(context.Background(), storeDir, nil, store.WithClock(now))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -1198,7 +1198,7 @@ func (b *blockingNodeLister) Snapshot(context.Context, time.Time) ([]inventory.N
 // this test's 409 assertion fails (it observes 200 instead).
 func TestConcurrentDiscoveryRunsAreRefusedNotQueued(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -1285,7 +1285,7 @@ func TestLatestDiscoveryRunTiebreaksOnInsertionOrder(t *testing.T) {
 	// A clock that never advances: every run in this test shares the exact
 	// same started_at, so ONLY the tiebreaker can distinguish them.
 	frozen := fixedClock(testNow)
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(frozen))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(frozen))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
