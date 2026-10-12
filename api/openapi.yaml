@@ -769,6 +769,85 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /fpp/{instanceId}/brightness/excluded-ranges:
+    parameters:
+      - name: instanceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Same ID syntax as a node ID (contract section 7).
+    put:
+      operationId: setFPPBrightnessExcludedRanges
+      summary: Replace the channel ranges one FPP host's brightness ceiling leaves alone
+      description: >-
+        Behind `fpp:command`, like the ceiling write. Replaces the whole
+        list the resident ShowMesh plugin holds; an empty `ranges` clears
+        it. Channels in the list keep their own values under any ceiling,
+        which is what a DMX fixture's pan, tilt, gobo and speed channels
+        need. This never writes the ceiling or the transition gain.
+
+        The plugin accepting the write is never confirmation on its own:
+        `excludedRanges` is present, and `command.outcome` is `confirmed`,
+        only when the plugin's own brightness route reported the same
+        channels within the read-back window. Otherwise
+        `command.outcome` is `unconfirmed`.
+
+        A range that starts below channel 1, has no channels, ends past
+        channel 8388608 or overlaps another is refused with `400`. An
+        instance id that names no configured `fpp.endpoints` entry is
+        `404`. A write the host did not take is `502`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPBrightnessExcludedRangesRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPBrightnessExcludedRangesResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the authenticated principal does not hold `fpp:command`
+            (ADR-024 decision 4, `detail` names the missing scope), or a
+            cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          description: >-
+            The request was valid and the instance is configured, but the
+            FPP host did not take the write. `type` is
+            `https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /fpp/{instanceId}/pairing:
     parameters:
       - name: instanceId
@@ -12041,6 +12120,65 @@ components:
             the new value within the read-back window. Absent means the
             value was not read back in time, never that the write failed:
             `command.outcome` is then `unconfirmed`.
+    FPPChannelRange:
+      description: >-
+        One run of channels: a first channel, counted from 1, and how many
+        channels follow from it.
+      type: object
+      additionalProperties: false
+      required: [startChannel, channelCount]
+      properties:
+        startChannel:
+          type: integer
+          minimum: 1
+          maximum: 8388608
+        channelCount:
+          type: integer
+          minimum: 1
+          maximum: 8388608
+    FPPBrightnessExcludedRangesRequest:
+      description: >-
+        The body of PUT /fpp/{instanceId}/brightness/excluded-ranges.
+      type: object
+      additionalProperties: false
+      required: [ranges]
+      properties:
+        ranges:
+          type: array
+          description: >-
+            The whole new list. An empty list clears it. Ranges must not
+            share a channel.
+          items:
+            $ref: "#/components/schemas/FPPChannelRange"
+        requestId:
+          type: string
+          minLength: 1
+          description: >-
+            Caller-minted idempotency key, echoed on the response. Omit it
+            and the coordinator mints one. Present but empty is a `400`.
+    FPPBrightnessExcludedRangesResponse:
+      description: >-
+        The body of a successful (200) response from
+        PUT /fpp/{instanceId}/brightness/excluded-ranges: the write's own
+        result, plus the list the plugin read back.
+      type: object
+      required: [serverTime, command]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/FPPCommandResult"
+        excludedRanges:
+          type: array
+          description: >-
+            Present only when the plugin's own brightness route reported
+            the same channels within the read-back window; an empty list
+            then means the plugin excludes nothing. Absent means the list
+            was not read back in time, never that the write failed:
+            `command.outcome` is then `unconfirmed`.
+          items:
+            $ref: "#/components/schemas/FPPChannelRange"
     FPPPairingRequest:
       description: >-
         The body of POST /fpp/{instanceId}/pairing: the code the FPP
@@ -17736,6 +17874,7 @@ components:
             - https://showmesh.dev/problems/fpp-definition-republish-failed
             - https://showmesh.dev/problems/fpp-pairing-not-waiting
             - https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed
+            - https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed
             - https://showmesh.dev/problems/show-config-body-invalid
             - https://showmesh.dev/problems/show-config-field-required
             - https://showmesh.dev/problems/show-config-field-null

@@ -1,11 +1,11 @@
 /**
  * Pure derivations for the FPP instance detail's Pairing and Brightness
  * sections (CONTRACT.md sections 1 and 3): the pairing state's plain
- * sentence, pairing-code normalization, and the four brightness signals as
+ * sentence, pairing-code normalization, and the brightness signals as
  * kit-ready facts. No React, no fetching, so each is testable without a
  * coordinator.
  */
-import type { Evidence, FPPPairingStateResponse } from '../api'
+import type { Evidence, FPPChannelRange, FPPPairingStateResponse } from '../api'
 import type { Absence } from '../kit'
 import { EVIDENCE_ABSENCE, EVIDENCE_LABEL } from '../domain/evidence'
 import { formatClock } from '../domain/time'
@@ -32,16 +32,40 @@ export type BrightnessReadout = {
   transitionGain: SignalFact<number>
   effectiveOutput: SignalFact<number>
   fadeActive: SignalFact<boolean>
+  excludedRanges: SignalFact<string>
 }
 
-/** The four `fpp.brightness.*` signals (contract section 3), each a kit-ready fact. */
+/** The `fpp.brightness.*` signals (contract section 3), each a kit-ready fact. */
 export function brightnessReadout(observations: readonly Evidence[]): BrightnessReadout {
   return {
     ceiling: fact<number>(findSignal(observations, 'fpp.brightness.ceiling'), (v) => Number(v)),
     transitionGain: fact<number>(findSignal(observations, 'fpp.brightness.transition_gain'), (v) => Number(v)),
     effectiveOutput: fact<number>(findSignal(observations, 'fpp.brightness.effective_output'), (v) => Number(v)),
     fadeActive: fact<boolean>(findSignal(observations, 'fpp.brightness.fade_active'), (v) => Boolean(v)),
+    excludedRanges: fact<string>(findSignal(observations, 'fpp.brightness.excluded_ranges'), (v) => String(v)),
   }
+}
+
+export const CHANNEL_RANGES_FORM_ERROR = 'That is not a list of ranges. Enter start-count pairs, like 1-512, 1025-512.'
+
+/** Reads "start-count, start-count"; empty text is an empty list. Returns null when the text is not that form. */
+export function parseChannelRanges(text: string): FPPChannelRange[] | null {
+  const trimmed = text.trim()
+  if (trimmed === '') return []
+  const ranges: FPPChannelRange[] = []
+  for (const part of trimmed.split(',')) {
+    const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(part)
+    if (match === null) return null
+    const [startChannel, channelCount] = [Number(match[1]), Number(match[2])]
+    if (!Number.isSafeInteger(startChannel) || !Number.isSafeInteger(channelCount)) return null
+    ranges.push({ startChannel, channelCount })
+  }
+  return ranges
+}
+
+/** The inverse of parseChannelRanges. */
+export function formatChannelRanges(ranges: readonly FPPChannelRange[]): string {
+  return ranges.map((r) => `${r.startChannel}-${r.channelCount}`).join(', ')
 }
 
 /**

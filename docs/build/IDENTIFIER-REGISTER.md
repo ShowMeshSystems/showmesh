@@ -660,6 +660,7 @@ register entry comes from the code and never from a plan.
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 | `fpp.pair` | shipped | FPP plugin pairing: the dispatch entry when an operator opens a pairing, and the outcome entry when the plugin claims its token |
 | `fpp.set_brightness_ceiling` | shipped | the operator write of one FPP host's brightness ceiling, dispatching the plugin's own FPP command |
+| `fpp.set_brightness_excluded_ranges` | shipped | an operator changed the channel ranges the brightness ceiling leaves alone on one FPP player |
 | `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
 | `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
 | `node.enrollment.redeem` | reserved | ADR-055: a node redeemed an enrollment code and received its credentials, attributed to the principal who minted the code |
@@ -761,7 +762,7 @@ and the night controller's cue tolerance is finer than a second.
 |---|---|---|
 | `fpp.position.elapsed.ms` | reserved | Track F (night-session cue timing) |
 
-**Four `fpp.brightness.*` signals**, written from the code that emits them
+**Five `fpp.brightness.*` signals**, written from the code that emits them
 (`internal/coordinator/collector/fppbrightness`). The resource is the FPP
 endpoint id, not the plugin, because a host serves one brightness state.
 
@@ -771,6 +772,7 @@ endpoint id, not the plugin, because a host serves one brightness state.
 | `fpp.brightness.transition_gain` | shipped | plugin brightness readout |
 | `fpp.brightness.effective_output` | shipped | plugin brightness readout |
 | `fpp.brightness.fade_active` | shipped | plugin brightness readout |
+| `fpp.brightness.excluded_ranges` | shipped | the channel ranges the plugin leaves untouched under any ceiling, as reported by the plugin |
 
 Track F seam F3 built against the existing whole-second signal rather than
 minting this one, and **reported the need instead of inventing the name**,

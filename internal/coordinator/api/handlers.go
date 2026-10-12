@@ -159,6 +159,10 @@ type handlers struct {
 	// production; only a test ever sets it.
 	fppCeilingWriter fppBrightnessCeilingWriter
 
+	// fppExcludedRangesWriter substitutes the excluded ranges write. Nil
+	// in production.
+	fppExcludedRangesWriter fppBrightnessExcludedRangesWriter
+
 	// fppPairings holds open and completed FPP plugin pairings for this
 	// process's lifetime, and fppPairingClaims bounds how often one
 	// client address may try to finish one. Both are in-memory and

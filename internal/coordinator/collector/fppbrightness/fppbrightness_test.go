@@ -219,3 +219,33 @@ func TestAnAllZeroDocumentWithNoTimestampIsAbsentNotAZeroCeiling(t *testing.T) {
 		}
 	}
 }
+
+// TestExcludedRangesReadsAsTheListThePluginReports.
+func TestExcludedRangesReadsAsTheListThePluginReports(t *testing.T) {
+	c := newCollector(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"schemaVersion":1,"ceiling":60,"updatedAtMillis":1,"excludedRanges":[{"startChannel":1,"channelCount":512},{"startChannel":1025,"channelCount":512}]}`))
+	})
+	got := bySignal(mustPoll(t, c))[SignalExcludedRanges]
+	if got.Absence != "" || got.Value != "1-512, 1025-512" {
+		t.Fatalf("excluded ranges = %+v, want the value \"1-512, 1025-512\"", got)
+	}
+}
+
+// TestAnEmptyExcludedListIsNotApplicableAndAMissingOneIsNotCollected: a
+// plugin excluding nothing and a plugin too old to say are different facts.
+func TestAnEmptyExcludedListIsNotApplicableAndAMissingOneIsNotCollected(t *testing.T) {
+	for body, want := range map[string]observation.State{
+		`{"schemaVersion":1,"ceiling":60,"updatedAtMillis":1,"excludedRanges":[]}`:      observation.StateNotApplicable,
+		`{"schemaVersion":1,"ceiling":60,"updatedAtMillis":1}`:                          observation.StateNotCollected,
+		`{"schemaVersion":1,"ceiling":60,"updatedAtMillis":1,"excludedRanges":"1-512"}`: observation.StateCollectionFailed,
+	} {
+		c := newCollector(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) })
+		got := bySignal(mustPoll(t, c))[SignalExcludedRanges]
+		if got.Absence != want || got.Value != nil || got.Reason == "" {
+			t.Errorf("body %s: excluded ranges = %+v, want %s with a reason and no value", body, got, want)
+		}
+		if ceiling := bySignal(mustPoll(t, c))[SignalCeiling]; ceiling.Value == nil {
+			t.Errorf("body %s: the ceiling signal went absent (%+v); a bad excluded list must cost only its own signal", body, ceiling)
+		}
+	}
+}

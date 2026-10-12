@@ -12,6 +12,7 @@ import {
   getResolumeInstancesConfigRevisions,
   postFPPBrightnessCeiling,
   postFPPPairing,
+  putFPPBrightnessExcludedRanges,
   putFPPEndpointsConfig,
   putFPPMQTTConfig,
   putFPPConnectSettingsConfig,
@@ -20,9 +21,10 @@ import {
   type ConfigResolumeInstance,
   type Evidence,
   type FPPBrightnessCeilingResponse,
+  type FPPBrightnessExcludedRangesResponse,
   type FPPPairingStateResponse,
 } from '../api'
-import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
+import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -30,7 +32,7 @@ import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
 import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
 import { SettingsReleaseCheck } from './SystemVersions'
-import { brightnessReadout, normalizePairingCode, pairingSentence, type SignalFact } from './fppPairingModel'
+import { brightnessReadout, CHANNEL_RANGES_FORM_ERROR, formatChannelRanges, normalizePairingCode, pairingSentence, parseChannelRanges, type SignalFact } from './fppPairingModel'
 
 type Load<R> = { kind: 'loading' } | { kind: 'loaded'; response: R } | { kind: 'notConfigured'; detail: string } | { kind: 'failed'; reason: string }
 
@@ -773,7 +775,7 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
 
   const ceilingUnknown = sliderValue === null
   const displayed = sliderValue ?? 0
-  const absentReasons = absentFacts([readout.ceiling, readout.transitionGain, readout.effectiveOutput, readout.fadeActive])
+  const absentReasons = absentFacts([readout.ceiling, readout.transitionGain, readout.effectiveOutput, readout.fadeActive, readout.excludedRanges])
   const sliderTitle = !gate.allowed ? gate.reason : ceilingUnknown ? 'The ceiling is unknown until the plugin reports it.' : undefined
 
   return (
@@ -801,12 +803,75 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
           { term: 'Transition gain', value: <FactCell fact={readout.transitionGain} render={(v) => `${v}%`} /> },
           { term: 'Effective output', value: <FactCell fact={readout.effectiveOutput} render={(v) => `${v}%`} /> },
           { term: 'Fade', value: <FactCell fact={readout.fadeActive} render={(v) => (v ? 'Fading' : 'Not fading')} /> },
+          { term: 'Excluded channels', value: <FactCell fact={readout.excludedRanges} render={(v) => v} /> },
         ]}
       />
+      <ExcludedRangesField instanceId={instanceId} reported={readout.excludedRanges} allowed={gate.allowed} deniedReason={gate.allowed ? undefined : gate.reason} />
       {absentReasons.map((reason) => (
         <RuledStrip key={reason.fact} absence={reason.absence} label={reason.label} fact={reason.fact} />
       ))}
     </section>
+  )
+}
+
+type ExcludedRangesOutcome = { kind: 'ok'; sentence: string } | { kind: 'unconfirmed' | 'failed'; reason: string }
+
+function excludedRangesOutcome(response: FPPBrightnessExcludedRangesResponse): ExcludedRangesOutcome {
+  if (response.excludedRanges === undefined) return { kind: 'unconfirmed', reason: response.command.outcomeReason }
+  if (response.excludedRanges.length === 0) return { kind: 'ok', sentence: 'Saved. The player now excludes no channels.' }
+  return { kind: 'ok', sentence: `Saved. The player now excludes ${formatChannelRanges(response.excludedRanges)}.` }
+}
+
+/** The channel ranges the ceiling leaves alone: a text field in the form the CLI takes, saved whole. */
+function ExcludedRangesField({ instanceId, reported, allowed, deniedReason }: { instanceId: string; reported: SignalFact<string>; allowed: boolean; deniedReason: string | undefined }) {
+  const reportedText = reported.kind === 'value' ? reported.value : ''
+  const [draft, setDraft] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | undefined>(undefined)
+  const [outcome, setOutcome] = useState<ExcludedRangesOutcome | null>(null)
+
+  const save = () => {
+    const ranges = parseChannelRanges(draft ?? reportedText)
+    setOutcome(null)
+    if (ranges === null) {
+      setFormError(CHANNEL_RANGES_FORM_ERROR)
+      return
+    }
+    setFormError(undefined)
+    setSaving(true)
+    putFPPBrightnessExcludedRanges(instanceId, ranges)
+      .then((response) => {
+        const next = excludedRangesOutcome(response)
+        setOutcome(next)
+        if (next.kind === 'ok') setDraft(null)
+      })
+      .catch((err: unknown) => setOutcome({ kind: 'failed', reason: describeApiError(err) }))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <>
+      <Field label="Channels the ceiling never changes" help="First channel and count, like 1-512, 1025-512." error={formError}>
+        {(props) => (
+          <Input
+            {...props}
+            type="text"
+            value={draft ?? reportedText}
+            onChange={(e) => { setDraft(e.target.value); setFormError(undefined) }}
+            disabled={!allowed}
+            title={deniedReason}
+          />
+        )}
+      </Field>
+      <ButtonRow>
+        <Button variant="primary" disabled={!allowed || saving || draft === null} title={deniedReason} onClick={save}>{saving ? 'Saving…' : 'Save excluded channels'}</Button>
+      </ButtonRow>
+      {outcome !== null && (outcome.kind === 'ok' ? (
+        <p className="sm-small sm-muted">{outcome.sentence}</p>
+      ) : (
+        <RuledStrip absence="failed" label={outcome.kind === 'unconfirmed' ? 'Not confirmed' : 'Not saved'} fact={outcome.reason} />
+      ))}
+    </>
   )
 }
 

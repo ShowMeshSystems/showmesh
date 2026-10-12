@@ -759,6 +759,7 @@ Response body, every field always present:
 | `fadeActive` | boolean | True while the ceiling or the transition gain is still fading. |
 | `weatherGateClosed` | boolean | True while the weather gate holds output at zero (section 2.5). `effectiveOutput` is then 0 whatever the ceiling and gain read. |
 | `updatedAtMillis` | number | The plugin's clock, in milliseconds, at the moment the snapshot was taken. |
+| `excludedRanges` | array | The channel ranges no ceiling changes, each `{"startChannel", "channelCount"}` with a 1-based start. Empty when nothing is excluded. A plugin older than section 2.7 omits it. |
 
 Example: `{"schemaVersion":1,"ceiling":60,"transitionGain":75,"effectiveOutput":45,"fadeActive":false,"weatherGateClosed":false,"updatedAtMillis":1790000000000}`
 
@@ -781,11 +782,37 @@ Coordinator behavior:
   ShowMesh plugin could not read its brightness. Check the plugin on that
   player.", so a plugin that still sends the all-zero fallback is not read as
   a real ceiling of 0. A body with no `updatedAtMillis` is read as before.
+- `excludedRanges` fills `fpp.brightness.excluded_ranges` with the list as
+  text, `start-count` pairs joined by a comma and a space. An empty list reads
+  not applicable, and a missing key reads not collected.
 - The collector decodes `ceiling`, `transitionGain`, `effectiveOutput`,
   `fadeActive` and `updatedAtMillis` only. `schemaVersion` and `weatherGateClosed`
   are informational for now: nothing in the coordinator reads them, and the
   UI does not show `weatherGateClosed`. The weather delay's own gate routes
   in section 2.5 remain how the coordinator reads and writes the gate.
+
+### 2.7 The excluded channel ranges write
+
+A DMX fixture's pan, tilt, gobo and speed channels are values, not brightness,
+so the plugin leaves the channels in this list alone under any ceiling.
+
+```text
+PUT /api/plugin-apis/showmesh/brightness/excluded-ranges
+```
+
+The route takes no credential, on section 2.2's accepted posture. The body is
+`{"excludedRanges":[{"startChannel":1,"channelCount":512}]}` and replaces the
+whole list; an empty list clears it. A `200` echoes
+`{"schemaVersion":1,"excludedRanges":[...]}` with the list the plugin now
+holds. A refusal is a non-2xx with `{"error":"one line"}`.
+
+The coordinator writes it from `PUT /api/v1/fpp/{instanceId}/brightness/excluded-ranges`
+(`fpp:command`, audit action `fpp.set_brightness_excluded_ranges`) after
+refusing a range that starts below channel 1, has no channels, ends past
+channel 8388608 or overlaps another. It then reads section 2.6's route for up
+to three seconds and reports confirmed only when the plugin holds the same
+channels. A `404` from the write is reported as a plugin too old to exclude
+channels.
 
 ## 3. Playlist definition publication
 

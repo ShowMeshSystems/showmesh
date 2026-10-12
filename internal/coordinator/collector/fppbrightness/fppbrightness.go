@@ -40,11 +40,15 @@ const (
 	SignalTransitionGain  observation.SignalID = "fpp.brightness.transition_gain"
 	SignalEffectiveOutput observation.SignalID = "fpp.brightness.effective_output"
 	SignalFadeActive      observation.SignalID = "fpp.brightness.fade_active"
+	// SignalExcludedRanges is the channel ranges no ceiling changes, as
+	// text in the form FormatChannelRanges writes.
+	SignalExcludedRanges observation.SignalID = "fpp.brightness.excluded_ranges"
 )
 
 // AllSignals is this package's complete signal vocabulary.
 var AllSignals = []observation.SignalID{
 	SignalCeiling, SignalTransitionGain, SignalEffectiveOutput, SignalFadeActive,
+	SignalExcludedRanges,
 }
 
 // PluginPath is the plugin's own read-only brightness route on an FPP
@@ -58,6 +62,14 @@ const absentOn404Reason = "This player does not report brightness. Install or up
 // absentOnUnreadReason is what an operator reads when the plugin answered
 // with the all-zero document it sends when it could not render its state.
 const absentOnUnreadReason = "This player's ShowMesh plugin could not read its brightness. Check the plugin on that player."
+
+// noExcludedRangesReason is what an operator reads when the plugin
+// reports an empty list.
+const noExcludedRangesReason = "No channels are excluded. The ceiling changes every channel it is applied to."
+
+// excludedRangesUnreportedReason is what an operator reads when the
+// plugin answers without the list, which an older plugin does.
+const excludedRangesUnreportedReason = "This player's plugin does not report excluded channels. Update the ShowMesh plugin."
 
 const (
 	// DefaultPollInterval is the recommended collector.Runner.Add cadence.
@@ -186,6 +198,26 @@ type brightnessDocument struct {
 	EffectiveOutput *int64 `json:"effectiveOutput"`
 	FadeActive      *bool  `json:"fadeActive"`
 	UpdatedAtMillis *int64 `json:"updatedAtMillis"`
+	// ExcludedRanges is decoded on its own so a malformed list costs only
+	// its signal, never the four brightness values beside it.
+	ExcludedRanges json.RawMessage `json:"excludedRanges"`
+}
+
+// ChannelRange is one run of channels on the plugin's wire: a 1-based
+// first channel and how many channels follow from it.
+type ChannelRange struct {
+	StartChannel int64 `json:"startChannel"`
+	ChannelCount int64 `json:"channelCount"`
+}
+
+// FormatChannelRanges renders ranges as "start-count, start-count", the
+// one text form the API, the CLI and the UI all show and accept.
+func FormatChannelRanges(ranges []ChannelRange) string {
+	parts := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		parts = append(parts, fmt.Sprintf("%d-%d", r.StartChannel, r.ChannelCount))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Poll performs one collection cycle. complete is always true: every
@@ -234,7 +266,29 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	} else {
 		obs = append(obs, c.measured(SignalFadeActive, *doc.FadeActive, now))
 	}
+	obs = append(obs, c.excludedRanges(doc.ExcludedRanges, now))
 	return obs, true
+}
+
+func (c *Collector) excludedRanges(raw json.RawMessage, now time.Time) observation.Observation {
+	if len(raw) == 0 || string(raw) == "null" {
+		return c.absence(SignalExcludedRanges, observation.StateNotCollected, excludedRangesUnreportedReason, now)
+	}
+	var list []ChannelRange
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return c.absence(SignalExcludedRanges, observation.StateCollectionFailed, "decode error: "+err.Error(), now)
+	}
+	reported := &list
+	if len(*reported) == 0 {
+		o, err := observation.NotApplicable(c.resource(), SignalExcludedRanges, noExcludedRangesReason, now,
+			observation.WithSource(SourceName), observation.WithValidFor(c.validFor), observation.WithCollectedAt(now))
+		if err != nil {
+			return c.absence(SignalExcludedRanges, observation.StateCollectionFailed,
+				"internal error building observation: "+err.Error(), now)
+		}
+		return o
+	}
+	return c.measured(SignalExcludedRanges, FormatChannelRanges(*reported), now)
 }
 
 func (c *Collector) fetch(ctx context.Context) ([]byte, error) {

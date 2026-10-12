@@ -1973,6 +1973,11 @@ func New(deps Dependencies, opts Options) *API {
 	// authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/ceiling", h.writeGuard(&scopeFPPBrightnessCeiling, h.handleFPPBrightnessCeiling))
 
+	// PUT /api/v1/fpp/{instanceId}/brightness/excluded-ranges: the
+	// operator write of the channel ranges the ceiling leaves alone,
+	// behind fpp:command like the ceiling write.
+	mux.HandleFunc("PUT /api/v1/fpp/{instanceId}/brightness/excluded-ranges", h.writeGuard(&scopeFPPBrightnessExcludedRanges, h.handleFPPBrightnessExcludedRanges))
+
 	// GET/POST /api/v1/fpp/{instanceId}/pairing: pairing one FPP host's
 	// ShowMesh plugin with this coordinator. The POST creates a principal
 	// and mints a token, which is principal:write's own blast radius, so
