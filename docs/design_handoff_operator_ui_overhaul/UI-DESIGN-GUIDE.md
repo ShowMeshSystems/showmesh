@@ -419,7 +419,7 @@ Routes as `ui/src/app/App.tsx` defines them.
 
 | Route | Screen | Notes |
 |---|---|---|
-| `/` | `Dashboard` | Readiness, Needs you, System health |
+| `/` | `Dashboard` | The main overview from `OBSERVABILITY.md` section 6.2, plus low-resolution NDI previews; see section 11 rule 4 |
 | `/night` | `ShowNight` | Night lifecycle, one `LifecycleCommands` element |
 | `/control` | `LiveControl` | Transport, outputs, Resolume, night lifecycle, audio sessions, macros, announcements, actions |
 | `/control/resolume` | `ResolumeControl` | The rail's one sub-link |
@@ -562,9 +562,18 @@ waiting for the owner, and no working file collects them again.
    and FPP playlist definitions fold into the playlist configuration page; night sessions are Show
    Night; the asset manifest is its own Monitor facet, which amends the four-facet list in section 3;
    top-level `/assets` is a rail destination built from the assets mock.
-4. **Dashboard is the mock's three blocks: Readiness, Needs you, System health.** The presentation
-   path belongs to Monitor Fleet, which already carries per-surface state per row. Recent activity
-   belongs to Monitor Activity and the rail badge. The lifecycle strip belongs to Show Night. Clock
+4. **Dashboard is the main overview that section 6.2 of
+   [`OBSERVABILITY.md`](../architecture/OBSERVABILITY.md#62-main-overview) defines.** The owner ruled
+   this on 2026-10-12. It replaces an earlier rule here that limited the page to the mock's three
+   blocks and sent everything else to other screens; the owner never made that rule. Readiness,
+   Needs you and System health stay. The page also shows lifecycle state and the active macro; the
+   current FPP schedule, playlist, sequence and playback position; audio playback and route state;
+   SMPTE source, frame rate, offset and lock state; and weather, wind, enclosure temperature and
+   humidity when a source is configured. It carries low-resolution NDI previews of the projection
+   outputs, which section 7.1 of that document specifies and section 6.2 does not list. Projector
+   health and network health are held until those devices have a way to report into ShowMesh.
+   Monitor Fleet, Monitor Activity and Show Night keep the detail, and the dashboard links to them.
+   `Dashboard.dc.html` draws only the three original blocks, so the added blocks have no mock. Clock
    skew belongs to the chrome, because it invalidates every age on every screen. Data freshness is
    the page lede, not a banner.
 5. **An attention count states the count and nothing more.** "N items" is the whole of it. Saying an
