@@ -189,6 +189,16 @@ describe('Settings tab strip', () => {
     expect(await screen.findByText('access page')).toBeInTheDocument()
   })
 
+  it('turns high contrast on and off with its checkbox', () => {
+    renderAt('/settings/appearance')
+    const box = screen.getByRole('checkbox', { name: 'Maximum legibility mode' })
+    expect(box).not.toBeChecked()
+    fireEvent.click(box)
+    expect(box).toBeChecked()
+    fireEvent.click(box)
+    expect(box).not.toBeChecked()
+  })
+
   it("renders the mock's h2 label on Appearance, a tab with no coordinator read", () => {
     renderAt('/settings/appearance')
     expect(screen.getByRole('heading', { level: 2, name: 'How this browser looks' })).toBeInTheDocument()
@@ -883,6 +893,37 @@ describe('Settings › Render recovery', () => {
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
     expect(screen.queryByRole('heading', { name: 'What happens when weather stops the show' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Settings › Render recovery idle output', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('selects an idle output with the radio cards', async () => {
+    stubs.getRenderSettingsConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'render.settings',
+        revision: 1,
+        payload: { idleOutput: 'black', restartPolicy: { initialDelaySeconds: 2, maxDelaySeconds: 30, maxConsecutiveFastFailures: 5 } },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        idleOutputEffectiveNote: 'idleOutput takes effect on next apply',
+      })
+
+    renderAt('/settings/recovery')
+
+    const black = await screen.findByRole('radio', { name: /Black/ })
+    const hold = screen.getByRole('radio', { name: /Hold the last frame/ })
+    expect(black).toBeChecked()
+    fireEvent.click(hold)
+    expect(hold).toBeChecked()
+    expect(black).not.toBeChecked()
   })
 })
 
@@ -2391,6 +2432,37 @@ describe('Settings › Mode', () => {
 
     const apply = await screen.findByRole('button', { name: /Apply mode/ })
     await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+  })
+
+  it('selects a mode with the radio cards and applies the chosen one', async () => {
+    const loaded = {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'show.mode',
+      revision: 2,
+      payload: { mode: 'show' },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+      resolumeWebSocketEffect: 'closed in show mode',
+      cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
+    }
+    const put = vi.fn<(body: unknown) => Promise<unknown>>(() => Promise.resolve({ ...loaded, revision: 3, payload: { mode: 'program' } }))
+    stubs.getShowModeConfig = () => Promise.resolve(loaded)
+    stubs.putShowModeConfig = put as unknown as typeof stubs.putShowModeConfig
+
+    renderAt('/settings/mode', { nightSession: null })
+
+    const show = await screen.findByRole('radio', { name: /Show mode/ })
+    const program = screen.getByRole('radio', { name: /Program mode/ })
+    expect(show).toBeChecked()
+    expect(program).not.toBeChecked()
+    fireEvent.click(program)
+    expect(program).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: /Apply mode/ }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put).toHaveBeenCalledWith({ mode: 'program' })
   })
 
   it('seeds the night session itself, because the model only ever gets one from a stream frame', async () => {

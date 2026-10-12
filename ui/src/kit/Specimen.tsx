@@ -327,17 +327,6 @@ export function Specimen() {
             <span className="sm-data">.sm-input--id</span> and <span className="sm-data">.sm-input--address</span>: an
             endpoint id and its address in one inline row, capped so the row keeps its buttons.
           </p>
-          <fieldset className="sm-option-group">
-            <legend className="sm-sr-only">Idle output</legend>
-            <label className="sm-panel sm-option sm-option--selected">
-              <span className="sm-subhead">Black</span>
-              <p className="sm-small sm-muted">The pipeline outputs black when nothing is rendering.</p>
-            </label>
-          </fieldset>
-          <p className="sm-small sm-muted">
-            <span className="sm-data">.sm-option-group</span>: the bare fieldset around a set of option cards, with a
-            legend for assistive technology only.
-          </p>
           <div className="sm-inline-row sm-inline-row--end">
             <Field label="Player id">{(props) => <Input {...props} defaultValue="barn-player" />}</Field>
             <Button variant="quiet">Remove</Button>

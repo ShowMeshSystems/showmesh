@@ -8,7 +8,7 @@ import {
   type NightSessionState,
   type ShowModeConfigResponse,
 } from '../api'
-import { Button, ButtonRow, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, RadioCardList, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -129,28 +129,20 @@ export function SettingsMode() {
       ) : (
         <>
           <Section id="st-mode" title="Mode">
-            <fieldset className="sm-option-group">
-              <legend className="sm-sr-only">Mode</legend>
-              {MODE_OPTIONS.map((option) => {
-                const isActive = state.response.payload.mode === option.value
-                return (
-                  <label key={option.value} className={`sm-panel sm-option${requestedMode === option.value ? ' sm-option--selected' : ''}`}>
-                    <div className="sm-inline-row">
-                      <input
-                        type="radio"
-                        name="show-mode"
-                        value={option.value}
-                        checked={requestedMode === option.value}
-                        onChange={() => setRequestedMode(option.value)}
-                      />
-                      <span className="sm-subhead">{option.title}</span>
-                      {isActive && <StatusPair tone="good" label="Active" />}
-                    </div>
-                    <p className="sm-small sm-muted">{option.consequence}</p>
-                  </label>
-                )
-              })}
-            </fieldset>
+            <RadioCardList
+              label="How the coordinator runs"
+              value={requestedMode}
+              options={MODE_OPTIONS.map((option) => ({
+                value: option.value,
+                title: (
+                  <>
+                    {option.title} {state.response.payload.mode === option.value && <StatusPair tone="good" label="Active" />}
+                  </>
+                ),
+                desc: option.consequence,
+              }))}
+              onChange={(value) => setRequestedMode(value as ConfigShowModePayload['mode'])}
+            />
           </Section>
 
           {cycle !== null && (
