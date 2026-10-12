@@ -306,28 +306,30 @@ export function SettingsConnections() {
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row sm-inline-row--end">
-                      <label className="sm-field">
-                        <span className="sm-field__label">Player id</span>
-                        <Input
-                          value={endpoint.id}
-                          onChange={(e) => {
-                            setEndpoints(patchRow(endpoints, index, { id: e.target.value }))
-                            setEndpointsDirty(true)
-                          }}
-                          className="sm-input--id"
-                        />
-                      </label>
-                      <label className="sm-field">
-                        <span className="sm-field__label">Player URL</span>
-                        <Input
-                          value={endpoint.url}
-                          onChange={(e) => {
-                            setEndpoints(patchRow(endpoints, index, { url: e.target.value }))
-                            setEndpointsDirty(true)
-                          }}
-                          className="sm-input--address"
-                        />
-                      </label>
+                      <Field label="Player id">
+                        {(props) => (
+                          <Input {...props}
+                            value={endpoint.id}
+                            onChange={(e) => {
+                              setEndpoints(patchRow(endpoints, index, { id: e.target.value }))
+                              setEndpointsDirty(true)
+                            }}
+                            className="sm-input--id"
+                          />
+                        )}
+                      </Field>
+                      <Field label="Player URL">
+                        {(props) => (
+                          <Input {...props}
+                            value={endpoint.url}
+                            onChange={(e) => {
+                              setEndpoints(patchRow(endpoints, index, { url: e.target.value }))
+                              setEndpointsDirty(true)
+                            }}
+                            className="sm-input--address"
+                          />
+                        )}
+                      </Field>
                       <NotWired>
                         <Button>Test</Button>
                       </NotWired>
@@ -396,28 +398,30 @@ export function SettingsConnections() {
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row sm-inline-row--end">
-                      <label className="sm-field">
-                        <span className="sm-field__label">Instance id</span>
-                        <Input
-                          value={instance.id}
-                          onChange={(e) => {
-                            setInstances(patchRow(instances, index, { id: e.target.value }))
-                            setInstancesDirty(true)
-                          }}
-                          className="sm-input--id"
-                        />
-                      </label>
-                      <label className="sm-field">
-                        <span className="sm-field__label">Instance URL</span>
-                        <Input
-                          value={instance.url}
-                          onChange={(e) => {
-                            setInstances(patchRow(instances, index, { url: e.target.value }))
-                            setInstancesDirty(true)
-                          }}
-                          className="sm-input--address"
-                        />
-                      </label>
+                      <Field label="Instance id">
+                        {(props) => (
+                          <Input {...props}
+                            value={instance.id}
+                            onChange={(e) => {
+                              setInstances(patchRow(instances, index, { id: e.target.value }))
+                              setInstancesDirty(true)
+                            }}
+                            className="sm-input--id"
+                          />
+                        )}
+                      </Field>
+                      <Field label="Instance URL">
+                        {(props) => (
+                          <Input {...props}
+                            value={instance.url}
+                            onChange={(e) => {
+                              setInstances(patchRow(instances, index, { url: e.target.value }))
+                              setInstancesDirty(true)
+                            }}
+                            className="sm-input--address"
+                          />
+                        )}
+                      </Field>
                       <NotWired>
                         <Button>Test</Button>
                       </NotWired>
@@ -478,50 +482,52 @@ export function SettingsConnections() {
               <RuledStrip absence="unavailable" label="Not configured" fact={mqttLoad.detail} />
             )}
             <div className="sm-grid sm-form-column">
-              <label className="sm-field">
-                <span className="sm-field__label">Broker</span>
-                <Input
-                  value={brokerURL}
-                  onChange={(e) => {
-                    setBrokerURL(e.target.value)
-                    setMqttDirty(true)
-                  }}
-                />
-              </label>
-              <label className="sm-field">
-                <span className="sm-field__label">Username</span>
-                <Input
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value)
-                    setMqttDirty(true)
-                  }}
-                />
-              </label>
-              <label className="sm-field">
-                <span className="sm-field__label">Topic prefix</span>
-                <Input
-                  value={topicPrefix}
-                  onChange={(e) => {
-                    setTopicPrefix(e.target.value)
-                    setMqttDirty(true)
-                  }}
-                />
-              </label>
-              <label className="sm-field">
-                <span className="sm-field__label">
-                  {mqttLoad.kind === 'loaded' && mqttLoad.response.payload.passwordSet ? 'A password is set. Set a new one' : 'No password is set. Set one'}
-                </span>
-                <Input
-                  type="password"
-                  value={newPassword}
-                  autoComplete="new-password"
-                  onChange={(e) => {
-                    setNewPassword(e.target.value)
-                    setMqttDirty(true)
-                  }}
-                />
-              </label>
+              <Field label="Broker">
+                {(props) => (
+                  <Input {...props}
+                    value={brokerURL}
+                    onChange={(e) => {
+                      setBrokerURL(e.target.value)
+                      setMqttDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Username">
+                {(props) => (
+                  <Input {...props}
+                    value={username}
+                    onChange={(e) => {
+                      setUsername(e.target.value)
+                      setMqttDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Topic prefix">
+                {(props) => (
+                  <Input {...props}
+                    value={topicPrefix}
+                    onChange={(e) => {
+                      setTopicPrefix(e.target.value)
+                      setMqttDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label={mqttLoad.kind === 'loaded' && mqttLoad.response.payload.passwordSet ? 'A password is set. Set a new one' : 'No password is set. Set one'}>
+                {(props) => (
+                  <Input {...props}
+                    type="password"
+                    value={newPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => {
+                      setNewPassword(e.target.value)
+                      setMqttDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
             </div>
             <div className="sm-stack-3" data-testid="mqtt-hosts">
               <p className="sm-field__label">Players on this feed</p>
@@ -531,30 +537,32 @@ export function SettingsConnections() {
               <div className="sm-panel sm-stack-4">
                 {hosts.map((row, index) => (
                   <div key={index} className="sm-inline-row sm-inline-row--end">
-                    <label className="sm-field">
-                      <span className="sm-field__label">Host id</span>
-                      <Input
-                        value={row.id}
-                        placeholder="barn-player"
-                        onChange={(e) => {
-                          setHosts(patchRow(hosts, index, { id: e.target.value }))
-                          setMqttDirty(true)
-                        }}
-                        className="sm-input--id"
-                      />
-                    </label>
-                    <label className="sm-field">
-                      <span className="sm-field__label">Host name</span>
-                      <Input
-                        value={row.hostName}
-                        placeholder={row.id !== '' ? row.id : 'Same as the id'}
-                        onChange={(e) => {
-                          setHosts(patchRow(hosts, index, { hostName: e.target.value }))
-                          setMqttDirty(true)
-                        }}
-                        className="sm-input--id"
-                      />
-                    </label>
+                    <Field label="Host id">
+                      {(props) => (
+                        <Input {...props}
+                          value={row.id}
+                          placeholder="barn-player"
+                          onChange={(e) => {
+                            setHosts(patchRow(hosts, index, { id: e.target.value }))
+                            setMqttDirty(true)
+                          }}
+                          className="sm-input--id"
+                        />
+                      )}
+                    </Field>
+                    <Field label="Host name">
+                      {(props) => (
+                        <Input {...props}
+                          value={row.hostName}
+                          placeholder={row.id !== '' ? row.id : 'Same as the id'}
+                          onChange={(e) => {
+                            setHosts(patchRow(hosts, index, { hostName: e.target.value }))
+                            setMqttDirty(true)
+                          }}
+                          className="sm-input--id"
+                        />
+                      )}
+                    </Field>
                     <Button
                       variant="quiet"
                       onClick={() => {
@@ -919,8 +927,12 @@ function FPPConnectSettings() {
         <>
           <Choice type="checkbox" checked={enabled} onChange={(e) => { setEnabled(e.target.checked); setDirty(true) }} label="Enable the xLights ingestion listener" />
           <div className="sm-grid sm-form-column sm-stack-3">
-            <label className="sm-field"><span className="sm-field__label">Maximum file bytes</span><Input type="number" min="1" value={maxFileBytes} onChange={(e) => { setMaxFileBytes(e.target.value); setDirty(true) }} /></label>
-            <label className="sm-field"><span className="sm-field__label">Maximum asset-directory bytes</span><Input type="number" min="1" value={maxAssetDirBytes} onChange={(e) => { setMaxAssetDirBytes(e.target.value); setDirty(true) }} /></label>
+            <Field label="Maximum file bytes">
+              {(props) => <Input {...props} type="number" min="1" value={maxFileBytes} onChange={(e) => { setMaxFileBytes(e.target.value); setDirty(true) }} />}
+            </Field>
+            <Field label="Maximum asset-directory bytes">
+              {(props) => <Input {...props} type="number" min="1" value={maxAssetDirBytes} onChange={(e) => { setMaxAssetDirBytes(e.target.value); setDirty(true) }} />}
+            </Field>
           </div>
           <ButtonRow>
             <Button variant="primary" disabled={!dirty || saving || !gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : 'Save FPP Connect settings'}</Button>

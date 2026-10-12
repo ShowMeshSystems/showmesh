@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Section, Segmented } from '../kit'
+import { Choice, Section, Segmented } from '../kit'
 import { useTheme } from '../app/useTheme'
 
 type BaseTheme = 'system' | 'dark' | 'light'
@@ -37,16 +37,14 @@ export function SettingsAppearance() {
       </Section>
 
       <Section id="st-hc" title="High contrast">
-        <label className="sm-panel sm-inline-row sm-stack-3">
-          <input
-            type="checkbox"
-            checked={highContrast}
-            onChange={(e) => {
-              setTheme(e.target.checked ? 'contrast' : baseTheme)
-            }}
-          />
-          <span className="sm-subhead">Maximum legibility mode</span>
-        </label>
+        <Choice
+          type="checkbox"
+          checked={highContrast}
+          onChange={(e) => {
+            setTheme(e.target.checked ? 'contrast' : baseTheme)
+          }}
+          label="Maximum legibility mode"
+        />
       </Section>
     </>
   )

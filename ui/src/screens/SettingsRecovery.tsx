@@ -5,7 +5,7 @@ import {
   putRenderSettingsConfig,
   type RenderSettingsConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section } from '../kit'
+import { Button, ButtonRow, Field, Input, RadioCardList, RevisionHistory, RuledStrip, Section } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -143,27 +143,23 @@ export function SettingsRecovery() {
           )}
 
           <Section id="st-idle" title="Idle output" detail="What a render pipeline puts out when it has nothing to render.">
-            <fieldset className="sm-option-group">
-              <legend className="sm-sr-only">Idle output</legend>
-              {IDLE_OPTIONS.map((option) => (
-                <label key={option.value} className={`sm-panel sm-option${idleOutput === option.value ? ' sm-option--selected' : ''}`}>
-                  <div className="sm-inline-row">
-                    <input
-                      type="radio"
-                      name="idle-output"
-                      checked={idleOutput === option.value}
-                      onChange={() => {
-                        setIdleOutput(option.value)
-                        setDirty(true)
-                      }}
-                    />
-                    <span className="sm-subhead">{option.title}</span>
-                    <span className="sm-data sm-small sm-faint">{option.value}</span>
-                  </div>
-                  <p className="sm-small sm-muted">{option.consequence}</p>
-                </label>
-              ))}
-            </fieldset>
+            <RadioCardList
+              label="What a pipeline puts out when idle"
+              value={idleOutput}
+              options={IDLE_OPTIONS.map((option) => ({
+                value: option.value,
+                title: (
+                  <>
+                    {option.title} <span className="sm-data sm-small sm-faint">{option.value}</span>
+                  </>
+                ),
+                desc: option.consequence,
+              }))}
+              onChange={(value) => {
+                setIdleOutput(value as 'black' | 'hold' | 'diagnostic')
+                setDirty(true)
+              }}
+            />
           </Section>
 
           <Section id="st-restart" title="Restart policy" detail="The pipeline supervisor backs off between restarts, and gives up rather than looping forever.">
