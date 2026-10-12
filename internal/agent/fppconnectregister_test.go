@@ -828,7 +828,7 @@ func TestFPPConnectRegisterVideoFileIsSkipped(t *testing.T) {
 	uploadAndBind(t, held, "videos", "Clip.mp4", []byte("video-bytes"))
 
 	skipped := waitForRegistrationState(t, held, "videos", "Clip.mp4", fppConnectRegistrationSkipped)
-	if want := `mediaType for directory "videos" is not registered by this lane`; skipped.RegistrationReason != want {
+	if want := `videos files are kept on this node and not registered.`; skipped.RegistrationReason != want {
 		t.Fatalf("RegistrationReason = %q, want %q", skipped.RegistrationReason, want)
 	}
 	time.Sleep(100 * time.Millisecond)

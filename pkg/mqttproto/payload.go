@@ -1215,8 +1215,8 @@ type RenderFPPConnectHeldFile struct {
 	UnboundReason string `json:"unboundReason,omitempty"`
 
 	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
-	// bound file not yet attempted, "skipped" for a music/videos file
-	// (this lane registers FSEQ content only), "pending" while a
+	// bound file not yet attempted, "skipped" for a videos file
+	// (sequences and music register; videos are held only), "pending" while a
 	// retryable attempt is scheduled, "registered" once the coordinator
 	// has accepted it, or "failed" for a non-retryable refusal or a
 	// content-hash mismatch against the coordinator's response. Always ""

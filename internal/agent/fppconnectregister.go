@@ -793,7 +793,7 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	if !registrable {
 		return fppConnectRegisterOutcome{
 			kind:   fppConnectRegistrationSkipped,
-			reason: fmt.Sprintf("mediaType for directory %q is not registered by this lane", rec.Dir),
+			reason: fmt.Sprintf("%s files are kept on this node and not registered.", rec.Dir),
 		}
 	}
 
