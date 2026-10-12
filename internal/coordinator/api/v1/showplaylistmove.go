@@ -20,7 +20,7 @@ type ShowPlaylistMoveDefinition struct {
 }
 
 // ShowPlaylistMoveEntry is what happens to one saved entry. Outcome is
-// kept, moved or dropped; MatchedBy is filename or position. To is null
+// kept, moved or dropped; MatchedBy is filename, previousSequence or position. To is null
 // when the entry is dropped. Summary is the sentence an operator reads.
 type ShowPlaylistMoveEntry struct {
 	EntryID           string                `json:"entryId"`
@@ -31,10 +31,10 @@ type ShowPlaylistMoveEntry struct {
 	From              ShowPlaylistMoveSlot  `json:"from"`
 	To                *ShowPlaylistMoveSlot `json:"to"`
 	DuplicateFilename bool                  `json:"duplicateFilename"`
-	// PreviousSequence and NewSequence name what a position-matched entry's
-	// position held before and holds now; both are empty for an entry matched
-	// by filename. PreviousSequence is also empty when that copy is no longer
-	// held or the position held no name. NeedsCheck is true when a
+	// PreviousSequence and NewSequence name what the saved position of an
+	// entry matched by previousSequence or position held before and holds
+	// now; both are empty for an entry matched by filename. PreviousSequence
+	// is also empty when that copy is no longer held or the position held no name. NeedsCheck is true when a
 	// position-matched entry is carried over and may now sit on another sequence.
 	PreviousSequence string `json:"previousSequence"`
 	NewSequence      string `json:"newSequence"`

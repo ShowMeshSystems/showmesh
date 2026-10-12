@@ -976,6 +976,31 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     expect(within(review).getByText(/held wizards-in-winter.fseq and now holds new-opener.fseq/)).toBeInTheDocument()
   })
 
+  it('shows an entry that follows the sequence its position held as moved, with that sequence, not as Check', async () => {
+    const followed = preview()
+    ;(followed.entries as Array<Record<string, unknown>>)[0] = {
+      entryId: 'e1',
+      cue: 'cue-1',
+      filename: '',
+      outcome: 'moved',
+      matchedBy: 'previousSequence',
+      from: { section: 'mainPlaylist', position: 0 },
+      to: { section: 'mainPlaylist', position: 1 },
+      duplicateFilename: false,
+      previousSequence: 'wizards-in-winter.fseq',
+      newSequence: 'wizards-in-winter.fseq',
+      needsCheck: false,
+      summary: 'No sequence name was saved for this cue, so it follows the sequence its position held, wizards-in-winter.fseq. Moved from position 0 to position 1.',
+    }
+    await openEditor(['config:write'], followed)
+    fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+    const review = await screen.findByRole('region', { name: 'Changes in FPP\'s playlist' })
+    expect(within(review).getByText('Moved')).toBeInTheDocument()
+    expect(within(review).queryByText('Check')).not.toBeInTheDocument()
+    expect(within(review).getByText('wizards-in-winter.fseq')).toBeInTheDocument()
+    expect(within(review).getByText(/it follows the sequence its position held, wizards-in-winter.fseq/)).toBeInTheDocument()
+  })
+
   it('labels a refusal to preview as such, not as a failed read', async () => {
     stubs.getFPPPlaylistDefinitionEntries = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', instanceUuid: 'uuid-1', playlistHash: 'a'.repeat(64), entries: [] })
     await openEditor()

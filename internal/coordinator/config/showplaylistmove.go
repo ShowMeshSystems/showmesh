@@ -17,12 +17,14 @@ const (
 )
 
 // PlaylistMoveMatch says how a saved entry was matched: by its saved
-// sequence filename, or by section and position because it had none.
+// sequence filename, by the sequence its saved position held in the copy the
+// playlist follows now, or by section and position when neither is known.
 type PlaylistMoveMatch string
 
 const (
-	PlaylistMoveByFilename PlaylistMoveMatch = "filename"
-	PlaylistMoveByPosition PlaylistMoveMatch = "position"
+	PlaylistMoveByFilename         PlaylistMoveMatch = "filename"
+	PlaylistMoveByPreviousSequence PlaylistMoveMatch = "previousSequence"
+	PlaylistMoveByPosition         PlaylistMoveMatch = "position"
 )
 
 // PlaylistMoveSlot is one section and position in an FPP playlist.
@@ -48,9 +50,9 @@ type PlaylistMoveEntry struct {
 	PositionTaken bool
 	// PreviousSequence is the sequence name the entry's saved position held
 	// in the copy the playlist follows now, when that copy is known and the
-	// entry was matched by position. NewSequence is the name at the position
-	// it lands on. NeedsCheck is set when a position-matched entry is carried
-	// and the two names differ or the earlier one is not known.
+	// entry was not matched by filename. NewSequence is the name at the
+	// position it lands on. NeedsCheck is set when a position-matched entry is
+	// carried and the two names differ or the earlier one is not known.
 	PreviousSequence      string
 	PreviousSequenceKnown bool
 	NewSequence           string
@@ -82,10 +84,11 @@ func (p PlaylistMovePlan) CanSave() bool { return len(p.Proposed.Entries) > 0 }
 // FPP playlist whose hash and entries are newHash and newEntries. Saved
 // entries with an expected sequence filename are matched to the newer entry
 // with that sequence name, in section then position order when a name
-// repeats; entries without one are matched by section and position, from
-// the slots the filename matches left free. oldEntries are the entries of the
-// copy current follows now, or nil when ShowMesh no longer holds it; they only
-// name what a position-matched entry used to sit on. It only reads its inputs.
+// repeats. An entry without one takes the sequence name its saved slot has in
+// oldEntries, the copy current follows now (nil when ShowMesh no longer holds
+// it), and is matched the same way. Entries with neither are matched by
+// section and position, from the slots the name matches left free. It only
+// reads its inputs.
 func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries, oldEntries []fppidentity.DefinitionEntry) PlaylistMovePlan {
 	saved := make([]ShowPlaylistEntry, len(current.Entries))
 	copy(saved, current.Entries)
@@ -97,10 +100,21 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries, o
 		return compareSlots(PlaylistMoveSlot{a.Section, a.Position}, PlaylistMoveSlot{b.Section, b.Position})
 	})
 
+	oldSequences := map[PlaylistMoveSlot]string{}
+	for _, e := range oldEntries {
+		oldSequences[PlaylistMoveSlot{e.Section, e.Position}] = e.SequenceName
+	}
+	matchNames := make([]string, len(saved))
+	byPreviousSequence := make([]bool, len(saved))
 	savedNames := map[string]int{}
-	for _, e := range saved {
-		if name := savedFilename(e); name != "" {
-			savedNames[name]++
+	for i, e := range saved {
+		matchNames[i] = savedFilename(e)
+		if matchNames[i] == "" {
+			matchNames[i] = oldSequences[savedSlot(e)]
+			byPreviousSequence[i] = matchNames[i] != ""
+		}
+		if matchNames[i] != "" {
+			savedNames[matchNames[i]]++
 		}
 	}
 	newNames := map[string]int{}
@@ -123,15 +137,23 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries, o
 			Outcome: PlaylistMoveDropped, From: savedSlot(e),
 		}
 		entries[i] = out
-		if out.Filename == "" {
+		name := matchNames[i]
+		if name == "" {
 			continue
 		}
 		entries[i].MatchedBy = PlaylistMoveByFilename
-		entries[i].DuplicateFilename = repeated(out.Filename)
-		if q := queues[out.Filename]; len(q) > 0 {
+		if byPreviousSequence[i] {
+			entries[i].MatchedBy = PlaylistMoveByPreviousSequence
+			entries[i].PreviousSequence, entries[i].PreviousSequenceKnown = name, true
+		}
+		entries[i].DuplicateFilename = repeated(name)
+		if q := queues[name]; len(q) > 0 {
 			claimed[q[0]] = true
-			queues[out.Filename] = q[1:]
+			queues[name] = q[1:]
 			setMoveTarget(&entries[i], PlaylistMoveSlot{news[q[0]].Section, news[q[0]].Position})
+			if byPreviousSequence[i] {
+				entries[i].NewSequence = name
+			}
 		}
 	}
 
@@ -144,7 +166,7 @@ func PlanPlaylistMove(current ShowPlaylistPayload, newHash string, newEntries, o
 		slotIndex[PlaylistMoveSlot{e.Section, e.Position}] = i
 	}
 	for i := range entries {
-		if entries[i].Filename != "" {
+		if matchNames[i] != "" {
 			continue
 		}
 		entries[i].MatchedBy = PlaylistMoveByPosition

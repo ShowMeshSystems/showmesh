@@ -8043,8 +8043,12 @@ paths:
         and reports for each saved entry whether it is kept, moved or dropped,
         and which entries of the newest copy have no cue. Saved entries match
         by `expectedSequenceFilename` first; an entry with no saved filename
-        matches by section and position, and is flagged with `needsCheck` when
-        its position may now hold a different sequence. When a filename occurs
+        follows the sequence name its saved position holds in the copy the
+        playlist follows now (`matchedBy` is `previousSequence`) and is matched
+        like a saved filename. Only when that copy is not held, or its position
+        has no sequence name, does the entry match by section and position,
+        flagged with `needsCheck` when its position may now hold a different
+        sequence. No filename is written onto the entry. When a filename occurs
         more than once the entries are matched in order and flagged.
         `revision` is the playlist revision the answer was computed against.
         To apply the move, send `proposed` unchanged to
@@ -20099,7 +20103,7 @@ components:
           enum: [kept, moved, dropped]
         matchedBy:
           type: string
-          enum: [filename, position]
+          enum: [filename, previousSequence, position]
         from:
           $ref: "#/components/schemas/ShowPlaylistMoveSlot"
         to:
@@ -20111,13 +20115,13 @@ components:
         previousSequence:
           type: string
           description: >-
-            For an entry matched by position, the sequence name its position
-            held in the copy the playlist follows now. Empty for a filename
-            match, when that copy is no longer held, or when the position had
-            no name.
+            For an entry matched by `previousSequence` or `position`, the
+            sequence name its position held in the copy the playlist follows
+            now. Empty for a filename match, when that copy is no longer held,
+            or when the position had no name.
         newSequence:
           type: string
-          description: For a position-matched entry that is carried over, the sequence name at the position it lands on.
+          description: For a carried entry matched by `previousSequence` or `position`, the sequence name at the position it lands on.
         needsCheck:
           type: boolean
           description: >-

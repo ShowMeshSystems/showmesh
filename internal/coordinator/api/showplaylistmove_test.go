@@ -242,16 +242,17 @@ func TestShowPlaylistDefinitionMovePreviewNewestIsDecidedByWhenShowMeshReceivedI
 	}
 }
 
+const moveNoFilenamePlaylist = `{
+	"show": "halloween-2026", "name": "Quick check", "runner": "fpp",
+	"fpp": {"instanceUuid": "` + moveInstance + `", "playlistName": "` + moveListName + `", "playlistHash": "` + moveOldHash + `"},
+	"entries": [
+		{"id": "a", "cue": "wake-up", "fpp": {"section": "mainPlaylist", "position": 0}},
+		{"id": "b", "cue": "kpop-audio", "fpp": {"section": "mainPlaylist", "position": 1}}
+	]}`
+
 func TestShowPlaylistDefinitionMovePreviewPositionMatchesNameBothSequences(t *testing.T) {
 	s := newMovePreviewSetup(t)
-	s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
-	s.putPlaylist(t, "quick", `{
-		"show": "halloween-2026", "name": "Quick check", "runner": "fpp",
-		"fpp": {"instanceUuid": "`+moveInstance+`", "playlistName": "`+moveListName+`", "playlistHash": "`+moveOldHash+`"},
-		"entries": [
-			{"id": "a", "cue": "wake-up", "fpp": {"section": "mainPlaylist", "position": 0}},
-			{"id": "b", "cue": "kpop-audio", "fpp": {"section": "mainPlaylist", "position": 1}}
-		]}`)
+	s.putPlaylist(t, "quick", moveNoFilenamePlaylist)
 	s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
 	status, body := s.preview(t, "quick")
 	var got v1.ShowPlaylistMovePreviewResponse
@@ -260,11 +261,70 @@ func TestShowPlaylistDefinitionMovePreviewPositionMatchesNameBothSequences(t *te
 		t.Fatalf("status = %d; body: %s", status, body)
 	}
 	a := got.Entries[0]
-	if a.Outcome != "kept" || !a.NeedsCheck || a.PreviousSequence != "Wake Up.fseq" || a.NewSequence != "Opener.fseq" {
+	if a.MatchedBy != "position" || a.Outcome != "kept" || !a.NeedsCheck || a.NewSequence != "Opener.fseq" {
 		t.Fatalf("entry a = %+v", a)
 	}
-	if !strings.Contains(a.Summary, "held Wake Up.fseq and now holds Opener.fseq") {
+	if !strings.Contains(a.Summary, "which now holds Opener.fseq. The earlier sequence name is not known.") {
 		t.Fatalf("summary = %q", a.Summary)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewNoFilenameFollowsThePreviousSequence(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+	s.putPlaylist(t, "quick", moveNoFilenamePlaylist)
+	s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	_, before := doRequest(t, s.api.Handler, "GET", "/api/v1/config/show.playlist/quick", s.auth)
+	status, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if status != http.StatusOK || !got.CanConfirm || len(got.Entries) != 2 {
+		t.Fatalf("status = %d; body: %s", status, body)
+	}
+	a, b := got.Entries[0], got.Entries[1]
+	if a.MatchedBy != "previousSequence" || a.Outcome != "moved" || a.To.Position != 1 || a.NeedsCheck || a.PreviousSequence != "Wake Up.fseq" || a.NewSequence != "Wake Up.fseq" || a.Filename != "" {
+		t.Fatalf("entry a = %+v", a)
+	}
+	if b.MatchedBy != "previousSequence" || b.Outcome != "moved" || b.To.Position != 2 || b.NeedsCheck {
+		t.Fatalf("entry b = %+v", b)
+	}
+	if want := "No sequence name was saved for this cue, so it follows the sequence its position held, Wake Up.fseq. Moved from position 0 to position 1."; a.Summary != want {
+		t.Fatalf("summary = %q, want %q", a.Summary, want)
+	}
+	if len(got.NewEntries) != 1 || got.NewEntries[0].Position != 0 {
+		t.Fatalf("new entries: %+v", got.NewEntries)
+	}
+	for _, e := range got.Proposed.Entries {
+		if e.FPP.ExpectedSequenceFilename != "" {
+			t.Fatalf("proposed entry %s gained a filename: %+v", e.ID, e.FPP)
+		}
+	}
+	_, after := doRequest(t, s.api.Handler, "GET", "/api/v1/config/show.playlist/quick", s.auth)
+	if string(stripServerTime(before)) != string(stripServerTime(after)) {
+		t.Fatalf("the preview wrote:\n%s\n%s", before, after)
+	}
+
+	proposedJSON, _ := json.Marshal(got.Proposed)
+	hdr := map[string]string{"Authorization": "Bearer " + s.token, "If-Match": `"1"`}
+	resp, putBody := doRawRequest(t, s.api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/quick", string(proposedJSON), hdr))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT of the proposed payload: status = %d; body: %s", resp.StatusCode, putBody)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewNoFilenameDroppedNamesTheSequence(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+	s.putPlaylist(t, "quick", moveNoFilenamePlaylist)
+	s.putDefinition(t, moveNewHash, testNow, `{"mainPlaylist":[{"type":"sequence","sequenceName":"Wake Up.fseq"},{"type":"sequence","sequenceName":"Renamed.fseq"}]}`)
+	_, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if len(got.Entries) != 2 || got.Entries[1].Outcome != "dropped" || got.Entries[1].To != nil || got.Entries[1].NeedsCheck {
+		t.Fatalf("entries: %s", body)
+	}
+	if want := "No sequence name was saved for this cue. Its position held kpop.fseq, which is no longer in FPP's playlist. This cue will be removed from this playlist."; got.Entries[1].Summary != want {
+		t.Fatalf("summary = %q", got.Entries[1].Summary)
 	}
 }
 

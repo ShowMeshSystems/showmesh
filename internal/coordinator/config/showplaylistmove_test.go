@@ -240,37 +240,68 @@ func TestPlanPlaylistMoveProposedPayloadDecodes(t *testing.T) {
 	}
 }
 
-func TestPlanPlaylistMoveFlagsPositionMatchesThatLandOnAnotherSequence(t *testing.T) {
+func TestPlanPlaylistMoveNoFilenameFollowsTheSequenceItsPositionHeld(t *testing.T) {
 	saved := movePlaylist(moveEntry("a", "wake-up", "mainPlaylist", 0, ""), moveEntry("b", "kpop-audio", "mainPlaylist", 1, ""))
 	saved.Entries[1].FPP.ExpectedMediaFilename = "kpop.mp3"
 	old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Wake Up.fseq"), seq("mainPlaylist", 1, "kpop.fseq")}
 	news := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Opener.fseq"), seq("mainPlaylist", 1, "Wake Up.fseq"), seq("mainPlaylist", 2, "kpop.fseq")}
 	plan := PlanPlaylistMove(saved, moveTestHash, news, old)
-	for id, want := range map[string][2]string{"a": {"Wake Up.fseq", "Opener.fseq"}, "b": {"kpop.fseq", "Wake Up.fseq"}} {
+	wantMoved(t, plan, "a", PlaylistMoveMoved, "mainPlaylist", 1)
+	wantMoved(t, plan, "b", PlaylistMoveMoved, "mainPlaylist", 2)
+	for id, name := range map[string]string{"a": "Wake Up.fseq", "b": "kpop.fseq"} {
 		e := outcomeOf(t, plan, id)
-		if e.Outcome != PlaylistMoveKept || !e.NeedsCheck || !e.PreviousSequenceKnown || e.PreviousSequence != want[0] || e.NewSequence != want[1] {
-			t.Fatalf("entry %s = %+v, want carried and flagged %v", id, e, want)
+		if e.MatchedBy != PlaylistMoveByPreviousSequence || e.NeedsCheck || e.DuplicateFilename || !e.PreviousSequenceKnown || e.PreviousSequence != name || e.NewSequence != name || e.Filename != "" {
+			t.Fatalf("entry %s = %+v", id, e)
 		}
 	}
-	if len(plan.Unassigned) != 1 || plan.Unassigned[0].Slot.Position != 2 {
+	if len(plan.Unassigned) != 1 || plan.Unassigned[0].Slot.Position != 0 {
 		t.Fatalf("unassigned = %+v", plan.Unassigned)
 	}
-}
-
-func TestPlanPlaylistMovePositionMatchOnTheSameSequenceIsNotFlagged(t *testing.T) {
-	saved := movePlaylist(moveEntry("a", "ca", "mainPlaylist", 0, ""))
-	old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq")}
-	plan := PlanPlaylistMove(saved, moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq"), seq("mainPlaylist", 1, "B.fseq")}, old)
-	if e := outcomeOf(t, plan, "a"); e.NeedsCheck || e.NewSequence != "A.fseq" {
-		t.Fatalf("entry = %+v", e)
+	for _, e := range plan.Proposed.Entries {
+		if e.FPP.ExpectedSequenceFilename != "" {
+			t.Fatalf("a filename was written onto %s: %+v", e.ID, e.FPP)
+		}
+	}
+	if b := plan.Proposed.Entries[1]; b.FPP.ExpectedMediaFilename != "kpop.mp3" || b.FPP.Position != 2 {
+		t.Fatalf("proposed b = %+v", b.FPP)
 	}
 }
 
-func TestPlanPlaylistMovePositionMatchWithoutTheOldCopyIsFlagged(t *testing.T) {
-	saved := movePlaylist(moveEntry("a", "ca", "mainPlaylist", 0, ""))
-	plan := PlanPlaylistMove(saved, moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq")}, nil)
-	if e := outcomeOf(t, plan, "a"); !e.NeedsCheck || e.PreviousSequenceKnown {
-		t.Fatalf("entry = %+v", e)
+func TestPlanPlaylistMoveNoFilenameEntryRemovedOrRenamed(t *testing.T) {
+	saved := movePlaylist(moveEntry("a", "ca", "mainPlaylist", 0, ""), moveEntry("b", "cb", "mainPlaylist", 1, ""), moveEntry("c", "cc", "mainPlaylist", 2, ""))
+	old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq"), seq("mainPlaylist", 1, "B.fseq"), seq("mainPlaylist", 2, "C.fseq")}
+	t.Run("removed", func(t *testing.T) {
+		plan := PlanPlaylistMove(saved, moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq"), seq("mainPlaylist", 1, "C.fseq")}, old)
+		wantMoved(t, plan, "a", PlaylistMoveKept, "mainPlaylist", 0)
+		got := wantDropped(t, plan, "b")
+		if got.MatchedBy != PlaylistMoveByPreviousSequence || got.PreviousSequence != "B.fseq" || got.PositionTaken {
+			t.Fatalf("b = %+v", got)
+		}
+		wantMoved(t, plan, "c", PlaylistMoveMoved, "mainPlaylist", 1)
+	})
+	t.Run("renamed", func(t *testing.T) {
+		plan := PlanPlaylistMove(saved, moveTestHash, []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "A.fseq"), seq("mainPlaylist", 1, "B2.fseq"), seq("mainPlaylist", 2, "C.fseq")}, old)
+		if got := wantDropped(t, plan, "b"); got.PreviousSequence != "B.fseq" || got.MatchedBy != PlaylistMoveByPreviousSequence {
+			t.Fatalf("b = %+v", got)
+		}
+		if len(plan.Unassigned) != 1 || plan.Unassigned[0].SequenceName != "B2.fseq" {
+			t.Fatalf("unassigned = %+v", plan.Unassigned)
+		}
+	})
+}
+
+func TestPlanPlaylistMoveSavedFilenameAndNoFilenameShareARepeatedName(t *testing.T) {
+	saved := movePlaylist(moveEntry("first", "c1", "mainPlaylist", 0, "Loop.fseq"), moveEntry("second", "c2", "mainPlaylist", 1, ""))
+	old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Loop.fseq"), seq("mainPlaylist", 1, "Loop.fseq")}
+	news := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Intro.fseq"), seq("mainPlaylist", 1, "Loop.fseq"), seq("mainPlaylist", 2, "Loop.fseq")}
+	plan := PlanPlaylistMove(saved, moveTestHash, news, old)
+	wantMoved(t, plan, "first", PlaylistMoveMoved, "mainPlaylist", 1)
+	wantMoved(t, plan, "second", PlaylistMoveMoved, "mainPlaylist", 2)
+	if first := outcomeOf(t, plan, "first"); first.MatchedBy != PlaylistMoveByFilename || !first.DuplicateFilename {
+		t.Fatalf("first = %+v", first)
+	}
+	if second := outcomeOf(t, plan, "second"); second.MatchedBy != PlaylistMoveByPreviousSequence || !second.DuplicateFilename || second.NeedsCheck {
+		t.Fatalf("second = %+v", second)
 	}
 }
 
@@ -279,13 +310,48 @@ func TestPlanPlaylistMoveRepeatedSequenceWithNoSavedFilenames(t *testing.T) {
 	old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Loop.fseq"), seq("mainPlaylist", 1, "Loop.fseq")}
 	news := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Intro.fseq"), seq("mainPlaylist", 1, "Loop.fseq"), seq("mainPlaylist", 2, "Loop.fseq")}
 	plan := PlanPlaylistMove(saved, moveTestHash, news, old)
-	if first := outcomeOf(t, plan, "first"); !first.NeedsCheck || first.NewSequence != "Intro.fseq" {
-		t.Fatalf("first = %+v", first)
+	wantMoved(t, plan, "first", PlaylistMoveMoved, "mainPlaylist", 1)
+	wantMoved(t, plan, "second", PlaylistMoveMoved, "mainPlaylist", 2)
+	if !outcomeOf(t, plan, "first").DuplicateFilename || !outcomeOf(t, plan, "second").DuplicateFilename {
+		t.Fatalf("entries not flagged: %+v", plan.Entries)
 	}
-	if second := outcomeOf(t, plan, "second"); second.NeedsCheck || second.NewSequence != "Loop.fseq" {
-		t.Fatalf("second = %+v", second)
+}
+
+func TestPlanPlaylistMoveFallsBackToPositionWhenNoNameIsKnown(t *testing.T) {
+	saved := movePlaylist(moveEntry("a", "wake-up", "mainPlaylist", 0, ""), moveEntry("b", "kpop-audio", "mainPlaylist", 1, ""))
+	news := []fppidentity.DefinitionEntry{seq("mainPlaylist", 0, "Opener.fseq"), seq("mainPlaylist", 1, "Wake Up.fseq"), seq("mainPlaylist", 2, "kpop.fseq")}
+	check := func(t *testing.T, plan PlaylistMovePlan, known bool, previous map[string]string) {
+		t.Helper()
+		wantMoved(t, plan, "a", PlaylistMoveKept, "mainPlaylist", 0)
+		wantMoved(t, plan, "b", PlaylistMoveKept, "mainPlaylist", 1)
+		for id, want := range map[string]string{"a": "Opener.fseq", "b": "Wake Up.fseq"} {
+			e := outcomeOf(t, plan, id)
+			if e.MatchedBy != PlaylistMoveByPosition || !e.NeedsCheck || e.PreviousSequenceKnown != known || e.PreviousSequence != previous[id] || e.NewSequence != want {
+				t.Fatalf("entry %s = %+v", id, e)
+			}
+		}
 	}
-	if len(plan.Unassigned) != 1 || plan.Unassigned[0].Slot.Position != 2 {
-		t.Fatalf("unassigned = %+v", plan.Unassigned)
+	t.Run("the current copy is not held", func(t *testing.T) {
+		check(t, PlanPlaylistMove(saved, moveTestHash, news, nil), false, map[string]string{})
+	})
+	t.Run("the old slot has no sequence name", func(t *testing.T) {
+		old := []fppidentity.DefinitionEntry{
+			{Section: "mainPlaylist", Position: 0, Type: "media", MediaName: "wake.mp3"},
+			{Section: "mainPlaylist", Position: 1, Type: "pause"},
+		}
+		check(t, PlanPlaylistMove(saved, moveTestHash, news, old), true, map[string]string{"a": "wake.mp3"})
+	})
+	t.Run("the old copy has no entry at the slot", func(t *testing.T) {
+		old := []fppidentity.DefinitionEntry{seq("mainPlaylist", 7, "Elsewhere.fseq")}
+		check(t, PlanPlaylistMove(saved, moveTestHash, news, old), false, map[string]string{})
+	})
+}
+
+func TestPlanPlaylistMovePositionMatchOnTheSameSequenceIsNotFlagged(t *testing.T) {
+	saved := movePlaylist(moveEntry("a", "ca", "mainPlaylist", 0, ""))
+	old := []fppidentity.DefinitionEntry{{Section: "mainPlaylist", Position: 0, Type: "media", MediaName: "a.mp3"}}
+	plan := PlanPlaylistMove(saved, moveTestHash, []fppidentity.DefinitionEntry{{Section: "mainPlaylist", Position: 0, Type: "media", MediaName: "a.mp3"}, seq("mainPlaylist", 1, "B.fseq")}, old)
+	if e := outcomeOf(t, plan, "a"); e.NeedsCheck || e.NewSequence != "a.mp3" || e.MatchedBy != PlaylistMoveByPosition {
+		t.Fatalf("entry = %+v", e)
 	}
 }
