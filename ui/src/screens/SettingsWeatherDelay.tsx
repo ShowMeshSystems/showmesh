@@ -314,7 +314,7 @@ export function SettingsWeatherDelay() {
             <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for weather delay yet. These are the coordinator's own defaults." />
           )}
 
-          <Section id="st-weatherdelay-alert" title="Alert">
+          <Section id="st-weatherdelay-alert" title="Alert" detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it.">
             <div className="sm-grid sm-grid--auto">
               <WeatherAlertAssetPicker
                 label="Delay alert"

@@ -2270,7 +2270,7 @@ describe('Settings › Mode', () => {
       Promise.resolve({
         serverTime: '2026-08-30T21:00:00Z',
         kind: 'show.mode',
-        revisions: [{ revision: 2, active: true, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalName: 'erbartos', note: '' }],
+        revisions: [{ revision: 2, active: true, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalName: 'operator', note: '' }],
       }),
     )
     stubs.getShowModeConfigRevisions = revisions
@@ -2292,7 +2292,7 @@ describe('Settings › Mode', () => {
         payload: { mode: 'show' },
         updatedAt: '2026-08-30T18:00:00Z',
         createdByPrincipalId: 'p1',
-        createdByPrincipalName: 'erbartos',
+        createdByPrincipalName: 'operator',
         source: 'api',
         resolumeWebSocketEffect: 'closed in show mode',
         cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
@@ -2539,7 +2539,7 @@ describe('RevisionHistory, shared across editors', () => {
     expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
   })
 
-  it('keeps the expandable revision list on Node routing, matching its own mock', async () => {
+  it('keeps the revision summary in the Node routing save row', async () => {
     stubs.listConfigObjects = () =>
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
     stubs.getAudioNode = () =>
@@ -2566,8 +2566,8 @@ describe('RevisionHistory, shared across editors', () => {
 
     renderAt('/settings/node-routing', { nodes: [] })
 
-    expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
-    expect(await screen.findByText('Active · 4')).toBeInTheDocument()
-    expect(screen.getByText(/LTC moved to channel 3/)).toBeInTheDocument()
+    const save = await screen.findByRole('button', { name: /Save routing/ })
+    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'Revisions' })).not.toBeInTheDocument()
   })
 })
