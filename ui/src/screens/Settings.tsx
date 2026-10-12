@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { PageTitle } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 
@@ -14,7 +14,7 @@ const TABS: readonly { path: string; label: string }[] = [
   { path: 'mode', label: 'Mode' },
 ]
 
-/** Settings owns installation configuration; Access remains a leaving tab at `/access`. */
+/** Settings owns installation configuration; Access is its own rail destination. */
 export function Settings() {
   const model = useModelContext()
   const resolume = model.resolume[0]
@@ -31,9 +31,6 @@ export function Settings() {
         <NavLink to={resolume === undefined ? '/settings/resolume' : `/settings/resolume/${encodeURIComponent(resolume.instanceId)}`} className="sm-facets__tab">
           Resolume
         </NavLink>
-        <Link to="/access" className="sm-facets__tab">
-          Access<span aria-hidden="true"> ↗</span>
-        </Link>
       </nav>
 
       <Outlet />
