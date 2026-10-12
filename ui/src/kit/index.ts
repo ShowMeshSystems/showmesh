@@ -33,6 +33,7 @@ export {
   ConnectionPill,
   Panes,
   Rail,
+  RailAccount,
   RailBadge,
   RailFooter,
   RailGroup,

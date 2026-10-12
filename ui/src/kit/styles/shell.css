@@ -36,31 +36,6 @@
   }
 }
 
-/*
- * Below 720px the left group's own show name plus mode badge can already run
- * past the viewport on its own (up to 475px measured), which would carry the
- * bar's overflow toggle off-screen with it if the toggle stayed an in-flow
- * flex child. Bound the show name so the left group is predictable, and
- * reserve room on the right for the toggle, which is fixed so it is never
- * subject to the bar's own overflow regardless of what is in the left group.
- */
-@media (max-width: 720px) {
-  .sm-chrome {
-    padding-right: 54px;
-  }
-
-  .sm-showpicker {
-    max-width: 128px;
-  }
-
-  /* A hard boundary, not just a clip point: overflowing children otherwise
-     paint past the padding above and under the fixed toggle. */
-  .sm-chrome__left {
-    max-width: calc(100vw - 108px);
-    overflow: hidden;
-  }
-}
-
 .sm-chrome__left {
   display: flex;
   align-items: center;
@@ -101,65 +76,6 @@
   align-items: center;
   gap: 14px;
   flex: 0 0 auto;
-}
-
-/*
- * The bar's own overflow menu. Below 720px the bar cannot fit the connection
- * pill and principal group; they move here instead of clipping. Fixed, like
- * the rail opener, so the bar's own nowrap overflow can never carry it
- * off-screen regardless of how wide the left group's show name runs.
- */
-.sm-chrome-toggle {
-  display: none;
-  position: fixed;
-  top: 6px;
-  right: 12px;
-  z-index: 31;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-card);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 15px;
-  cursor: pointer;
-}
-
-@media (max-width: 720px) {
-  .sm-chrome-toggle {
-    display: inline-flex;
-  }
-}
-
-.sm-chrome-overflow-scrim {
-  position: fixed;
-  inset: var(--chrome-h) 0 0 0;
-  z-index: 40;
-  background: transparent;
-}
-
-.sm-chrome-overflow {
-  position: fixed;
-  top: calc(var(--chrome-h) + 1px);
-  right: 12px;
-  z-index: 41;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s-2);
-  padding: var(--s-3);
-  max-width: calc(100vw - 24px);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-card);
-  background: var(--raised);
-  box-shadow: -4px 8px 24px rgb(0 0 0 / 0.4);
-}
-
-.sm-chrome-overflow > .sm-chrome__divider {
-  width: 100%;
-  height: 1px;
 }
 
 .sm-brand {
@@ -559,6 +475,23 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* The signed-in name and Sign out at phone width, above the build lines. The
+   confirm step wraps here: the drawer is narrower than its one-line form. */
+.sm-rail__account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-rail__account .sm-signout-confirm {
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 /* The opener for the collapsed rail. Fixed at the bar's left edge so it stays
