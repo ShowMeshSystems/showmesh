@@ -206,6 +206,18 @@ func fppConnectExtractFileNames(body fppConnectPlaylistPostBody) []string {
 	return out
 }
 
+// fppConnectExtractMediaPairs maps each mediaName to the sequenceName its
+// mainPlaylist entry carries it with.
+func fppConnectExtractMediaPairs(body fppConnectPlaylistPostBody) map[string]string {
+	pairs := make(map[string]string)
+	for _, entry := range body.MainPlaylist {
+		if entry.SequenceName != "" && entry.MediaName != "" {
+			pairs[entry.MediaName] = entry.SequenceName
+		}
+	}
+	return pairs
+}
+
 // fppConnectCountShowMatches counts how many times want occurs in names:
 // 0 means unknown, 1 means resolved, more than 1 means ambiguous (ADR-044
 // decision 8), two shows sharing one display name, which is the only way
@@ -270,6 +282,7 @@ func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Req
 	_ = json.Unmarshal(raw, &payload)
 
 	fileNames := fppConnectExtractFileNames(payload)
+	pairs := fppConnectExtractMediaPairs(payload)
 	now := s.now()
 
 	switch matches := fppConnectCountShowMatches(s.view.ShowNames(), name); {
@@ -291,10 +304,10 @@ func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Req
 			// instead; RebindPendingShowIDs resolves it automatically the
 			// next time any push carries shows.
 			s.held.RecordShowIDNotPushed(name, fileNames, now)
-			s.held.BindPendingShowID(name, fileNames, now)
+			s.held.BindPendingShowID(name, fileNames, pairs, now)
 			break
 		}
-		s.held.BindShow(name, showID, fileNames, now)
+		s.held.BindShow(name, showID, fileNames, pairs, now)
 	}
 
 	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)

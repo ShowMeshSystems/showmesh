@@ -1001,7 +1001,7 @@ func TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord(t *testing.T) {
 		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
 	}
 
-	held.BindShow("Halloween", "halloween-2026", []string{"AlreadyBound.fseq"}, time.Now())
+	held.BindShow("Halloween", "halloween-2026", []string{"AlreadyBound.fseq"}, nil, time.Now())
 	bound, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
 	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
 		t.Fatalf("record after BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
@@ -1010,7 +1010,7 @@ func TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord(t *testing.T) {
 	// A stale or regressed playlist POST names the same file for a show
 	// whose id this node cannot currently resolve: the already-bound
 	// record must be left exactly as it was.
-	held.BindPendingShowID("Halloween", []string{"AlreadyBound.fseq"}, time.Now())
+	held.BindPendingShowID("Halloween", []string{"AlreadyBound.fseq"}, nil, time.Now())
 
 	after, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
 	if !ok {
@@ -1043,19 +1043,19 @@ func TestFPPConnectBindShowToNewIdentityResetsRegistration(t *testing.T) {
 	}
 	srv.Close()
 
-	held.BindShow("Halloween", "halloween-2026", []string{"Rebound.fseq"}, time.Now())
+	held.BindShow("Halloween", "halloween-2026", []string{"Rebound.fseq"}, nil, time.Now())
 	bound, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
 	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
 		t.Fatalf("record after initial BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
 	}
-	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, bound.ShowID, bound.LogicalSequence, "asset-halloween", false) {
+	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, bound.ShowID, bound.LogicalSequence, "asset-halloween", false, "") {
 		t.Fatal("SetRegistrationRegistered was a no-op, want it to apply")
 	}
 
 	// A later playlist POST rebinds the SAME file to a DIFFERENT show
 	// (xLights' own playlist naming changed, or an operator error): the
 	// resolved ShowID changes even though the file itself did not.
-	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, nil, time.Now())
 
 	after, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
 	if !ok {
@@ -1079,7 +1079,7 @@ func TestFPPConnectBindShowToNewIdentityResetsRegistration(t *testing.T) {
 
 	// Rebinding to the SAME show a second time must not disturb the reset
 	// state further (BindShow's own idempotence, unaffected by this fix).
-	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, nil, time.Now())
 	still, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
 	if !ok || still.RegistrationState != "" || still.RegistrationReason != after.RegistrationReason {
 		t.Fatalf("record after a same-show rebind = %+v (found=%v), want unchanged from %+v", still, ok, after)
@@ -1433,7 +1433,7 @@ func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("File%04d.fseq", i)
 	}
-	held.BindShow("SomeShow", "some-show", names, time.Now())
+	held.BindShow("SomeShow", "some-show", names, nil, time.Now())
 
 	held.mu.Lock()
 	gotLen := len(held.pending)
@@ -1476,7 +1476,7 @@ func TestFPPConnectPendingBindingKeyIsBoundedAndStillMatchesALaterUpload(t *test
 
 	longName := strings.Repeat("N", 900*1024) + ".fseq"
 
-	held.BindShow("Halloween", "halloween-2026", []string{longName}, time.Now())
+	held.BindShow("Halloween", "halloween-2026", []string{longName}, nil, time.Now())
 
 	held.mu.Lock()
 	if got := len(held.pending); got != 1 {

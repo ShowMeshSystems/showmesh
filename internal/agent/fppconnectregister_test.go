@@ -811,10 +811,9 @@ func TestFPPConnectRegisterContentHashMismatchIsFailure(t *testing.T) {
 	}
 }
 
-// TestFPPConnectRegisterMusicFileIsSkipped proves a bound music/videos
-// upload never reaches the registration endpoint: FC3 registers FSEQ
-// content only, and the record says so.
-func TestFPPConnectRegisterMusicFileIsSkipped(t *testing.T) {
+// TestFPPConnectRegisterVideoFileIsSkipped proves a bound videos upload
+// never reaches the registration endpoint, and the record says so.
+func TestFPPConnectRegisterVideoFileIsSkipped(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 
 	var requestCount int32
@@ -826,15 +825,15 @@ func TestFPPConnectRegisterMusicFileIsSkipped(t *testing.T) {
 
 	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
 
-	uploadAndBind(t, held, "music", "Song.mp3", []byte("audio-bytes"))
+	uploadAndBind(t, held, "videos", "Clip.mp4", []byte("video-bytes"))
 
-	skipped := waitForRegistrationState(t, held, "music", "Song.mp3", fppConnectRegistrationSkipped)
-	if !strings.Contains(skipped.RegistrationReason, "music") {
-		t.Fatalf("RegistrationReason = %q, want it to name the music directory", skipped.RegistrationReason)
+	skipped := waitForRegistrationState(t, held, "videos", "Clip.mp4", fppConnectRegistrationSkipped)
+	if want := `mediaType for directory "videos" is not registered by this lane`; skipped.RegistrationReason != want {
+		t.Fatalf("RegistrationReason = %q, want %q", skipped.RegistrationReason, want)
 	}
 	time.Sleep(100 * time.Millisecond)
 	if got := atomic.LoadInt32(&requestCount); got != 0 {
-		t.Fatalf("registration requests = %d, want 0 for a music upload", got)
+		t.Fatalf("registration requests = %d, want 0 for a videos upload", got)
 	}
 }
 
@@ -1160,7 +1159,7 @@ func TestFPPConnectRegisterRebindDuringInFlightAttemptRegistersUnderNewIdentity(
 
 	// A rebind to a different show lands while the attempt above is still
 	// in flight, waiting on the fake coordinator's response.
-	held.BindShow("Christmas", "christmas-2026", []string{"Rebind.fseq"}, time.Now())
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebind.fseq"}, nil, time.Now())
 	close(rebindDone)
 
 	registered := waitForRegistrationState(t, held, "sequences", "Rebind.fseq", fppConnectRegistrationRegistered)
@@ -1487,7 +1486,7 @@ func TestFPPConnectRegisterReadyFileStaysPendingBehindAwaitingCompetitor(t *test
 		t.Fatalf("upload competitor: status = %d, body=%s", resp.StatusCode, body)
 	}
 	competitorSrv.Close()
-	held.BindPendingShowID("Halloween", []string{"My Show.fseq"}, time.Now())
+	held.BindPendingShowID("Halloween", []string{"My Show.fseq"}, nil, time.Now())
 	competitor, ok := findHeldRecord(t, held, "sequences", "My Show.fseq")
 	if !ok || competitor.Bound || competitor.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
 		t.Fatalf("competitor = %+v (ok=%v), want held, unbound, awaiting the show id", competitor, ok)
@@ -1504,7 +1503,7 @@ func TestFPPConnectRegisterReadyFileStaysPendingBehindAwaitingCompetitor(t *test
 		t.Fatalf("upload ready file: status = %d, body=%s", resp.StatusCode, body)
 	}
 	readySrv.Close()
-	held.BindShow("Halloween", "halloween-2026", []string{"my_show.fseq"}, time.Now())
+	held.BindShow("Halloween", "halloween-2026", []string{"my_show.fseq"}, nil, time.Now())
 
 	pending := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationPending)
 	if !strings.Contains(pending.RegistrationReason, "My Show.fseq") {

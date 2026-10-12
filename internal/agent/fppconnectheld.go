@@ -99,10 +99,14 @@ type fppConnectHeldRecord struct {
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 	UnboundReason   string `json:"unboundReason,omitempty"`
 
+	// PairedSequence is the sequence file a music file was uploaded with,
+	// and what its audio asset is named after. Empty for every other file.
+	PairedSequence string `json:"pairedSequence,omitempty"`
+
 	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
 	// bound file this lane has not yet attempted to register, one of
-	// [fppConnectRegistrationSkipped] (a music/videos file: this lane
-	// registers FSEQ content only), [fppConnectRegistrationPending] (an
+	// [fppConnectRegistrationSkipped] (a videos file: this lane registers
+	// sequences and music only), [fppConnectRegistrationPending] (an
 	// attempt failed retryably and another is scheduled),
 	// [fppConnectRegistrationRegistered] (the coordinator accepted it), or
 	// [fppConnectRegistrationFailed] (a non-retryable coordinator refusal,
@@ -124,8 +128,9 @@ type fppConnectHeldRecord struct {
 
 	// RegistrationReason is human-readable evidence for the current
 	// RegistrationState: why registration is skipped, the retry reason
-	// while pending, or the failure detail. Empty when RegistrationState
-	// is "" or "registered", except immediately after BindShow resets an
+	// while pending, the failure detail, or the asset name a registered
+	// music file took. Otherwise empty when RegistrationState is "" or
+	// "registered", except immediately after BindShow resets an
 	// already-registered record to "" for a rebind to a new show or
 	// sequence identity (review round 5 finding 1,
 	// resetRegistrationForRebindLocked): RegistrationReason then carries
@@ -261,6 +266,10 @@ const fppConnectMaxPending = 500
 type fppConnectPendingBinding struct {
 	ShowName string `json:"showName"`
 	ShowID   string `json:"showId"`
+
+	// PairedSequence is the sequence file the playlist post paired this
+	// media file with, when it named one.
+	PairedSequence string `json:"pairedSequence,omitempty"`
 }
 
 // fppConnectUnboundReasonShowIDNotPushed is fppConnectHeldRecord.
@@ -585,9 +594,9 @@ func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord,
 // letting whichever of two colliding files happened to attempt while the
 // other was mid-wait claim the identity uncontested, decided by push
 // timing rather than claimIdentity's own ReceivedAt fairness rule.
-// Scoped to dir so a music/videos file, which this lane never registers
-// at all, is never flagged against a sequences file it could never
-// actually collide with at the API. Returns nil when no such collision
+// Scoped to dir so a music or videos file is never flagged against a
+// sequences file it could never actually collide with at the API (the
+// media type differs). Returns nil when no such collision
 // exists.
 func (s *fppConnectHeldStore) CollidingRecords(dir, name, showID, showName, logicalSequence string) []fppConnectHeldRecord {
 	s.mu.Lock()
@@ -692,17 +701,37 @@ func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, wantSho
 // coordinator's own response fields (ADR-028 decision 10). Returns false
 // (a no-op) when wantHash, wantShowID, or wantLogicalSequence no longer
 // matches the current record.
-func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, wantShowID, wantLogicalSequence, assetID string, rolledBack bool) bool {
+func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, wantShowID, wantLogicalSequence, assetID string, rolledBack bool, note string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
 		rec.RegistrationState = fppConnectRegistrationRegistered
 		rec.RegistrationAssetID = assetID
 		rec.RegistrationRolledBack = rolledBack
-		rec.RegistrationReason = ""
+		rec.RegistrationReason = note
 		rec.RegistrationProblemType = ""
 		rec.RegistrationNextRetryAt = time.Time{}
 	})
+}
+
+// SetPairedSequence records that the held music file (dir, name) came with
+// sequenceName and renames its asset to match. Returns false (a no-op) when
+// wantHash or wantShowID no longer matches the current record.
+func (s *fppConnectHeldStore) SetPairedSequence(dir, name, wantHash, wantShowID, sequenceName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := dir + "/" + name
+	rec, exists := s.records[key]
+	if !exists || rec.ContentHash != wantHash || rec.ShowID != wantShowID {
+		return false
+	}
+	rec.PairedSequence = fppConnectPairedSequenceFor(dir, name, rec.PairedSequence, map[string]string{name: sequenceName})
+	rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, rec.PairedSequence)
+	s.records[key] = rec
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after pairing a song with its sequence", "dir", dir, "name", name, "error", err)
+	}
+	return true
 }
 
 // MainPlaylistFor returns one fppConnectPlaylistEntry per held record
@@ -792,6 +821,46 @@ func fppConnectLogicalSequenceSlug(name string) string {
 		slug = strings.TrimSuffix(slug[:64], "-")
 	}
 	return slug
+}
+
+// fppConnectMusicDir is the upload directory whose files register as audio.
+const fppConnectMusicDir = "music"
+
+// fppConnectAudioSequenceSuffix keeps a song's asset name apart from the
+// sequence it plays with.
+const fppConnectAudioSequenceSuffix = "-audio"
+
+// fppConnectSequenceIDFor is the asset name a held file registers under. A
+// music file is named after its paired sequence, or after itself when it
+// has none, plus fppConnectAudioSequenceSuffix.
+func fppConnectSequenceIDFor(dir, name, pairedSequence string) string {
+	if dir != fppConnectMusicDir {
+		return fppConnectLogicalSequenceSlug(name)
+	}
+	base := name
+	if pairedSequence != "" {
+		base = pairedSequence
+	}
+	slug := fppConnectLogicalSequenceSlug(base)
+	if slug == "" {
+		return ""
+	}
+	if room := 64 - len(fppConnectAudioSequenceSuffix); len(slug) > room {
+		slug = strings.TrimRight(slug[:room], "-")
+	}
+	return slug + fppConnectAudioSequenceSuffix
+}
+
+// fppConnectPairedSequenceFor returns the sequence file pairs names for a
+// music file, or current when pairs has none.
+func fppConnectPairedSequenceFor(dir, name, current string, pairs map[string]string) string {
+	if dir != fppConnectMusicDir {
+		return ""
+	}
+	if seq := pairs[name]; seq != "" {
+		return fppConnectBoundEventString(seq)
+	}
+	return current
 }
 
 // stagingDir, stagingFilePath, heldFileDir, heldFilePath and indexPath are
@@ -1254,12 +1323,12 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 			rec.Bound = true
 			rec.Show = showName
 			rec.ShowID = id
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, "")
 			return
 		}
 		if fppConnectContainsShow(showNames(), showName) {
 			rec.Show = showName
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, "")
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			return
 		}
@@ -1267,6 +1336,9 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 	}
 
 	if binding, ok := s.pending[fppConnectBoundEventString(name)]; ok {
+		if dir == fppConnectMusicDir {
+			rec.PairedSequence = binding.PairedSequence
+		}
 		if binding.ShowID == "" {
 			// A POST /api/playlist/{name} named this file's show by
 			// display name before the coordinator ever pushed that
@@ -1274,20 +1346,21 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 			// guessed, with a reason RebindPendingShowIDs specifically
 			// looks for once a later push carries shows.
 			rec.Show = binding.ShowName
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, rec.PairedSequence)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 		} else {
 			rec.Bound = true
 			rec.Show = binding.ShowName
 			rec.ShowID = binding.ShowID
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, rec.PairedSequence)
 		}
 		s.deletePendingLocked(name)
 	} else if hadPrev && prev.Bound {
 		rec.Bound = true
 		rec.Show = prev.Show
 		rec.ShowID = prev.ShowID
-		rec.LogicalSequence = prev.LogicalSequence
+		rec.PairedSequence = prev.PairedSequence
+		rec.LogicalSequence = fppConnectSequenceIDFor(dir, name, rec.PairedSequence)
 	} else {
 		showName, known, everSet := activeShow()
 		switch {
@@ -1330,7 +1403,7 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 // another show kept reporting "registered" for the new show while no
 // asset existed there at all, since nothing ever told the registrar to
 // try again under the new identity.
-func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []string, at time.Time) {
+func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []string, pairs map[string]string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1343,13 +1416,15 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 			if rec.Name != fname {
 				continue
 			}
-			newSeq := fppConnectLogicalSequenceSlug(fname)
+			paired := fppConnectPairedSequenceFor(rec.Dir, fname, rec.PairedSequence, pairs)
+			newSeq := fppConnectSequenceIDFor(rec.Dir, fname, paired)
 			if rec.RegistrationState != "" && (rec.ShowID != showID || rec.LogicalSequence != newSeq) {
 				rec = resetRegistrationForRebindLocked(rec)
 			}
 			rec.Bound = true
 			rec.Show = showName
 			rec.ShowID = showID
+			rec.PairedSequence = paired
 			rec.LogicalSequence = newSeq
 			rec.UnboundReason = ""
 			s.records[key] = rec
@@ -1361,7 +1436,7 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 		if matched {
 			s.deletePendingLocked(fname)
 		} else {
-			s.addPendingLocked(fname, showName, showID)
+			s.addPendingLocked(fname, showName, showID, pairs[fname])
 		}
 	}
 
@@ -1419,7 +1494,7 @@ func resetRegistrationForRebindLocked(rec fppConnectHeldRecord) fppConnectHeldRe
 // attempting to register while this one waits still finds it as a
 // competitor, rather than treating this temporary sub-state as if the
 // file did not exist at all.
-func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, at time.Time) {
+func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, pairs map[string]string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1439,7 +1514,8 @@ func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []str
 			rec.Bound = false
 			rec.Show = showName
 			rec.ShowID = ""
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(fname)
+			rec.PairedSequence = fppConnectPairedSequenceFor(rec.Dir, fname, rec.PairedSequence, pairs)
+			rec.LogicalSequence = fppConnectSequenceIDFor(rec.Dir, fname, rec.PairedSequence)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			s.records[key] = rec
 			if s.onHeld != nil {
@@ -1449,7 +1525,7 @@ func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []str
 		if matched {
 			s.deletePendingLocked(fname)
 		} else {
-			s.addPendingLocked(fname, showName, "")
+			s.addPendingLocked(fname, showName, "", pairs[fname])
 		}
 	}
 
@@ -1483,7 +1559,7 @@ func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name strin
 		}
 		rec.Bound = true
 		rec.ShowID = id
-		rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+		rec.LogicalSequence = fppConnectSequenceIDFor(rec.Dir, rec.Name, rec.PairedSequence)
 		rec.UnboundReason = ""
 		s.records[key] = rec
 		changed = true
@@ -1500,7 +1576,7 @@ func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name strin
 		if !ok {
 			continue
 		}
-		s.pending[fname] = fppConnectPendingBinding{ShowName: binding.ShowName, ShowID: id}
+		s.pending[fname] = fppConnectPendingBinding{ShowName: binding.ShowName, ShowID: id, PairedSequence: binding.PairedSequence}
 		changed = true
 	}
 
@@ -1524,9 +1600,9 @@ func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name strin
 // identical bound, so a later upload of that same file (whose real,
 // unbounded Name completeLocked bounds the same way before looking it up)
 // still matches this entry. s.mu already held.
-func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID string) {
+func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID, pairedSequence string) {
 	fname = fppConnectBoundEventString(fname)
-	binding := fppConnectPendingBinding{ShowName: showName, ShowID: showID}
+	binding := fppConnectPendingBinding{ShowName: showName, ShowID: showID, PairedSequence: fppConnectBoundEventString(pairedSequence)}
 	if _, exists := s.pending[fname]; exists {
 		s.pending[fname] = binding
 		return
@@ -1766,7 +1842,7 @@ func (s *fppConnectHeldStore) load() error {
 			// RebindPendingShowIDs converges it the next time any push
 			// resolves the show it already names.
 			rec.Bound = false
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+			rec.LogicalSequence = fppConnectSequenceIDFor(rec.Dir, rec.Name, rec.PairedSequence)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			s.records[key] = rec
 		}

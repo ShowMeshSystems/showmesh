@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/fseq"
 )
 
 // This file is FC3: it turns a held, bound file (FC2's fppconnectheld.go)
@@ -54,14 +56,20 @@ const fppConnectRegisterTimeout = 30 * time.Minute
 // http.DefaultClient.
 var fppConnectRegisterHTTPClient = &http.Client{}
 
+// fppConnectPairingGrace is how long a song with no known sequence waits
+// for one before registering under its own file name. xLights sends a
+// song before the sequence it belongs to.
+const fppConnectPairingGrace = 2 * time.Minute
+
 // fppConnectMediaTypeForDir maps FC2's upload directory to the assets
-// API's mediaType. Only "sequences" registers in this lane: FC3 registers
-// FSEQ content only, per docs/build/TRACK-E-FPP-CONNECT.md's FC3
-// paragraph; "music" and "videos" are held (an operator can still see and
-// manually promote them) but never reach POST /api/v1/assets from here.
+// API's mediaType. "sequences" and "music" register; "videos" is held but
+// never reaches POST /api/v1/assets from here.
 func fppConnectMediaTypeForDir(dir string) (mediaType string, registrable bool) {
-	if dir == "sequences" {
+	switch dir {
+	case "sequences":
 		return "fseq", true
+	case fppConnectMusicDir:
+		return "audio", true
 	}
 	return "", false
 }
@@ -78,6 +86,9 @@ type fppConnectRegisterOutcome struct {
 	rolledBack  bool
 	reason      string
 	problemType string
+
+	// note is what a registered record's reason says; "" for a sequence.
+	note string
 }
 
 // fppConnectRegistrar is FC3's whole state: it watches
@@ -104,6 +115,9 @@ type fppConnectRegistrar struct {
 	// explicit Wake() or a multi-second sleep.
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+
+	// pairingGrace is fppConnectPairingGrace, a field so a test can shorten it.
+	pairingGrace time.Duration
 
 	// triggerInventory signals the asset inventory to republish out of
 	// cadence after a successful registration, so the coordinator's own
@@ -170,6 +184,7 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 		triggerInventory: triggerInventory, now: now, logger: logger,
 		initialBackoff: fppConnectRegisterInitialBackoff,
 		maxBackoff:     fppConnectRegisterMaxBackoff,
+		pairingGrace:   fppConnectPairingGrace,
 		wake:           make(chan struct{}),
 		inFlight:       map[string]bool{},
 		identityOwner:  map[string]string{},
@@ -243,6 +258,10 @@ func (r *fppConnectRegistrar) OnHeld(rec fppConnectHeldRecord) {
 		// ADR-030 decision 5 extended: an unresolved binding registers
 		// nothing, and must never be reported as pending registration.
 		return
+	}
+	if rec.Dir == "sequences" || rec.Dir == fppConnectMusicDir {
+		// A song may be waiting on this sequence, or on its own new pairing.
+		r.Wake()
 	}
 	if fppConnectRegistrationTerminal(rec.RegistrationState) {
 		// xLights fires POST /api/playlist/{name} up to twice per target
@@ -370,6 +389,10 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 		// until the next Wake() or the full backoff elapses.
 		wake := r.wakeChan()
 
+		if r.pairSong(rec) {
+			continue
+		}
+
 		outcome := r.attemptRegister(rec)
 
 		// Every branch below treats a false return from its setter as
@@ -405,7 +428,7 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 			}
 			return
 		case fppConnectRegistrationRegistered:
-			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.assetID, outcome.rolledBack) {
+			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.assetID, outcome.rolledBack, outcome.note) {
 				if !r.waitBeforeRetry(wake) {
 					return
 				}
@@ -467,6 +490,73 @@ func (r *fppConnectRegistrar) waitBeforeRetry(wake <-chan struct{}) bool {
 	case <-wake:
 		return true
 	}
+}
+
+// fppConnectBaseName is path's last element, for either separator: an
+// FSEQ names its media by the full path on the machine that made it.
+func fppConnectBaseName(path string) string {
+	return path[strings.LastIndexAny(path, `/\`)+1:]
+}
+
+// sequenceForSong finds the held sequence file a song belongs to: the one
+// whose FSEQ names the song as its media, else the one sharing its file
+// name. The most recently received match wins.
+func (r *fppConnectRegistrar) sequenceForSong(song fppConnectHeldRecord) (string, bool) {
+	var byMedia, byName *fppConnectHeldRecord
+	for _, cand := range r.held.Held() {
+		if cand.Dir != "sequences" || !cand.Bound || cand.ShowID != song.ShowID {
+			continue
+		}
+		if strings.EqualFold(fppConnectSequenceMediaName(r.held.HeldFilePath(cand.Dir, cand.Name)), song.Name) {
+			if byMedia == nil || cand.ReceivedAt.After(byMedia.ReceivedAt) {
+				byMedia = &cand
+			}
+		}
+		if fppConnectLogicalSequenceSlug(cand.Name) == fppConnectLogicalSequenceSlug(song.Name) {
+			if byName == nil || cand.ReceivedAt.After(byName.ReceivedAt) {
+				byName = &cand
+			}
+		}
+	}
+	switch {
+	case byMedia != nil:
+		return byMedia.Name, true
+	case byName != nil:
+		return byName.Name, true
+	}
+	return "", false
+}
+
+// fppConnectSequenceMediaName is the media file name the FSEQ at path
+// names, or "" when it names none or cannot be read.
+func fppConnectSequenceMediaName(path string) string {
+	f, err := fseq.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	return fppConnectBaseName(f.MediaFilename())
+}
+
+// pairSong binds an unpaired song to the sequence it belongs to, when one
+// is held. True means the record changed and must be read again.
+func (r *fppConnectRegistrar) pairSong(rec fppConnectHeldRecord) bool {
+	if rec.Dir != fppConnectMusicDir || rec.PairedSequence != "" {
+		return false
+	}
+	sequenceName, ok := r.sequenceForSong(rec)
+	if !ok {
+		return false
+	}
+	return r.held.SetPairedSequence(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, sequenceName)
+}
+
+// fppConnectSongNote is the reason a registered song's record carries.
+func fppConnectSongNote(rec fppConnectHeldRecord) string {
+	if rec.PairedSequence == "" {
+		return fmt.Sprintf("No sequence came with this song. Registered as %q.", rec.LogicalSequence)
+	}
+	return fmt.Sprintf("Registered as %q.", rec.LogicalSequence)
 }
 
 // fppConnectIdentityKey is the assets API's own identity, as far as this
@@ -628,7 +718,18 @@ func (r *fppConnectRegistrar) strongestCompetitor(colliding []fppConnectHeldReco
 // against the show config OBJECT ID, never the display name FC2's own
 // binding carries (review round 1 finding 1). rec.ShowID is that id,
 // resolved once at bind time (fppconnectheld.go's completeLocked/BindShow).
+//
+// A song registers show-wide, so every audio node receives it; a show-wide
+// asset carries no target.
 func fppConnectRegisterFields(rec fppConnectHeldRecord, mediaType, nodeID string) [][2]string {
+	if mediaType == "audio" {
+		return [][2]string{
+			{"show", rec.ShowID},
+			{"sequence", rec.LogicalSequence},
+			{"mediaType", mediaType},
+			{"targetKind", "show"},
+		}
+	}
 	return [][2]string{
 		{"show", rec.ShowID},
 		{"sequence", rec.LogicalSequence},
@@ -721,6 +822,13 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		return fppConnectRegisterOutcome{
 			kind:   fppConnectRegistrationPending,
 			reason: fmt.Sprintf("bound record for %q has no resolved show id", rec.Name),
+		}
+	}
+
+	if rec.Dir == fppConnectMusicDir && rec.PairedSequence == "" && r.now().Sub(rec.ReceivedAt) < r.pairingGrace {
+		return fppConnectRegisterOutcome{
+			kind:   fppConnectRegistrationPending,
+			reason: "Waiting for the sequence this song belongs to.",
 		}
 	}
 
@@ -857,7 +965,11 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode == http.StatusOK {
-		return fppConnectClassifyRegisterSuccess(body, rec.ContentHash)
+		outcome := fppConnectClassifyRegisterSuccess(body, rec.ContentHash)
+		if rec.Dir == fppConnectMusicDir {
+			outcome.note = fppConnectSongNote(rec)
+		}
+		return outcome
 	}
 
 	problemType, detail := fppConnectDecodeProblem(body)
