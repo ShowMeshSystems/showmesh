@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigObjectSummary, type ConfigShowCue, type Model, type SessionResponse, type ShowCueConfigResponse } from '../api'
+import { ApiError, PROBLEM_TYPE, type ConfigObjectSummary, type ConfigShowCue, type Model, type SessionResponse, type ShowCueConfigResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 
@@ -14,6 +14,7 @@ const stubs = vi.hoisted(() => ({
   getShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   deleteShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deployNodeCueCatalog: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() =>
     Promise.resolve({
       serverTime: '2026-08-30T21:00:00Z',
@@ -49,6 +50,7 @@ vi.mock('../api', async () => {
     putShowCue: (...args: never[]) => stubs.putShowCue(...args),
     deleteShowCue: (...args: never[]) => stubs.deleteShowCue(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
+    deployNodeCueCatalog: (...args: never[]) => stubs.deployNodeCueCatalog(...args),
   }
 })
 
@@ -1214,6 +1216,61 @@ describe('Shows · Cues tab', () => {
       expect(save).toBeDisabled()
       fireEvent.click(screen.getByRole('button', { name: 'Remove ghost-action' }))
       expect(save).not.toBeDisabled()
+    })
+  })
+
+  describe('Deploy cue catalog', () => {
+    const activeRuns = { serverTime: '2026-08-30T21:00:00Z', activeShow: { configured: true, show: 'winter-ridge-2026', generation: 1 }, runs: [] } as never
+    const deployed = (nodeId: string) => Promise.resolve({ outcome: 'confirmed', revision: 'r1', nodeId })
+
+    function setupDeploy(model: Partial<Model> = {}) {
+      stubs.getShow = () => showHead().then((r) => ({ ...r, payload: { ...r.payload, audioNodes: ['node-a', 'node-b'] } }))
+      stubs.listConfigObjects = (kind: string) => withContents(kind, [cueSummary()], [playlistSummary()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = (id: string) => Promise.resolve(cueResponse(cuePayload(), id))
+      stubs.getShowPlaylist = () => Promise.resolve(playlistResponse())
+      return renderWorkspace({ session: signedIn(['config:write', 'cuecatalog:deploy']), currentRuns: activeRuns, ...model })
+    }
+
+    it('deploys the active show catalog to every declared node and lists each outcome', async () => {
+      const calls: unknown[][] = []
+      stubs.deployNodeCueCatalog = (...args: unknown[]) => {
+        calls.push(args)
+        return deployed(String(args[0]))
+      }
+      setupDeploy()
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      await waitFor(() => expect(button).toBeEnabled())
+      fireEvent.click(button)
+      const outcome = await screen.findByRole('status', { name: 'Cue catalog deploy outcome' })
+      await waitFor(() => expect(within(outcome).getByText('node-a · Confirmed')).toBeInTheDocument())
+      expect(within(outcome).getByText('node-b · Confirmed')).toBeInTheDocument()
+      expect(calls.map((c) => c[0])).toEqual(['node-a', 'node-b'])
+    })
+
+    it('offers Deploy anyway only for the node that refused on a claim conflict', async () => {
+      const calls: unknown[][] = []
+      stubs.deployNodeCueCatalog = (...args: unknown[]) => {
+        calls.push(args)
+        if (args[0] === 'node-b' && args[1] !== true) return Promise.reject(new ApiError('Two cues claim the same surface.', 409, PROBLEM_TYPE.cueCatalogClaimConflict))
+        return deployed(String(args[0]))
+      }
+      setupDeploy()
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      await waitFor(() => expect(button).toBeEnabled())
+      fireEvent.click(button)
+      fireEvent.click(await screen.findByRole('button', { name: 'Deploy anyway' }))
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Deploy anyway' }))
+      await waitFor(() => expect(screen.getByText('node-b · Confirmed')).toBeInTheDocument())
+      expect(calls.map((c) => [c[0], c[1]])).toEqual([['node-a', undefined], ['node-b', undefined], ['node-b', true]])
+    })
+
+    it('stays disabled with a reason when this show is not the active show', async () => {
+      setupDeploy({ currentRuns: { serverTime: '2026-08-30T21:00:00Z', activeShow: { configured: true, show: 'other-show', generation: 1 }, runs: [] } as never })
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'This show is not the active show. Activate it to deploy its cue catalog.')
     })
   })
 })

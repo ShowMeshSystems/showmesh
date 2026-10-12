@@ -5,11 +5,9 @@ import {
   clearRenderSurface,
   declareNode,
   deleteNodeDeclaration,
-  deployNodeCueCatalog,
   getAudioAlignmentRun,
   getShowSurface,
   getNodeAssetManifest,
-  getNodeCueCatalog,
   listAudioAlignmentRuns,
   listConfigObjects,
   listShowSurfacesForNode,
@@ -19,13 +17,9 @@ import {
   runDiscovery,
   startAudioAlignmentRun,
   stopAudioAlignmentRun,
-  ApiError,
-  PROBLEM_TYPE,
   type AudioAlignmentRun,
   type AudioAlignmentRunSummary,
   type Capability,
-  type CueCatalogDeployResult,
-  type CueCatalogResponse,
   type NodeAssetManifest,
   type RenderCommandResult,
   type ShowSurfaceConfigResponse,
@@ -54,6 +48,7 @@ import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
 import { nodePlaybackStatus, type FreshReading } from './nodePlaybackModel'
 import { nodeSyncStatus, type SignalFact } from './nodeSyncModel'
 import { SurfaceEditor, type ShowChoice } from './SurfaceEditor'
+import { useCueCatalogDeploy } from './cueCatalogDeploy'
 import { activeShowId, formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
 
@@ -397,44 +392,6 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
 }
 
 /** The node's copy is a deployable projection; it is never fabricated from capability advertisements. */
-/** The node's cue catalog and its deploy, including the refusal that Deploy anyway overrides. */
-function useCueCatalogDeploy(nodeId: string) {
-  const [catalog, setCatalog] = useState<CueCatalogResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  // conflictDetail is the overridable 409's own `detail` text (the real
-  // claim conflict, never invented), set only while a deploy is refused on it.
-  const [conflictDetail, setConflictDetail] = useState<string | null>(null)
-  const [result, setResult] = useState<CueCatalogDeployResult | null>(null)
-  const [deploying, setDeploying] = useState(false)
-  const [confirmingOverride, setConfirmingOverride] = useState(false)
-  const reload = () => getNodeCueCatalog(nodeId).then(setCatalog).catch((err: unknown) => setError(describeApiError(err)))
-  useEffect(() => { reload() }, [nodeId])
-  const deploy = (override?: boolean) => {
-    setDeploying(true)
-    setError(null)
-    setConflictDetail(null)
-    deployNodeCueCatalog(nodeId, override)
-      .then((response) => { setResult(response); reload() })
-      .catch((err: unknown) => {
-        if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.cueCatalogClaimConflict) {
-          setConflictDetail(err.message)
-          return
-        }
-        setError(describeApiError(err))
-      })
-      .finally(() => setDeploying(false))
-  }
-  const deployAnyway = () => {
-    if (conflictDetail === null) return
-    setConfirmingOverride(true)
-  }
-  const confirmDeployAnyway = () => {
-    setConfirmingOverride(false)
-    deploy(true)
-  }
-  return { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway }
-}
-
 function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
   const { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway } = useCueCatalogDeploy(nodeId)
   const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)

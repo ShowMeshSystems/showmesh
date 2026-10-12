@@ -14,6 +14,7 @@ import type {
   Node,
   ResolvedFrom,
   ShowCueConfigResponse,
+  ShowSurfaceConfigResponse,
 } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
@@ -664,4 +665,18 @@ export function explicitListExcludeConflictError(explicitList: readonly string[]
     return "This has its own audio node list, so Exclude has no effect. Clear the list or clear Exclude."
   }
   return null
+}
+
+/** Every node a show's surfaces, audio list and cue audio outputs name, in first-seen order. */
+export function showDeclaredNodes(params: {
+  surfaces: readonly ShowSurfaceConfigResponse[]
+  showAudioNodes: readonly string[]
+  cues: readonly ShowCueConfigResponse[]
+}): string[] {
+  const nodes = [
+    ...params.surfaces.map((s) => s.payload.node),
+    ...params.showAudioNodes,
+    ...params.cues.flatMap((c) => [...(c.payload.outputs.audio?.targets ?? []), ...(c.payload.outputs.announcement?.targets ?? [])]),
+  ]
+  return [...new Set(nodes.filter((n) => n !== ''))]
 }
