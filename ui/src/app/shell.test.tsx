@@ -1393,6 +1393,28 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
+describe('the rail drawer below 1100px', () => {
+  // jsdom applies no stylesheet, so these read the rules the drawer depends on.
+  const css = readFileSync(path.resolve(__dirname, '../kit/styles/shell.css'), 'utf8')
+  const drawerQuery = css.slice(css.lastIndexOf('@media (max-width: 1100px)'))
+  const rule = (selector: string) => {
+    const start = drawerQuery.indexOf(`${selector} {`)
+    if (start === -1) throw new Error(`no ${selector} rule in the 1100px query`)
+    return drawerQuery.slice(start, drawerQuery.indexOf('}', start))
+  }
+
+  it('takes a closed drawer out of the tab order, and puts an open one back', () => {
+    expect(rule('.sm-rail')).toMatch(/visibility:\s*hidden/)
+    expect(rule(".sm-rail[data-open='true']")).toMatch(/visibility:\s*visible/)
+  })
+
+  it('scrolls inside a viewport shorter than the drawer, so the footer stays reachable', () => {
+    expect(rule('.sm-rail')).toMatch(/max-height:\s*calc\(100vh - var\(--chrome-h\) - 1px\)/)
+    expect(rule('.sm-rail')).toMatch(/overflow-y:\s*auto/)
+    expect(rule('.sm-rail > *')).toMatch(/flex-shrink:\s*0/)
+  })
+})
+
 describe('the old design system', () => {
   const src = path.join(__dirname, '..')
   const files = sourceFiles(src)
