@@ -319,12 +319,21 @@
   white-space: nowrap;
 }
 
-/* Holds the weather delay banner under the top bar and the progress bar while
-   the page scrolls. The rail reads its height from --sticky-banner-h. */
+/* Holds banners under the top bar and the progress bar while the page scrolls.
+   Capped, with its own scroll, so a long banner never hides the page. The
+   rail reads the height from --sticky-banner-h. */
 .sm-sticky-banners {
   position: sticky;
   top: calc(var(--chrome-h) + 3px);
   z-index: 28;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 720px) {
+  .sm-sticky-banners {
+    max-height: 40vh;
+  }
 }
 
 /* Full-width, non-dismissible strip shown on every screen while a weather

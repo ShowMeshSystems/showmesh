@@ -248,7 +248,6 @@ export function SettingsRecovery() {
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <p className="sm-small sm-faint">Saving does not restart anything now. It changes what happens the next time a pipeline fails.</p>
-
     </>
   )
 }

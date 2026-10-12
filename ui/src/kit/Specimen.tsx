@@ -12,6 +12,7 @@ import {
   ChromeProgress,
   ClockSkewStrip,
   FPPPluginReportsRefusedBanner,
+  StickyBanners,
   StopHoldBanner,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
@@ -477,22 +478,24 @@ export function Specimen() {
               kindLabel="Weather delay state unknown"
               elapsedLabel="Could not read whether a weather delay is active. Check the connection before running the display."
             />
-            <WeatherDelayBanner
-              kindLabel="Weather delay"
-              elapsedLabel="Started 6 m 12 s ago"
-              startedByLabel="Started by operator"
-              groups={[
-                { id: 'stage', label: 'Stage lighting', confirmedLabel: 'Confirmed dark for 4 m' },
-                { id: 'trees', label: 'Trees', unknownLabel: 'Dark not confirmed, could not refresh' },
-                {
-                  id: 'projection',
-                  label: 'Projection',
-                  notDarkMembers: [{ label: 'Resolume proj-01', reason: 'A layer is still producing output.' }],
-                },
-              ]}
-              resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
-              cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
-            />
+            <StickyBanners>
+              <WeatherDelayBanner
+                kindLabel="Weather delay"
+                elapsedLabel="Started 6 m 12 s ago"
+                startedByLabel="Started by operator"
+                groups={[
+                  { id: 'stage', label: 'Stage lighting', confirmedLabel: 'Confirmed dark for 4 m' },
+                  { id: 'trees', label: 'Trees', unknownLabel: 'Dark not confirmed, could not refresh' },
+                  {
+                    id: 'projection',
+                    label: 'Projection',
+                    notDarkMembers: [{ label: 'Resolume proj-01', reason: 'A layer is still producing output.' }],
+                  },
+                ]}
+                resume={{ label: 'Resume', onClick: () => {}, disabled: false, busy: false }}
+                cancelNight={{ label: 'Cancel night', onClick: () => {}, disabled: false, busy: false }}
+              />
+            </StickyBanners>
             <StopHoldBanner
               message="The show is stopped. Press Resume on Live Control to start the show playlist from its first song."
               detail="Stopped at 20:41 by operator"
