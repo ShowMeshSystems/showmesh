@@ -230,7 +230,7 @@ describe('Shows workspace shell', () => {
     expect(within(screen.getByRole('combobox', { name: 'Action' })).getByRole('option', { name: 'Lights up · lights-up' })).toBeInTheDocument()
     expect(screen.getByLabelText('Blackout hold (ms)')).toBeInTheDocument()
     expect(screen.getByLabelText('Blackout after show (ms)')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Enable background audio while resting'))
+    fireEvent.click(screen.getByRole('radio', { name: 'Inline items' }))
     expect(within(screen.getByRole('combobox', { name: 'Audio asset' })).getByRole('option', { name: 'arrival-bed · audio-front' })).toBeInTheDocument()
     expect(screen.getByLabelText('Maximum gain (dB)')).toBeInTheDocument()
   })
