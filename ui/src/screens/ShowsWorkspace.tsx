@@ -177,7 +177,7 @@ export function ShowsWorkspace() {
         <div>
           <h1 className="sm-page__title">{payload.name}</h1>
           <p className="sm-page__lede">
-            Revision <span className="sm-data">{revision}</span> · saved by {createdByPrincipalName ?? 'an unknown principal'} at{' '}
+            Version <span className="sm-data">{revision}</span> · saved by {createdByPrincipalName ?? 'an unknown principal'} at{' '}
             {formatClock(updatedAt) ?? 'an unrecorded time'}
           </p>
         </div>

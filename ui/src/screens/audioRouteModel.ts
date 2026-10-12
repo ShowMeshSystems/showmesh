@@ -30,11 +30,13 @@ export function routeName(route: string, shortName: string | undefined): string 
   return shortName === undefined || shortName === '' ? route : shortName
 }
 
-/** "M4 ch 1-2" when the node reports a short name, otherwise the full route unchanged. */
+/** "M4 ch 1-2" when the node reports a short name, otherwise the full route with its channels. */
 export function audioNodeRouteText(summary: AudioNodeSummary, fleet: readonly Node[]): string {
   const shortName = routeShortName(fleet.find((node) => node.nodeId === summary.id), summary.label)
-  if (shortName === undefined) return summary.label
-  return summary.programChannels.length === 0 ? shortName : `${shortName} ${channelText(summary.programChannels)}`
+  const name = routeName(summary.label, shortName)
+  // A missing channel list reads as no channels.
+  const channels = (summary.programChannels as readonly number[] | null | undefined) ?? []
+  return channels.length === 0 ? name : `${name} ${channelText(channels)}`
 }
 
 /** An audio node id with its route text, collapsed to the bare id when the route adds nothing. */

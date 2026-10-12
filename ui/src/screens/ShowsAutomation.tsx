@@ -978,7 +978,7 @@ function StepEditor({
       </div>
 
       <div className="sm-inspector__actions">
-        <span className="sm-small sm-muted">{action !== undefined ? `${actionIntegrationLabel(action.payload.target.integration)} action` : 'Creates a new step revision'}</span>
+        <span className="sm-small sm-muted">{action !== undefined ? `${actionIntegrationLabel(action.payload.target.integration)} action` : 'Creates a new step version'}</span>
         <div className="sm-btn-row">
           <Button variant="quiet" onClick={onCancel} disabled={saving}>
             Cancel
@@ -2161,7 +2161,7 @@ function ActionEditor({
         <span className="sm-small sm-muted">
           {blockReason ?? (
             <>
-              Creates revision <span className="sm-data">{action.revision + 1}</span>
+              Creates version <span className="sm-data">{action.revision + 1}</span>
             </>
           )}
         </span>

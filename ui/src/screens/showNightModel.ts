@@ -253,7 +253,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
         : 'No readiness result has been recorded.'
       : `${READINESS_WORD[readiness.outcome ?? 'unknown']} at ${formatClock(readiness.completedAt ?? null) ?? 'an unrecorded time'}` +
         `${readinessAge === null ? '' : `, ${formatDuration(readinessAge)} ago`}` +
-        `${readiness.sameEpoch ? ', this epoch' : ', from an earlier epoch'}` +
+        `${readiness.sameEpoch ? ', since the last prepare' : ', before the last prepare'}` +
         `${readiness.fresh ? '' : ', no longer fresh'}.`
 
   const hold = session.stopHold
@@ -309,8 +309,8 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       label: session.attributionDegraded ? 'Attribution degraded' : 'Attribution complete',
       tone: session.attributionDegraded ? 'bad' : 'good',
       fact: session.attributionDegraded
-        ? 'A step ran with no principal recorded. This stays for the session.'
-        : 'Every dispatch this session has an authorizing principal recorded.',
+        ? 'A step ran with no user recorded. This stays for the session.'
+        : 'Every dispatch this session has an authorizing user recorded.',
     },
     {
       key: 'authorization',
@@ -327,7 +327,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       key: 'definition',
       label: 'Definition',
       tone: 'pending',
-      fact: `${session.configObjectId} at revision ${session.configRevision}.`,
+      fact: `${session.configObjectId} at version ${session.configRevision}.`,
     },
     {
       key: 'armed-show',
@@ -430,7 +430,7 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
       cueName: step.cueName,
       nodeId: step.nodeId,
       kind: step.kind,
-      detail: `rev ${step.actionRevision}`,
+      detail: `version ${step.actionRevision}`,
       tone: outcome === undefined ? (step.state === 'pending' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
       state: outcome ?? step.state.replace('_', ' '),
       resolved: step.resolvedAt === null ? (step.reason ?? null) : formatClock(step.resolvedAt),

@@ -160,7 +160,7 @@ export function ShowDraft() {
             'An id is required.'
           ) : (
             <>
-              Creates <span className="sm-data">{id}</span> at revision <span className="sm-data">1</span>
+              Creates <span className="sm-data">{id}</span> at version <span className="sm-data">1</span>
             </>
           )}
         </span>

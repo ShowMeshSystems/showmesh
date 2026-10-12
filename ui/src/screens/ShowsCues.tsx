@@ -1004,7 +1004,7 @@ function CueEditor({
       <Callout>{cueActivationSummary(activationDraft)}</Callout>
 
       <div className="sm-inspector__actions">
-        <span className="sm-small sm-muted">{isNew ? 'Creates revision 1' : `Active revision ${cue?.revision}`}</span>
+        <span className="sm-small sm-muted">{isNew ? 'Creates version 1' : `Active version ${cue?.revision}`}</span>
         <div className="sm-btn-row">
           <Button variant="quiet" onClick={onCancel} disabled={saving}>
             Cancel

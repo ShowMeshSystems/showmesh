@@ -1344,7 +1344,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const overrideValue = revisionOverride === null ? null : parseExactRevisionInput(revisionOverride)
   const overrideError =
     revisionOverride !== null && revisionOverride.trim() !== '' && overrideValue === null
-      ? 'Not a valid revision. Type a whole number, 0 or greater.'
+      ? 'Not a valid version. Type a whole number, 0 or greater.'
       : null
   const effectiveRevision = overrideValue ?? revisionInfo?.next ?? 1n
   const nodeId = selectedNodeId ?? ''
@@ -1536,19 +1536,19 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
             {trimmedSessionId !== '' && (
               <p className="sm-small sm-data">
                 {revisionInfo === null || revisionInfo.observed === null
-                  ? 'Never observed. Sending revision 1.'
-                  : `Revision ${revisionInfo.observed} → ${revisionInfo.next}`}
+                  ? 'Never observed. Sending version 1.'
+                  : `Version ${revisionInfo.observed} → ${revisionInfo.next}`}
               </p>
             )}
             {revisionOverride === null ? (
               <ButtonRow>
                 <Button size="compact" variant="quiet" onClick={() => setRevisionOverride(String(effectiveRevision))}>
-                  Set revision
+                  Set version
                 </Button>
               </ButtonRow>
             ) : (
               <Field
-                label="Revision override"
+                label="Version override"
                 help="Digits only. Use when the automatic value above is stuck."
                 error={overrideError ?? undefined}
               >

@@ -302,7 +302,7 @@ describe('Shows · activation', () => {
     stubs.getShowActiveRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.active', revisions: [] })
     renderShows()
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
+    expect(await screen.findByText('No earlier versions.')).toBeInTheDocument()
   })
 
   it('does not claim a read failure while the activation-history fetch is still pending', async () => {
@@ -312,7 +312,7 @@ describe('Shows · activation', () => {
     stubs.getShowActiveRevisions = () => new Promise(() => {})
     renderShows()
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('does not let a failed activation-history read break Show activation', async () => {
@@ -322,7 +322,7 @@ describe('Shows · activation', () => {
     stubs.getShowActiveRevisions = () => Promise.reject(new Error('network down'))
     renderShows()
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
     expect(await screen.findByRole('button', { name: 'Activate' })).toBeInTheDocument()
   })
@@ -487,11 +487,11 @@ describe('Shows · Identity', () => {
         ],
       })
     renderDetail('winter-ridge-2026')
-    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    const summary = await screen.findByText(/Active version/, { selector: 'p' })
     expect(summary).toBeInTheDocument()
     expect(within(summary).getByText('47')).toBeInTheDocument()
     expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 47')).not.toBeInTheDocument()
     expect(screen.queryByText(/renamed/)).not.toBeInTheDocument()
   })

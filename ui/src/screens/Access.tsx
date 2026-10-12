@@ -310,7 +310,7 @@ export function Access() {
           <RuledStrip
             absence="failed"
             label="This session"
-            fact="At least one step ran with no principal recorded. Which steps is not reported."
+            fact="A step ran with no user recorded."
           />
         )}
       </Section>

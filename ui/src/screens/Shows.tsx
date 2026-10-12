@@ -191,7 +191,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
                   ),
               },
               {
-                term: 'Revision',
+                term: 'Version',
                 value: state.response.revision === 0 ? 'never activated' : <span className="sm-data">{state.response.revision}</span>,
               },
               {

@@ -99,7 +99,7 @@ const TYPE_ROLES = [
 ]
 
 const STRIPS = [
-  { absence: 'loading' as const, label: 'Loading', fact: 'Waiting for the first snapshot', detail: 'An empty list here would not be evidence of an empty fleet.' },
+  { absence: 'loading' as const, label: 'Loading', fact: 'Waiting for the first snapshot' },
   { absence: 'empty' as const, label: 'Empty', fact: 'No cues authored yet', detail: <>A cue binds a transition step to a playlist item. <a href="#specimen-states">Add the first cue</a></> },
   { absence: 'stale' as const, label: 'Stale · 4 m 12 s', fact: 'Pipeline state pre-dates the current stream gap', detail: <>Stale is unknown, never healthy. <a href="#specimen-states">Re-fetch snapshot</a></> },
   { absence: 'failed' as const, label: 'Failed · retry', fact: 'Discovery did not complete', detail: <>The agent on <span className="sm-data">node-04</span> did not answer in 5 s. <a href="#specimen-states">Run discovery again</a></> },

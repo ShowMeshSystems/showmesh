@@ -54,6 +54,22 @@ describe('Monitor · Capabilities', () => {
     expect(screen.getByText('transport.ndi.send · v2 · maxLayers: 8, formats: ndi, ntp')).toBeInTheDocument()
   })
 
+  it('shows an audio output by its short name, with the full device string as its title', () => {
+    const route = 'alsa_output.usb-MOTU_M4-00.pro-output-0'
+    renderScreen({
+      nodes: [
+        node('audio-front', [
+          { id: 'audio.output.local', version: 1, attributes: { outputs: [{ channels: 4, route, shortName: 'M4' }, { route: 'hw:0' }] } },
+        ]),
+      ],
+    })
+    expect(screen.getByText('M4')).toHaveAttribute('title', route)
+    expect(screen.getByText('hw:0')).toHaveAttribute('title', 'hw:0')
+    const line = screen.getByText(/^audio\.output\.local · v1/)
+    expect(line).toHaveTextContent('audio.output.local · v1 · outputs: route: M4, channels: 4, route: hw:0')
+    expect(line).not.toHaveTextContent(route)
+  })
+
   it('reads a node with nothing advertised as nothing to observe, not a failure', () => {
     renderScreen({ nodes: [node('media-garage', [])] })
     expect(screen.getByText('Never advertised')).toBeInTheDocument()

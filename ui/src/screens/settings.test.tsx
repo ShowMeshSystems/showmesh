@@ -2434,7 +2434,7 @@ describe('Settings › Mode', () => {
     await waitFor(() => expect(screen.getByText('The coordinator is unreachable.')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: /Apply mode/ })).not.toBeInTheDocument()
     expect(revisions).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Active revision/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Active version/)).not.toBeInTheDocument()
     cleanup()
 
     stubs.getShowModeConfig = () =>
@@ -2453,7 +2453,7 @@ describe('Settings › Mode', () => {
     renderAt('/settings/mode')
 
     const apply = await screen.findByRole('button', { name: /Apply mode/ })
-    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active version/)).toBeInTheDocument())
   })
 
   it('selects a mode with the radio cards and applies the chosen one', async () => {
@@ -2629,11 +2629,11 @@ describe('RevisionHistory, shared across editors', () => {
 
     renderAt('/settings/delivery')
 
-    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    const summary = await screen.findByText(/Active version/, { selector: 'p' })
     expect(summary).toBeInTheDocument()
     expect(within(summary).getByText('2')).toBeInTheDocument()
     expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 2')).not.toBeInTheDocument()
     expect(screen.queryByText(/raised max upload size/)).not.toBeInTheDocument()
   })
@@ -2646,8 +2646,8 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/audio-defaults')
 
     await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
-    expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(await screen.findByText('No earlier versions.')).toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('names which node substituted which audio field on Audio defaults', async () => {
@@ -2681,7 +2681,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/delivery')
 
     await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('leaves the editor around it intact and reports the failure honestly when the revisions read is rejected, on Content delivery', async () => {
@@ -2692,7 +2692,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/delivery')
 
     await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save delivery' })).toBeInTheDocument()
   })
 
@@ -2707,7 +2707,7 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     const delivery = renderAt('/settings/delivery')
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
     delivery.unmount()
     cleanup()
 
@@ -2720,7 +2720,7 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     renderAt('/settings/audio-defaults')
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
   })
 
   it('keeps the revision summary in the Node routing save row', async () => {
@@ -2751,7 +2751,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     const save = await screen.findByRole('button', { name: /Save routing/ })
-    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
-    expect(screen.queryByRole('heading', { level: 2, name: 'Revisions' })).not.toBeInTheDocument()
+    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active version/)).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'History' })).not.toBeInTheDocument()
   })
 })

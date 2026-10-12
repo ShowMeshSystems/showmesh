@@ -189,7 +189,7 @@ export function ShowDetail() {
           fact={state.reason}
           detail={
             <>
-              No revision of <span className="sm-data">{id}</span> has ever been read on this device.{' '}
+              No version of <span className="sm-data">{id}</span> has ever been read on this device.{' '}
               <button type="button" className="sm-linkbutton" onClick={reload}>
                 Try again
               </button>
@@ -230,7 +230,7 @@ export function ShowDetail() {
           absence="stale"
           label="Stale"
           fact={state.reason}
-          detail={`Showing the copy last read at revision ${revision}.`}
+          detail={`Showing the copy last read at version ${revision}.`}
         />
       )}
 

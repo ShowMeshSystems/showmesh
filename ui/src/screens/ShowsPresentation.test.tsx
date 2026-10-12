@@ -283,8 +283,8 @@ describe('Shows · Presentation tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 6')).not.toBeInTheDocument()
   })
 
@@ -294,7 +294,7 @@ describe('Shows · Presentation tab', () => {
     const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save surface' })
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('reports the read failure honestly when the surface’s revisions fetch is rejected', async () => {
@@ -302,7 +302,7 @@ describe('Shows · Presentation tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
   it('save is disabled without config:write and is actually inert', async () => {

@@ -190,7 +190,7 @@ export function ShowNight() {
           ]
           if (response.command.reason !== undefined && response.command.reason !== '') parts.push(response.command.reason)
           if (response.command.attributionDegraded) {
-            parts.push('This ran with no principal recorded.')
+            parts.push('This ran with no user recorded.')
           }
           setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No-op', detail: parts.join(' ') })
         })
@@ -577,7 +577,7 @@ export function ShowNight() {
                 <div className="sm-outcome__override">
                   <FieldGrid>
                     <Field
-                      label="Interlock rule"
+                      label="Safety check"
                       help="The rule name, exactly as configured."
                       error={overrideInvalid && overrideRule.trim() === '' ? 'Name the rule to override.' : undefined}
                     >
@@ -585,7 +585,7 @@ export function ShowNight() {
                     </Field>
                     <Field
                       label="Reason"
-                      error={overrideInvalid && overrideReason.trim() === '' ? 'A reason is required to override an interlock.' : undefined}
+                      error={overrideInvalid && overrideReason.trim() === '' ? 'A reason is required to override a safety check.' : undefined}
                     >
                       {(props) => <Input {...props} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />}
                     </Field>
@@ -806,7 +806,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
                   ),
               },
               {
-                term: 'Revision',
+                term: 'Version',
                 value: state.response.revision === 0 ? 'never activated' : <span className="sm-data">{state.response.revision}</span>,
               },
               {
@@ -1152,7 +1152,7 @@ function buildSiteControl(sc: SiteControlDraft): { ok: true; value: SiteControlW
   if (sc.powerOffEnabled) {
     if (sc.powerOffAction.trim() === '') return { ok: false, error: 'Presentation power-off needs an action.' }
     if (sc.removalPolicy === 'immediate' && !sc.immediateSafeAttestation) {
-      return { ok: false, error: 'Immediate removal requires the safe-to-remove attestation.' }
+      return { ok: false, error: 'Immediate removal needs the safe-to-remove box ticked.' }
     }
     if (sc.removalPolicy === 'after-actions' && sc.prerequisites.length === 0) {
       return { ok: false, error: 'After-actions removal requires at least one prerequisite.' }
@@ -1183,17 +1183,17 @@ function buildInterlocks(items: InterlockDraft[]): { ok: true; value: InterlockW
   if (items.length === 0) return { ok: true, value: undefined }
   const built: InterlockWrite[] = []
   for (const [index, item] of items.entries()) {
-    if (item.name.trim() === '') return { ok: false, error: `Interlock ${index + 1} needs a name.` }
+    if (item.name.trim() === '') return { ok: false, error: `Safety check ${index + 1} needs a name.` }
     if (item.posture === 'disabled') {
       built.push({ name: item.name.trim(), phase: item.phase, posture: 'disabled' })
       continue
     }
-    if (item.signal.trim() === '') return { ok: false, error: `Interlock ${index + 1} needs a signal action.` }
+    if (item.signal.trim() === '') return { ok: false, error: `Safety check ${index + 1} needs a signal action.` }
     const entry: InterlockWrite = { name: item.name.trim(), phase: item.phase, posture: item.posture, signal: item.signal.trim() }
     if (item.freshnessSeconds.trim() !== '') {
       const freshness = Number(item.freshnessSeconds)
       if (!Number.isInteger(freshness) || freshness < 0) {
-        return { ok: false, error: `Interlock ${index + 1}'s freshness must be a whole, non-negative number of seconds.` }
+        return { ok: false, error: `Safety check ${index + 1}'s freshness must be a whole, non-negative number of seconds.` }
       }
       entry.freshnessSeconds = freshness
     }
@@ -1460,7 +1460,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
       </div>
       <aside>
         {selected === '' ? <div className="sm-inspector sm-night-session-empty"><p className="sm-eyebrow">Definition inspector</p><h3 className="sm-inspector__title">Select a definition</h3><p className="sm-small sm-muted">Choose a row to edit it, or create a new definition.</p></div> : <div className="sm-inspector sm-night-session-inspector">
-          <p className="sm-eyebrow sm-eyebrow--accent">{loaded === null ? 'Draft · new definition' : `Editing · revision ${loaded.revision}`}</p>
+          <p className="sm-eyebrow sm-eyebrow--accent">{loaded === null ? 'Draft · new definition' : `Editing · version ${loaded.revision}`}</p>
           <h3 className="sm-inspector__title" id="sn-definition-inspector-heading">{loaded === null ? 'New night session' : draft.label}</h3>
           <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
@@ -1586,7 +1586,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                   </Field>
                 </div>
                 {draft.siteControl.removalPolicy === 'immediate' && (
-                  <Choice type="checkbox" checked={draft.siteControl.immediateSafeAttestation} onChange={(e) => updateSiteControl({ immediateSafeAttestation: e.target.checked })} label="Attest this power domain is safe to remove immediately" />
+                  <Choice type="checkbox" checked={draft.siteControl.immediateSafeAttestation} onChange={(e) => updateSiteControl({ immediateSafeAttestation: e.target.checked })} label="This power domain is safe to remove immediately" />
                 )}
                 {draft.siteControl.removalPolicy === 'after-actions' && (
                   <>
@@ -1613,7 +1613,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             )}
           </div>
           <div className="sm-inspector__group">
-            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Interlocks</h4><Button onClick={addInterlock}>Add interlock</Button></div>
+            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Safety checks</h4><Button onClick={addInterlock}>Add safety check</Button></div>
             {draft.interlocks.map((item, index) => (
               <div className="sm-night-session-item" key={`interlock-${index}`}>
                 <Field label="Name">{(p) => <Input {...p} value={item.name} onChange={(e) => updateInterlock(index, { name: e.target.value })} />}</Field>
@@ -1640,14 +1640,14 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                     </>
                   )}
                 </div>
-                <Button variant="quiet" onClick={() => removeInterlock(index)}>Remove interlock</Button>
+                <Button variant="quiet" onClick={() => removeInterlock(index)}>Remove safety check</Button>
               </div>
             ))}
           </div>
           {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
           {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
-          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing revision', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }]} />}
-          <div className="sm-inspector__actions"><span className="sm-small sm-muted">{loaded === null ? 'Creates revision 1' : `Creates revision ${loaded.revision + 1}`}</span><div className="sm-btn-row"><Button variant="quiet" onClick={closeInspector}>Cancel</Button><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div></div>
+          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing version', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }]} />}
+          <div className="sm-inspector__actions"><span className="sm-small sm-muted">{loaded === null ? 'Creates version 1' : `Creates version ${loaded.revision + 1}`}</span><div className="sm-btn-row"><Button variant="quiet" onClick={closeInspector}>Cancel</Button><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div></div>
           {loaded !== null && (
             <DeletePanel
               key={loaded.id}

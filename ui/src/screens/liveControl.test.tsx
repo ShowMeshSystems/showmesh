@@ -1149,20 +1149,20 @@ describe('Live Control', () => {
   it('shows an error and disables dispatch for a revision override that does not parse', async () => {
     const region = await renderAudioSessionsReady()
 
-    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
-    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: 'not-a-number' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Set version' }))
+    fireEvent.change(within(region).getByLabelText('Version override'), { target: { value: 'not-a-number' } })
 
-    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByText(/Not a valid version/)).toBeInTheDocument()
     expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
   })
 
   it('rejects a negative revision override, disabling dispatch with the same error', async () => {
     const region = await renderAudioSessionsReady()
 
-    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
-    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: '-5' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Set version' }))
+    fireEvent.change(within(region).getByLabelText('Version override'), { target: { value: '-5' } })
 
-    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByText(/Not a valid version/)).toBeInTheDocument()
     expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
   })
 

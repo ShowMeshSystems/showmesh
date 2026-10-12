@@ -291,7 +291,7 @@ describe('Node detail', () => {
   it('renders capabilities from the node’s own list and states the no-audio-routing fact', () => {
     renderScreen([node({ capabilities: [{ id: 'display.hdmi', version: 1, attributes: { outputs: 2 } }] })])
     expect(screen.getAllByText('display.hdmi').length).toBeGreaterThan(0)
-    expect(screen.getByText(/This node advertises no/)).toBeInTheDocument()
+    expect(screen.getByText(/This node has no audio output\./)).toBeInTheDocument()
     expect(screen.getByText(/reports a count but no names/)).toBeInTheDocument()
   })
 

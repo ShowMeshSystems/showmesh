@@ -162,7 +162,7 @@ describe('Shows workspace shell', () => {
     stubs.listAssets = assetsEmpty
     renderWorkspace()
     await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
-    expect(screen.getByText(/Revision/)).toBeInTheDocument()
+    expect(screen.getByText(/Version/)).toBeInTheDocument()
     expect(screen.getByText(/erbartos/)).toBeInTheDocument()
   })
 

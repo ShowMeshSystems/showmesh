@@ -34,10 +34,11 @@ describe('audio route short names', () => {
     expect(channelText([])).toBe('')
   })
 
-  it('shows the short name with the channels, and the full route unchanged without one', () => {
+  it('shows the channels after the short name, and after the full route without one', () => {
     expect(audioNodeRouteText(summary(), [fleetNode([{ route: M4, shortName: 'M4' }])])).toBe('M4 ch 1-2')
-    expect(audioNodeRouteText(summary(), [fleetNode([{ route: M4 }])])).toBe(M4)
-    expect(audioNodeRouteText(summary(), [])).toBe(M4)
+    expect(audioNodeRouteText(summary(), [fleetNode([{ route: M4 }])])).toBe(`${M4} ch 1-2`)
+    expect(audioNodeRouteText(summary(), [])).toBe(`${M4} ch 1-2`)
+    expect(audioNodeRouteText(summary({ programChannels: [] }), [])).toBe(M4)
     expect(routeName(M4, undefined)).toBe(M4)
   })
 
@@ -58,6 +59,6 @@ describe('audio route short names', () => {
 
   it('renders the full device string outside a model provider', () => {
     render(<AudioNodeRoute node={summary()} />)
-    expect(screen.getByText(M4)).toBeInTheDocument()
+    expect(screen.getByText(`${M4} ch 1-2`)).toHaveAttribute('title', M4)
   })
 })

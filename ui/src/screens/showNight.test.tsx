@@ -237,7 +237,7 @@ describe('Show Night', () => {
     const readouts = evidenceReadouts(session(), '2026-08-28T21:07:00Z')
     const readiness = readouts.find((entry) => entry.key === 'readiness')
     expect(readiness?.tone).toBe('warn')
-    expect(readiness?.fact).toContain('from an earlier epoch')
+    expect(readiness?.fact).toContain('before the last prepare')
     expect(readiness?.fact).toContain('no longer fresh')
   })
 
@@ -486,7 +486,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     await screen.findByText('Accepted')
-    expect(screen.getByText(/no principal recorded/)).toBeInTheDocument()
+    expect(screen.getByText(/no user recorded/)).toBeInTheDocument()
   })
 
   it('sends skipEnterShowLead: true for start-night only when the late-start box is checked', () => {
@@ -664,7 +664,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
     await screen.findByText('Withheld')
-    expect(screen.queryByLabelText('Interlock rule')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Safety check')).not.toBeInTheDocument()
     expect(screen.getByText(/does not include "night:override"/)).toBeInTheDocument()
   })
 
@@ -681,10 +681,10 @@ describe('Show Night', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
     await screen.findByText('Withheld')
-    const ruleInput = screen.getByLabelText('Interlock rule')
+    const ruleInput = screen.getByLabelText('Safety check')
     fireEvent.change(ruleInput, { target: { value: 'projector-cooldown' } })
     fireEvent.click(screen.getByRole('button', { name: 'Retry power-down-presentation with override' }))
-    expect(await screen.findByText('A reason is required to override an interlock.')).toBeInTheDocument()
+    expect(await screen.findByText('A reason is required to override a safety check.')).toBeInTheDocument()
     expect(calls).toBe(1)
 
     const reasonInput = screen.getByLabelText('Reason')
@@ -1086,7 +1086,7 @@ describe('Show Night', () => {
         updatedAt: '2026-08-28T21:07:00Z',
       }),
     })
-    expect(screen.getByText('night.session/winter-ridge at revision 4.')).toBeInTheDocument()
+    expect(screen.getByText('night.session/winter-ridge at version 4.')).toBeInTheDocument()
     expect(screen.getByText('winter-ridge-2026 is armed and committed for this session.')).toBeInTheDocument()
     expect(screen.getByText(/^Admission closed \d/)).toBeInTheDocument()
     expect(screen.getByText('Session last updated')).toBeInTheDocument()
@@ -1126,8 +1126,8 @@ describe('Show Night', () => {
       })
     renderScreen({ nightSession: session() })
     fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
-    expect(await screen.findByText(/Active revision/)).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Active version/)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
   })
 
@@ -1137,7 +1137,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session() })
     fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('reports the read failure honestly when the activation pointer’s revisions fetch is rejected', async () => {
@@ -1145,7 +1145,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
     renderScreen({ nightSession: session() })
     fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
   it('activates a different night session definition', async () => {

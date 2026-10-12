@@ -292,7 +292,7 @@ export function SurfaceEditor({
       </div>
 
       <div className="sm-inspector__actions">
-        <span className="sm-small sm-muted">{isNew ? 'Creates revision 1' : `Active revision ${surface?.revision}`}</span>
+        <span className="sm-small sm-muted">{isNew ? 'Creates version 1' : `Active version ${surface?.revision}`}</span>
         <div className="sm-btn-row">
           {isNew ? (
             <Button variant="quiet" onClick={onCancel} disabled={saving}>

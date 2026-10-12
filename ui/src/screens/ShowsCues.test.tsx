@@ -310,8 +310,8 @@ describe('Shows · Cues tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 1')).not.toBeInTheDocument()
   })
 
@@ -321,7 +321,7 @@ describe('Shows · Cues tab', () => {
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save cue' })
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('reports the read failure honestly when the cue’s revisions fetch is rejected', async () => {
@@ -329,7 +329,7 @@ describe('Shows · Cues tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
   it('a stale cue save is refused, writes nothing, and names the changed fields', async () => {

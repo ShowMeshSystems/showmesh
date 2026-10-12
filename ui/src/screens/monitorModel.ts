@@ -9,6 +9,7 @@ import {
 } from '../domain/audioSettingsSubstitution'
 import { unusedSessionIds } from './nodePlaybackModel'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
+import { routeName } from './audioRouteModel'
 
 /** Connection state, in the terms Monitor's own pill labels use. */
 export function monitorConnection(model: Model): Connection {
@@ -372,7 +373,7 @@ export function fallbackAcknowledgedTone(status: FallbackProgramResponse['acknow
 export function fallbackProgramMetadataRows(entry: FallbackProgramListEntry): FallbackProgramRow[] {
   return [
     { key: 'package', label: 'Package', value: entry.packageId },
-    { key: 'revision', label: 'Revision', value: entry.revision },
+    { key: 'revision', label: 'Version', value: entry.revision },
     { key: 'show', label: 'Show', value: entry.show },
     { key: 'generation', label: 'Generation', value: String(entry.generation) },
     { key: 'compiled', label: 'Compiled', value: formatClock(entry.compiledAt) ?? 'unrecorded' },
@@ -551,17 +552,41 @@ function formatAttributeValue(value: unknown): string {
   return String(value)
 }
 
-/** A capability's declared attributes, in plain words - never a raw JSON blob. */
-function summarizeAttributes(attributes: Capability['attributes']): string | null {
-  const entries = Object.entries(attributes ?? {})
-  if (entries.length === 0) return null
-  return entries.map(([key, value]) => `${key}: ${formatAttributeValue(value)}`).join(', ')
+/** One run of a capability line. `title` is the full device string behind a short name. */
+export interface CapabilityLinePart {
+  text: string
+  title?: string
 }
 
-/** One capability, as one line: id, version, and its attributes in plain words. */
-export function capabilityLine(capability: Capability): string {
-  const summary = summarizeAttributes(capability.attributes)
-  return summary === null ? `${capability.id} · v${capability.version}` : `${capability.id} · v${capability.version} · ${summary}`
+/** One audio output: its route by short name, then the rest of what it reports. */
+function outputParts(output: unknown): CapabilityLinePart[] {
+  const entry = typeof output === 'object' && output !== null ? (output as Record<string, unknown>) : {}
+  const { route, shortName, ...rest } = entry
+  if (typeof route !== 'string') return [{ text: formatAttributeValue(output) }]
+  const name = routeName(route, typeof shortName === 'string' ? shortName : undefined)
+  const tail = Object.keys(rest).length === 0 ? '' : `, ${formatAttributeValue(rest)}`
+  return [{ text: 'route: ' }, { text: name, title: route }, ...(tail === '' ? [] : [{ text: tail }])]
+}
+
+/** One capability, as one line: id, version, and its attributes in plain words, never a raw JSON blob. */
+export function capabilityLineParts(capability: Capability): CapabilityLinePart[] {
+  const head = `${capability.id} · v${capability.version}`
+  const entries = Object.entries(capability.attributes ?? {})
+  if (entries.length === 0) return [{ text: head }]
+  const parts: CapabilityLinePart[] = [{ text: `${head} · ` }]
+  entries.forEach(([key, value], index) => {
+    const lead = `${index === 0 ? '' : ', '}${key}: `
+    if (capability.id !== 'audio.output.local' || key !== 'outputs' || !Array.isArray(value)) {
+      parts.push({ text: `${lead}${formatAttributeValue(value)}` })
+      return
+    }
+    parts.push({ text: lead })
+    ;(value as unknown[]).forEach((output, outputIndex) => {
+      if (outputIndex > 0) parts.push({ text: ', ' })
+      parts.push(...outputParts(output))
+    })
+  })
+  return parts
 }
 
 // ---------------------------------------------------------------------

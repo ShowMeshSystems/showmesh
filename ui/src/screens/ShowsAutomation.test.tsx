@@ -783,8 +783,8 @@ describe('Shows · Automation tab', () => {
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
-      expect(await within(aside).findByText(/Active revision/)).toBeInTheDocument()
-      expect(within(aside).queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+      expect(await within(aside).findByText(/Active version/)).toBeInTheDocument()
+      expect(within(aside).queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
       expect(within(aside).queryByText('Active · 1')).not.toBeInTheDocument()
     })
 
@@ -795,7 +795,7 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
       await within(aside).findByText('Editing · Start Preshow Playlist')
-      expect(within(aside).queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+      expect(within(aside).queryByText('History could not be read.')).not.toBeInTheDocument()
     })
 
     it('reports the read failure honestly when the action’s revisions fetch is rejected', async () => {
@@ -804,7 +804,7 @@ describe('Shows · Automation tab', () => {
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
-      expect(await within(aside).findByText('Revision history could not be read just now.')).toBeInTheDocument()
+      expect(await within(aside).findByText('History could not be read.')).toBeInTheDocument()
     })
 
     it('a stale save is refused and writes nothing', async () => {
