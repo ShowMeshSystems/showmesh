@@ -210,6 +210,7 @@ type AudioRoutingLTC struct {
 // AudioRoutingRouteChoice is one reported output and its program groups.
 type AudioRoutingRouteChoice struct {
 	Route         string              `json:"route"`
+	ShortName     string              `json:"shortName,omitempty"`
 	Interface     string              `json:"interface"`
 	Source        string              `json:"source"`
 	Channels      int                 `json:"channels"`

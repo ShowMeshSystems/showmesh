@@ -39,6 +39,9 @@ const alwaysPresentProbeDevice = "null"
 // RouteEvidence is one candidate device's real probe outcome.
 type RouteEvidence struct {
 	Device string
+	// ShortName is what an operator reads for this route's interface. Empty
+	// when the device reports nothing shorter than Device.
+	ShortName string
 	ProbeResult
 
 	// LTCChannels is 0 unless a SEPARATE probe of Device, explicitly
@@ -198,6 +201,7 @@ func DiscoverPipeWire(ctx context.Context, enum PipeWireEnumerator) PipeWireDisc
 	for _, n := range nodes {
 		ev := RouteEvidence{
 			Device:      n.Name,
+			ShortName:   ShortInterfaceName(n.Nick, n.Description),
 			ProbeResult: ProbeResult{Available: n.Channels > 0, Channels: n.Channels, Rate: n.Rate},
 			FromGraph:   true,
 		}
@@ -246,7 +250,7 @@ func Discover(ctx context.Context, enum Enumerator) Discovery {
 
 	d.Routes = make([]RouteEvidence, 0, len(candidates))
 	for _, dev := range candidates {
-		route := RouteEvidence{Device: dev, ProbeResult: ProbeOutput(ctx, dev, 0, 0)}
+		route := RouteEvidence{Device: dev, ShortName: alsaShortName(dev), ProbeResult: ProbeOutput(ctx, dev, 0, 0)}
 		if route.Available && route.Channels >= 1 {
 			if ltc := ProbeOutput(ctx, dev, MinLTCChannels, 0); ltc.Available && ltc.Channels >= MinLTCChannels {
 				route.LTCChannels = ltc.Channels

@@ -391,6 +391,9 @@ func outputEvidence(routes []audio.RouteEvidence) (out []map[string]any, missing
 			"interface":  audio.RouteInterface(r.Device),
 			"ltcCapable": r.LTCChannels >= minLTCChannels,
 		}
+		if r.ShortName != "" {
+			entry["shortName"] = r.ShortName
+		}
 		if r.FromGraph {
 			entry["source"], entry["channelBasis"], entry["channels"] = "pipewire", channelBasisInventory, r.Channels
 		} else {

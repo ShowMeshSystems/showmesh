@@ -17285,6 +17285,9 @@ components:
       properties:
         route:
           type: string
+        shortName:
+          type: string
+          description: The node's short name for the interface. Absent when it reports none.
         interface:
           type: string
           description: The interface the route leaves through, which is its local clock.

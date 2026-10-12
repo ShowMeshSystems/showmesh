@@ -37,7 +37,9 @@ const (
 
 // AudioOutputEvidence is one entry of a node's reported "outputs".
 type AudioOutputEvidence struct {
-	Route        string
+	Route string
+	// ShortName is the node's own short name for the interface, or empty.
+	ShortName    string
 	Interface    string
 	Source       string
 	Channels     int
