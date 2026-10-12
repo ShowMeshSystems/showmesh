@@ -762,7 +762,7 @@ and the night controller's cue tolerance is finer than a second.
 |---|---|---|
 | `fpp.position.elapsed.ms` | reserved | Track F (night-session cue timing) |
 
-**Four `fpp.brightness.*` signals**, written from the code that emits them
+**Five `fpp.brightness.*` signals**, written from the code that emits them
 (`internal/coordinator/collector/fppbrightness`). The resource is the FPP
 endpoint id, not the plugin, because a host serves one brightness state.
 

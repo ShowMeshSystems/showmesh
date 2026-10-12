@@ -198,9 +198,9 @@ type brightnessDocument struct {
 	EffectiveOutput *int64 `json:"effectiveOutput"`
 	FadeActive      *bool  `json:"fadeActive"`
 	UpdatedAtMillis *int64 `json:"updatedAtMillis"`
-	// ExcludedRanges is nil when the key is missing and empty when the
-	// plugin excludes nothing; the two read differently.
-	ExcludedRanges *[]ChannelRange `json:"excludedRanges"`
+	// ExcludedRanges is decoded on its own so a malformed list costs only
+	// its signal, never the four brightness values beside it.
+	ExcludedRanges json.RawMessage `json:"excludedRanges"`
 }
 
 // ChannelRange is one run of channels on the plugin's wire: a 1-based
@@ -270,10 +270,15 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	return obs, true
 }
 
-func (c *Collector) excludedRanges(reported *[]ChannelRange, now time.Time) observation.Observation {
-	if reported == nil {
+func (c *Collector) excludedRanges(raw json.RawMessage, now time.Time) observation.Observation {
+	if len(raw) == 0 || string(raw) == "null" {
 		return c.absence(SignalExcludedRanges, observation.StateNotCollected, excludedRangesUnreportedReason, now)
 	}
+	var list []ChannelRange
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return c.absence(SignalExcludedRanges, observation.StateCollectionFailed, "decode error: "+err.Error(), now)
+	}
+	reported := &list
 	if len(*reported) == 0 {
 		o, err := observation.NotApplicable(c.resource(), SignalExcludedRanges, noExcludedRangesReason, now,
 			observation.WithSource(SourceName), observation.WithValidFor(c.validFor), observation.WithCollectedAt(now))

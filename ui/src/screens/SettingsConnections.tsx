@@ -856,7 +856,6 @@ function ExcludedRangesField({ instanceId, reported, allowed, deniedReason }: { 
           <Input
             {...props}
             type="text"
-            inputMode="numeric"
             value={draft ?? reportedText}
             onChange={(e) => { setDraft(e.target.value); setFormError(undefined) }}
             disabled={!allowed}
