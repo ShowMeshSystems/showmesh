@@ -760,16 +760,16 @@ func configRevisionConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Pr
 	var detail string
 	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
 		detail = fmt.Sprintf(
-			"%s %q already exists at revision %d. Send If-Match with that revision to update it.",
+			"%s %q already exists at version %d. Send If-Match with that version to update it.",
 			e.kind, e.id, e.actualRevision)
 	} else {
 		detail = fmt.Sprintf(
-			`If-Match %q is no longer current for %s %q; its current revision is %d`,
+			"If-Match %q is out of date for %s %q. The current version is %d. Read it again and retry.",
 			fmt.Sprintf("%d", e.precondition.Revision), e.kind, e.id, e.actualRevision)
 	}
 	return v1.Problem{
 		Type:   ProblemTypeConfigRevisionPreconditionFailed,
-		Title:  "Config write refused: the revision precondition is no longer current",
+		Title:  "Config write refused: a newer version was saved first",
 		Status: http.StatusConflict,
 		Detail: detail,
 	}

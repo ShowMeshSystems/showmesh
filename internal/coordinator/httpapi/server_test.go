@@ -82,7 +82,7 @@ func TestHandleReadyzReflectsReadinessSource(t *testing.T) {
 		// Reason and Details through to the response body untouched.
 		srv := NewServer(":0", fakeReadinessSource{report: readiness.Report{
 			Ready:      false,
-			Reason:     "mqtt broker evidence is stale",
+			Reason:     "mqtt broker status is stale",
 			ObservedAt: time.Now(),
 			Details: map[string]any{
 				"connected":       true,
@@ -102,7 +102,7 @@ func TestHandleReadyzReflectsReadinessSource(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("/readyz body did not parse as JSON: %v (body=%q)", err, rec.Body.String())
 		}
-		if body["reason"] != "mqtt broker evidence is stale" {
+		if body["reason"] != "mqtt broker status is stale" {
 			t.Errorf("/readyz reason = %v, want it to name stale evidence", body["reason"])
 		}
 		if body["connected"] != true {

@@ -109,7 +109,7 @@ func ResolveShowmeshAudioPlaylistRef(ctx context.Context, st *store.Store, showI
 			// [cueactivation.BackgroundSessionID]. Detected here, at the
 			// point this playlist's own resolution is what would otherwise
 			// discard the declared ltc output.
-			return pkgaudio.PlaylistRef{}, fmt.Errorf("assetsync: resolve showmesh-audio playlist %q: entry %q: cue %q declares an ltc output, but a showmesh-audio background session has no LTC generator (ADR-018); refusing rather than silently dropping it", ownerID, entry.ID, entry.Cue)
+			return pkgaudio.PlaylistRef{}, fmt.Errorf("assetsync: resolve showmesh-audio playlist %q: entry %q: cue %q declares an ltc output, but a showmesh-audio background session has no LTC generator; refusing rather than silently dropping it", ownerID, entry.ID, entry.Cue)
 		}
 		filename, contentHash, sizeBytes := resolveAssetForWithSize(assetsBySequence, cue.Outputs.Audio.Asset, "audio")
 		if filename == "" || contentHash == "" {

@@ -180,7 +180,7 @@ func (h *handlers) nightDispatchCueFPP(ctx context.Context, now time.Time, issue
 		// A plain error always precedes dispatchFPPCommand's own
 		// command-row insert, so nothing reached FPP: resolved failed,
 		// never left dispatched for a later tick to find and misread.
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue could not be dispatched: " + err.Error()}
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
 	}
 	if problem != nil {
 		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeRefused, reason: problem.Detail}
@@ -241,7 +241,7 @@ func (h *handlers) nightDispatchCueResolume(ctx context.Context, now time.Time, 
 	if err != nil {
 		// Dispatch's own error contract is a dependency failure that
 		// provably sent nothing: resolved failed, never left dispatched.
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue could not be dispatched: " + err.Error()}
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
 	}
 	var outcome string
 	switch res.Outcome {
@@ -334,7 +334,7 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 			// own markUndispatched path): resolved failed is correct here,
 			// mirroring nightDispatchCueFPP's identical treatment for an
 			// error that provably sent nothing.
-			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue could not be dispatched: " + err.Error()}
+			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
 		}
 		// Any OTHER error from executeAudioSessionDispatch arrives AFTER
 		// its own markDispatched call (audiodispatch.go's own await-result

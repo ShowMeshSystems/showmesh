@@ -235,7 +235,7 @@ func (r currentRunsReader) appendAudioRuns(ctx context.Context, now time.Time, o
 }
 
 func audioRun(now time.Time, active currentrun.ActiveContext, pl *currentPlaylist, nodeID, sessionID string, obs []observation.Observation) currentrun.Run {
-	state, reason := "unknown", "no audio session state evidence"
+	state, reason := "unknown", "no audio session state has been reported"
 	itemID, media := "", ""
 	var itemIndex, position, playlistRevision *int64
 	newest := latestAudioObservation(obs, "")
@@ -270,7 +270,7 @@ func audioRun(now time.Time, active currentrun.ActiveContext, pl *currentPlaylis
 		}
 	}
 	recon := audioSessionReconciliation(now, pl, role, roleCurrent, playlistRevisionObs, playlistRevision)
-	fresh := currentrun.Freshness{State: "not_collected", Reason: "no audio session evidence"}
+	fresh := currentrun.Freshness{State: "not_collected", Reason: "no audio session reading"}
 	if newest != nil {
 		freshState := currentEvidenceState(now, derefTime(newest.ObservedAt))
 		fresh = currentrun.Freshness{State: freshState, Reason: currentRunFreshnessReason(freshState), ObservedAt: newest.ObservedAt, CollectedAt: currentRunTimePtr(newest.CollectedAt)}
@@ -369,20 +369,20 @@ func audioSessionRole(o *observation.Observation, now time.Time) (string, bool) 
 
 func audioSessionEvidenceReason(o *observation.Observation, label string) string {
 	if o == nil {
-		return label + " evidence is unavailable"
+		return label + " reading is unavailable"
 	}
 	if o.Reason != "" {
 		return o.Reason
 	}
 	if o.Absence != "" {
-		return label + " evidence is " + string(o.Absence)
+		return label + " reading is " + string(o.Absence)
 	}
-	return label + " evidence is unavailable"
+	return label + " reading is unavailable"
 }
 
 func audioSessionReconciliation(now time.Time, pl *currentPlaylist, role string, roleCurrent bool, playlistRevisionObs *observation.Observation, playlistRevision *int64) currentrun.Reconciliation {
 	if !roleCurrent {
-		return currentrun.Reconciliation{State: "unknown", Reason: "audio session source role evidence is unavailable or stale"}
+		return currentrun.Reconciliation{State: "unknown", Reason: "audio session source role is unavailable or stale"}
 	}
 	if role != "background" {
 		return currentrun.Reconciliation{State: "unbound", Reason: "audio session source role is not the showmesh-audio background role"}
@@ -391,10 +391,10 @@ func audioSessionReconciliation(now time.Time, pl *currentPlaylist, role string,
 		return currentrun.Reconciliation{State: "unbound", Reason: "no active showmesh-audio playlist is bound to this session"}
 	}
 	if !observationIsCurrent(playlistRevisionObs, now) || playlistRevision == nil {
-		return currentrun.Reconciliation{State: "unknown", Reason: "background audio session has no current playlist revision evidence"}
+		return currentrun.Reconciliation{State: "unknown", Reason: "background audio session has not reported its current playlist version"}
 	}
 	if *playlistRevision != pl.Revision {
-		return currentrun.Reconciliation{State: "stale-import", Reason: "audio session reports a different playlist revision than the active playlist"}
+		return currentrun.Reconciliation{State: "stale-import", Reason: "audio session reports a different playlist version than the active playlist"}
 	}
 	return currentrun.Reconciliation{State: "resolved", Reason: "audio session playlist identity matches the active Show playlist"}
 }
@@ -462,13 +462,13 @@ func currentEvidenceState(now time.Time, at time.Time) string {
 func currentRunFreshnessReason(state string) string {
 	switch state {
 	case string(observation.StateCurrent):
-		return "latest runner evidence is fresh"
+		return "latest runner reading is fresh"
 	case string(observation.StateStale):
-		return "latest runner evidence has aged past its freshness window"
+		return "latest runner reading has aged past its freshness window"
 	case string(observation.StateUnknownAge):
-		return "latest runner evidence has no observation time"
+		return "latest runner reading has no observation time"
 	default:
-		return "runner evidence freshness is unavailable"
+		return "runner reading freshness is unavailable"
 	}
 }
 

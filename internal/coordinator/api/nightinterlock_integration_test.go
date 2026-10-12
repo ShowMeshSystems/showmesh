@@ -502,8 +502,8 @@ func TestNightCommandSurvivesServerWriteTimeout(t *testing.T) {
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem: %v\nbody: %s", err, body)
 	}
-	if !strings.Contains(problem.Detail, "evidence source unavailable") {
-		t.Fatalf("problem.Detail = %q, want it to name the interlock's own real \"evidence source unavailable\" reason, not a generic transport error", problem.Detail)
+	if !strings.Contains(problem.Detail, "the source for this check is unavailable") {
+		t.Fatalf("problem.Detail = %q, want it to name the interlock's own real \"source is unavailable\" reason, not a generic transport error", problem.Detail)
 	}
 }
 

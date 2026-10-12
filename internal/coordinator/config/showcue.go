@@ -480,7 +480,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 
 // showCueActionsOnlyDetail refuses a cue whose only output is actions: an
 // activation needs a node output to happen at all.
-const showCueActionsOnlyDetail = "A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one."
+const showCueActionsOnlyDetail = "A cue needs a render, audio, LTC or announcement output. Add one."
 
 // decodeShowCueActions decodes outputs.actions: a JSON array of distinct,
 // non-empty show.action ids. An empty array decodes as nil, the same as absent.

@@ -883,7 +883,7 @@ func (b *BrokerManager) Readiness() readiness.Report {
 	if age > evidenceStalenessWindow {
 		return readiness.Report{
 			Ready:      false,
-			Reason:     "mqtt broker evidence is stale",
+			Reason:     "mqtt broker status is stale",
 			ObservedAt: state.ObservedAt,
 			Details: map[string]any{
 				"connected": state.Connected,

@@ -66,7 +66,7 @@ func (e *Executor) dispatchAudioStep(ctx context.Context, run store.MacroRunReco
 		res = stepResult{
 			outcome:       outcomeFailed,
 			outcomeState:  audioStateInternalError,
-			outcomeReason: "this step could not be dispatched because of an internal coordinator error",
+			outcomeReason: "this step was not sent because of an internal coordinator error",
 		}
 	} else if problem != nil {
 		res = stepResult{

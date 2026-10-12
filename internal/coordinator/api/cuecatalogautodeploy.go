@@ -135,7 +135,7 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 	snap, err := h.deps.CurrentRuns.Snapshot(ctx, now)
 	if err != nil {
 		return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
-			Reason: fmt.Sprintf("current-runs evidence could not be read: %s", err.Error())}
+			Reason: fmt.Sprintf("current runs could not be read: %s", err.Error())}
 	}
 	for _, run := range snap.Runs {
 		switch run.Runner {
@@ -148,7 +148,7 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 			}
 			if run.Freshness.State != string(observation.StateCurrent) {
 				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
-					Reason: fmt.Sprintf("fpp run %q's playback evidence is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
+					Reason: fmt.Sprintf("fpp run %q's playback reading is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
 			}
 			switch run.Playback.State {
 			case "playing":
@@ -174,7 +174,7 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 			}
 			if run.Freshness.State != string(observation.StateCurrent) {
 				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
-					Reason: fmt.Sprintf("audio session %q's playback evidence is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
+					Reason: fmt.Sprintf("audio session %q's playback reading is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
 			}
 			switch run.Playback.State {
 			case "stopped", "idle", "ready":

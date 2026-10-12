@@ -145,7 +145,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 //   - Not ready: 503, with the source's Reason and Details merged into the
 //     response body. For the broker source (the only one that exists
 //     today), that means reason "mqtt broker not connected" when
-//     disconnected, or "mqtt broker evidence is stale" when connected but
+//     disconnected, or "mqtt broker status is stale" when connected but
 //     the evidence has aged past the source's staleness window — per
 //     ADR-011 that is unknown, not healthy, so it is reported as not-ready
 //     rather than papering over the missing confirmation.

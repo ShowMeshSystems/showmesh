@@ -84,7 +84,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 		case nightInterlockConditionFalse:
 			return nightInterlockDecision{Health: nightHealthFailed(), Reason: rule.FailureText}
 		default:
-			return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "evidence source unavailable"}
+			return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "the source for this check is unavailable"}
 		}
 
 	case config.NightInterlockPostureBlock:
@@ -110,7 +110,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 				// rule reaching this branch.
 				Withhold: rule.OnUnavailable != config.NightInterlockOnUnavailableAllow,
 				Health:   nightHealthUnknown(),
-				Reason:   "evidence source unavailable",
+				Reason:   "the source for this check is unavailable",
 			}
 		}
 	}
@@ -164,7 +164,7 @@ func (h *handlers) nightEvaluateInterlockRuleLive(ctx context.Context, rule conf
 			// withholds.
 			Withhold: rule.Posture == config.NightInterlockPostureBlock && rule.OnUnavailable != config.NightInterlockOnUnavailableAllow,
 			Health:   nightHealthUnknown(),
-			Reason:   "could not read this interlock's own signal action: " + err.Error(),
+			Reason:   "could not read this check's own signal action: " + err.Error(),
 		}
 	}
 	res := DispatchMQTTAction(ctx, h.deps.MQTTBrokers, action.Target, h.now)

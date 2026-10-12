@@ -60,7 +60,7 @@ func (e *Executor) dispatchFPPStep(ctx context.Context, run store.MacroRunRecord
 		return stepResult{
 			outcome:       outcomeFailed,
 			outcomeState:  "internal_error",
-			outcomeReason: "this step could not be dispatched because of an internal coordinator error",
+			outcomeReason: "this step was not sent because of an internal coordinator error",
 			resolvedAt:    ptrTime(e.now()),
 		}
 	}

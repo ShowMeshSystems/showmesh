@@ -187,12 +187,12 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 		// No internal citation in this operator-facing string (this
 		// package's own copy-guard test) — the policy this implements is
 		// documented on [mqttproto.RenderPipelineStateSuperseded] instead.
-		reason := fmt.Sprintf(
-			"this surface is holding a render authorized by show %q generation %d; the coordinator's currently active show is %q generation %d",
-			sc.show, sc.generation, active.ShowID, active.Generation,
-		)
+		reason := fmt.Sprintf("This surface is playing a render from an older deploy of show %q.", sc.show)
+		if sc.show != active.ShowID {
+			reason = fmt.Sprintf("This surface is playing a render from an older show %q. The active show is %q.", sc.show, active.ShowID)
+		}
 		if sc.haveRevision && sc.revision != catalog.Revision {
-			reason += fmt.Sprintf("; it was built from cue list %q and the active cue list is now %q", sc.revision, catalog.Revision)
+			reason += fmt.Sprintf(" It was built from cue list %q and the active cue list is now %q.", sc.revision, catalog.Revision)
 		}
 		superseded := out[sc.pipelineIdx]
 		superseded.Value = mqttproto.RenderPipelineStateSuperseded

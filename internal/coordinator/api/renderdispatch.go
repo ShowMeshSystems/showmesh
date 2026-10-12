@@ -1080,11 +1080,11 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 			"Node %s has not reported when its pipeline last changed (%s), so the change cannot be confirmed.", nodeID, changedDetail), false
 	case changedAtUnparsable:
 		return false, string(observation.StateCollectionFailed), fmt.Sprintf(
-			"surface.pipeline.changed_at for node %s could not be read as evidence: %s", nodeID, changedDetail), false
+			"Node %s sent a pipeline change time that cannot be read: %s", nodeID, changedDetail), false
 	case changedAtAbsent:
 		if o.ObservedAt == nil {
 			return false, string(observation.StateUnknownAge), fmt.Sprintf(
-				"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID), false
+				"Node %s's pipeline reading has no time, so it cannot be confirmed as new.", nodeID), false
 		}
 		transitionAt = *o.ObservedAt
 	}
@@ -1098,7 +1098,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	if state != observation.StateCurrent {
 		reason := o.Reason
 		if reason == "" {
-			reason = fmt.Sprintf("surface.pipeline.state evidence state is %s", state)
+			reason = fmt.Sprintf("pipeline reading is %s", state)
 		}
 		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src), false
 	}
@@ -1259,7 +1259,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	if state != observation.StateCurrent {
 		reason := o.Reason
 		if reason == "" {
-			reason = fmt.Sprintf("surface.transport.available evidence state is %s", state)
+			reason = fmt.Sprintf("transport reading is %s", state)
 		}
 		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
 	}

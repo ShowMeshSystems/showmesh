@@ -1001,7 +1001,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, config.NightSessionPayload{}, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which has no active revision", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
 		return "", 0, config.NightSessionPayload{}, &p, nil
 	}
 	rev, rerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, activePayload.Session, obj.CurrentRevision)
@@ -1957,7 +1957,7 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which has no active revision", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
 		return "", 0, &p, nil
 	}
 	return activePayload.Session, obj.CurrentRevision, nil, nil
