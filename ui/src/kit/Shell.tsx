@@ -36,13 +36,15 @@ type ChromeProps = {
   connection: ReactNode
   /** Not rendered at phone width, where `RailAccount` carries it instead. */
   principal: ReactNode
+  /** The emergency stop pair. Rendered at every width. */
+  emergency?: ReactNode
 }
 
 /**
  * The bar must not wrap. If its height changes, the rail's sticky offset
  * puts the first nav group behind it: fix the wrap, never the offset.
  */
-export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal }: ChromeProps) {
+export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal, emergency }: ChromeProps) {
   const phone = useNarrow(PHONE_BREAKPOINT)
   return (
     <header className="sm-chrome" data-chrome>
@@ -59,14 +61,49 @@ export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal 
       <div className="sm-chrome__now">{nowPlaying}</div>
       <div className="sm-chrome__right">
         {connection}
+        {emergency}
         {!phone && (
           <>
             <span className="sm-chrome__divider" aria-hidden="true" />
-            {principal}
+            <span className="sm-chrome__principal">{principal}</span>
           </>
         )}
       </div>
     </header>
+  )
+}
+
+type ChromeStopProps = {
+  stopLabel: string
+  onStop: () => void
+  moreLabel: string
+  onMore: () => void
+  /** Whether the popup the second button opens is showing. */
+  moreExpanded: boolean
+  /** When set, both buttons are marked disabled and carry this reason as their title. They still open, so the reason is readable. */
+  disabledReason?: string | undefined
+}
+
+/** The emergency stop pair on the bar: the first button asks to stop, the second opens the other levels. Neither acts on its own press. */
+export function ChromeStop({ stopLabel, onStop, moreLabel, onMore, moreExpanded, disabledReason }: ChromeStopProps) {
+  return (
+    <span className="sm-chrome-stop">
+      <button type="button" className="sm-chrome-stop__btn" aria-label={stopLabel} title={disabledReason ?? stopLabel} aria-disabled={disabledReason !== undefined || undefined} aria-haspopup="dialog" onClick={onStop}>
+        <span className="sm-chrome-stop__square" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="sm-chrome-stop__btn"
+        aria-label={moreLabel}
+        title={disabledReason ?? moreLabel}
+        aria-disabled={disabledReason !== undefined || undefined}
+        aria-haspopup="dialog"
+        aria-expanded={moreExpanded}
+        onClick={onMore}
+      >
+        <span aria-hidden="true">▾</span>
+      </button>
+    </span>
   )
 }
 

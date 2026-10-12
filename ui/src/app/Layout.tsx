@@ -51,6 +51,7 @@ import { nowPlaying as fppNowPlaying } from '../screens/showNightModel'
 import { useModelContext } from './ModelContext'
 import { useWeatherDelay, WeatherDelayProvider } from './WeatherDelayContext'
 import { StopHoldShellBanner } from './StopHoldShellBanner'
+import { EmergencyStopChrome } from './EmergencyStopChrome'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
 const WEATHER_DELAY_KIND_LABEL: Record<'delay' | 'cancelNight', string> = {
@@ -889,6 +890,7 @@ export function Layout() {
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
         principal={account}
+        emergency={<EmergencyStopChrome model={model} />}
       />
       <ChromeProgress value={fppElapsedFraction(model.fpp[0])} label="Position of the current item" />
       {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (

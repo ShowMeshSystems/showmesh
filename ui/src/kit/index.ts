@@ -30,6 +30,7 @@ export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,
   ChromeProgress,
+  ChromeStop,
   ConnectionPill,
   Panes,
   Rail,

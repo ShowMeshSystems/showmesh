@@ -375,7 +375,7 @@ describe('Live Control', () => {
   })
 
   it('confirms level 1 stop, dispatches it, and reports per-instance and follow-up outcomes honestly', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const nativeConfirm = vi.spyOn(window, 'confirm')
     stubs.emergencyStop = vi.fn(() =>
       Promise.resolve({
         level: 'stop',
@@ -390,7 +390,9 @@ describe('Live Control', () => {
     )
     renderScreen({ session: emergencyAllowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
-    expect(window.confirm).toHaveBeenCalledTimes(1)
+    expect(stubs.emergencyStop).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).getByRole('button', { name: 'Stop' }))
+    expect(nativeConfirm).not.toHaveBeenCalled()
     expect(await screen.findByText('main-player')).toBeInTheDocument()
     expect(screen.getByText('lobby-player')).toBeInTheDocument()
     expect(screen.getAllByText('confirmed')).toHaveLength(2)
@@ -401,7 +403,6 @@ describe('Live Control', () => {
   })
 
   it('groups stopOutcomes by target kind so an operator reads what stopped, refused, or was never reached per kind', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     stubs.emergencyStop = vi.fn(() =>
       Promise.resolve({
         level: 'stop',
@@ -417,6 +418,7 @@ describe('Live Control', () => {
     )
     renderScreen({ session: emergencyAllowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).getByRole('button', { name: 'Stop' }))
     expect(await screen.findByText('main-player')).toBeInTheDocument()
 
     expect(screen.getByRole('region', { name: 'Emergency stop, per FPP target' })).toBeInTheDocument()
@@ -428,11 +430,28 @@ describe('Live Control', () => {
   })
 
   it('sends nothing when level 1 stop’s confirmation is cancelled', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
     stubs.emergencyStop = vi.fn(() => new Promise(() => {}))
     renderScreen({ session: emergencyAllowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).getByRole('button', { name: 'Cancel' }))
     expect(stubs.emergencyStop).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: 'Stop every configured FPP instance now?' })).not.toBeInTheDocument()
+  })
+
+  it('asks in the app before level 2 stop and posts only on confirm', () => {
+    const nativeConfirm = vi.spyOn(window, 'confirm')
+    stubs.emergencyStopPowerDown = vi.fn(() => new Promise(() => {}))
+    renderScreen({ session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and power down' }))
+    let dialog = within(screen.getByRole('dialog', { name: 'Stop and power down now?' }))
+    expect(stubs.emergencyStopPowerDown).not.toHaveBeenCalled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(stubs.emergencyStopPowerDown).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and power down' }))
+    dialog = within(screen.getByRole('dialog', { name: 'Stop and power down now?' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Stop and power down' }))
+    expect(stubs.emergencyStopPowerDown).toHaveBeenCalledTimes(1)
+    expect(nativeConfirm).not.toHaveBeenCalled()
   })
 
   it('arms then fires the hard-stop gate with the minted token, with Fire disabled until armed', async () => {

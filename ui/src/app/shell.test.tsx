@@ -27,6 +27,10 @@ const getWeatherDelayStateMock = vi.fn()
 const resumeFromWeatherDelayMock = vi.fn()
 const cancelNightForWeatherMock = vi.fn()
 const answerWeatherDelayDecisionMock = vi.fn()
+const emergencyStopMock = vi.fn()
+const emergencyStopPowerDownMock = vi.fn()
+const armEmergencyStopHardStopMock = vi.fn()
+const fireEmergencyStopHardStopMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -46,6 +50,10 @@ vi.mock('../api', async () => {
     resumeFromWeatherDelay: (...args: unknown[]) => resumeFromWeatherDelayMock(...args),
     cancelNightForWeather: (...args: unknown[]) => cancelNightForWeatherMock(...args),
     answerWeatherDelayDecision: (...args: unknown[]) => answerWeatherDelayDecisionMock(...args),
+    emergencyStop: (...args: unknown[]) => emergencyStopMock(...args),
+    emergencyStopPowerDown: (...args: unknown[]) => emergencyStopPowerDownMock(...args),
+    armEmergencyStopHardStop: (...args: unknown[]) => armEmergencyStopHardStopMock(...args),
+    fireEmergencyStopHardStop: (...args: unknown[]) => fireEmergencyStopHardStopMock(...args),
   }
 })
 
@@ -134,6 +142,10 @@ describe('app shell', () => {
     resumeFromWeatherDelayMock.mockReset()
     cancelNightForWeatherMock.mockReset()
     answerWeatherDelayDecisionMock.mockReset()
+    emergencyStopMock.mockReset()
+    emergencyStopPowerDownMock.mockReset()
+    armEmergencyStopHardStopMock.mockReset()
+    fireEmergencyStopHardStopMock.mockReset()
     clearStoredToken()
   })
   afterEach(cleanup)
@@ -643,6 +655,136 @@ describe('app shell', () => {
       fireEvent.click(rail.getByRole('button', { name: 'Sign out' }))
       fireEvent.click(rail.getByRole('button', { name: 'Confirm sign out' }))
       expect(logoutMock).toHaveBeenCalledExactlyOnceWith(undefined)
+    })
+  })
+
+  describe('the emergency stop on the bar', () => {
+    const STOPPED = {
+      noInstancesConfigured: false,
+      stopOutcomes: [{ instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: 'Stopped.', dispatchedAt: null, replay: false }],
+      followUps: [],
+    }
+    afterEach(() => vi.unstubAllGlobals())
+
+    function renderBar(scopes: string[] = ['show:emergencystop:invoke']) {
+      renderShell({ session: authenticatedSession({ scopes }) })
+      return within(screen.getByRole('banner'))
+    }
+
+    it('asks before the level 1 stop, posts once on confirm, and shows what the coordinator reported', async () => {
+      emergencyStopMock.mockResolvedValue(STOPPED)
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      const confirm = screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })
+      expect(emergencyStopMock).not.toHaveBeenCalled()
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Stop' }))
+      expect(emergencyStopMock).toHaveBeenCalledTimes(1)
+      const popup = await screen.findByRole('dialog', { name: 'Emergency stop' })
+      expect(await within(popup).findByText('main-player')).toBeInTheDocument()
+      expect(within(popup).getByText('confirmed')).toBeInTheDocument()
+    })
+
+    it('posts nothing when the level 1 confirm is cancelled', () => {
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+      expect(emergencyStopMock).not.toHaveBeenCalled()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('shows the arm and its expiry in the popup, and fires with the token the arm returned', async () => {
+      armEmergencyStopHardStopMock.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: new Date(Date.now() + 10_000).toISOString() })
+      fireEmergencyStopHardStopMock.mockResolvedValue(STOPPED)
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
+      const popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
+      expect(popup.getByRole('button', { name: 'Fire hard stop' })).toBeDisabled()
+      fireEvent.click(popup.getByRole('button', { name: 'Arm hard stop' }))
+      expect(await popup.findByText(/Armed\. Fire within (10|9)s/)).toBeInTheDocument()
+      expect(fireEmergencyStopHardStopMock).not.toHaveBeenCalled()
+      fireEvent.click(popup.getByRole('button', { name: 'Fire hard stop' }))
+      expect(fireEmergencyStopHardStopMock).toHaveBeenCalledExactlyOnceWith('token-1')
+      expect(await popup.findByText('main-player')).toBeInTheDocument()
+    })
+
+    it('drops the arm on Cancel and on closing the popup, without firing', async () => {
+      armEmergencyStopHardStopMock.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: new Date(Date.now() + 10_000).toISOString() })
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
+      let popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
+      fireEvent.click(popup.getByRole('button', { name: 'Arm hard stop' }))
+      await popup.findByText(/Armed\. Fire within/)
+      fireEvent.click(popup.getByRole('button', { name: 'Cancel' }))
+      expect(popup.queryByText(/Armed\. Fire within/)).not.toBeInTheDocument()
+      expect(popup.getByRole('button', { name: 'Fire hard stop' })).toBeDisabled()
+
+      fireEvent.click(popup.getByRole('button', { name: 'Arm hard stop' }))
+      await popup.findByText(/Armed\. Fire within/)
+      fireEvent.click(popup.getByRole('button', { name: 'Close' }))
+      fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
+      popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
+      expect(popup.queryByText(/Armed\. Fire within/)).not.toBeInTheDocument()
+      expect(popup.getByRole('button', { name: 'Fire hard stop' })).toBeDisabled()
+      expect(fireEmergencyStopHardStopMock).not.toHaveBeenCalled()
+    })
+
+    it('posts the level 2 stop from the popup', async () => {
+      emergencyStopPowerDownMock.mockResolvedValue({ ...STOPPED, nightSession: { present: false } })
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
+      const popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
+      fireEvent.click(popup.getByRole('button', { name: 'Stop and power down' }))
+      expect(emergencyStopPowerDownMock).not.toHaveBeenCalled()
+      const confirm = within(screen.getByRole('dialog', { name: 'Stop and power down now?' }))
+      fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }))
+      expect(emergencyStopPowerDownMock).not.toHaveBeenCalled()
+      fireEvent.click(popup.getByRole('button', { name: 'Stop and power down' }))
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop and power down now?' })).getByRole('button', { name: 'Stop and power down' }))
+      expect(emergencyStopPowerDownMock).toHaveBeenCalledTimes(1)
+      expect(await popup.findByText('No night session was active.')).toBeInTheDocument()
+    })
+
+    it('says why it is unavailable, in the confirm and in the popup, without the scope', () => {
+      const reason = /admin does not include "show:emergencystop:invoke"/
+      const bar = renderBar(['config:write'])
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      const confirm = within(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' }))
+      expect(confirm.getByText(reason)).toBeInTheDocument()
+      expect(confirm.getByRole('button', { name: 'Stop' })).toBeDisabled()
+      fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }))
+
+      fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
+      const popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
+      expect(popup.getByText(reason)).toBeInTheDocument()
+      for (const name of ['Stop and power down', 'Arm hard stop', 'Fire hard stop']) {
+        expect(popup.getByRole('button', { name })).toBeDisabled()
+      }
+      expect(emergencyStopMock).not.toHaveBeenCalled()
+    })
+
+    it('marks both bar buttons disabled with the reason as their title without the scope, and still opens them', () => {
+      const bar = renderBar(['config:write'])
+      for (const name of ['Emergency stop', 'More emergency stop levels']) {
+        const button = bar.getByRole('button', { name })
+        expect(button).toHaveAttribute('aria-disabled', 'true')
+        expect(button).toHaveAttribute('title', expect.stringMatching(/does not include "show:emergencystop:invoke"/))
+      }
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      expect(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).toBeInTheDocument()
+    })
+
+    it('leaves both bar buttons enabled with the scope', () => {
+      const bar = renderBar()
+      for (const name of ['Emergency stop', 'More emergency stop levels']) {
+        expect(bar.getByRole('button', { name })).not.toHaveAttribute('aria-disabled')
+      }
+    })
+
+    it('keeps both buttons on the bar at phone width', () => {
+      vi.stubGlobal('matchMedia', (query: string) => ({ matches: /max-width/.test(query), media: query, addEventListener: () => {}, removeEventListener: () => {} }))
+      const bar = renderBar()
+      expect(bar.getByRole('button', { name: 'Emergency stop' })).toBeInTheDocument()
+      expect(bar.getByRole('button', { name: 'More emergency stop levels' })).toBeInTheDocument()
     })
   })
 
@@ -1274,6 +1416,28 @@ function sourceFiles(dir: string): string[] {
     return /\.(tsx?|css)$/.test(name) ? [full] : []
   })
 }
+
+describe('the rail drawer below 1100px', () => {
+  // jsdom applies no stylesheet, so these read the rules the drawer depends on.
+  const css = readFileSync(path.resolve(__dirname, '../kit/styles/shell.css'), 'utf8')
+  const drawerQuery = css.slice(css.lastIndexOf('@media (max-width: 1100px)'))
+  const rule = (selector: string) => {
+    const start = drawerQuery.indexOf(`${selector} {`)
+    if (start === -1) throw new Error(`no ${selector} rule in the 1100px query`)
+    return drawerQuery.slice(start, drawerQuery.indexOf('}', start))
+  }
+
+  it('takes a closed drawer out of the tab order, and puts an open one back', () => {
+    expect(rule('.sm-rail')).toMatch(/visibility:\s*hidden/)
+    expect(rule(".sm-rail[data-open='true']")).toMatch(/visibility:\s*visible/)
+  })
+
+  it('scrolls inside a viewport shorter than the drawer, so the footer stays reachable', () => {
+    expect(rule('.sm-rail')).toMatch(/max-height:\s*calc\(100vh - var\(--chrome-h\) - 1px\)/)
+    expect(rule('.sm-rail')).toMatch(/overflow-y:\s*auto/)
+    expect(rule('.sm-rail > *')).toMatch(/flex-shrink:\s*0/)
+  })
+})
 
 describe('the old design system', () => {
   const src = path.join(__dirname, '..')

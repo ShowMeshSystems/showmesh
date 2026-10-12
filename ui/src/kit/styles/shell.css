@@ -75,7 +75,27 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The name gives way first, so a long name never pushes Sign out or the stop pair off the bar. */
+.sm-chrome__principal {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sm-chrome__principal > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-chrome__principal > :not(:first-child) {
+  flex-shrink: 0;
 }
 
 .sm-brand {
@@ -95,6 +115,56 @@
   height: 20px;
   background: var(--border);
   flex: 0 0 auto;
+}
+
+/* The emergency stop pair, on the bar at every width. The confirm step it
+   opens is the mispress guard, so it needs no distance from its neighbours. */
+.sm-chrome-stop {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sm-chrome-stop__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: var(--ctrl-h-compact);
+  border: 1px solid var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sm-chrome-stop__btn:first-child {
+  border-radius: var(--r-card) 0 0 var(--r-card);
+}
+
+.sm-chrome-stop__btn:last-child {
+  margin-left: -1px;
+  border-radius: 0 var(--r-card) var(--r-card) 0;
+}
+
+.sm-chrome-stop__btn:hover {
+  z-index: 1;
+  border-color: var(--bad-fg);
+  background: var(--bad-fg);
+  color: var(--bg);
+}
+
+.sm-chrome-stop__btn:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.sm-chrome-stop__square {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentcolor;
 }
 
 .sm-signout-confirm {
@@ -538,13 +608,25 @@
     width: min(84vw, 320px);
     max-width: 320px;
     min-height: 0;
+    /* Scrolls inside a viewport shorter than its links plus the footer. */
+    max-height: calc(100vh - var(--chrome-h) - 1px);
+    overflow-y: auto;
     transform: translateX(-100%);
-    transition: transform 160ms ease;
+    /* Hidden once it has slid out, so a closed drawer is not in the tab order. */
+    visibility: hidden;
+    transition: transform 160ms ease, visibility 0s linear 160ms;
     box-shadow: 8px 0 24px rgb(0 0 0 / 0.4);
   }
 
   .sm-rail[data-open='true'] {
     transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
+
+  /* The drawer scrolls instead of squeezing its links below their height. */
+  .sm-rail > * {
+    flex-shrink: 0;
   }
 
   .sm-rail-scrim[data-open='true'] {
