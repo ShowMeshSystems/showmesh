@@ -319,6 +319,14 @@ export function Specimen() {
             <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
             inline row, such as a pairing code. Never for a field that can hold an operator-length string.
           </p>
+          <div className="sm-inline-row sm-inline-row--end">
+            <Field label="Player id">{(props) => <Input {...props} defaultValue="barn-player" />}</Field>
+            <Button variant="quiet">Remove</Button>
+          </div>
+          <p className="sm-small sm-muted">
+            <span className="sm-data">.sm-inline-row--end</span>: labelled fields with buttons in one row. The buttons
+            sit level with the inputs, not the labels.
+          </p>
           <RadioCardList
             label="Program channels"
             help="Channel pairs this output reports."
