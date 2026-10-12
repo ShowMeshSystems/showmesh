@@ -766,7 +766,7 @@ func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.O
 	if err := s.persistLocked(); err != nil {
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeFailed,
-			Reason:  "operation executed but could not be durably persisted: " + err.Error(),
+			Reason:  "This ran, but the node could not save it. Check this node's disk.",
 		}
 	}
 	return outcome
@@ -1116,7 +1116,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.state = pkgaudio.StateFailed
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	startCtx, startCancel := boundedEngineCallContext(ctx)
 	obs, err := s.mgr.engine.Start(startCtx, s.handle, 0)
@@ -1126,7 +1126,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
@@ -1471,13 +1471,11 @@ func (s *Session) staleFallbackSnapshot(budget time.Duration) SessionSnapshot {
 	last := s.lastSnapshot.Load()
 	if last == nil {
 		return SessionSnapshot{
-			ID:    s.id,
-			State: pkgaudio.StateUnknown,
-			Fault: pkgaudio.FaultOther,
-			FaultReason: fmt.Sprintf(
-				"audio session telemetry could not be collected within %s of this report tick, and no prior snapshot exists to fall back to; the session is likely inside an in-flight engine call",
-				budget),
-			Stale: true,
+			ID:          s.id,
+			State:       pkgaudio.StateUnknown,
+			Fault:       pkgaudio.FaultOther,
+			FaultReason: "This audio is busy and did not report in time. It reports again shortly.",
+			Stale:       true,
 		}
 	}
 	snap := *last

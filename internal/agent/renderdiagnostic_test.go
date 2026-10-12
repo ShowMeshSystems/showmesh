@@ -447,7 +447,7 @@ func TestDiagnosticSurfaceStatesItsDegradedOutput(t *testing.T) {
 	if *snap.TransportAvailable {
 		t.Fatal("a diagnostic surface with no NDI source name reported an available transport")
 	}
-	if !strings.Contains(snap.TransportReason, "sourceName") {
+	if !strings.Contains(snap.TransportReason, "No NDI source name is set") {
 		t.Fatalf("the degraded-output reason does not name the missing source name: %q", snap.TransportReason)
 	}
 }

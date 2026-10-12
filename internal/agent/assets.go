@@ -171,10 +171,11 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 			// sync tick tries again — no local file is ever removed on this
 			// path, and nothing below executes.
 			return OperationResult{
-				Confirmed: false,
-				Signal:    "node.asset.fetch_failed",
-				Value:     assetID,
-			}, fmt.Errorf("asset.fetch: download failed: %w", downloadErr)
+					Confirmed: false,
+					Signal:    "node.asset.fetch_failed",
+					Value:     assetID,
+				}, withOperatorReason(fmt.Errorf("asset.fetch: download failed: %w", downloadErr),
+					"This node could not download the file. Check that it can reach the coordinator.")
 		}
 	}
 
@@ -188,15 +189,15 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 		// (ADR-025's rule applied to content hashing): discard the staged
 		// file, never rename unverified content into place.
 		_ = os.Remove(stagingPath)
-		return OperationResult{}, fmt.Errorf(
+		return OperationResult{}, withOperatorReason(fmt.Errorf(
 			"asset.fetch: asset %s failed verification and was discarded: want %s, got %s",
-			assetID, contentHash, downloadedHash)
+			assetID, contentHash, downloadedHash), reasonDownloadDamaged)
 	}
 	if downloadedSize != sizeBytes {
 		_ = os.Remove(stagingPath)
-		return OperationResult{}, fmt.Errorf(
-			"asset.fetch: asset %s transferred %d bytes but %d were expected; the partial content was discarded",
-			assetID, downloadedSize, sizeBytes)
+		return OperationResult{}, withOperatorReason(fmt.Errorf(
+			"asset.fetch: asset %s transferred %d bytes but %d were expected",
+			assetID, downloadedSize, sizeBytes), reasonDownloadDamaged)
 	}
 
 	// Verification succeeded: only now does the content become visible under
@@ -298,9 +299,10 @@ func (o assetRemoveOperation) run(ctx context.Context, params map[string]any, no
 	}
 	gotHash := "sha256:" + hex.EncodeToString(h.Sum(nil))
 	if gotHash != contentHash {
-		return OperationResult{}, fmt.Errorf(
+		return OperationResult{}, withOperatorReason(fmt.Errorf(
 			"asset.remove: refusing to delete %q: on-disk content hash %s does not match requested %s",
-			filename, gotHash, contentHash)
+			filename, gotHash, contentHash),
+			"The file on this node has changed, so it was kept. Refresh and try again.")
 	}
 
 	if err := os.Remove(path); err != nil {

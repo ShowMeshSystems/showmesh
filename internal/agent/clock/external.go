@@ -77,11 +77,11 @@ func (p *ExternalProvider) Close() error       { return nil }
 func (p *ExternalProvider) Now(context.Context) MediaTime {
 	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not check %s for a hardware clock: %v. Media time is unavailable until this is fixed.", p.cfg.Interface, err)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not check %s for a hardware clock. Media time is off until this is fixed.", p.cfg.Interface)}
 	}
 	if !hasPHC {
 		if p.cfg.PHCDevice != "" {
-			return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is set, but %s has no hardware clock. Remove phcDevice or point it at the right interface.", p.cfg.PHCDevice, p.cfg.Interface)}
+			return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is set, but %s has no hardware clock. Fix or remove phcDevice.", p.cfg.PHCDevice, p.cfg.Interface)}
 		}
 		return MediaTime{
 			Time:   time.Now(),
@@ -90,14 +90,14 @@ func (p *ExternalProvider) Now(context.Context) MediaTime {
 		}
 	}
 	if p.cfg.PHCDevice == "" {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a hardware clock, but this node cannot tell if it is being used. Set phcDevice to enable media time.", p.cfg.Interface)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a hardware clock that is not confirmed in use. Set phcDevice to enable media time.", p.cfg.Interface)}
 	}
 	declaredIndex, ok := phcDeviceIndex(p.cfg.PHCDevice)
 	if !ok {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %q is not a valid hardware clock device. Use a path like /dev/ptp0.", p.cfg.PHCDevice)}
 	}
 	if declaredIndex != index {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s does not match %s's hardware clock, which is /dev/ptp%d. Fix phcDevice or the interface.", p.cfg.PHCDevice, p.cfg.Interface, index)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is not %s's hardware clock. Set phcDevice to /dev/ptp%d.", p.cfg.PHCDevice, p.cfg.Interface, index)}
 	}
 	t, err := readPHC(index)
 	if err != nil {
@@ -127,11 +127,11 @@ func (p *ExternalProvider) frequencyPPM() (ppm float64, ok bool, reason string) 
 		return v, true, ""
 	}
 	if p.cfg.PHCDevice == "" {
-		return 0, false, fmt.Sprintf("%s has a hardware clock, but no PHC device is declared for it. Set phcDevice in this node's clock settings to report its frequency.", p.cfg.Interface)
+		return 0, false, fmt.Sprintf("%s has a hardware clock but no phcDevice. Set phcDevice to report its frequency.", p.cfg.Interface)
 	}
 	declaredIndex, parsed := phcDeviceIndex(p.cfg.PHCDevice)
 	if !parsed || declaredIndex != index {
-		return 0, false, fmt.Sprintf("phcDevice does not match %s's hardware clock. Fix phcDevice in this node's clock settings.", p.cfg.Interface)
+		return 0, false, fmt.Sprintf("phcDevice does not match %s's hardware clock. Fix phcDevice in the clock settings.", p.cfg.Interface)
 	}
 	v, err := phcFrequencyPPM(index)
 	if err != nil {
@@ -199,7 +199,7 @@ func pollViaUDS(ctx context.Context, uds string, domain int, owner string, socke
 	}
 	port := parsePortDataSet(portOut)
 	if !port.PortStateKnown {
-		return RawStatus{Reachable: false, Reason: "No response from the clock socket. Check the domain number, or confirm the clock service is running."}
+		return RawStatus{Reachable: false, Reason: "No response from the clock socket. Check the domain number and the clock service."}
 	}
 
 	tsOut, _ := runPMC(ctx, uds, domain, "TIME_STATUS_NP", socketDirHint)

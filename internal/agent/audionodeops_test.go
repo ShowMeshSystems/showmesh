@@ -239,14 +239,14 @@ func TestResolveNodeChannelCountFromGraphSourceWording(t *testing.T) {
 			graphChannel: 4,
 			bindingCount: 4,
 			wantCount:    4,
-			wantContains: "matching",
+			wantContains: "which this output has",
 		},
 		{
 			name:         "graph width narrower than the binding",
 			graphChannel: 2,
 			bindingCount: 4,
 			wantCount:    4,
-			wantContains: "exceeding",
+			wantContains: "more than this output reports",
 		},
 	}
 

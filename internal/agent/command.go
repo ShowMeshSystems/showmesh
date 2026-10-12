@@ -276,7 +276,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		// authorized-or-refused against the held catalog, and only the
 		// apply step for a configured output actually executes (see
 		// cueActivationOperation.activate).
-		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr, nodeID: nodeID, hashCache: hashCache, weatherDelay: weatherDelay}
+		cueActivate := &cueActivationOperation{logger: logger, assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr, nodeID: nodeID, hashCache: hashCache, weatherDelay: weatherDelay}
 		ops["cue.activate"] = cueActivate.activate
 	}
 	for action, op := range audioSessionOperations(audioMgr) {
@@ -630,15 +630,15 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 		"issuer_principal_id", cmd.Issuer.PrincipalID, "issuer_principal_name", cmd.Issuer.PrincipalName)
 
 	if cmd.Target.Kind != "node" || cmd.Target.ID != h.nodeID {
-		result := h.refusedResult(cmd, receivedAt, fmt.Sprintf(
-			"target mismatch: this agent is node %q, command targets %s %q", h.nodeID, cmd.Target.Kind, cmd.Target.ID))
+		h.logger.Warn("refusing a command addressed to another target", "command_id", cmd.CommandID, "target_kind", cmd.Target.Kind, "target_id", cmd.Target.ID)
+		result := h.refusedResult(cmd, receivedAt, "This command was addressed to another node. Nothing was changed.")
 		h.publishResult(ctx, publisher, result)
 		return
 	}
 
 	if cmd.ConfirmationMethod != confirmationMethodEvidence {
-		result := h.refusedResult(cmd, receivedAt, fmt.Sprintf(
-			"confirmation method %q is not implemented; only %q is", cmd.ConfirmationMethod, confirmationMethodEvidence))
+		h.logger.Warn("refusing a command with an unimplemented confirmation method", "command_id", cmd.CommandID, "confirmation_method", cmd.ConfirmationMethod)
+		result := h.refusedResult(cmd, receivedAt, "This node cannot confirm the command the way it asks. Update ShowMesh on the node.")
 		h.publishResult(ctx, publisher, result)
 		return
 	}
@@ -661,7 +661,7 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	}
 
 	if cmd.Deadline != nil && !cmd.Deadline.After(h.now()) {
-		result := h.refusedResult(cmd, receivedAt, "deadline already elapsed at receipt")
+		result := h.refusedResult(cmd, receivedAt, "The command arrived too late to run. Send it again.")
 		h.cache.complete(cmd.IdempotencyKey, result)
 		h.publishResult(ctx, publisher, result)
 		return
@@ -669,7 +669,7 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 
 	op, ok := h.ops[cmd.Action]
 	if !ok {
-		result := h.refusedResult(cmd, receivedAt, fmt.Sprintf("operation %q is not on the agent's allowlist", cmd.Action))
+		result := h.refusedResult(cmd, receivedAt, reasonOperationUnknown)
 		h.cache.complete(cmd.IdempotencyKey, result)
 		h.publishResult(ctx, publisher, result)
 		return
@@ -677,7 +677,8 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 
 	opResult, err := op(ctx, cmd.Params, h.now)
 	if err != nil {
-		result := h.failedResult(cmd, receivedAt, err.Error())
+		h.logger.Warn("operation failed", "command_id", cmd.CommandID, "action", cmd.Action, "error", err)
+		result := h.failedResult(cmd, receivedAt, operatorReason(cmd.Action, err))
 		// opResult is still meaningful here: an OperationFunc that fails
 		// may still classify what it observed (assetFetchOperation.run
 		// returns Signal "node.asset.fetch_failed" alongside its error, for
@@ -710,7 +711,7 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	reason := ""
 	if !opResult.Confirmed {
 		outcome = mqttproto.OutcomeUnconfirmed
-		reason = "operation applied, but the post-write read-back evidence did not match the requested value"
+		reason = reasonUnconfirmed
 		if opResult.Reason != "" {
 			reason = opResult.Reason
 		}

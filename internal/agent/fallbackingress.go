@@ -56,9 +56,9 @@ type fallbackIngress struct {
 }
 
 const (
-	fallbackReasonFenceDamaged     = "This node's record of handled fallback requests is damaged, so it refuses every fallback request. Delete fallback-state/executions.jsonl in the node's asset folder and restart the agent."
-	fallbackReasonFenceWriteFailed = "This node could not write its record of handled fallback requests, so it refused a fallback request. Check this node's disk."
-	fallbackReasonNoCueActivation  = "This node cannot run Cues, so it cannot run a fallback request. Check this node's log."
+	fallbackReasonFenceDamaged     = "This node's fallback record is damaged, so it refuses fallback requests. Delete it and restart the agent: fallback-state/executions.jsonl"
+	fallbackReasonFenceWriteFailed = "This node could not save its fallback record, so it refused. Check this node's disk."
+	fallbackReasonNoCueActivation  = "This node cannot run Cues, so it refused a fallback request. Check its log."
 )
 
 // executionRecordProblem is the sentence the report carries while this
@@ -167,32 +167,32 @@ var fallbackOutcomeReason = map[fallbackactivation.Outcome]string{
 	fallbackactivation.OutcomeAuthorized:                         "The Cue was started from the FPP player's fallback program.",
 	fallbackactivation.OutcomeMalformedRequest:                   "A fallback request was not in the expected form. Update the FPP plugin.",
 	fallbackactivation.OutcomeTooLarge:                           "A fallback request was too large. Update the FPP plugin.",
-	fallbackactivation.OutcomeRateLimited:                        "This node received too many fallback requests from one address. The extra requests were refused.",
-	fallbackactivation.OutcomeNoCoordinatorKey:                   "This node has no coordinator key, so it cannot check a fallback program. Enroll this node again.",
-	fallbackactivation.OutcomeStorageUnavailable:                 "This node could not save what a fallback request needs, so nothing was started. Check this node's disk.",
+	fallbackactivation.OutcomeRateLimited:                        "Too many fallback requests came from one address. The extra ones were refused.",
+	fallbackactivation.OutcomeNoCoordinatorKey:                   "This node has no coordinator key to check a fallback program. Enroll it again.",
+	fallbackactivation.OutcomeStorageUnavailable:                 "This node could not save a fallback request, so nothing started. Check its disk.",
 	fallbackactivation.OutcomeNotReady:                           "This node is still starting. The plugin tries again.",
-	fallbackactivation.OutcomeProgramSignatureInvalid:            "A fallback program was not signed by this node's coordinator. Check that the FPP player and this node use the same coordinator.",
+	fallbackactivation.OutcomeProgramSignatureInvalid:            "A fallback program came from another coordinator. Point the FPP player at this one.",
 	fallbackactivation.OutcomeProgramUnsupported:                 "A fallback program is in a form this node does not understand. Update this node.",
-	fallbackactivation.OutcomeWrongFPPHost:                       "A fallback program was sent under a different FPP player than it was built for. Check the FPP plugin.",
+	fallbackactivation.OutcomeWrongFPPHost:                       "A fallback program was built for a different FPP player. Check the FPP plugin.",
 	fallbackactivation.OutcomeWrongTarget:                        "A fallback request was meant for a different node. Nothing was started here.",
-	fallbackactivation.OutcomeProgramExpired:                     "The fallback program from this FPP player has expired. It is renewed when the coordinator is back.",
-	fallbackactivation.OutcomeProgramSuperseded:                  "This node already holds a newer fallback program from this FPP player. The older one was ignored.",
-	fallbackactivation.OutcomeProgramNotInstalled:                "This node holds no fallback program from this FPP player. The plugin sends it and tries again.",
-	fallbackactivation.OutcomeProgramNotCurrent:                  "The FPP player used a different fallback program than this node holds. The plugin sends its program and tries again.",
-	fallbackactivation.OutcomeExecutorNotEnrolled:                "The fallback program names no key for this FPP player. Start the FPP plugin so it registers with the coordinator.",
+	fallbackactivation.OutcomeProgramExpired:                     "This FPP player's fallback program has expired. It renews when the coordinator is back.",
+	fallbackactivation.OutcomeProgramSuperseded:                  "This node holds a newer fallback program. The older one was ignored.",
+	fallbackactivation.OutcomeProgramNotInstalled:                "This node has no fallback program from this FPP player yet. The plugin sends it.",
+	fallbackactivation.OutcomeProgramNotCurrent:                  "The FPP player and this node hold different fallback programs. The plugin resends it.",
+	fallbackactivation.OutcomeExecutorNotEnrolled:                "This FPP player is not registered for fallback. Start the FPP plugin to register it.",
 	fallbackactivation.OutcomeSignatureInvalid:                   "A fallback request was not signed by the paired FPP player. Nothing was started.",
-	fallbackactivation.OutcomeUnknownEntry:                       "The FPP player is playing an item the fallback program does not list. Nothing was started.",
-	fallbackactivation.OutcomeCueNotAuthorized:                   "A fallback request asked for a Cue the fallback program does not allow for this item. Nothing was started.",
-	fallbackactivation.OutcomeStaleGeneration:                    "A fallback request does not match the show this node has active. Nothing was started.",
-	fallbackactivation.OutcomeStaleCatalog:                       "A fallback request does not match the Cue list this node holds. Nothing was started.",
+	fallbackactivation.OutcomeUnknownEntry:                       "The FPP player is on an item the fallback program lacks. Nothing was started.",
+	fallbackactivation.OutcomeCueNotAuthorized:                   "A fallback request asked for a Cue this item does not allow. Nothing was started.",
+	fallbackactivation.OutcomeStaleGeneration:                    "A fallback request was for another show activation. Nothing was started.",
+	fallbackactivation.OutcomeStaleCatalog:                       "A fallback request used a different Cue list than this node's. Nothing was started.",
 	fallbackactivation.OutcomeReplayedExecution:                  "This fallback request was already handled. It was not run again.",
 	fallbackactivation.OutcomeApplyFailed:                        "The Cue was allowed, but an output could not be started.",
-	fallbackactivation.OutcomeCueCheckFailed:                     "This node could not check the Cue, so nothing was started. Check this node's log.",
-	fallbackactivation.Outcome(cueauth.OutcomeCrossShow):         "A fallback request was for a different show than this node has active. Nothing was started.",
-	fallbackactivation.Outcome(cueauth.OutcomeUnknownGeneration): "A fallback request was for a newer activation of the show than this node has. Nothing was started.",
+	fallbackactivation.OutcomeCueCheckFailed:                     "This node could not check the Cue, so nothing started. Check this node's log.",
+	fallbackactivation.Outcome(cueauth.OutcomeCrossShow):         "A fallback request was for a different show. Nothing was started.",
+	fallbackactivation.Outcome(cueauth.OutcomeUnknownGeneration): "A fallback request was for a newer show activation. Nothing was started.",
 	fallbackactivation.Outcome(cueauth.OutcomeUnknownCue):        "A fallback request asked for a Cue this node does not hold. Nothing was started.",
-	fallbackactivation.Outcome(cueauth.OutcomeStaleCue):          "A fallback request asked for an older version of a Cue than this node holds. Nothing was started.",
-	fallbackactivation.Outcome(cueauth.OutcomeAssetMissing):      "A file this Cue needs is missing from this node or does not match. Nothing was started.",
+	fallbackactivation.Outcome(cueauth.OutcomeStaleCue):          "A fallback request asked for an older version of a Cue. Nothing was started.",
+	fallbackactivation.Outcome(cueauth.OutcomeAssetMissing):      "A file this Cue needs is missing or changed on this node. Nothing was started.",
 	"weather-delay-active":                                       weatherDelayActiveReason,
 }
 

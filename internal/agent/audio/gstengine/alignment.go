@@ -54,7 +54,7 @@ func (e *Engine) Alignment(_ context.Context, handle agentaudio.EngineHandle) (a
 	offset := time.Duration(pads[0].GetOffset())
 	programPos := segmentStart + (runningTime - offset)
 	if programPos < 0 {
-		return agentaudio.AlignmentSample{}, false, "the branch's pad offset and the pipeline's running time disagree; computed program position is negative"
+		return agentaudio.AlignmentSample{}, false, "The audio position could not be read, so alignment was not measured."
 	}
 
 	// The branch has not decoded up to the position the pipeline is

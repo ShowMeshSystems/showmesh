@@ -497,7 +497,7 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	}
 	source := m.clockSourceSnapshot()
 	if source == nil {
-		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node has no media clock wired, so the requested start instant was ignored", nil
+		return nil, pkgaudio.ReasonScheduledStartIgnored + ": Started at once because this node has no media clock. Set up its clock.", nil
 	}
 
 	// A fresh cached status (from the clock report loop's own cadence,
@@ -511,10 +511,10 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	mediaNow := source.Now(ctx)
 
 	if status.State != agentclock.StateLocked {
-		return nil, fmt.Sprintf("%s: started on arrival: this node's clock provider reports %q (%s), so the requested start instant was ignored", pkgaudio.ReasonScheduledStartIgnored, status.State, status.Reason), nil
+		return nil, fmt.Sprintf("%s: Started at once because this node's clock is %s. Check its clock.", pkgaudio.ReasonScheduledStartIgnored, status.State), nil
 	}
 	if !mediaNow.Valid {
-		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node's media clock is unreadable (" + mediaNow.Reason + "), so the requested start instant was ignored", nil
+		return nil, pkgaudio.ReasonScheduledStartIgnored + ": Started at once because this node's clock could not be read. Check its clock.", nil
 	}
 
 	t0 := time.Unix(0, *scheduledAtNs)
@@ -530,20 +530,18 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 		t0 = t0.Add(-time.Duration(latencyUs) * time.Microsecond)
 	}
 	if !t0.After(mediaNow.Time) {
-		latencyNote := ""
+		late := mediaNow.Time.Sub(t0).Round(time.Millisecond)
+		reason := fmt.Sprintf("%s: The start time passed %s before it reached this node. Start it again.", pkgaudio.ReasonScheduledStartInPast, late)
 		if latencyUs != 0 {
-			latencyNote = fmt.Sprintf(" (adjusted from the requested %d by this node's calibrated output latency of %dus)", *scheduledAtNs, latencyUs)
+			reason = fmt.Sprintf("%s: The start time passed %s ago after this node's output delay of %d ms. Start it again.",
+				pkgaudio.ReasonScheduledStartInPast, late, latencyUs/1000)
 		}
-		return nil, "", &pkgaudio.OutcomeResult{
-			Outcome: pkgaudio.OutcomeRefused,
-			Reason: fmt.Sprintf("%s: the adjusted start instant %d%s is %s behind this node's media clock, which already reads %d; this node refuses rather than starting late",
-				pkgaudio.ReasonScheduledStartInPast, t0.UnixNano(), latencyNote, mediaNow.Time.Sub(t0), mediaNow.Time.UnixNano()),
-		}
+		return nil, "", &pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reason}
 	}
 	if lead := t0.Sub(mediaNow.Time); lead > maxScheduledStartLead {
 		return nil, "", &pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeRefused,
-			Reason:  fmt.Sprintf("the requested start instant is %s ahead of this node's media clock, beyond the %s a scheduled start may wait", lead, maxScheduledStartLead),
+			Reason:  fmt.Sprintf("The start time is %s away and this node waits at most %s. Start it closer to the time.", lead.Round(time.Second), maxScheduledStartLead),
 		}
 	}
 	return &startSchedule{source: source, t0: t0, status: status}, "", nil

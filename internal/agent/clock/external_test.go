@@ -124,7 +124,7 @@ func TestExternalProviderNowRefusesPHCPresentWithNoDeclaration(t *testing.T) {
 	if mt.Valid {
 		t.Fatalf("Valid = true, want false: a PHC exists and nothing confirms the observed ptp4l reached hardware timestamping")
 	}
-	if !strings.Contains(mt.Reason, "eno2") || !strings.Contains(mt.Reason, "cannot tell if it is being used") {
+	if !strings.Contains(mt.Reason, "eno2") || !strings.Contains(mt.Reason, "not confirmed in use") {
 		t.Errorf("Reason = %q, want the refusal wording naming the interface", mt.Reason)
 	}
 }

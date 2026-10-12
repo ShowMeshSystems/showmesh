@@ -1124,13 +1124,8 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 		exists = false
 	} else if !exists || offset != existing.bytesReceived {
 		s.discardFragment(dir, name)
-		got := int64(-1)
-		if exists {
-			got = existing.bytesReceived
-		}
 		o, r, _ := s.refuseLocked(fppConnectChunkGap, "gap", dir, name, fmt.Sprintf(
-			"upload offset %d does not match %d bytes already received for %q; the fragment was discarded",
-			offset, got, name), at)
+			"Part of %s arrived out of order and was discarded. Upload it again from xLights.", name), at)
 		return nil, 0, o, r, false
 	} else if uploadLength != existing.uploadLength {
 		// The declared total changed mid-upload (review round 3 finding
@@ -1141,8 +1136,7 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 		// headroom for a concurrent upload that should not exist.
 		s.discardFragment(dir, name)
 		o, r, _ := s.refuseLocked(fppConnectChunkGap, "length-mismatch", dir, name, fmt.Sprintf(
-			"Upload-Length %d does not match the %d declared at offset 0 for %q; the fragment was discarded",
-			uploadLength, existing.uploadLength, name), at)
+			"The size of %s changed during the upload, so it was discarded. Upload it again.", name), at)
 		return nil, 0, o, r, false
 	}
 
@@ -1187,8 +1181,8 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 		}
 		if existingOnDisk+reserved+uploadLength > maxAssetDirBytes {
 			o, r, _ := s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, fmt.Sprintf(
-				"accepting %d declared bytes (plus %d bytes reserved by other in-progress uploads) would bring the asset directory to more than its %d byte cap (%d bytes already used)",
-				uploadLength, reserved, maxAssetDirBytes, existingOnDisk), at)
+				"No room for %s: %d bytes used and %d held for other uploads, of %d allowed. Remove unused files.",
+				name, existingOnDisk, reserved, maxAssetDirBytes), at)
 			return nil, 0, o, r, false
 		}
 	}
@@ -1197,8 +1191,7 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 	if newTotal > uploadLength || newTotal > maxFileBytes {
 		s.discardFragment(dir, name)
 		o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
-			"accumulated upload of %d bytes would exceed the declared length of %d bytes or the per-file cap of %d bytes",
-			newTotal, uploadLength, maxFileBytes), at)
+			"%s is larger than this node accepts. Raise the file size limit or upload a smaller file.", name), at)
 		return nil, 0, o, r, false
 	}
 
@@ -1235,7 +1228,7 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 		// its writing flag, discard its staging file, or rename it into
 		// place as if it were the newer upload's own bytes. Refuse
 		// without touching key's current entry.
-		return fppConnectChunkGap, fmt.Sprintf("upload for %q was reclaimed as idle while this chunk was still being written; restart at offset 0", name), fppConnectHeldRecord{}
+		return fppConnectChunkGap, fmt.Sprintf("The upload of %s stalled and was dropped. Upload it again from xLights.", name), fppConnectHeldRecord{}
 	}
 
 	inf.writing = false
@@ -1458,9 +1451,7 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 func resetRegistrationForRebindLocked(rec fppConnectHeldRecord) fppConnectHeldRecord {
 	reason := ""
 	if rec.RegistrationState == fppConnectRegistrationRegistered {
-		reason = fmt.Sprintf(
-			"previously registered as asset %q under show %q, sequence %q, before being rebound to a different show",
-			rec.RegistrationAssetID, rec.ShowID, rec.LogicalSequence)
+		reason = fmt.Sprintf("This file moved to another show. It was asset %s in show %s.", rec.RegistrationAssetID, rec.ShowID)
 	}
 	rec.RegistrationState = ""
 	rec.RegistrationAssetID = ""

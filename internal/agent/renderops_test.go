@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -190,7 +192,9 @@ func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) 
 			store := pipeline.NewAssignmentStore(dir)
 			renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-			h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+			var logged bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logged, nil))
+			h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, nil, nil, nil, clock.now, logger)
 			pub := newFakePublisher()
 
 			cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", tc.params)
@@ -201,15 +205,13 @@ func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) 
 			if result.Outcome != mqttproto.OutcomeFailed {
 				t.Fatalf("Outcome = %q, want %q for %s; reason = %q", result.Outcome, mqttproto.OutcomeFailed, tc.name, result.Reason)
 			}
-			// Pinned to the SPECIFIC field this subtest's own params leave
-			// missing, not merely "some reason was given": a bare
-			// substring shared across subtests would let one subtest pass
-			// on the other's diagnostic, or on an unrelated downstream
-			// failure (e.g. pipeline.FSEQSourceSpec rejecting an empty
-			// pixelFormat) rather than the refusal buildFSEQAssignment
-			// itself is supposed to produce.
-			if !strings.Contains(result.Reason, tc.wantReasonSubstr) {
-				t.Fatalf("Reason = %q for %s, want it to contain %q", result.Reason, tc.name, tc.wantReasonSubstr)
+			// The operator reads one plain line. The specific field this
+			// subtest leaves out is pinned in the node's log instead.
+			if result.Reason != "This node could not change what the surface shows. Check this node's log." {
+				t.Fatalf("Reason = %q for %s, want the plain operator line", result.Reason, tc.name)
+			}
+			if !strings.Contains(logged.String(), tc.wantReasonSubstr) {
+				t.Fatalf("log = %q for %s, want it to contain %q", logged.String(), tc.name, tc.wantReasonSubstr)
 			}
 
 			reloaded, err := store.Load()
@@ -455,7 +457,7 @@ func TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning(t *testin
 	if reason == "" {
 		t.Fatalf(`Value["reason"] is empty for a "running" state whose sink is a diagnostic fallback — a silent success is exactly what ADR-029 forbids`)
 	}
-	if !strings.Contains(reason, "hdmi") {
+	if !strings.Contains(reason, "HDMI") {
 		t.Errorf("Value[\"reason\"] = %q, want it to name hdmi specifically", reason)
 	}
 

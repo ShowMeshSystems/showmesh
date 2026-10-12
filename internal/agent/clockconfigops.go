@@ -82,7 +82,8 @@ func newClockBinding(mgr *clock.Manager, localSocketDir string) *clockBinding {
 func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error {
 	if b.haveConfig {
 		if p.Revision < b.revision {
-			return fmt.Errorf("node.clock.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.revision)
+			return withOperatorReason(fmt.Errorf("node.clock.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.revision),
+				"This node already has newer clock settings. The older ones were ignored.")
 		}
 		if p.Revision == b.revision {
 			return nil

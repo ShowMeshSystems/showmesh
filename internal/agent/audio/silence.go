@@ -157,9 +157,9 @@ func (m *Manager) releaseEveryEngineBranchExcept(ctx context.Context, except ...
 // sweep does not come back clean. Rendered verbatim by the API, the CLI
 // and the UI, so the wording is fixed here.
 const (
-	SilenceSweepNoEngineReason = "This node's audio engine was not connected when the stop's final sweep ran, so some audio may still be playing. Retry the stop once the engine reconnects."
+	SilenceSweepNoEngineReason = "Audio may still be playing: the audio engine was offline. Stop again once it is back."
 
-	SilenceSweepUnfinishedReason = "Some of this node's audio did not finish shutting down in time. It is already silenced, and the node keeps working to shut it down."
+	SilenceSweepUnfinishedReason = "Some audio is silenced but still shutting down. The node keeps working on it."
 )
 
 // SilenceSession stops one session the way [Manager.SilenceAll] does,

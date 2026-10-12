@@ -308,7 +308,7 @@ func TestSecondAnnouncementRefusedWhileFirstIsPlaying(t *testing.T) {
 	if !strings.Contains(reason, "cue-ann-first") || !strings.Contains(reason, "cue-ann-second") {
 		t.Fatalf("refusal reason %q does not name both cue ids", reason)
 	}
-	if !strings.Contains(reason, "already playing") {
+	if !strings.Contains(reason, "still playing") {
 		t.Fatalf("refusal reason %q does not say the first announcement is already playing", reason)
 	}
 

@@ -77,6 +77,10 @@ func (m *Manager) StopPersisted(match func(pkgaudio.SessionID) bool) error {
 	return errors.Join(errs...)
 }
 
+// restoreRetryQueuedReason is reported while a session waits for another
+// restore attempt after one failed.
+const restoreRetryQueuedReason = "This audio could not be restored yet. The node tries again when its audio settings arrive."
+
 // restoreOne rebuilds one session from its persisted record and, for a
 // session that was Playing or mid-advance (Preparing) at last persist,
 // re-loads and re-starts its current item — never the item that had
@@ -270,7 +274,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 			if retry {
 				// A build refusal (not ErrNoEngineBinding) must not
 				// consume the pending restore; see restoreOne's doc comment.
-				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Load failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
 			s.state = pkgaudio.StateFailed
@@ -292,7 +296,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
-				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Start failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
 			s.state = pkgaudio.StateFailed
@@ -328,7 +332,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 			}
 			if retry {
 				// Same reasoning as the Playing/Preparing branch above.
-				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Load failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
 			s.state = pkgaudio.StateFailed
@@ -356,7 +360,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		// specifically, only a real engine error.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
-				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Start failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
 			s.state = pkgaudio.StateFailed
@@ -367,7 +371,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
 			if retry && !errors.Is(err, ErrNoEngineBinding) {
-				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Pause failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				m.queueForRetryLocked(ctx, s, id, restoreRetryQueuedReason)
 				return nil
 			}
 			s.state = pkgaudio.StateFailed

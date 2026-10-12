@@ -186,7 +186,8 @@ func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[s
 
 	executedAt := now()
 	if err := saveFPPConnectSnapshot(o.assetDir, snap); err != nil {
-		return OperationResult{}, markDoNotCacheFailure(fmt.Errorf("fppconnect.configure: persist state: %w", err))
+		return OperationResult{}, markDoNotCacheFailure(withOperatorReason(fmt.Errorf("fppconnect.configure: persist state: %w", err),
+			"This node could not save its upload settings. Check this node's disk."))
 	}
 	o.state.Apply(snap)
 	observedAt := now()

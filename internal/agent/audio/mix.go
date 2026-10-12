@@ -73,10 +73,10 @@ func (s *Session) applyEffectiveGainLocked(ctx context.Context) pkgaudio.Outcome
 	obs, err := s.mgr.engine.SetGain(gainCtx, s.handle, effective)
 	cancel()
 	if err != nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	if obs.ObservedAt.Before(dispatchedAt) {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: reasonNotYetConfirmed}
 	}
 	if !gainsEqual(obs.Gain, effective) {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: fmt.Sprintf("engine reports gain %v, expected %v", obs.Gain, effective)}
@@ -134,7 +134,7 @@ func (s *Session) fadeToEffectiveGainLocked(ctx context.Context, durationMs int)
 	dispatchedAt := s.mgr.now()
 	obs, err := s.mgr.engine.Fade(ctx, s.handle, fade)
 	if err != nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	s.resolveSupersededFadeInvocationLocked()
 	s.fadeDispatchedTarget = effective
@@ -142,7 +142,7 @@ func (s *Session) fadeToEffectiveGainLocked(ctx context.Context, durationMs int)
 	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateInProgress
 	if obs.ObservedAt.Before(dispatchedAt) {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: reasonNotYetConfirmed}
 	}
 	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: "fade dispatched, not yet complete"}
 }
@@ -287,10 +287,10 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 		s.fadePending = false
 		s.fadeInvocation = ""
 		s.fadeState = FadeStateNone
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	if obs.ObservedAt.Before(dispatchedAt) {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: reasonNotYetConfirmed}
 	}
 	reason := "fade dispatched, not yet complete"
 	if result.Clamped {

@@ -17,7 +17,7 @@ import (
 // detached state reports [SwitchableEngineRebindInProgressReason]
 // instead, never this: a caller must be able to tell "never configured"
 // apart from "configured, currently between engines".
-const SwitchableEngineNoBindingReason = "no audio.node configuration has been delivered to this node yet; nothing plays audio"
+const SwitchableEngineNoBindingReason = "This node has no audio settings yet, so it plays nothing. Set up its audio outputs."
 
 // SwitchableEngineRebindInProgressReason is [SwitchableEngine.Available]'s
 // reason while a rebind has detached the outgoing engine and has not yet
@@ -25,7 +25,7 @@ const SwitchableEngineNoBindingReason = "no audio.node configuration has been de
 // audioEngineRebuilder.rebuild in the agent package). A binding WAS
 // delivered here, so a caller must not read this the way it would read
 // [SwitchableEngineNoBindingReason].
-const SwitchableEngineRebindInProgressReason = "an audio.node.configure rebuild is replacing this node's engine; no engine is bound yet"
+const SwitchableEngineRebindInProgressReason = "This node is applying new audio settings. Try again in a moment."
 
 // ErrNoEngineBinding is the sentinel every SwitchableEngine call fails
 // with before its first Set. Callers that need to tell "no engine bound

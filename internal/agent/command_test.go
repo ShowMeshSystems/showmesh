@@ -934,7 +934,7 @@ func TestHandleMessageAssetFetchFailureCarriesReasonAndSignal(t *testing.T) {
 	if result.Outcome != mqttproto.OutcomeFailed {
 		t.Fatalf("Outcome = %q, want %q", result.Outcome, mqttproto.OutcomeFailed)
 	}
-	if result.Reason == "" || !strings.Contains(result.Reason, "asset.fetch: download failed") {
+	if !strings.Contains(result.Reason, "could not download the file") {
 		t.Fatalf("Reason = %q, want it to name the download failure", result.Reason)
 	}
 	if result.Evidence == nil {

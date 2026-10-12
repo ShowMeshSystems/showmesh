@@ -166,7 +166,8 @@ func (b *audioBinding) applyNode(p audioNodeConfig) error {
 	if b.haveNode {
 		if p.Revision < b.nodeRevision {
 			b.mu.Unlock()
-			return fmt.Errorf("audio.node.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.nodeRevision)
+			return withOperatorReason(fmt.Errorf("audio.node.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.nodeRevision),
+				"This node already has newer audio output settings. The older ones were ignored.")
 		}
 		if p.Revision == b.nodeRevision {
 			broken := b.nodeBroken != nil && b.nodeBroken()
@@ -214,7 +215,8 @@ func (b *audioBinding) applySettings(p audioSettingsConfig) error {
 	if b.haveSettings {
 		if p.Revision < b.settingsRevision {
 			b.mu.Unlock()
-			return fmt.Errorf("audio.settings.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.settingsRevision)
+			return withOperatorReason(fmt.Errorf("audio.settings.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.settingsRevision),
+				"This node already has newer audio settings. The older ones were ignored.")
 		}
 		if p.Revision == b.settingsRevision {
 			b.mu.Unlock()
@@ -612,9 +614,9 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 			case r.Channels > bindingCount:
 				return r.Channels, pipeWireGraphEvidenceSource
 			case r.Channels == bindingCount:
-				return bindingCount, "bindings: highest program or LTC channel index, matching this route's graph-reported width"
+				return bindingCount, "from the highest channel in use, which this output has"
 			default:
-				return bindingCount, "bindings: highest program or LTC channel index, exceeding this route's graph-reported width"
+				return bindingCount, "from the highest channel in use, which is more than this output reports"
 			}
 		}
 		if pipewireBacked {

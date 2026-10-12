@@ -91,7 +91,7 @@ func (m *Manager) AlignmentSnapshot(ctx context.Context) AlignmentSnapshot {
 
 	fields, ok := s.alignmentFieldsWithBudget(snapshotLockBudget)
 	if !ok {
-		return notMeasuredAlignment("this node's LTC-holding session lock was busy past the alignment snapshot's lock budget")
+		return notMeasuredAlignment("This node was too busy to measure alignment. It measures again shortly.")
 	}
 	sessID := fields.id
 	handle := fields.handle

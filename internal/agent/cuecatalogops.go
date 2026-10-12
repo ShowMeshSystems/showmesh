@@ -142,9 +142,10 @@ func (o *catalogDeployOperation) deploy(_ context.Context, params map[string]any
 		return OperationResult{}, fmt.Errorf("%s: computing catalog revision: %w", action, err)
 	}
 	if computed != wire.Revision {
-		return OperationResult{}, fmt.Errorf(
+		return OperationResult{}, withOperatorReason(fmt.Errorf(
 			"%s: refusing to store catalog: computed revision %q does not match the coordinator's claimed revision %q for show %q generation %d",
-			action, computed, wire.Revision, wire.Show, wire.Generation)
+			action, computed, wire.Revision, wire.Show, wire.Generation),
+			"The Cue list did not arrive intact, so it was not stored. Deploy it again.")
 	}
 
 	previous, hadPrevious, previousErr := o.store.Load()

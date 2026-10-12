@@ -878,8 +878,7 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 			return fppConnectRegisterOutcome{
 				kind: fppConnectRegistrationPending,
 				reason: fmt.Sprintf(
-					"sequence id %q under show %q may collide with held file %q, which is still awaiting its own show id; will re-check",
-					rec.LogicalSequence, rec.ShowID, ownerName),
+					"Waiting to see whether %s takes the same sequence name. This is checked again.", ownerName),
 			}
 		}
 		// Pending, not failed (review round 7 finding 3): a collision loss
@@ -893,8 +892,7 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		return fppConnectRegisterOutcome{
 			kind: fppConnectRegistrationPending,
 			reason: fmt.Sprintf(
-				"sequence id %q under show %q collides with already-held file %q, which slugifies to the same id; will re-check if %q is ever discarded, rebound, or fails; rename one of the two files to resolve this permanently",
-				rec.LogicalSequence, rec.ShowID, ownerName, ownerName),
+				"This file and %s get the same sequence name, %s. Rename one of them and upload it again.", ownerName, rec.LogicalSequence),
 		}
 	}
 
