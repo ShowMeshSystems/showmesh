@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,14 +25,31 @@ var barrierTotals struct {
 	stillRunning    atomic.Int64 // branches with a state change still running at test end
 	closeIncomplete atomic.Int64 // engines Close could not finish, here or in the test
 	leftBehind      atomic.Int64 // engines the barrier could not bring to NULL at all
+
+	mu                  sync.Mutex
+	closeIncompleteTest []string
+	leftBehindTest      []string
+}
+
+func recordBarrierName(list *[]string, name string) {
+	barrierTotals.mu.Lock()
+	defer barrierTotals.mu.Unlock()
+	*list = append(*list, name)
+}
+
+func barrierNames(list *[]string) string {
+	barrierTotals.mu.Lock()
+	defer barrierTotals.mu.Unlock()
+	return strings.Join(*list, ", ")
 }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
 	fmt.Fprintf(os.Stderr,
-		"gstengine test barrier: settled %d engines; %d branch state changes were still running at test end, %d engines needed more than Close, %d engines were left live, %d goroutines are still inside gst_element_set_state\n",
+		"gstengine test barrier: settled %d engines; %d branch state changes were still running at test end, %d engines needed more than Close, %d engines were left live, %d goroutines are still inside gst_element_set_state; close incomplete in: [%s]; left live in: [%s]\n",
 		barrierTotals.engines.Load(), barrierTotals.stillRunning.Load(),
-		barrierTotals.closeIncomplete.Load(), barrierTotals.leftBehind.Load(), goroutinesInSetState())
+		barrierTotals.closeIncomplete.Load(), barrierTotals.leftBehind.Load(), goroutinesInSetState(),
+		barrierNames(&barrierTotals.closeIncompleteTest), barrierNames(&barrierTotals.leftBehindTest))
 	os.Exit(code)
 }
 
@@ -130,7 +148,7 @@ func settleTestEngine(t *testing.T, e *Engine) {
 		t.Logf("test barrier: %d branch state changes were still running at test end", len(busy))
 	}
 
-	_ = e.Close() // the outcome is the test's own business where it closed e itself
+	closeErr := e.Close()
 	pipeline := testEnginePipeline(e)
 	if pipeline == nil {
 		return
@@ -139,6 +157,8 @@ func settleTestEngine(t *testing.T, e *Engine) {
 	// Close ran out of time, here or in the test. Whatever is parked
 	// behind a branch's own streaming thread is flushed loose first.
 	barrierTotals.closeIncomplete.Add(1)
+	recordBarrierName(&barrierTotals.closeIncompleteTest, t.Name())
+	t.Logf("test barrier: Close did not finish the pipeline (error: %v)", closeErr)
 	for _, b := range branches {
 		flushDownstream(b)
 	}
@@ -151,11 +171,13 @@ func settleTestEngine(t *testing.T, e *Engine) {
 	case <-done:
 	case <-time.After(testCleanupTimeout):
 		barrierTotals.leftBehind.Add(1)
+		recordBarrierName(&barrierTotals.leftBehindTest, t.Name())
 		t.Logf("test barrier: test engine cleanup abandoned the pipeline's NULL transition; its pipeline stays live for the rest of this run")
 		return
 	}
 	if busy := awaitPendingDrained(branches, testCleanupTimeout); len(busy) != 0 {
 		barrierTotals.leftBehind.Add(1)
+		recordBarrierName(&barrierTotals.leftBehindTest, t.Name())
 		t.Logf("test barrier: %d branch state changes never returned after the pipeline reached NULL", len(busy))
 	}
 }
@@ -206,8 +228,11 @@ func TestAbandonedStateChangeDoesNotOutliveItsTest(t *testing.T) {
 		if err := b.setElementsState(shortCtx, gst.StateNull); !errors.Is(err, context.DeadlineExceeded) {
 			t.Skipf("the NULL transition returned %v instead of parking on this environment; nothing was abandoned to prove the barrier on", err)
 		}
-		if b.pendingStateChanges.Load() == 0 || goroutinesInSetState() == stuckBefore {
+		if b.pendingStateChanges.Load() == 0 {
 			t.Skip("the NULL transition finished right after its deadline on this environment; nothing was abandoned to prove the barrier on")
+		}
+		if goroutinesInSetState() == stuckBefore {
+			t.Fatalf("stack probe found no goroutine in gst_element_set_state; the symbol match is stale")
 		}
 		parked = true
 	})
