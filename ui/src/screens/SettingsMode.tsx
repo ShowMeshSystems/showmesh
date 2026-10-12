@@ -175,6 +175,9 @@ export function SettingsMode() {
                 {requestedMode === 'show' ? 'Show' : 'Program'} mode is already active, so there is nothing to apply.
               </span>
             )}
+            <div className="sm-push-end">
+              <RevisionHistory fetch={getShowModeConfigRevisions} reloadKey={attempt} />
+            </div>
           </ButtonRow>
         </>
       )}
@@ -189,8 +192,6 @@ export function SettingsMode() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={getShowModeConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

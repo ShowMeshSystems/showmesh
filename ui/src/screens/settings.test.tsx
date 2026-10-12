@@ -792,7 +792,7 @@ describe('Settings › Render recovery', () => {
     renderAt('/settings/recovery')
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
-    expect(screen.queryByRole('heading', { name: 'Weather delay' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What happens when weather stops the show' })).not.toBeInTheDocument()
   })
 })
 
@@ -835,7 +835,7 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
 
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /stage-node/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -857,7 +857,7 @@ describe('Settings › Weather delay', () => {
     )
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Add power group' }))
     fireEvent.change(screen.getByLabelText('Id'), { target: { value: 'lighting' } })
@@ -881,7 +881,7 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay')
 
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
     expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
   })
@@ -895,7 +895,7 @@ describe('Settings › Weather delay', () => {
     )
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.change(screen.getByLabelText('Latitude'), { target: { value: '43.07' } })
@@ -929,7 +929,7 @@ describe('Settings › Weather delay', () => {
     stubs.putWeatherDelayConfig = vi.fn(() => Promise.resolve(weatherDelayConfig({}, 2)))
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -952,7 +952,7 @@ describe('Settings › Weather delay', () => {
       })
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     expect(await screen.findByText(/The alerts API did not answer\./)).toBeInTheDocument()
     expect(screen.getByText('An official warning feed does not cover ordinary lightning on its own.')).toBeInTheDocument()
@@ -966,7 +966,7 @@ describe('Settings › Weather delay', () => {
       Promise.reject(new ApiError('A weather delay is active. Configuration cannot change until it is cleared.', 409))
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
 

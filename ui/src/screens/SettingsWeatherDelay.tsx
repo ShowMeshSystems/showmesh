@@ -302,11 +302,10 @@ export function SettingsWeatherDelay() {
 
   return (
     <>
-      <Section
-        id="st-weatherdelay"
-        title="Weather delay"
-        detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it."
-      >
+      <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Weather delay</p>
+      <h2 className="sm-section__title">What happens when weather stops the show</h2>
+      <p className="sm-section__detail">The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it.</p>
+      <div className="sm-stack-4">
         {state.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for weather delay settings." />
         ) : state.kind === 'failed' ? (
@@ -626,7 +625,7 @@ export function SettingsWeatherDelay() {
           />
         )}
         {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-      </Section>
+      </div>
     </>
   )
 }
