@@ -303,24 +303,28 @@ export function SettingsConnections() {
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row">
-                      <Input
-                        aria-label="Player id"
-                        value={endpoint.id}
-                        onChange={(e) => {
-                          setEndpoints(patchRow(endpoints, index, { id: e.target.value }))
-                          setEndpointsDirty(true)
-                        }}
-                        style={{ maxWidth: 200 }}
-                      />
-                      <Input
-                        aria-label="Player URL"
-                        value={endpoint.url}
-                        onChange={(e) => {
-                          setEndpoints(patchRow(endpoints, index, { url: e.target.value }))
-                          setEndpointsDirty(true)
-                        }}
-                        style={{ maxWidth: 260 }}
-                      />
+                      <label className="sm-field">
+                        <span className="sm-field__label">Player id</span>
+                        <Input
+                          value={endpoint.id}
+                          onChange={(e) => {
+                            setEndpoints(patchRow(endpoints, index, { id: e.target.value }))
+                            setEndpointsDirty(true)
+                          }}
+                          style={{ maxWidth: 200 }}
+                        />
+                      </label>
+                      <label className="sm-field">
+                        <span className="sm-field__label">Player URL</span>
+                        <Input
+                          value={endpoint.url}
+                          onChange={(e) => {
+                            setEndpoints(patchRow(endpoints, index, { url: e.target.value }))
+                            setEndpointsDirty(true)
+                          }}
+                          style={{ maxWidth: 260 }}
+                        />
+                      </label>
                       <NotWired>
                         <Button>Test</Button>
                       </NotWired>
@@ -390,24 +394,28 @@ export function SettingsConnections() {
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row">
-                      <Input
-                        aria-label="Instance id"
-                        value={instance.id}
-                        onChange={(e) => {
-                          setInstances(patchRow(instances, index, { id: e.target.value }))
-                          setInstancesDirty(true)
-                        }}
-                        style={{ maxWidth: 200 }}
-                      />
-                      <Input
-                        aria-label="Instance URL"
-                        value={instance.url}
-                        onChange={(e) => {
-                          setInstances(patchRow(instances, index, { url: e.target.value }))
-                          setInstancesDirty(true)
-                        }}
-                        style={{ maxWidth: 260 }}
-                      />
+                      <label className="sm-field">
+                        <span className="sm-field__label">Instance id</span>
+                        <Input
+                          value={instance.id}
+                          onChange={(e) => {
+                            setInstances(patchRow(instances, index, { id: e.target.value }))
+                            setInstancesDirty(true)
+                          }}
+                          style={{ maxWidth: 200 }}
+                        />
+                      </label>
+                      <label className="sm-field">
+                        <span className="sm-field__label">Instance URL</span>
+                        <Input
+                          value={instance.url}
+                          onChange={(e) => {
+                            setInstances(patchRow(instances, index, { url: e.target.value }))
+                            setInstancesDirty(true)
+                          }}
+                          style={{ maxWidth: 260 }}
+                        />
+                      </label>
                       <NotWired>
                         <Button>Test</Button>
                       </NotWired>
@@ -517,29 +525,35 @@ export function SettingsConnections() {
             <div className="sm-stack-3" data-testid="mqtt-hosts">
               <p className="sm-field__label">Host name overrides</p>
               <p className="sm-small sm-muted">
-                Maps a player id to the HostName it publishes in MQTT topics; unlisted ids are ignored.
+                Optional. Add a row only when a player's MQTT host name differs from its id.
               </p>
               <div className="sm-panel sm-stack-4">
                 {hosts.map((row, index) => (
                   <div key={index} className="sm-inline-row">
-                    <Input
-                      aria-label="Host id"
-                      value={row.id}
-                      onChange={(e) => {
-                        setHosts(patchRow(hosts, index, { id: e.target.value }))
-                        setMqttDirty(true)
-                      }}
-                      style={{ maxWidth: 200 }}
-                    />
-                    <Input
-                      aria-label="HostName"
-                      value={row.hostName}
-                      onChange={(e) => {
-                        setHosts(patchRow(hosts, index, { hostName: e.target.value }))
-                        setMqttDirty(true)
-                      }}
-                      style={{ maxWidth: 200 }}
-                    />
+                    <label className="sm-field">
+                      <span className="sm-field__label">Host id</span>
+                      <Input
+                        value={row.id}
+                        placeholder="barn-player"
+                        onChange={(e) => {
+                          setHosts(patchRow(hosts, index, { id: e.target.value }))
+                          setMqttDirty(true)
+                        }}
+                        style={{ maxWidth: 200 }}
+                      />
+                    </label>
+                    <label className="sm-field">
+                      <span className="sm-field__label">Host name</span>
+                      <Input
+                        value={row.hostName}
+                        placeholder="FPP-Barn"
+                        onChange={(e) => {
+                          setHosts(patchRow(hosts, index, { hostName: e.target.value }))
+                          setMqttDirty(true)
+                        }}
+                        style={{ maxWidth: 200 }}
+                      />
+                    </label>
                     <Button
                       variant="quiet"
                       onClick={() => {
