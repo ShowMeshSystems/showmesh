@@ -143,7 +143,7 @@ export function SettingsRecovery() {
           )}
 
           <Section id="st-idle" title="Idle output" detail="What a render pipeline puts out when it has nothing to render.">
-            <fieldset className="sm-grid" style={{ border: 0, padding: 0, margin: 0 }}>
+            <fieldset className="sm-option-group">
               <legend className="sm-sr-only">Idle output</legend>
               {IDLE_OPTIONS.map((option) => (
                 <label key={option.value} className={`sm-panel sm-option${idleOutput === option.value ? ' sm-option--selected' : ''}`}>

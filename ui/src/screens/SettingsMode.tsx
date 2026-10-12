@@ -129,7 +129,7 @@ export function SettingsMode() {
       ) : (
         <>
           <Section id="st-mode" title="Mode">
-            <fieldset className="sm-grid" style={{ border: 0, padding: 0, margin: 0 }}>
+            <fieldset className="sm-option-group">
               <legend className="sm-sr-only">Mode</legend>
               {MODE_OPTIONS.map((option) => {
                 const isActive = state.response.payload.mode === option.value

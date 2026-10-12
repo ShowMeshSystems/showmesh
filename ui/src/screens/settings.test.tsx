@@ -2265,6 +2265,44 @@ describe('Settings › Mode', () => {
     expect(screen.getByRole('button', { name: /Apply mode/ })).toBeDisabled()
   })
 
+  it('keeps revision history in the save row, and shows none while the read has failed', async () => {
+    const revisions = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revisions: [{ revision: 2, active: true, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalName: 'erbartos', note: '' }],
+      }),
+    )
+    stubs.getShowModeConfigRevisions = revisions
+    stubs.getShowModeConfig = () => Promise.reject(new ApiError('The coordinator is unreachable.', 500, 'https://showmesh.dev/problems/internal'))
+
+    renderAt('/settings/mode')
+
+    await waitFor(() => expect(screen.getByText('The coordinator is unreachable.')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Apply mode/ })).not.toBeInTheDocument()
+    expect(revisions).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Active revision/)).not.toBeInTheDocument()
+    cleanup()
+
+    stubs.getShowModeConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revision: 2,
+        payload: { mode: 'show' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        resolumeWebSocketEffect: 'closed in show mode',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
+      })
+    renderAt('/settings/mode')
+
+    const apply = await screen.findByRole('button', { name: /Apply mode/ })
+    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+  })
+
   it('seeds the night session itself, because the model only ever gets one from a stream frame', async () => {
     stubs.getShowModeConfig = () =>
       Promise.resolve({

@@ -185,6 +185,15 @@
   max-width: 160px;
 }
 
+/* An endpoint id and an endpoint address in an inline row: wider than a code, still capped so the row keeps its buttons. */
+.sm-input--id {
+  max-width: 200px;
+}
+
+.sm-input--address {
+  max-width: 260px;
+}
+
 .sm-textarea {
   height: auto;
   min-height: 88px;
@@ -422,6 +431,16 @@
   display: block;
   color: var(--text-muted);
   font: var(--t-small);
+}
+
+/* The bare fieldset around a set of .sm-option cards. */
+.sm-option-group {
+  display: grid;
+  gap: var(--s-4);
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
 }
 
 /* A radio option drawn as a card, its own consequence line beneath it: idle output, installation mode. */

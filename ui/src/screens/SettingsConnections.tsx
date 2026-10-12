@@ -312,7 +312,7 @@ export function SettingsConnections() {
                             setEndpoints(patchRow(endpoints, index, { id: e.target.value }))
                             setEndpointsDirty(true)
                           }}
-                          style={{ maxWidth: 200 }}
+                          className="sm-input--id"
                         />
                       </label>
                       <label className="sm-field">
@@ -323,7 +323,7 @@ export function SettingsConnections() {
                             setEndpoints(patchRow(endpoints, index, { url: e.target.value }))
                             setEndpointsDirty(true)
                           }}
-                          style={{ maxWidth: 260 }}
+                          className="sm-input--address"
                         />
                       </label>
                       <NotWired>
@@ -374,7 +374,6 @@ export function SettingsConnections() {
           <StaleWriteStrip stale={fppOutcome.stale} onReload={() => { setFppOutcome(null); reloadAll() }} />
         )}
         {fppOutcome !== null && 'error' in fppOutcome && <RuledStrip absence="failed" label="Save failed" fact={fppOutcome.error} />}
-        <RevisionHistory id="st-fpp-rev" fetch={getFPPEndpointsConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <Section id="st-res" title="Resolume">
@@ -403,7 +402,7 @@ export function SettingsConnections() {
                             setInstances(patchRow(instances, index, { id: e.target.value }))
                             setInstancesDirty(true)
                           }}
-                          style={{ maxWidth: 200 }}
+                          className="sm-input--id"
                         />
                       </label>
                       <label className="sm-field">
@@ -414,7 +413,7 @@ export function SettingsConnections() {
                             setInstances(patchRow(instances, index, { url: e.target.value }))
                             setInstancesDirty(true)
                           }}
-                          style={{ maxWidth: 260 }}
+                          className="sm-input--address"
                         />
                       </label>
                       <NotWired>
@@ -464,7 +463,6 @@ export function SettingsConnections() {
         {resolumeOutcome !== null && 'error' in resolumeOutcome && (
           <RuledStrip absence="failed" label="Save failed" fact={resolumeOutcome.error} />
         )}
-        <RevisionHistory id="st-res-rev" fetch={getResolumeInstancesConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <Section id="st-mqtt" title="Event feed">
@@ -540,7 +538,7 @@ export function SettingsConnections() {
                           setHosts(patchRow(hosts, index, { id: e.target.value }))
                           setMqttDirty(true)
                         }}
-                        style={{ maxWidth: 200 }}
+                        className="sm-input--id"
                       />
                     </label>
                     <label className="sm-field">
@@ -552,7 +550,7 @@ export function SettingsConnections() {
                           setHosts(patchRow(hosts, index, { hostName: e.target.value }))
                           setMqttDirty(true)
                         }}
-                        style={{ maxWidth: 200 }}
+                        className="sm-input--id"
                       />
                     </label>
                     <Button
@@ -582,7 +580,6 @@ export function SettingsConnections() {
           <StaleWriteStrip stale={mqttOutcome.stale} onReload={() => { setMqttOutcome(null); reloadAll() }} />
         )}
         {mqttOutcome !== null && 'error' in mqttOutcome && <RuledStrip absence="failed" label="Save failed" fact={mqttOutcome.error} />}
-        <RevisionHistory id="st-mqtt-rev" fetch={getFPPMQTTConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <FPPConnectSettings />
@@ -599,6 +596,14 @@ export function SettingsConnections() {
         <Button variant="quiet" onClick={discard} disabled={!anyDirty || saving}>
           Discard changes
         </Button>
+        <div className="sm-push-end">
+          <p className="sm-small sm-faint">FPP players</p>
+          <RevisionHistory id="st-fpp-rev" fetch={getFPPEndpointsConfigRevisions} reloadKey={attempt} />
+          <p className="sm-small sm-faint">Resolume</p>
+          <RevisionHistory id="st-res-rev" fetch={getResolumeInstancesConfigRevisions} reloadKey={attempt} />
+          <p className="sm-small sm-faint">Event feed</p>
+          <RevisionHistory id="st-mqtt-rev" fetch={getFPPMQTTConfigRevisions} reloadKey={attempt} />
+        </div>
       </ButtonRow>
 
       <SettingsReleaseCheck />
@@ -666,8 +671,7 @@ function PairingSection({ instanceId }: { instanceId: string }) {
   }
 
   return (
-    <section aria-labelledby="fpp-instance-pairing-title" className="sm-stack-3">
-      <h3 id="fpp-instance-pairing-title" className="sm-subhead">Pairing</h3>
+    <Section id="fpp-instance-pairing-title" title="Pairing">
       {readError !== null ? (
         <RuledStrip absence="failed" label="Read failed" fact={readError} />
       ) : state === null ? (
@@ -693,7 +697,7 @@ function PairingSection({ instanceId }: { instanceId: string }) {
         </Button>
       </div>
       {pairError !== null && <RuledStrip absence="failed" label="Pairing failed" fact={pairError} />}
-    </section>
+    </Section>
   )
 }
 
@@ -777,8 +781,7 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
   const sliderTitle = !gate.allowed ? gate.reason : ceilingUnknown ? 'The ceiling is unknown until the plugin reports it.' : undefined
 
   return (
-    <section aria-labelledby="fpp-instance-brightness-title" className="sm-stack-3">
-      <h3 id="fpp-instance-brightness-title" className="sm-subhead">Brightness</h3>
+    <Section id="fpp-instance-brightness-title" title="Brightness">
       <Slider
         label="Ceiling"
         value={displayed}
@@ -806,7 +809,7 @@ function BrightnessSection({ instanceId, observations }: { instanceId: string; o
       {absentReasons.map((reason) => (
         <RuledStrip key={reason.fact} absence={reason.absence} label={reason.label} fact={reason.fact} />
       ))}
-    </section>
+    </Section>
   )
 }
 
@@ -854,11 +857,15 @@ function FPPConnectSettings() {
             <label className="sm-field"><span className="sm-field__label">Maximum file bytes</span><Input type="number" min="1" value={maxFileBytes} onChange={(e) => { setMaxFileBytes(e.target.value); setDirty(true) }} /></label>
             <label className="sm-field"><span className="sm-field__label">Maximum asset-directory bytes</span><Input type="number" min="1" value={maxAssetDirBytes} onChange={(e) => { setMaxAssetDirBytes(e.target.value); setDirty(true) }} /></label>
           </div>
-          <ButtonRow><Button variant="primary" disabled={!dirty || saving || !gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : 'Save FPP Connect settings'}</Button></ButtonRow>
+          <ButtonRow>
+            <Button variant="primary" disabled={!dirty || saving || !gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : 'Save FPP Connect settings'}</Button>
+            <div className="sm-push-end">
+              <RevisionHistory id="st-fppconnect-rev" fetch={getFPPConnectSettingsConfigRevisions} reloadKey={attempt} />
+            </div>
+          </ButtonRow>
         </>
       )}
       {error !== null && <RuledStrip absence="failed" label="Save failed" fact={error} />}
-      <RevisionHistory id="st-fppconnect-rev" fetch={getFPPConnectSettingsConfigRevisions} reloadKey={attempt} />
     </Section>
   )
 }
