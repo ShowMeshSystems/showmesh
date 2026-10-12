@@ -102,6 +102,7 @@ const { Settings } = await import('./Settings')
 const { SettingsConnections } = await import('./SettingsConnections')
 const { SettingsDelivery } = await import('./SettingsDelivery')
 const { SettingsRecovery } = await import('./SettingsRecovery')
+const { SettingsWeatherDelay } = await import('./SettingsWeatherDelay')
 const { SettingsAudioDefaults } = await import('./SettingsAudioDefaults')
 const { SettingsNodeRouting } = await import('./SettingsNodeRouting')
 const { SettingsMode } = await import('./SettingsMode')
@@ -134,6 +135,7 @@ function settingsTree(path: string, model: Partial<Model> = {}) {
               <Route path="connections" element={<SettingsConnections />} />
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
+              <Route path="weather-delay" element={<SettingsWeatherDelay />} />
               <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
               <Route path="node-routing" element={<SettingsNodeRouting />} />
               <Route path="mode" element={<SettingsMode />} />
@@ -165,11 +167,12 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(10)
+    expect(tabs).toHaveLength(11)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
       'Render recovery',
+      'Weather delay',
       'Appearance',
       'Audio defaults',
       'Node routing',
@@ -663,6 +666,7 @@ describe('Settings › Render recovery', () => {
     renderAt('/settings/recovery')
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: 'Weather delay' })).not.toBeInTheDocument()
   })
 })
 
@@ -689,7 +693,7 @@ describe('Settings › Weather delay', () => {
     stubs.getRenderSettingsConfig = () => new Promise(() => {})
     stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({}, 0, 'default'))
 
-    renderAt('/settings/recovery')
+    renderAt('/settings/weather-delay')
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for weather delay yet/)).toBeInTheDocument())
     expect(screen.getByText('No power group is configured.')).toBeInTheDocument()
@@ -703,9 +707,9 @@ describe('Settings › Weather delay', () => {
       Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
     )
 
-    renderAt('/settings/recovery', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
+    renderAt('/settings/weather-delay', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
 
-    await screen.findByText('Weather delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /stage-node/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -726,8 +730,8 @@ describe('Settings › Weather delay', () => {
       Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
     )
 
-    renderAt('/settings/recovery')
-    await screen.findByText('Weather delay')
+    renderAt('/settings/weather-delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Add power group' }))
     fireEvent.change(screen.getByLabelText('Id'), { target: { value: 'lighting' } })
@@ -749,9 +753,9 @@ describe('Settings › Weather delay', () => {
     stubs.getWeatherDelayConfig = () => Promise.resolve(weatherDelayConfig({ alert: { delayAssetId: 'asset-siren' } }))
     stubs.listAssets = () => Promise.reject(new ApiError('Assets could not be listed.', 503))
 
-    renderAt('/settings/recovery')
+    renderAt('/settings/weather-delay')
 
-    await screen.findByText('Weather delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
     expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
     expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
   })
@@ -764,8 +768,8 @@ describe('Settings › Weather delay', () => {
       Promise.resolve(weatherDelayConfig(payload as Record<string, unknown>, 2)),
     )
 
-    renderAt('/settings/recovery')
-    await screen.findByText('Weather delay')
+    renderAt('/settings/weather-delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.change(screen.getByLabelText('Latitude'), { target: { value: '43.07' } })
@@ -798,8 +802,8 @@ describe('Settings › Weather delay', () => {
     stubs.listAssets = () => Promise.resolve({ serverTime: '2026-09-19T21:00:00Z', assets: [] })
     stubs.putWeatherDelayConfig = vi.fn(() => Promise.resolve(weatherDelayConfig({}, 2)))
 
-    renderAt('/settings/recovery')
-    await screen.findByText('Weather delay')
+    renderAt('/settings/weather-delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -821,8 +825,8 @@ describe('Settings › Weather delay', () => {
         sourcesMessage: 'An official warning feed does not cover ordinary lightning on its own.',
       })
 
-    renderAt('/settings/recovery')
-    await screen.findByText('Weather delay')
+    renderAt('/settings/weather-delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
 
     expect(await screen.findByText(/The alerts API did not answer\./)).toBeInTheDocument()
     expect(screen.getByText('An official warning feed does not cover ordinary lightning on its own.')).toBeInTheDocument()
@@ -835,8 +839,8 @@ describe('Settings › Weather delay', () => {
     stubs.putWeatherDelayConfig = () =>
       Promise.reject(new ApiError('A weather delay is active. Configuration cannot change until it is cleared.', 409))
 
-    renderAt('/settings/recovery')
-    await screen.findByText('Weather delay')
+    renderAt('/settings/weather-delay')
+    await screen.findByRole('heading', { name: 'Weather delay' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
 

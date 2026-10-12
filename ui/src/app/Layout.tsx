@@ -15,6 +15,7 @@ import {
   RailLink,
   RuledStrip,
   ShellBody,
+  StickyBanners,
   WeatherDelayBanner,
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
@@ -910,7 +911,9 @@ export function Layout() {
           .filter((instance) => instance.playlistObservationRefused !== null)
           .map((instance) => ({ instanceId: instance.instanceId }))}
       />
-      <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      <StickyBanners>
+        <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      </StickyBanners>
       <StopHoldShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>
         <Rail>

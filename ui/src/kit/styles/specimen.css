@@ -202,10 +202,11 @@
   background: var(--surface);
 }
 
-/* The chrome bar and progress bar are sticky in a real page; inside the
+/* The chrome bar, progress bar and sticky banners are sticky in a real page; inside the
    specimen frame they are static so the frame does not trap them. */
 .sm-spec-shell .sm-chrome,
-.sm-spec-shell .sm-progress {
+.sm-spec-shell .sm-progress,
+.sm-spec-shell .sm-sticky-banners {
   position: static;
 }
 
