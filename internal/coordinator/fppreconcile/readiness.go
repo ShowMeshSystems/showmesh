@@ -17,6 +17,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/versions"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -265,6 +266,10 @@ const (
 	// ReadinessVersionMismatch: a node's last reported agent version is one
 	// the coordinator's compatibility rule does not accept. Never a failure.
 	ReadinessVersionMismatch ReadinessCondition = "version-mismatch"
+	// ReadinessAudioLTCCapableUnconfigured: a node advertises a discrete
+	// LTC-capable route and its audio.node names no LTC channel. Warning
+	// only, never a failure: a program-only node is a valid configuration.
+	ReadinessAudioLTCCapableUnconfigured ReadinessCondition = "audio-ltc-capable-unconfigured"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -613,6 +618,14 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return Report{}, err
 	}
 	for _, warning := range warnings {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 18: a node that can send timecode has none configured.
+	// Never a failure. See [audioLTCCapableUnconfiguredReadiness].
+	if warning, err := audioLTCCapableUnconfiguredReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
@@ -1414,6 +1427,73 @@ func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store, p
 		}
 	}
 	return "", nil
+}
+
+// audioLTCCapableUnconfiguredReadiness is condition 17, scoped like
+// [audioLTCSeparateLocalClockReadiness]. A node whose Hello advertises an
+// LTC-capable route and whose audio.node names no LTC channel runs without
+// timecode it could have produced; omitting the LTC fields stays valid.
+func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return "", nil
+	}
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	warning := ""
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		carriesAudio := false
+		for _, e := range catalog.Entries {
+			if e.Outputs.Audio != nil {
+				carriesAudio = true
+				break
+			}
+		}
+		if !carriesAudio {
+			continue
+		}
+		payload, ok, err := activeAudioNodePayload(ctx, st, n.NodeID)
+		if err != nil {
+			return "", err
+		}
+		if !ok || payload.LTCChannel != 0 || payload.LTCRoute != "" {
+			continue
+		}
+		rec, err := st.GetNode(ctx, n.NodeID)
+		if errors.Is(err, store.ErrNodeNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
+		}
+		if rec.Hello != nil && advertisesLTCRoute(rec.Hello.Capabilities) {
+			warning = appendWarning(warning, fmt.Sprintf(
+				"Node %s can send timecode but none is configured. Add an LTC channel in Node routing if this node should.", n.NodeID))
+		}
+	}
+	return warning, nil
+}
+
+// advertisesLTCRoute reports whether caps carries an audio.output.ltc
+// capability naming at least one route.
+func advertisesLTCRoute(caps capability.Set) bool {
+	c, ok := caps.Lookup("audio.output.ltc")
+	if !ok {
+		return false
+	}
+	routes, _ := c.Attributes["routes"].([]any)
+	return len(routes) > 0
 }
 
 // activeAudioNodePayload reads nodeID's active audio.node object with

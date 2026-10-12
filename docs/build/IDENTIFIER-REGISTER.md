@@ -1275,6 +1275,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
 | `audio-ltc-separate-local-clock` | shipped | ADR-052 decision 4: a node's LTC route names a different interface than its program route and no local clock override says they share a clock. Reported only as `warning`, never `failingCondition` |
+| `audio-ltc-capable-unconfigured` | shipped | a node advertises a discrete LTC-capable route and its `audio.node` names no LTC channel; warning only, never `failingCondition` |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
