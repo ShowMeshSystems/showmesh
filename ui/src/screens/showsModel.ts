@@ -17,6 +17,7 @@ import type {
 } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { describeSurfaceOutput } from './renderOutputModel'
 import { ageMs, formatClock, formatDuration, millisToTimecode } from '../domain/time'
 
 /** The id of the show `currentRuns` reports as active, or null when unknown. */
@@ -382,18 +383,8 @@ export function surfaceRenderStatus(nodes: readonly Node[], nodeId: string, surf
   const age = ageMs(stateEntry.observedAt, nowIso)
   const ageLabel = age === null ? null : `${formatDuration(age)} ago`
   if (stateEntry.state === 'current') {
-    // A held-black surface still reports its pipeline running (its
-    // assignment and NDI source are untouched), so pipeline state alone
-    // would read as ordinary content here - surface.output.mode is what
-    // actually says this surface is forced black between songs or during
-    // a stop.
-    const outputMode = entries.find((entry) => entry.signal === 'surface.output.mode')
-    if (outputMode?.value === 'blackout') {
-      return { tone, label: 'Held black', detail: 'Returns with the next cue.', unclaimed: false }
-    }
-    const rate = entries.find((entry) => entry.signal === 'surface.frames.rate')
-    const rateLabel = typeof rate?.value === 'number' ? ` · ${rate.value} fps` : ''
-    return { tone, label: `${String(stateEntry.value ?? 'running')}${rateLabel}`, detail: ageLabel, unclaimed: false }
+    const output = describeSurfaceOutput(entries)
+    return { tone, label: output.label, detail: output.detail ?? ageLabel, unclaimed: false }
   }
   return {
     tone,

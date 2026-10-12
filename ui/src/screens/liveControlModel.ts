@@ -14,6 +14,7 @@ import type {
 } from '../api'
 import type { LifecycleCommandGroup, LifecycleCommandSpec, Tone } from '../kit'
 import { displayValue, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { describeSurfaceOutput } from './renderOutputModel'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /** Gate shape shared by every night-lifecycle command surface. */
@@ -268,9 +269,7 @@ export function outputRows(model: Model, nowIso: string | null): OutputRow[] {
       bySurface.set(id, list)
     }
     for (const [surfaceId, observations] of bySurface) {
-      const state = findSignal(observations, 'surface.pipeline.state')
-      const rate = numberValue(observations, 'surface.frames.rate')
-      const content = stringValue(observations, 'surface.content.fseq_filename') ?? stringValue(observations, 'surface.content.cue_id')
+      const output = describeSurfaceOutput(observations)
       const freshest = observations.reduce<Evidence | undefined>(
         (best, entry) => (best === undefined || (entry.observedAt ?? '') > (best.observedAt ?? '') ? entry : best),
         undefined,
@@ -282,11 +281,8 @@ export function outputRows(model: Model, nowIso: string | null): OutputRow[] {
         key: `${node.nodeId}:${surfaceId}`,
         name: surfaceId,
         where: `${node.nodeId} · ${outputKind(node)}`,
-        doing:
-          state === undefined || state.value === null
-            ? 'Unknown'
-            : `${String(state.value)}${rate === null ? '' : ` at ${Number(rate.toFixed(2))} fps`}`,
-        content,
+        doing: output.label,
+        content: output.playing,
         tone: EVIDENCE_TONE[evidenceState],
         evidence:
           age === null

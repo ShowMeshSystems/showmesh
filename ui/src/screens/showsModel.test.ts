@@ -317,7 +317,7 @@ describe('surfaceRenderStatus', () => {
       { resource: { kind: 'surface', id: 'surface-1' }, signal: 'surface.output.mode', state: 'current', value: 'content', observedAt: '2026-09-21T00:00:00Z' },
     ])
     const status = surfaceRenderStatus([node], 'render-01', 'surface-1', '2026-09-21T00:00:01Z')
-    expect(status.label).toBe('running')
+    expect(status.label).toBe('Drawing')
     expect(status.unclaimed).toBe(false)
   })
 })

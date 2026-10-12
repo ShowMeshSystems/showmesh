@@ -671,6 +671,19 @@ describe('Node detail', () => {
     await waitFor(() => expect(stubs.probeRenderTransport).toHaveBeenCalledWith('media-garage', 'garage-door'))
   })
 
+  it('says a surface has no assignment and redeploys the cue catalog without naming a sequence', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    stubs.deployNodeCueCatalog = vi.fn().mockResolvedValue({ outcome: 'confirmed', reason: 'The node confirmed the catalog.', revision: 3 })
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Redeploy cue catalog' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Redeploy cue catalog' }))
+    await waitFor(() => expect(stubs.deployNodeCueCatalog).toHaveBeenCalledWith('media-garage'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmed'))
+  })
+
   it('renders a current beyond_threshold alignment row as a warn status, not a blank state', () => {
     renderScreen([
       node({

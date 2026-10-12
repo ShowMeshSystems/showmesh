@@ -315,6 +315,42 @@ function NodeSurfaceEditor({
   )
 }
 
+/** A node holding no assignment for a surface is repaired by the show's cue catalog deploy; no sequence is named. */
+function MissingAssignmentRepair({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
+  const [deploying, setDeploying] = useState(false)
+  const [outcome, setOutcome] = useState<RenderOutcome | null>(null)
+  const redeploy = () => {
+    setDeploying(true)
+    setOutcome(null)
+    deployNodeCueCatalog(nodeId)
+      .then((result) =>
+        setOutcome({
+          tone: result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : 'bad',
+          label: result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1),
+          detail: result.reason ?? 'The cue catalog was sent to this node.',
+        }),
+      )
+      .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: describeApiError(err) }))
+      .finally(() => setDeploying(false))
+  }
+  return (
+    <div className="sm-stack-2">
+      <p className="sm-small">This node holds no render assignment for this surface. Redeploy the cue catalog to restore it.</p>
+      <ButtonRow>
+        <Button variant="primary" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={redeploy}>
+          {deploying ? 'Redeploying…' : 'Redeploy cue catalog'}
+        </Button>
+      </ButtonRow>
+      {outcome !== null && (
+        <div className="sm-outcome" role="status">
+          <StatusPair tone={outcome.tone} label={outcome.label} />
+          <p className="sm-outcome__detail">{outcome.detail}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** A surface's four real render commands stay beside the assignment they address. */
 function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; surfaceId: string; gate: ReturnType<typeof evaluateScope> }) {
   const [sequenceId, setSequenceId] = useState('')
@@ -1076,6 +1112,8 @@ export function NodeDetail() {
                           </td>
                           <td className="sm-table__wrap sm-node-surface-cell">
                             <StatusPair tone={status.tone} label={status.label} />
+                            {status.unclaimed && <MissingAssignmentRepair nodeId={node.nodeId} gate={gate} />}
+                            <p className="sm-small sm-muted">Maintenance controls</p>
                             <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
                           </td>
                         </SelectableRow>
