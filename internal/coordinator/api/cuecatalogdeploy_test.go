@@ -509,8 +509,8 @@ func TestCueCatalogDeployReplayRefusesAnUntaggedWrongFamilyRowByItsAllZeroIdenti
 	if !strings.Contains(p.Detail, "cmd-untagged-wrong-family") {
 		t.Fatalf("detail = %q, want it to name the refused command", p.Detail)
 	}
-	if !strings.Contains(p.Detail, "show, generation, revision") {
-		t.Fatalf("detail = %q, want it to name the evidence (the fields a deploy identity always has)", p.Detail)
+	if !strings.Contains(p.Detail, "not a cue list deploy") {
+		t.Fatalf("detail = %q, want it to say the command is not a cue list deploy", p.Detail)
 	}
 }
 

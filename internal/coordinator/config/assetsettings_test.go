@@ -264,7 +264,7 @@ func TestValidateAssetSettingsContentBaseURLMessages(t *testing.T) {
 		{"not a url", "not a url", shape},
 		{"wrong scheme", "ftp://coordinator.example", shape},
 		{"userinfo", "https://user:pass@coordinator.example", "Content base URL must not contain a user name or password. Remove it."},
-		{"loopback", "http://localhost:8080", "Content base URL must be one the nodes can reach. Use http://<coordinator address>:<port>."},
+		{"loopback", "http://localhost:8080", "Content base URL points at this machine, which nodes cannot reach. Use http://<coordinator address>:<port>."},
 	}
 	for _, c := range cases {
 		s := testAssetSettings

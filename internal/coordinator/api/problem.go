@@ -719,7 +719,7 @@ func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existin
 func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeFPPStartPlaylistEvidenceNotCurrent,
-		Title:  "Start Playlist refused: evidence needed to evaluate ifBusy is not current",
+		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
 			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",

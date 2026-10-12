@@ -111,15 +111,9 @@ func TestValidateFPPMQTTConfigKindAllowsUnconfigured(t *testing.T) {
 	}
 }
 
-// TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy
-// pins ADR-039's fix (decision 1): reached through the store-backed
-// config:write surface (`showmeshctl fpp-mqtt set --host`), an unmatched
-// host id must lead with the `showmeshctl config set` / fpp.endpoints
-// remedy. SHOWMESH_FPP_MQTT_HOSTS still gets named too (a startup failure
-// here is often a typo in that variable, not a missing endpoint), but only
-// after the store remedy, and SHOWMESH_FPP_ENDPOINTS stays a trailing
-// hedge for a coordinator that has not migrated.
-func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy(t *testing.T) {
+// An unmatched host id reaches the operator raw through the config write
+// surface, so it names the remedy and no environment variable.
+func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheRemedy(t *testing.T) {
 	cfg := FPPMQTTConfig{
 		BrokerURL: "tcp://broker:1883",
 		Hosts:     map[string]string{"fpp1": "fpp-one"},
@@ -129,17 +123,10 @@ func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy(t *
 		t.Fatalf("ValidateFPPMQTTConfigKind: want an error for host id %q with no configured fpp.endpoints", "fpp1")
 	}
 	got := err.Error()
-	if !strings.Contains(got, "fpp1") {
-		t.Errorf("error = %q, want it to name the unmatched instance id %q", got, "fpp1")
+	if !containsAll(got, `"fpp1"`, "not a configured FPP endpoint", "Add the endpoint or remove the host") {
+		t.Errorf("error = %q, want the unmatched id, the fact and the remedy", got)
 	}
-	storeIdx := strings.Index(got, "showmeshctl config set")
-	if storeIdx < 0 || !strings.Contains(got, "fpp.endpoints") {
-		t.Fatalf("error = %q, want it to lead with the store-backed remedy (showmeshctl config set / fpp.endpoints)", got)
-	}
-	if !strings.Contains(got, "SHOWMESH_FPP_MQTT_HOSTS") {
-		t.Errorf("error = %q, want it to also name SHOWMESH_FPP_MQTT_HOSTS as a possible typo", got)
-	}
-	if idx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS"); idx >= 0 && idx < storeIdx {
-		t.Errorf("error = %q, want the store remedy to lead and SHOWMESH_FPP_ENDPOINTS to appear only as a trailing hedge", got)
+	if strings.Contains(got, "SHOWMESH_") {
+		t.Errorf("error = %q, must not name an environment variable", got)
 	}
 }

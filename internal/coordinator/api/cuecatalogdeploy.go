@@ -590,7 +590,7 @@ func cueCatalogDeployReplayAllZeroIdentityProblem(existingID, nodeID string) v1.
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s on node %q, which has no show, generation, revision. Use a new key.",
+			"idempotencyKey already belongs to command %s on node %q, which is not a cue list deploy. Use a new key.",
 			existingID, nodeID),
 	}
 }

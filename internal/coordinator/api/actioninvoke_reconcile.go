@@ -176,8 +176,7 @@ func reconcileActionInvokeOutcome(ctx context.Context, deps Dependencies, rec st
 				"Settled after a restart from its FPP command %s, which was confirmed: %s", child.ID, child.OutcomeReason)
 		}
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected), fmt.Sprintf(
-			"resolved by startup reconciliation, not by this invocation's own original request: its own dispatched "+
-				"FPP command %s resolved %q rather than confirmed (%s)", child.ID, childPayload.Outcome, child.OutcomeReason)
+			"Settled after a restart as unconfirmed: its FPP command %s ended %q, not confirmed: %s", child.ID, childPayload.Outcome, child.OutcomeReason)
 	case err == nil:
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected), fmt.Sprintf(
 			"Settled after a restart as unconfirmed: its FPP command %s has no result yet.", child.ID)

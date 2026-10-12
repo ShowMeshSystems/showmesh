@@ -253,7 +253,7 @@ type CatalogConflict struct {
 // section H5 build item 2's ruling requires naming both Cue ids and the
 // exact [config.ShowCueClaim.String] value, never only a log line.
 func (c CatalogConflict) Detail() string {
-	return fmt.Sprintf("cues %q and %q both hold exclusive claim %q; a concurrent claim is refused, never silently preempted (H0.5)", c.CueA, c.CueB, c.Claim.String())
+	return fmt.Sprintf("Cues %q and %q both claim %q.", c.CueA, c.CueB, c.Claim.String())
 }
 
 // resolveCueOutputs projects payload's declared outputs onto

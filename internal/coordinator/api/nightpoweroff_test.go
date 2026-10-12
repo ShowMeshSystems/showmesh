@@ -137,8 +137,8 @@ func TestNightPowerOff_AfterActionsRunsPrerequisitesInOrderThenPowerOffLast(t *t
 	if final.PowerPhase == nightPowerPhaseConfiguredNotDispatched {
 		t.Fatalf("PowerPhase never resolved to a terminal outcome")
 	}
-	if !strings.Contains(final.PowerPhase, "dispatched") {
-		t.Fatalf("PowerPhase = %q, want it to record the power-off action's own dispatch", final.PowerPhase)
+	if !strings.Contains(final.PowerPhase, "Power-off was sent") {
+		t.Fatalf("PowerPhase = %q, want it to record that the power-off action was sent", final.PowerPhase)
 	}
 
 	// A further tick after the sequence has resolved must never redispatch.

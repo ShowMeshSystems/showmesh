@@ -236,9 +236,9 @@ func (h *handlers) nightPowerOffDispatchAction(ctx context.Context, now time.Tim
 				"Power-off was not sent: %s. Power was not removed. Run the power-off action by hand.",
 				row.OutcomeReason))
 		default:
-			msg := fmt.Sprintf("presentation power-off action dispatched, outcome %s", row.Outcome)
+			msg := fmt.Sprintf("Power-off was sent, result %s.", row.Outcome)
 			if row.OutcomeReason != "" {
-				msg += ": " + row.OutcomeReason
+				msg = fmt.Sprintf("Power-off was sent, result %s: %s", row.Outcome, row.OutcomeReason)
 			}
 			h.nightCompletePowerPhase(ctx, now, rec, msg)
 		}

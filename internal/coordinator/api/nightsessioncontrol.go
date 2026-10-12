@@ -1851,7 +1851,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "failed to read fpp.reachable evidence: " + err.Error()}
 	}
 	if len(obs) == 0 {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "no fpp.reachable evidence recorded for this instance"}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "FPP has not reported whether it is reachable. Check that the player is on."}
 	}
 	health := observation.DeriveHealth(obs[0], now, func(v any) observation.Health {
 		if b, ok := v.(bool); ok && b {
@@ -1861,7 +1861,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	})
 	reason := ""
 	if health != observation.HealthHealthy {
-		reason = "fpp.reachable evidence state: " + string(obs[0].StateAt(now))
+		reason = fmt.Sprintf("FPP is not confirmed reachable, last report is %s. Check that the player is on.", obs[0].StateAt(now))
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
 }
@@ -2299,7 +2299,7 @@ func mapNightCue(phase string, cue config.NightSessionCue, row store.NightCueOut
 	out := v1.NightCue{Name: cue.Name, Phase: phase, Role: cue.Role, Action: cue.Action}
 	if !hasRow {
 		out.State = nightCueStateNotDispatched
-		out.Reason = "this cue has not been dispatched in the current cycle"
+		out.Reason = "This cue has not run this cycle."
 		return out
 	}
 	rev := row.ActionRevision

@@ -280,7 +280,7 @@ func ValidateAssetSettings(s AssetSettings) error {
 		return operatorMessage("Content base URL must not contain a user name or password. Remove it.")
 	}
 	if ContentBaseURLIsLoopback(s.ContentBaseURL) {
-		return operatorMessage("Content base URL must be one the nodes can reach. Use http://<coordinator address>:<port>.")
+		return operatorMessage("Content base URL points at this machine, which nodes cannot reach. Use http://<coordinator address>:<port>.")
 	}
 	return nil
 }

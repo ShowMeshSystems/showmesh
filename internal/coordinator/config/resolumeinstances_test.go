@@ -133,25 +133,14 @@ func TestValidateResolumeInstancesRejectsFPPEndpointCollision(t *testing.T) {
 		t.Errorf("error = %q, want it to name the colliding id", err.Error())
 	}
 
-	// ADR-039 decision 1: this refusal reaches the operator raw
-	// (api/resolumeinstancesconfig.go returns err.Error() directly), so it
-	// must lead with the store-backed remedies (showmeshctl resolume
-	// instance set / showmeshctl config set) and name SHOWMESH_RESOLUME_ID
-	// only as a trailing hedge for a coordinator that has not migrated,
-	// never as the leading remedy and never alongside the internal
-	// "collector.Runner" type name no operator on this surface would
-	// recognize.
+	// This refusal reaches the operator raw, so it names the remedy and no
+	// environment variable or internal type.
 	got := err.Error()
-	if !containsAll(got, "showmeshctl resolume instance set", "showmeshctl config set") {
-		t.Errorf("error = %q, want it to name both store-backed remedies", got)
+	if !containsAll(got, "already used by an FPP endpoint", "Rename one of them") {
+		t.Errorf("error = %q, want the fact and the rename remedy", got)
 	}
-	if strings.Contains(got, "collector.Runner") {
-		t.Errorf("error = %q, must not name the internal collector.Runner type", got)
-	}
-	if storeIdx := strings.Index(got, "showmeshctl resolume instance set"); storeIdx < 0 {
-		t.Fatalf("error = %q, want the store remedy present", got)
-	} else if envIdx := strings.Index(got, "SHOWMESH_RESOLUME_ID"); envIdx >= 0 && envIdx < storeIdx {
-		t.Errorf("error = %q, want the store remedy to lead and SHOWMESH_RESOLUME_ID to appear only as a trailing hedge", got)
+	if strings.Contains(got, "collector.Runner") || strings.Contains(got, "SHOWMESH_") {
+		t.Errorf("error = %q, must not name an internal type or an environment variable", got)
 	}
 }
 
