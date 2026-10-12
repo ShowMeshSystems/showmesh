@@ -80,6 +80,22 @@ func (g *capabilityDetectionGate) trigger(run func(gen uint64)) {
 	go g.runLoop()
 }
 
+// triggerIfIdle is trigger for a periodic caller: it starts run only when no
+// cycle is running, so a tick never supersedes a detection slower than it.
+func (g *capabilityDetectionGate) triggerIfIdle(run func(gen uint64)) bool {
+	g.mu.Lock()
+	if g.running {
+		g.mu.Unlock()
+		return false
+	}
+	g.generation++
+	g.latestRun = run
+	g.running = true
+	g.mu.Unlock()
+	go g.runLoop()
+	return true
+}
+
 // runLoop executes the gate's current latestRun under the gate's current
 // generation, then either stops (no follow-up was requested while it
 // ran) or immediately executes again for whatever generation and run

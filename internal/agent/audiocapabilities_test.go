@@ -59,6 +59,15 @@ func withAudioEngineHeldNode(t *testing.T, node audioNodeConfig, ok bool) {
 	t.Cleanup(func() { audioEngineHeldNode = orig })
 }
 
+// withAudioConfiguredNode drives [audioConfiguredNode] deterministically,
+// matching withAudioEngineHeldNode's own injection convention.
+func withAudioConfiguredNode(t *testing.T, node audioNodeConfig, have bool) {
+	t.Helper()
+	orig := audioConfiguredNode
+	audioConfiguredNode = func() (audioNodeConfig, bool) { return node, have }
+	t.Cleanup(func() { audioConfiguredNode = orig })
+}
+
 // TestDetectAudioCapabilitiesNoEngineReturnsNil proves a node with no
 // usable audio engine (every render node, the development laptop)
 // advertises no audio capability at all.
@@ -751,7 +760,9 @@ func TestHeldRouteMissingFromTwoPassesStopsReadingAvailable(t *testing.T) {
 	t.Cleanup(lastKnownGoodRoutes.reset)
 	t.Cleanup(heldRouteMissCounts.reset)
 	withAudioEngineAvailable(t, true, "")
-	withAudioEngineHeldNode(t, audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}, true)
+	node := audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}
+	withAudioEngineHeldNode(t, node, true)
+	withAudioConfiguredNode(t, node, true)
 
 	if set := heldRouteMissPass(t, true); !heldRouteAdvertised(set) {
 		t.Fatal("route present: want it advertised")
@@ -783,6 +794,24 @@ func TestHeldRouteMissingFromTwoPassesStopsReadingAvailable(t *testing.T) {
 	}
 	if local, _ := set.Lookup("audio.output.local"); local.Attributes["missingRoutes"] != nil {
 		t.Fatalf("missingRoutes = %v after the route returned, want none", local.Attributes["missingRoutes"])
+	}
+}
+
+func TestHeldRouteMissingIsReportedWhenTheEngineFailedToBuild(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	heldRouteMissCounts.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	t.Cleanup(heldRouteMissCounts.reset)
+	withAudioEngineAvailable(t, false, "the output did not open")
+	withAudioEngineHeldNode(t, audioNodeConfig{}, false)
+	withAudioConfiguredNode(t, audioNodeConfig{ProgramRoute: "hw:CARD=M4,DEV=0", ProgramChannels: []int{1, 2}}, true)
+
+	heldRouteMissPass(t, false)
+	set := heldRouteMissPass(t, false)
+	local, _ := set.Lookup("audio.output.local")
+	missing, _ := local.Attributes["missingRoutes"].([]map[string]any)
+	if len(missing) != 1 || missing[0]["route"] != "hw:CARD=M4,DEV=0" {
+		t.Fatalf("missingRoutes = %v, want the configured route reported while the engine is down", missing)
 	}
 }
 

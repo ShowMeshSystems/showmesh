@@ -176,14 +176,14 @@ function reportsCountNotNames(capability: Capability): boolean {
 function missingRouteNames(node: Node): string[] {
   const raw = node.capabilities.find((c) => c.id === 'audio.output.local')?.attributes?.missingRoutes
   if (!Array.isArray(raw)) return []
-  const names: string[] = []
+  const names = new Set<string>()
   for (const item of raw) {
     const route = (item as { route?: unknown } | null)?.route
     if (typeof route === 'string' && route !== '') {
-      names.push(route.replace(/^(plug)?(hw|dmix|dsnoop):(CARD=)?/, '').split(',')[0] ?? route)
+      names.add(route.replace(/^(plug)?(hw|dmix|dsnoop):(CARD=)?/, '').split(',')[0] ?? route)
     }
   }
-  return names
+  return [...names]
 }
 
 function surfaceDisplay(surface: ShowSurfaceConfigResponse): string {

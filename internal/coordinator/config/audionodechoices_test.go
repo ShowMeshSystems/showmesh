@@ -34,13 +34,6 @@ func TestResolveAudioRoutingChoicesOffersPairsAndLTCOffProgramChannels(t *testin
 	}
 }
 
-func TestResolveAudioRoutingChoicesStillOffersOtherRoutesWhenAHeldRouteIsGone(t *testing.T) {
-	c := ResolveAudioRoutingChoices("node-a", liveEvidence(pchStereo), nil, nil)
-	if c.Discovery != AudioRoutingDiscoveryAvailable || len(c.Routes) != 1 || c.Routes[0].Route != pchStereo.Route {
-		t.Fatalf("discovery=%q routes=%+v, want the remaining route offered", c.Discovery, c.Routes)
-	}
-}
-
 func TestResolveAudioRoutingChoicesProgramOnlyOutput(t *testing.T) {
 	c := ResolveAudioRoutingChoices("node-a", liveEvidence(pchStereo), nil, nil)
 	r := c.Routes[0]

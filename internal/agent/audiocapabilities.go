@@ -67,6 +67,11 @@ var audioEngineAvailable = func() (bool, string) { return false, "no playback en
 // never claims to hold anything.
 var audioEngineHeldNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
 
+// audioConfiguredNode reports the audio.node settings the operator last
+// saved, whether or not the engine built from them is healthy: a route that
+// fails to open is still the route the operator is waiting on.
+var audioConfiguredNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
+
 // routeEvidenceCache remembers each device's last genuinely-successful
 // probe: a held device probes EBUSY (zero on every field), so only an
 // earlier pass has real evidence to substitute.
@@ -122,20 +127,20 @@ func (c *routeEvidenceCache) reset() {
 // held route may be absent from before it stops reading Available.
 const heldRouteMissLimit = 2
 
-// heldRouteMisses counts, per held device, the consecutive complete
+// heldRouteMisses counts, per configured device, the consecutive complete
 // enumeration passes that did not list it.
 type heldRouteMisses struct {
 	mu     sync.Mutex
 	counts map[string]int
 }
 
-// observe records one enumeration pass and returns the held devices that
-// have now been missing for heldRouteMissLimit passes. An incomplete pass
-// changes nothing, so a failed or slow probe never counts as a miss.
-func (h *heldRouteMisses) observe(routes []audio.RouteEvidence, held audioNodeConfig, heldOK, complete bool) map[string]bool {
+// observe records one enumeration pass and returns the configured devices
+// that have now been missing for heldRouteMissLimit passes. An incomplete
+// pass changes nothing, so a failed or slow probe never counts as a miss.
+func (h *heldRouteMisses) observe(routes []audio.RouteEvidence, configured audioNodeConfig, haveConfigured, complete bool) map[string]bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !heldOK {
+	if !haveConfigured {
 		h.counts = nil
 		return nil
 	}
@@ -145,7 +150,7 @@ func (h *heldRouteMisses) observe(routes []audio.RouteEvidence, held audioNodeCo
 	}
 	next := map[string]int{}
 	gone := map[string]bool{}
-	for _, dev := range []string{held.ProgramRoute, held.LTCRoute} {
+	for _, dev := range []string{configured.ProgramRoute, configured.LTCRoute} {
 		if dev == "" {
 			continue
 		}
@@ -296,7 +301,8 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	heldNode, heldOK := audioEngineHeldNode()
-	gone := heldRouteMissCounts.observe(d.Routes, heldNode, heldOK, complete)
+	configured, haveConfigured := audioConfiguredNode()
+	gone := heldRouteMissCounts.observe(d.Routes, configured, haveConfigured, complete)
 	trustedNode := heldNode
 	if gone[trustedNode.ProgramRoute] {
 		trustedNode.ProgramRoute = ""
@@ -334,7 +340,7 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	return set
 }
 
-// goneRouteAttributes names each held route that has gone missing, sorted
+// goneRouteAttributes names each configured route that has gone missing, sorted
 // so the advertisement is stable between passes.
 func goneRouteAttributes(gone map[string]bool) []map[string]any {
 	devices := make([]string, 0, len(gone))

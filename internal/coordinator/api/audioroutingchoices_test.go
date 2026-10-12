@@ -56,6 +56,23 @@ func getRoutingChoices(t *testing.T, api *API, token, nodeID string) (int, map[s
 	return resp.StatusCode, decodeMap(t, body)
 }
 
+const pchWithM4MissingAttrs = `{"routes":["hw:CARD=PCH,DEV=0"],"outputCount":1,"discoveryComplete":true,
+ "missingRoutes":[{"route":"hw:CARD=M4,DEV=0","reason":"Interface hw:CARD=M4 is no longer found on this node. Reconnect it or pick another route."}],
+ "outputs":[{"route":"hw:CARD=PCH,DEV=0","interface":"hw:CARD=PCH","source":"alsa","channels":2,"channelBasis":"atLeast","ltcCapable":false}]}`
+
+func TestAudioRoutingChoicesStillOfferOtherRoutesWhenAHeldRouteIsMissing(t *testing.T) {
+	api, token := newRoutingChoicesAPI(t, nodeViewReportingOutputs(t, "audio-m4", true, pchWithM4MissingAttrs))
+
+	status, body := getRoutingChoices(t, api, token, "audio-m4")
+	if status != http.StatusOK || body["discovery"] != "available" {
+		t.Fatalf("status %d body %v, want 200 available while a held route is missing", status, body)
+	}
+	routes := body["routes"].([]any)
+	if len(routes) != 1 || routes[0].(map[string]any)["route"] != "hw:CARD=PCH,DEV=0" {
+		t.Errorf("routes = %v, want the remaining route offered and the missing one left out", routes)
+	}
+}
+
 func TestAudioRoutingChoicesAreIndependentPerNode(t *testing.T) {
 	api, token := newRoutingChoicesAPI(t,
 		nodeViewReportingOutputs(t, "audio-m4", true, m4OutputsAttrs, "alsa_output.m4"),
