@@ -1477,7 +1477,7 @@ func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, 
 		if err != nil {
 			return "", fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
 		}
-		if rec.Hello != nil && advertisesLTCRoute(rec.Hello.Capabilities) {
+		if rec.Hello != nil && advertisesLTCRoute(rec.Hello.Capabilities, payload.ProgramRoute) {
 			warning = appendWarning(warning, fmt.Sprintf(
 				"Node %s can send timecode but none is configured. Add an LTC channel in Node routing if this node should.", n.NodeID))
 		}
@@ -1486,14 +1486,20 @@ func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, 
 }
 
 // advertisesLTCRoute reports whether caps carries an audio.output.ltc
-// capability naming at least one route.
-func advertisesLTCRoute(caps capability.Set) bool {
+// capability naming programRoute: LTC can only leave through the route that
+// carries program audio.
+func advertisesLTCRoute(caps capability.Set, programRoute string) bool {
 	c, ok := caps.Lookup("audio.output.ltc")
 	if !ok {
 		return false
 	}
 	routes, _ := c.Attributes["routes"].([]any)
-	return len(routes) > 0
+	for _, r := range routes {
+		if name, _ := r.(string); name == programRoute {
+			return true
+		}
+	}
+	return false
 }
 
 // activeAudioNodePayload reads nodeID's active audio.node object with

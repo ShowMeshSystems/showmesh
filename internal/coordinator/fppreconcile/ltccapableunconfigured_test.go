@@ -88,3 +88,33 @@ func TestPlaylistReadinessSilentWhenTheLTCChannelIsConfigured(t *testing.T) {
 		t.Fatalf("Warning = %q, want no timecode warning once an LTC channel is configured", got)
 	}
 }
+
+func TestPlaylistReadinessSilentWhenOnlyAnotherDeviceIsLTCCapable(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	makeNodeProgramOnly(t, st, "node-1")
+	observedAt := time.Now()
+	caps := capability.Set{
+		{ID: "audio.output.local", Version: 1, Attributes: map[string]any{"routes": []any{"usb-interface", "hdmi-out"}}},
+		{ID: "audio.output.ltc", Version: 1, Attributes: map[string]any{"routes": []any{"hdmi-out"}}},
+	}
+	if err := st.UpsertHello(context.Background(), "node-1", store.HelloRecord{
+		Label: "node-1", Capabilities: caps, ObservedAt: &observedAt, Provenance: store.ProvenanceAgentReport,
+	}); err != nil {
+		t.Fatalf("upsert hello: %v", err)
+	}
+
+	if got := ltcWarningFor(t, st, p); strings.Contains(got, "can send timecode") {
+		t.Fatalf("Warning = %q, want no timecode warning when only a device the program does not use is LTC-capable", got)
+	}
+}
+
+func TestPlaylistReadinessSilentWhenTheNodeHasNotReportedCapabilities(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	makeNodeProgramOnly(t, st, "node-1")
+
+	if got := ltcWarningFor(t, st, p); strings.Contains(got, "can send timecode") {
+		t.Fatalf("Warning = %q, want no timecode warning before the node has reported capabilities", got)
+	}
+}
