@@ -54,7 +54,7 @@ func nightResolveShowAction(ctx context.Context, cfg ConfigStore, actionID strin
 		return config.ShowActionPayload{}, 0, fmt.Errorf("api: get show.action object %q: %w", actionID, err)
 	}
 	if obj.CurrentRevision == 0 {
-		return config.ShowActionPayload{}, 0, fmt.Errorf("api: show.action %q has no active revision", actionID)
+		return config.ShowActionPayload{}, 0, fmt.Errorf("api: show.action %q is not saved", actionID)
 	}
 	rev, err := cfg.GetConfigRevision(ctx, config.ShowActionConfigKind, actionID, obj.CurrentRevision)
 	if err != nil {

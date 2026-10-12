@@ -197,7 +197,7 @@ func TestNightBarrierSatisfied_DeadlineRunsFromTheCuesOwnOffset(t *testing.T) {
 	if ok {
 		t.Fatal("the barrier released before its cue was even due")
 	}
-	if !strings.Contains(reason, "has not been dispatched yet") {
+	if !strings.Contains(reason, "has not been sent yet") {
 		t.Fatalf("reason = %q, want the not-yet-dispatched reason", reason)
 	}
 	if _, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseEnterShow, "late-barrier"); err == nil {

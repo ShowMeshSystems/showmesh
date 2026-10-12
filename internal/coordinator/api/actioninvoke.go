@@ -187,8 +187,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(bodyBytes) > maxActionInvokeRequestBodyBytes {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"the request body exceeds this endpoint's %d byte limit; an idempotency key and an optional revision "+
-				"number never legitimately need more",
+			"The request body is over the %d byte limit.",
 			maxActionInvokeRequestBodyBytes)))
 		return
 	}
@@ -474,7 +473,7 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 	}
 	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, id, *requestedRevision)
 	if errors.Is(err, store.ErrConfigRevisionNotFound) {
-		p := resourceNotFoundProblem(fmt.Sprintf("show.action %q has no revision %d", id, *requestedRevision))
+		p := resourceNotFoundProblem(fmt.Sprintf("show.action %q has no version %d", id, *requestedRevision))
 		return store.ConfigRevisionRecord{}, &p, nil
 	}
 	if err != nil {

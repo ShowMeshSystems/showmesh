@@ -1955,7 +1955,7 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 	})
 	if err != nil {
 		h.logWarn("night loop: end-session clear retry: dispatch failed", "sessionId", sessionID, "nodeId", nodeID, "error", err)
-		return failed("the clear could not be dispatched: " + err.Error())
+		return failed("the clear was not sent: " + err.Error())
 	}
 	if problem != nil {
 		h.logWarn("night loop: end-session clear retry: refused", "sessionId", sessionID, "nodeId", nodeID, "reason", problem.Detail)
@@ -2912,7 +2912,7 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 		}
 		row.State = nightCueStateResolved
 		row.Outcome = nightCueOutcomeFailed
-		row.OutcomeReason = reason("this step could not be dispatched: " + derr.Error())
+		row.OutcomeReason = reason("this step was not sent: " + derr.Error())
 		resolvedAt := h.nowNotBefore(now)
 		row.ResolvedAt = &resolvedAt
 		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {

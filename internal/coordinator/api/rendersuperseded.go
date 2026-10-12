@@ -188,7 +188,9 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 		// package's own copy-guard test) — the policy this implements is
 		// documented on [mqttproto.RenderPipelineStateSuperseded] instead.
 		reason := fmt.Sprintf("This surface is playing a render from an older deploy of show %q.", sc.show)
-		if sc.show != active.ShowID {
+		if !supersededByShowGeneration {
+			reason = "A cue in this render is no longer in the active show."
+		} else if sc.show != active.ShowID {
 			reason = fmt.Sprintf("This surface is playing a render from an older show %q. The active show is %q.", sc.show, active.ShowID)
 		}
 		if sc.haveRevision && sc.revision != catalog.Revision {

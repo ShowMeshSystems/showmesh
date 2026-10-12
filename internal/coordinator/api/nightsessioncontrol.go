@@ -2248,11 +2248,11 @@ func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSession
 	}
 	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
 	if err != nil {
-		return unreadable("failed to read the pinned night.session revision: " + err.Error())
+		return unreadable("failed to read the saved night session: " + err.Error())
 	}
 	var payload config.NightSessionPayload
 	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
-		return unreadable("failed to decode the pinned night.session revision: " + err.Error())
+		return unreadable("failed to decode the saved night session: " + err.Error())
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
 	if err != nil {

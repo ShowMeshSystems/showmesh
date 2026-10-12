@@ -140,7 +140,7 @@ type MacroRunStepRecord struct {
 // point, not an enforced invariant thereafter.
 const (
 	MacroRunStepOutcomeStatePending  = string(observation.StateNotCollected)
-	MacroRunStepOutcomeReasonPending = "this step has not been dispatched or resolved yet"
+	MacroRunStepOutcomeReasonPending = "this step has not been sent or resolved yet"
 )
 
 // ErrMacroRunNotFound is returned by [Store.GetMacroRun]/[Tx.GetMacroRun],

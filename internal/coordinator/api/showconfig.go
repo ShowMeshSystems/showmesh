@@ -168,7 +168,7 @@ func (h *handlers) handleListShowMacros(w http.ResponseWriter, r *http.Request) 
 // kind is unconfigured), the interesting fact here is which OBJECT ID was
 // asked for.
 func showConfigObjectNotFoundProblem(kind, id string) v1.Problem {
-	return resourceNotFoundProblem(fmt.Sprintf("no %s object with id %q has an active revision; PUT one to create it", kind, id))
+	return resourceNotFoundProblem(fmt.Sprintf("Nothing is saved for %s %q yet. Save one to create it.", kind, id))
 }
 
 func (h *handlers) getActiveShowConfigRevision(ctx context.Context, kind, id string) (store.ConfigRevisionRecord, store.ConfigObjectRecord, *v1.Problem, error) {

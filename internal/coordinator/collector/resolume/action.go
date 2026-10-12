@@ -761,7 +761,7 @@ func (d *ActionDispatcher) pollUntilConfirmedOrDeadline(
 func (d *ActionDispatcher) unconfirmedOutcome(name ActionName, dispatchedAt time.Time, deadline time.Duration, windowBound bool, lastReason string) ActionOutcome {
 	reason := fmt.Sprintf("nothing confirmed this within %s of sending the command: %s", deadline, lastReason)
 	if windowBound {
-		reason = fmt.Sprintf("checking this ran out of the %s total dispatch budget before anything confirmed it: %s", MaxDispatchDuration, lastReason)
+		reason = fmt.Sprintf("checking this ran out of the %s total time limit before anything confirmed it: %s", MaxDispatchDuration, lastReason)
 	}
 	return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt, Reason: reason}
 }

@@ -216,7 +216,7 @@ func decodeNightInterlocks(top map[string]json.RawMessage, sessionShow string, r
 		if seenNames[rule.Name] {
 			return nil, &ValidationError{
 				Code: ValidationCodeInterlockNameDuplicate, Field: field + ".name",
-				Detail: fmt.Sprintf("interlock name %q is used more than once", rule.Name),
+				Detail: fmt.Sprintf("rule name %q is used more than once", rule.Name),
 			}
 		}
 		seenNames[rule.Name] = true

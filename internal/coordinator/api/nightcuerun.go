@@ -231,7 +231,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			// terminal, ambiguous, until an operator resolves it.
 			row.State = nightCueStateAmbiguous
 			row.Outcome = nightCueOutcomeAmbiguous
-			row.OutcomeReason = "a dispatch attempt was made but its outcome was never recorded, and this action has no stable retry identity; end-session and prepare-site again to recover"
+			row.OutcomeReason = "it was sent but its outcome was never recorded, and this action has no stable retry identity; end-session and prepare-site again to recover"
 			resolvedAt := now
 			row.ResolvedAt = &resolvedAt
 			if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
@@ -390,7 +390,7 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 		row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
 		if errors.Is(err, store.ErrNightCueOutboxNotFound) {
 			if now.Sub(dueAt) < nightBarrierResolutionDeadline {
-				return false, fmt.Sprintf("barrier cue %q has not been dispatched yet", cue.Name), nil
+				return false, fmt.Sprintf("barrier cue %q has not been sent yet", cue.Name), nil
 			}
 			// The row could not be created at all, so the deadline has to
 			// apply to its absence too, and durably: a barrier that stays

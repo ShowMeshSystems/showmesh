@@ -254,8 +254,8 @@ func TestPollUntilConfirmedOrDeadlineIsBoundedByTheDispatchWindow(t *testing.T) 
 	if elapsed := now.Sub(start); elapsed > MaxDispatchDuration {
 		t.Errorf("poll ran for %s, want at most MaxDispatchDuration (%s)", elapsed, MaxDispatchDuration)
 	}
-	if !contains(out.Reason, "total dispatch budget") {
-		t.Errorf("Reason = %q, want it to name the total dispatch budget as the phase that ran out", out.Reason)
+	if !contains(out.Reason, "total time limit") {
+		t.Errorf("Reason = %q, want it to name the total time limit as the phase that ran out", out.Reason)
 	}
 }
 

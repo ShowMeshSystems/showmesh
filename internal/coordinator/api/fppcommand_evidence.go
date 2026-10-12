@@ -94,7 +94,7 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 	}
 	reason := o.Reason
 	if reason == "" {
-		reason = fmt.Sprintf("%s evidence state is %s", signal, state)
+		reason = fmt.Sprintf("%s reading is %s", signal, state)
 	}
 	return o.Value, src, false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
 }

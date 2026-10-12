@@ -553,7 +553,7 @@ func (h *handlers) persistAnnouncementPrepareOutcome(ctx context.Context, rec st
 		}
 		row.State = nightCueStateResolved
 		row.Outcome = nightCueOutcomeFailed
-		row.OutcomeReason = "this announcement's own prepare could not be dispatched: " + out.err.Error()
+		row.OutcomeReason = "this announcement's own prepare was not sent: " + out.err.Error()
 		row.ResolvedAt = &resolvedAt
 		return h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row)
 	}

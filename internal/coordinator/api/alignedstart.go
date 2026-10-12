@@ -234,7 +234,7 @@ func (h *handlers) nodeHoldsMediaClock(ctx context.Context, nodeID string) (bool
 func readinessFromEvidence(nodeID string, holdsClock bool, evidence map[string]any) audiosched.Readiness {
 	out := audiosched.Readiness{NodeID: nodeID, HoldsMediaClock: holdsClock}
 	if evidence == nil {
-		out.MediaClockReason = "the node's prepare reported no evidence at all"
+		out.MediaClockReason = "the node's prepare reported no readings at all"
 		return out
 	}
 	valid, _ := evidence[pkgaudio.ResultMediaClockValid].(bool)

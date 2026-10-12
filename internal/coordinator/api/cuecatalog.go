@@ -210,9 +210,9 @@ func (h *handlers) handlePostNodeCueCatalogAcknowledge(w http.ResponseWriter, r 
 		return
 	}
 	if !active.Configured || req.Show != active.ShowID || req.Generation != active.Generation {
-		detail := fmt.Sprintf("acknowledgement names show %q generation %d, which does not match this coordinator's currently resolved active show", req.Show, req.Generation)
+		detail := fmt.Sprintf("This acknowledgement is for show %q. No show is active.", req.Show)
 		if active.Configured {
-			detail = fmt.Sprintf("acknowledgement names show %q generation %d, but the active show is %q generation %d", req.Show, req.Generation, active.ShowID, active.Generation)
+			detail = fmt.Sprintf("This acknowledgement is for an older deploy of show %q. The active show is %q.", req.Show, active.ShowID)
 		}
 		writeProblem(w, h.logger, now, invalidParameterProblem(detail))
 		return

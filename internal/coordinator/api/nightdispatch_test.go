@@ -270,7 +270,7 @@ func TestNightBarrierSatisfied_MissingRowHonoursOnFailureAfterTheDeadline(t *tes
 			if ok {
 				t.Fatal("the barrier released before its deadline with no row at all")
 			}
-			if !strings.Contains(reason, "has not been dispatched yet") {
+			if !strings.Contains(reason, "has not been sent yet") {
 				t.Fatalf("reason = %q, want the not-yet-dispatched reason", reason)
 			}
 

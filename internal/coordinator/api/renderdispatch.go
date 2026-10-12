@@ -1248,7 +1248,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	// coordinator's receipt time.
 	if o.ObservedAt == nil {
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.transport.available evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+			"Node %s's output reading has no time, so it cannot be confirmed as new.", nodeID)
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
@@ -1436,7 +1436,7 @@ func (h *handlers) evaluateRenderOutputMode(ctx context.Context, nodeID, surface
 	}
 	if o.ObservedAt == nil {
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.output.mode from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+			"Node %s's output mode reading has no time, so it cannot be confirmed as new.", nodeID)
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
