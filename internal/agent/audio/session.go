@@ -1504,7 +1504,7 @@ func confirmLocked(want pkgaudio.State, outcomeIfConfirmed pkgaudio.Outcome, obs
 	if obs.State != want {
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeUnconfirmable,
-			Reason:  fmt.Sprintf("engine reports state %q, expected %q", obs.State, want),
+			Reason:  "The node did not reach the expected state. Check again in a moment.",
 		}
 	}
 	return pkgaudio.OutcomeResult{Outcome: outcomeIfConfirmed}

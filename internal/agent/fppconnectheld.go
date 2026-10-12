@@ -1189,10 +1189,18 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 	}
 
 	newTotal := bytesReceived + n
-	if newTotal > uploadLength || newTotal > maxFileBytes {
+	if newTotal > maxFileBytes {
+		s.logger.Warn("fppconnect: upload grew past the per-file cap", "dir", dir, "name", name, "received_bytes", newTotal, "max_file_bytes", maxFileBytes)
 		s.discardFragment(dir, name)
 		o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
 			"%s is larger than this node accepts. Raise the file size limit or upload a smaller file.", name), at)
+		return nil, 0, o, r, false
+	}
+	if newTotal > uploadLength {
+		s.logger.Warn("fppconnect: upload grew past its declared length", "dir", dir, "name", name, "received_bytes", newTotal, "upload_length_bytes", uploadLength)
+		s.discardFragment(dir, name)
+		o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
+			"More of %s arrived than its size said. Upload it again from xLights.", name), at)
 		return nil, 0, o, r, false
 	}
 
