@@ -84,7 +84,7 @@ function CompactSummary({ revisions }: { revisions: ConfigRevisionMeta[] }) {
   return (
     <p className="sm-small sm-muted">
       Active version <span className="sm-data">{active.revision}</span> ·{' '}
-      {active.createdByPrincipalName ?? 'unknown principal'} {formatClock(active.createdAt) ?? 'at an unrecorded time'}
+      {active.createdByPrincipalName ?? 'an unknown user'} {formatClock(active.createdAt) ?? 'at an unrecorded time'}
     </p>
   )
 }
@@ -96,7 +96,7 @@ function RevisionList({ revisions, onSelect }: { revisions: ConfigRevisionMeta[]
         <div key={rev.revision} className="sm-inline-row sm-stack-3">
           <StatusPair tone={rev.active ? 'good' : 'pending'} label={rev.active ? `Active · ${rev.revision}` : String(rev.revision)} />
           <p className="sm-small sm-muted">
-            {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'unknown principal'}
+            {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'an unknown user'}
             {rev.note !== '' && `. ${rev.note}`}
           </p>
           {onSelect !== undefined && <Button variant="quiet" onClick={() => onSelect(rev)}>View version</Button>}

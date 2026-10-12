@@ -318,7 +318,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       tone: session.authorization.state === 'recorded' ? 'pending' : 'unknown',
       fact:
         session.authorization.state === 'recorded'
-          ? `${session.authorization.command ?? 'a command'} by ${session.authorization.principalName ?? 'an unnamed principal'}, recorded ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
+          ? `${session.authorization.command ?? 'a command'} by ${session.authorization.principalName ?? 'an unknown user'}, recorded ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
           : session.authorization.reason !== undefined && session.authorization.reason !== ''
             ? session.authorization.reason
             : 'No authorizing command has been recorded for this session.',
@@ -331,14 +331,14 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
     },
     {
       key: 'armed-show',
-      label: session.armedShowId === '' ? 'No show armed' : session.showCommitted ? 'Show committed' : 'Show armed',
+      label: session.armedShowId === '' ? 'No show ready' : session.showCommitted ? 'Show committed' : 'Show ready',
       tone: session.armedShowId === '' ? 'unknown' : session.showCommitted ? 'good' : 'pending',
       fact:
         session.armedShowId === ''
-          ? 'No show is armed for this session.'
+          ? 'No show is ready for this session.'
           : session.showCommitted
-            ? `${session.armedShowId} is armed and committed for this session.`
-            : `${session.armedShowId} is armed but not yet committed.`,
+            ? `${session.armedShowId} is ready and committed for this session.`
+            : `${session.armedShowId} is ready but not yet committed.`,
     },
     {
       key: 'admission',
@@ -393,14 +393,14 @@ export function runOfShow(session: NightSessionState): RunStep[] {
     const outcome = cue.outcome
     return {
       key: `${cue.name}:${index}`,
-      when: cue.dispatchedAt === null ? 'Armed' : (formatClock(cue.dispatchedAt) ?? 'dispatched'),
+      when: cue.dispatchedAt === null ? 'Waiting' : (formatClock(cue.dispatchedAt) ?? 'dispatched'),
       name: cue.name,
-      detail: cue.actionRevision === null ? cue.role : `${cue.role} · rev ${cue.actionRevision}`,
+      detail: cue.actionRevision === null ? cue.role : `${cue.role} · version ${cue.actionRevision}`,
       phase: CUE_PHASE[cue.phase],
       target: cue.role,
       action: cue.action,
       tone: outcome === undefined ? (cue.state === 'not_dispatched' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
-      state: outcome ?? (cue.state === 'not_dispatched' ? 'Armed' : cue.state.replace('_', ' ')),
+      state: outcome ?? (cue.state === 'not_dispatched' ? 'Waiting' : cue.state.replace('_', ' ')),
       resolved: cue.resolvedAt === null ? (cue.reason ?? null) : formatClock(cue.resolvedAt),
     }
   })
@@ -425,7 +425,7 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
     const outcome = step.outcome
     return {
       key: `${step.cueName}:${step.kind}:${step.nodeId}:${index}`,
-      when: step.dispatchedAt === null ? 'Armed' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
+      when: step.dispatchedAt === null ? 'Waiting' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
       sequence: step.sequence,
       cueName: step.cueName,
       nodeId: step.nodeId,

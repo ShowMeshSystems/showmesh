@@ -918,7 +918,7 @@ export function NodeDetail() {
             {
               term: 'Declared',
               value: node.declaration.declared ? (
-                `${formatDateClock(node.declaration.declaredAt) ?? 'an unrecorded time'} by ${node.declaration.declaredByPrincipalName ?? 'an unknown principal'}`
+                `${formatDateClock(node.declaration.declaredAt) ?? 'an unrecorded time'} by ${node.declaration.declaredByPrincipalName ?? 'an unknown user'}`
               ) : (
                 <div className="sm-inline-row">
                   <span>Not declared</span>

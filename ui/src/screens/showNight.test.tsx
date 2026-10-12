@@ -204,7 +204,7 @@ describe('Show Night', () => {
 
   it('gives an armed step a settled state, not the never-collected one', () => {
     const steps = runOfShow(session({ cues: { state: 'recorded', reason: '', cues: [cue({})] } } as never))
-    expect(steps[0]?.state).toBe('Armed')
+    expect(steps[0]?.state).toBe('Waiting')
     expect(steps[0]?.tone).toBe('pending')
     expect(steps[0]?.tone).not.toBe('unknown')
   })
@@ -321,7 +321,7 @@ describe('Show Night', () => {
       fpp: [knownPositionInstance],
     })
     const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
-    expect(within(boundary).getByText('2 cues armed this cycle')).toBeInTheDocument()
+    expect(within(boundary).getByText('2 cues waiting this cycle')).toBeInTheDocument()
   })
 
   it('shows Unknown for a stale FPP position without repeating the armed boundary beneath it', () => {
@@ -1087,14 +1087,14 @@ describe('Show Night', () => {
       }),
     })
     expect(screen.getByText('night.session/winter-ridge at version 4.')).toBeInTheDocument()
-    expect(screen.getByText('winter-ridge-2026 is armed and committed for this session.')).toBeInTheDocument()
+    expect(screen.getByText('winter-ridge-2026 is ready and committed for this session.')).toBeInTheDocument()
     expect(screen.getByText(/^Admission closed \d/)).toBeInTheDocument()
     expect(screen.getByText('Session last updated')).toBeInTheDocument()
   })
 
   it('reports no show armed honestly when armedShowId is empty', () => {
     renderScreen({ nightSession: session({ armedShowId: '', showCommitted: false }) })
-    expect(screen.getByText('No show is armed for this session.')).toBeInTheDocument()
+    expect(screen.getByText('No show is ready for this session.')).toBeInTheDocument()
   })
 
   it('reads the night session activation pointer and lists definitions to activate', async () => {

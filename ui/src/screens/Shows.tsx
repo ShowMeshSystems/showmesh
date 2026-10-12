@@ -199,7 +199,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
                 value:
                   state.response.revision === 0
                     ? 'never'
-                    : `${formatClock(state.response.updatedAt) ?? 'at an unrecorded time'} by ${state.response.createdByPrincipalName ?? 'an unnamed principal'}`,
+                    : `${formatClock(state.response.updatedAt) ?? 'at an unrecorded time'} by ${state.response.createdByPrincipalName ?? 'an unknown user'}`,
               },
             ]}
           />

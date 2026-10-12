@@ -643,7 +643,7 @@ function AssetDetail({
         <div className="sm-inspector__row">
           <span className="sm-inspector__label">Uploaded</span>
           <p className="sm-inspector__value sm-data">
-            {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown principal'}
+            {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown user'}
           </p>
         </div>
         {asset.mediaType === 'audio' && (
@@ -695,7 +695,7 @@ function AssetDetail({
               <div>
                 <p className="sm-data sm-flat">{hashLabel(entry.contentHash)}</p>
                 <p className="sm-readout__fact">
-                  Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown principal'}
+                  Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown user'}
                 </p>
                 {annotation !== null && <p className="sm-readout__fact sm-eyebrow--accent sm-flat">{annotation}</p>}
 

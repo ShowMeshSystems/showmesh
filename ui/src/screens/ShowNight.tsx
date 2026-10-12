@@ -269,7 +269,7 @@ export function ShowNight() {
   const { instance, run, state } = nowPlaying(model)
   const next = nextTransition(model)
   const steps = runOfShow(session)
-  const armed = steps.filter((step) => step.when === 'Armed').length
+  const armed = steps.filter((step) => step.when === 'Waiting').length
   const elapsedSeconds = state?.elapsedSeconds ?? null
   const totalSeconds = state?.totalSeconds ?? null
   const playbackPercent =
@@ -497,7 +497,7 @@ export function ShowNight() {
             <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} detail="Derived from observed playback, not a clock." />
           )}
           <div className="sm-nownext__boundary">
-            {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
+            {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} waiting this cycle`}</p>}
           </div>
         </section>
       </div>
@@ -814,7 +814,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
                 value:
                   state.response.revision === 0
                     ? 'never'
-                    : `${formatClock(state.response.updatedAt) ?? 'at an unrecorded time'} by ${state.response.createdByPrincipalName ?? 'an unnamed principal'}`,
+                    : `${formatClock(state.response.updatedAt) ?? 'at an unrecorded time'} by ${state.response.createdByPrincipalName ?? 'an unknown user'}`,
               },
             ]}
           />
@@ -1592,7 +1592,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                   <>
                     {draft.siteControl.prerequisites.map((p, index) => (
                       <div className="sm-night-session-item" key={`prereq-${index}`}>
-                        <Field label="Kind">{(field) => <Select {...field} value={p.kind} onChange={(e) => updatePrerequisite(index, { kind: e.target.value as PrerequisiteDraft['kind'] })}>{PREREQUISITE_KINDS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                        <Field label="Kind">{(field) => <Select {...field} value={p.kind} onChange={(e) => updatePrerequisite(index, { kind: e.target.value as PrerequisiteDraft['kind'] })}>{PREREQUISITE_KINDS.map((option) => <option key={option} value={option}>{option === 'evidence' ? 'Signal check' : option}</option>)}</Select>}</Field>
                         {p.kind === 'delay' ? (
                           <Field label="Delay (ms)">{(field) => <Input {...field} type="number" min="0" step="1" value={p.delayMs} onChange={(e) => updatePrerequisite(index, { delayMs: e.target.value })} />}</Field>
                         ) : (

@@ -39,6 +39,9 @@ describe('audio route short names', () => {
     expect(audioNodeRouteText(summary(), [fleetNode([{ route: M4 }])])).toBe(`${M4} ch 1-2`)
     expect(audioNodeRouteText(summary(), [])).toBe(`${M4} ch 1-2`)
     expect(audioNodeRouteText(summary({ programChannels: [] }), [])).toBe(M4)
+    const withoutChannels: Partial<AudioNodeSummary> = summary()
+    delete withoutChannels.programChannels
+    expect(audioNodeRouteText(withoutChannels as AudioNodeSummary, [])).toBe(M4)
     expect(routeName(M4, undefined)).toBe(M4)
   })
 

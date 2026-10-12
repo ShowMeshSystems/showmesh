@@ -94,8 +94,8 @@ const TYPE_ROLES = [
   { cls: 'sm-subhead', sample: 'Program output routing', role: 'subhead', spec: '15 / 1.3 / 600 · field-group h3' },
   { cls: 'sm-body', sample: 'FPP remains authoritative for its own schedule, playlist order, and playhead.', role: 'body', spec: '14 / 1.5 / 400 · prose, labels, controls' },
   { cls: 'sm-small sm-muted', sample: 'Helper text appears only when it changes the decision.', role: 'small', spec: '12.5 / 1.45 / 400 · helper, detail, captions' },
-  { cls: 'sm-meta sm-faint', sample: 'Freshness · Revision · Source', role: 'meta', spec: '11 / 1.35 / 600 mono / .09em caps · labels' },
-  { cls: 'sm-data', sample: 'rev 47 · 21:04:11.882 · a3f91c2', role: 'data', spec: '13 / 1.4 / 500 mono tabular · values, IDs' },
+  { cls: 'sm-meta sm-faint', sample: 'Freshness · Version · Source', role: 'meta', spec: '11 / 1.35 / 600 mono / .09em caps · labels' },
+  { cls: 'sm-data', sample: 'version 47 · 21:04:11.882 · a3f91c2', role: 'data', spec: '13 / 1.4 / 500 mono tabular · values, IDs' },
 ]
 
 const STRIPS = [
@@ -275,7 +275,7 @@ export function Specimen() {
                 </Select>
               )}
             </Field>
-            <Field label="Idle output" error="The coordinator rejected an empty value at revision 47.">
+            <Field label="Idle output" error="The coordinator rejected an empty value at version 47.">
               {(props) => <Input defaultValue="" {...props} />}
             </Field>
           </FieldGrid>
@@ -670,7 +670,7 @@ export function Specimen() {
             detail={
               <>
                 <p className="sm-body">Cues &ldquo;cue-a&rdquo; and &ldquo;cue-b&rdquo; both hold the exclusive claim &ldquo;program-audio-route:media-garage:usb-interface&rdquo;.</p>
-                <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed revision.</p>
+                <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed version.</p>
               </>
             }
             confirmLabel="Deploy anyway"
@@ -698,7 +698,7 @@ export function Specimen() {
               {
                 id: 'specimen-lc-flat',
                 commands: [
-                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a new preparation.', onRun: () => {} },
                   {
                     command: 'start-night',
                     label: 'Start night',
@@ -729,7 +729,7 @@ export function Specimen() {
                 id: 'specimen-lc-prepare',
                 title: 'Prepare',
                 commands: [
-                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a new preparation.', onRun: () => {} },
                   { command: 'run-readiness', label: 'Run readiness', detail: 'Re-runs every readiness check.', onRun: () => {} },
                 ],
               },
