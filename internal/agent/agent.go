@@ -520,6 +520,14 @@ func Run() int {
 		return 1
 	}
 
+	go func() {
+		ticker := time.NewTicker(heldRouteRedetectInterval)
+		defer ticker.Stop()
+		runHeldRouteRedetect(sigCtx, ticker.C, audioRebuilder.HeldNode, func() {
+			scheduleCapabilityDetection(sigCtx, conn, cfg, bootID, startedAt, fppConnectStatus, logger)
+		})
+	}()
+
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)

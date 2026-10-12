@@ -770,8 +770,11 @@ func TestHeldRouteMissingFromTwoPassesStopsReadingAvailable(t *testing.T) {
 	if len(missing) != 1 || missing[0]["route"] != "hw:CARD=M4,DEV=0" || !strings.Contains(missing[0]["reason"].(string), "M4") {
 		t.Fatalf("missingRoutes = %v, want the held route with a reason naming the interface", missing)
 	}
-	if local.Attributes["discoveryComplete"] != false {
-		t.Fatalf("discoveryComplete = %v, want false while a held route is missing", local.Attributes["discoveryComplete"])
+	if local.Attributes["discoveryComplete"] != true {
+		t.Fatalf("discoveryComplete = %v, want true so the other routes stay offered while a held route is missing", local.Attributes["discoveryComplete"])
+	}
+	if outputs, _ := local.Attributes["outputs"].([]map[string]any); len(outputs) != 1 {
+		t.Fatalf("outputs = %v, want the one remaining route offered", outputs)
 	}
 
 	set = heldRouteMissPass(t, true)

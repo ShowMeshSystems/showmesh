@@ -314,7 +314,6 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 		if len(gone) > 0 {
 			missingRoutes := goneRouteAttributes(gone)
 			attrs["missingRoutes"] = missingRoutes
-			discovered, reason = false, missingRoutes[0]["reason"].(string)
 		}
 		attrs["discoveryComplete"] = discovered
 		if !discovered {
