@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,7 +194,7 @@ func multiAnnouncementShowActionBody(sessionID string) string {
 
 // setupPrepareSiteMultiAnnouncementFixture is
 // setupPrepareSiteAnnouncementFixture's three-session counterpart.
-func setupPrepareSiteMultiAnnouncementFixture(t *testing.T) (api *API, token string, obs *fakeObservationLister, pub *fakeAudioPublisher, logs *bytes.Buffer) {
+func setupPrepareSiteMultiAnnouncementFixture(t *testing.T, clock func() time.Time) (api *API, token string, obs *fakeObservationLister, pub *fakeAudioPublisher, logs *bytes.Buffer) {
 	t.Helper()
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -209,7 +210,7 @@ func setupPrepareSiteMultiAnnouncementFixture(t *testing.T) (api *API, token str
 	logs = &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 
-	api = New(deps, Options{Clock: fixedClock(testNow), Logger: logger, NightReadinessMaxAge: time.Hour})
+	api = New(deps, Options{Clock: clock, Logger: logger, NightReadinessMaxAge: time.Hour})
 
 	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
@@ -235,37 +236,31 @@ func setupPrepareSiteMultiAnnouncementFixture(t *testing.T) (api *API, token str
 // renderCommandConfirmDeadline in renderdispatch_test.go and
 // nightInterlockAggregateDispatchBudget in
 // nightinterlock_integration_test.go) and each simulated dispatch is made
-// to cost 50ms of REAL wall-clock time via onAwaitResponse, mimicking an
-// audio node that never answers within audioCommandConfirmDeadline. Only
+// to advance the fake Options.Clock by 50ms via onAwaitResponse, mimicking
+// an audio node that never answers within audioCommandConfirmDeadline. Only
 // the first of the three distinct sessions should fit inside the 5ms
-// budget; the other two must be skipped before ever being dispatched, so
-// the whole prepare-site call finishes in a small multiple of one 50ms
-// dispatch, not three.
+// budget; the other two must be skipped before ever being dispatched.
 func TestNightPrepareSite_AnnouncementResetBudget_BoundedRegardlessOfSessionCount(t *testing.T) {
 	origBudget := nightAnnouncementResetAtPrepareSiteBudget
 	nightAnnouncementResetAtPrepareSiteBudget = 5 * time.Millisecond
 	t.Cleanup(func() { nightAnnouncementResetAtPrepareSiteBudget = origBudget })
 
-	api, token, obs, pub, logs := setupPrepareSiteMultiAnnouncementFixture(t)
+	var nowNanos atomic.Int64
+	nowNanos.Store(testNow.UnixNano())
+	clock := func() time.Time { return time.Unix(0, nowNanos.Load()).UTC() }
+
+	api, token, obs, pub, logs := setupPrepareSiteMultiAnnouncementFixture(t, clock)
 	setHealthyFPPReachable(obs, testNow)
 	pub.resultsByAction = announcementNodeResults("announcement-1")
-	pub.onAwaitResponse = func() { time.Sleep(50 * time.Millisecond) }
+	pub.onAwaitResponse = func() { nowNanos.Add(int64(50 * time.Millisecond)) }
 
-	start := time.Now()
 	prep := mustNightCommand(t, api, token, "prepare-site")
-	elapsed := time.Since(start)
 
 	if prep.Command.Outcome != "applied" {
 		t.Fatalf("prepare-site outcome = %q, want applied even though the announcement reset budget was exhausted", prep.Command.Outcome)
 	}
 	if prep.Session.State != nightStatePreparing {
 		t.Fatalf("session state = %q, want %q; the night must still start when the reset budget runs out", prep.Session.State, nightStatePreparing)
-	}
-
-	// Not a boundedness check (the dispatch count and skipped-budget log
-	// below already prove that); this only catches a genuine hang.
-	if elapsed >= 10*time.Second {
-		t.Fatalf("prepare-site took %s, want under 10s: the announcement reset pass appears to be hanging", elapsed)
 	}
 
 	var clears []dispatchedAudioCommand
