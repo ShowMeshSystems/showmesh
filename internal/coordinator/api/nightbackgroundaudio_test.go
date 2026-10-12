@@ -51,7 +51,7 @@ func TestNightBackgroundAudioSessionID_SatisfiesAudioSessionIDPattern(t *testing
 func nightBackgroundAudioTestHandlers(t *testing.T) (*handlers, *store.Store, *fakeAudioPublisher, *dynamicObservationLister) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -2827,7 +2827,7 @@ func nightPinnedMaxGainDbFromResponse(t *testing.T, body []byte) (id string, pin
 // owner ruling (2026-08-30) is about.
 func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

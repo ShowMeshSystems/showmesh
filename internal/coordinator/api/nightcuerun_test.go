@@ -45,7 +45,7 @@ func putNightAction(t *testing.T, st *store.Store, id string, payload config.Sho
 func nightCueTestHandlers(t *testing.T) (*handlers, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

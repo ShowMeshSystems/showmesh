@@ -143,7 +143,7 @@ func (f currentRunsAudioListerFake) NodeAudioObservations(nodeID string) []obser
 
 func newCurrentRunsProductionReader(t *testing.T, observations []observation.Observation) CurrentRunsReader {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -212,7 +212,7 @@ func currentRunsAudioRun(t *testing.T, snap currentrun.Snapshot, id string) curr
 // FPP-side wiring one file over.
 func newFPPCurrentRunsProductionReader(t *testing.T) (currentRunsReader, *store.Store) {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

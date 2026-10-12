@@ -152,6 +152,8 @@ jobs:
     # under the race detector on every main run (runs 35170310208 through
     # 35306228942), and run 35306264479 crossed go test's own 20 minute
     # per-package limit with one unrelated one-second test still running.
+    # That package no longer replays every migration per test, so the race
+    # step's own per-package limit is 15m; see the comment beside it.
     timeout-minutes: 55
     strategy:
       # Both matrix legs run to completion. With the default fail-fast, a
@@ -286,8 +288,11 @@ jobs:
             echo "the two test steps do not partition the package list." >&2
             exit 1
           fi
+          # 15m is about three times the slowest package's race run. That is
+          # internal/coordinator/api, whose tests copy one migrated template
+          # database (teststore_test.go) rather than replay every migration.
           # shellcheck disable=SC2086
-          go test -race -timeout=40m $rest
+          go test -race -timeout=15m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
         id: build_cgo

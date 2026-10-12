@@ -31,7 +31,7 @@ type nightPowerOffFixture struct {
 func newNightPowerOffFixture(t *testing.T, now *time.Time, off *config.NightPresentationPowerOff, results map[string]ResolumeActionResult, actionIDsToVerbs map[string]string) *nightPowerOffFixture {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(func() time.Time { return *now }))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(func() time.Time { return *now }))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

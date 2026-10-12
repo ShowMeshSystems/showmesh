@@ -215,7 +215,7 @@ func closeAndReopenStore(t *testing.T, setup *fppCommandTestSetup) reopenedStore
 	if err := setup.st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	st, err := store.Open(context.Background(), setup.storeDir, nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), setup.storeDir, nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

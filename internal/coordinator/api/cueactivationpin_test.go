@@ -20,7 +20,7 @@ import (
 
 func newPinTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
+	st, err := openTestStore(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

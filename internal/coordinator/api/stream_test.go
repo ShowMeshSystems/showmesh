@@ -1674,7 +1674,7 @@ func TestStreamFPPChangedResolvesMultiSourceDuplicates(t *testing.T) {
 func TestStreamFPPPlaylistEntryChangedIncludesEndpointID(t *testing.T) {
 	dir := t.TempDir()
 	clock := fixedClock(testNow)
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(clock))
+	st, err := openTestStore(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(clock))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
