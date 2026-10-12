@@ -173,23 +173,16 @@ func reconcileActionInvokeOutcome(ctx context.Context, deps Dependencies, rec st
 		_ = json.Unmarshal([]byte(child.ResultJSON), &childPayload)
 		if childPayload.Outcome == outcomeWordConfirmed {
 			return outcomeWordConfirmed, string(observation.StateNotCollected), fmt.Sprintf(
-				"resolved by startup reconciliation, not by this invocation's own original request (a restart or an "+
-					"abandoned connection left it dispatched but never resolved): reconstructed from its own dispatched "+
-					"FPP command %s, which startup reconciliation independently confirmed (%s)", child.ID, child.OutcomeReason)
+				"Settled after a restart from its FPP command %s, which was confirmed: %s", child.ID, child.OutcomeReason)
 		}
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected), fmt.Sprintf(
 			"resolved by startup reconciliation, not by this invocation's own original request: its own dispatched "+
 				"FPP command %s resolved %q rather than confirmed (%s)", child.ID, childPayload.Outcome, child.OutcomeReason)
 	case err == nil:
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected), fmt.Sprintf(
-			"resolved by startup reconciliation, not by this invocation's own original request: its own dispatched "+
-				"FPP command %s is itself still unresolved, so this coordinator will not guess whether the action's "+
-				"effect actually landed", child.ID)
+			"Settled after a restart as unconfirmed: its FPP command %s has no result yet.", child.ID)
 	default:
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected),
-			"resolved by startup reconciliation, not by this invocation's own original request (a restart or an " +
-				"abandoned connection left it dispatched but never resolved): this coordinator does not re-run an " +
-				"action's own confirmation rules retroactively, and no dispatched FPP command is recorded for it, so " +
-				"it reports unconfirmed rather than guessing whether the action's effect actually landed"
+			"Settled after a restart as unconfirmed: no FPP command is on record for it."
 	}
 }

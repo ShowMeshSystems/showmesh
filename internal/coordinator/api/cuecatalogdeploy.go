@@ -564,9 +564,7 @@ func cueCatalogDeployReplayUndecodableProblem(existingID, nodeID string) v1.Prob
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (node %q), but its stored record does not decode "+
-				"as a cue-catalog-deploy result or identity; it cannot be answered as a replay. Mint a fresh "+
-				"idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s on node %q, not a Cue list deploy. Use a new key.",
 			existingID, nodeID),
 	}
 }
@@ -592,10 +590,7 @@ func cueCatalogDeployReplayAllZeroIdentityProblem(existingID, nodeID string) v1.
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (node %q), but its stored identity carries none "+
-				"of the fields a cue-catalog-deploy identity always has (show, generation, revision); it is "+
-				"likely a different command family or a pre-identity row, and cannot be answered as a replay. "+
-				"Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s on node %q, which has no show, generation, revision. Use a new key.",
 			existingID, nodeID),
 	}
 }

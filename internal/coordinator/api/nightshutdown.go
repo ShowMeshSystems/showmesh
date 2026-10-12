@@ -81,7 +81,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	}
 	if !rec.Degraded {
 		h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-			"fading out: a stop was issued to FPP instance %q but no idle evidence confirming it arrived within %s; the presentation may still be running, so this session is not reported stopped",
+			"Fading out: FPP %q was told to stop but was not seen idle within %s. The show may still be running.",
 			anchor.FPPInstanceID, nightShutdownStopConfirmDeadline))
 	}
 	// Degrading records what happened; it does not end the attempt. The

@@ -146,11 +146,11 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 	hold := h.cueCatalogAutoDeployHold(ctx, now, nodeID)
 	if hold.Hold {
 		reason := fmt.Sprintf(
-			"node %q has not acknowledged the active show's required catalog revision %q (acknowledged revision: %q); a deploy is held because %s, and will apply automatically once it clears",
+			"Node %q does not have the active show's Cue list %q yet (it has %q). The deploy waits because %s.",
 			nodeID, catalog.Revision, ackRevision, hold.Reason)
 		if hold.EvidenceUncertain {
 			reason = fmt.Sprintf(
-				"node %q has not acknowledged the active show's required catalog revision %q (acknowledged revision: %q); a deploy is held because this node's own playback evidence is stale or unreadable rather than confirmed idle (%s), and will apply automatically once fresh evidence shows nothing running",
+				"Node %q does not have the active show's Cue list %q yet (it has %q). The deploy waits until the node is seen idle: %s",
 				nodeID, catalog.Revision, ackRevision, hold.Reason)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: reason}, true

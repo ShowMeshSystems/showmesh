@@ -1189,7 +1189,7 @@ func TestHandbackTheListingSaysThePlayerIsRunningFromItsFallbackProgram(t *testi
 		state.CutoffAt == "" || state.HoldReason != string(fallbackhold.ReasonExecutor) {
 		t.Fatalf("with the plugin in fallback the listing shows %+v", state)
 	}
-	if !strings.HasPrefix(state.Message, "This player is running the show from its fallback program.") {
+	if !strings.HasPrefix(state.Message, "This player is running the show on fallback.") {
 		t.Fatalf("the operator message is %q", state.Message)
 	}
 	if got := countAuditActionsIn(t, w.setup.svc, auditActionFallbackPlayerStateReport); got != 2 {

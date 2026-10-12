@@ -161,7 +161,7 @@ func (h *handlers) extendRecordedScheduleToLateNodes(now time.Time, settings con
 			reason := peer.unalignedReason
 			if reason == "" {
 				reason = fmt.Sprintf(
-					"node %q joined this activation after its shared start instant was already chosen (on node %q); no clock is read again for an activation already dispatched, and the configured lead has since elapsed",
+					"Node %q joined after the shared start time was set by node %q, so it may start late.",
 					b.nodeID, peer.nodeID)
 			}
 			act.UnalignedReason = reason

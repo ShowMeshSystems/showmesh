@@ -77,8 +77,7 @@ func (h *handlers) handleGetFPPMQTTConfig(w http.ResponseWriter, r *http.Request
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.FPPMQTTMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"No fpp.mqtt configuration is stored: the coordinator's data volume is unwritable, so nothing was "+
-					"saved. Fix the volume and restart; do not clear the SHOWMESH_FPP_MQTT_* variables."))
+				"No FPP MQTT settings are stored: the data volume is unwritable. Fix it, restart, and do not clear the SHOWMESH_FPP_MQTT_* variables."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
@@ -193,9 +192,7 @@ var fppMQTTPutFieldNames = map[string]bool{
 func decodeFPPMQTTConfigPutBody(body io.Reader) (fppMQTTPutFields, error) {
 	var top map[string]json.RawMessage
 	if err := json.NewDecoder(body).Decode(&top); err != nil {
-		return fppMQTTPutFields{}, fmt.Errorf(`request body must be a JSON object matching `+
-			`{"brokerURL":string,"username":string,"topicPrefix":string,"hosts":{"id":"HostName",...},"password":string}, `+
-			`every field optional: %w`, err)
+		return fppMQTTPutFields{}, fmt.Errorf(`request body must be JSON like {"brokerURL":string,"username":string,"topicPrefix":string,"hosts":{...},"password":string}: %w`, err)
 	}
 	// A literal null decodes into a nil map with no error, which would
 	// read as "every field absent" and mint a no-op revision.

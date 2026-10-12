@@ -78,7 +78,7 @@ func TestNightBedRejoin_LeavesABedAnOperatorStoppedAlone(t *testing.T) {
 	if len(got) != 1 || got[0].NodeID != "node-b" {
 		t.Fatalf("nodesNotPlaying = %+v, want node-b named", got)
 	}
-	if !strings.Contains(got[0].Reason, "outside this night's own controls") {
+	if !strings.Contains(got[0].Reason, "outside this night's controls") {
 		t.Fatalf("node-b reason = %q, want it to say the music was changed from outside this night's controls", got[0].Reason)
 	}
 	if strings.Contains(got[0].Reason, "was stopped") {

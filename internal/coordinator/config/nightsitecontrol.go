@@ -322,7 +322,7 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 	if posture == NightInterlockPostureBlock && !nightInterlockSignalCanExpressFalse(info) {
 		return NightInterlockRule{}, &ValidationError{
 			Code: ValidationCodeInterlockSignalNoFalseAnswer, Field: field + ".signal",
-			Detail: fmt.Sprintf("signal %q can never report a no with kind %q and no comparison value. A block rule needs a signal that can say no; pick a different signal or set a comparison value.", signal, info.MQTTExpectKind),
+			Detail: fmt.Sprintf("Signal %q can never say no with kind %q and no comparison value. Pick another signal or set a comparison value.", signal, info.MQTTExpectKind),
 		}
 	}
 

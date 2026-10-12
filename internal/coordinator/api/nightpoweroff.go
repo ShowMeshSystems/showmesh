@@ -55,7 +55,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 	if payload.SiteControl == nil || payload.SiteControl.PresentationPowerOff == nil {
 		// Cannot happen for a session already prepared against this
 		// configuration; must not spin forever if it somehow does.
-		h.nightCompletePowerPhase(ctx, now, rec, "power-down-presentation was requested, but this session's pinned night.session revision no longer configures siteControl.presentationPowerOff; presentation power was not removed by this session")
+		h.nightCompletePowerPhase(ctx, now, rec, "Power-down was asked for, but this night no longer has a power-off step. Power was not removed.")
 		return
 	}
 	off := *payload.SiteControl.PresentationPowerOff
@@ -66,7 +66,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 	// come down with it (RESTING-MODE.md section 10.2).
 	if off.PowerDomain != config.NightPowerDomainPresentation {
 		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-			"power-off sequence refused: the pinned siteControl.presentationPowerOff.powerDomain is %q, not %q; presentation power was NOT removed, and no environmental binding is ever dispatched by this path",
+			"Power-off refused: its power domain is %q, not %q. Power was not removed.",
 			off.PowerDomain, config.NightPowerDomainPresentation))
 		return
 	}
@@ -80,7 +80,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 			}
 			if terminal {
 				h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-					"power-off sequence stopped at prerequisite %d of %d (%s): %s; presentation power was NOT removed; remove it by invoking the configured action directly (POST /api/v1/actions/{id}/invocations) or through a configured force-power-off action",
+					"Power-off stopped at step %d of %d (%s): %s. Power was not removed. Run the power-off action by hand.",
 					i+1, len(off.Prerequisites), nightPowerOffPrerequisiteLabel(prereq), reason))
 				return
 			}
@@ -227,13 +227,13 @@ func (h *handlers) nightPowerOffDispatchAction(ctx context.Context, now time.Tim
 		return
 	case nightCueStateAmbiguous:
 		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-			"power-off action dispatch outcome is ambiguous: %s; presentation power state is unknown - verify manually and, if still on, remove it by invoking the configured action directly (POST /api/v1/actions/{id}/invocations)",
+			"The power-off result is unclear: %s. Check the power by hand and run the power-off action if it is still on.",
 			row.OutcomeReason))
 	case nightCueStateResolved:
 		switch row.Outcome {
 		case nightCueOutcomeFailed, nightCueOutcomeRefused:
 			h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-				"power-off action was not dispatched: %s; presentation power was NOT removed; remove it by invoking the configured action directly (POST /api/v1/actions/{id}/invocations) or through a configured force-power-off action",
+				"Power-off was not sent: %s. Power was not removed. Run the power-off action by hand.",
 				row.OutcomeReason))
 		default:
 			msg := fmt.Sprintf("presentation power-off action dispatched, outcome %s", row.Outcome)

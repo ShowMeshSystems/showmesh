@@ -498,7 +498,7 @@ const ReservedResolumeRecoveryPrincipalID = "system-resolume-recovery"
 // CREATE a principal under that name). The message names the toggle as the
 // way to turn recovery off, because a refusal that just says "reserved"
 // sends the operator hunting.
-var ErrReservedPrincipal = errors.New("identity: this is the built-in Resolume recovery principal and cannot be deleted, disabled, renamed, re-roled, or re-credentialed; use the resolume.recovery configuration toggle to turn automatic recovery off instead")
+var ErrReservedPrincipal = errors.New("identity: the built-in Resolume recovery principal cannot be changed; turn automatic recovery off in the resolume.recovery settings instead")
 
 // AuditKind distinguishes the append-only records ADR-024 decision 11
 // requires.

@@ -593,7 +593,7 @@ func (h *handlers) handleStartDiscoveryRun(w http.ResponseWriter, r *http.Reques
 	var reason string
 	if !complete {
 		reason = fmt.Sprintf(
-			"%d declared entit%s reported no current evidence either way during this run (e.g. a broker outage, an unreachable coordinator restart before the first FPP poll completed, or evidence aged past its staleness window); a run cannot assert their absence without evidence they are actually offline or unreachable",
+			"%d declared entit%s gave no reading during this run, so nothing is claimed about them.",
 			ambiguousDeclaredCount, pluralY(ambiguousDeclaredCount))
 	}
 
@@ -704,8 +704,7 @@ func (h *handlers) handlePromoteNode(w http.ResponseWriter, r *http.Request) {
 		dec := json.NewDecoder(io.LimitReader(r.Body, maxDeclarationRequestBodyBytes+1))
 		if err := dec.Decode(&req); err != nil {
 			writeProblem(w, h.logger, now, invalidParameterProblem(
-				"request body, if present, must be JSON matching {\"label\":string|null,\"notes\":string|null}, "+
-					"with an absent or null field leaving that field's currently declared value unchanged"))
+				`The body must be JSON like {"label":string|null,"notes":string|null}. A null or absent field is unchanged.`))
 			return
 		}
 	}

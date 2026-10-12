@@ -255,7 +255,7 @@ func TestClaimWithAWrongSecretIsAGeneric404(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("claim %q status = %d, want 404", body, resp.StatusCode)
 		}
-		if !strings.Contains(string(got), "no pairing is waiting for this plugin") {
+		if !strings.Contains(string(got), "No pairing is waiting for this plugin") {
 			t.Fatalf("claim %q body = %s, want the one generic refusal", body, got)
 		}
 	}

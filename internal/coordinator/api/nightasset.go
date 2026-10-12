@@ -246,7 +246,7 @@ func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, p
 func nightCheckRestingAssetExactVariant(namePrefix, playlistName string) nightReadinessCheck {
 	return nightReadinessCheck{
 		name: namePrefix + ":asset-exact-variant:" + playlistName, health: nightCheckStateNotVerifiable,
-		reason: "FPP's playlist read exposes only a filename, never a content hash; this coordinator cannot independently confirm the live host is running the pinned asset's exact bytes, and no configuration of this build can make it able to",
+		reason: "FPP reports only a filename, so the coordinator cannot confirm it holds this exact file.",
 	}
 }
 
@@ -269,7 +269,7 @@ func nightCheckShowPlaylistPresent(ctx context.Context, endpoint, playlistName s
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: "the show playlist has no items"}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy(),
-		reason: "playlist exists and is non-empty; whether it is unexpectedly busy at start-night time is enforced at dispatch (startPlaylist's own ifBusy=refuse guard), not by this readiness snapshot"}
+		reason: "The playlist exists and has items. Whether FPP is busy is checked when the night starts."}
 }
 
 // nightCheckRestingAssetDuration is §6.1/§13's duration/cue-offset bullet:

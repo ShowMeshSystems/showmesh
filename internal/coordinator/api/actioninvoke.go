@@ -99,7 +99,7 @@ const actionInvokeResolvedNoStoredReason = "this invocation has resolved, and no
 // caller is told the truth the row itself carries: still pending, and
 // self-healing via [RunActionInvokeReconciliationLoop] rather than a
 // restart.
-const actionInvokeOutcomeNotPersistedReason = "this invocation's outward effect has already completed and its outcome is known to this coordinator, but durably recording that outcome failed; it remains pending and this coordinator's own ongoing reconciliation will resolve it without waiting for a restart"
+const actionInvokeOutcomeNotPersistedReason = "This ran, but its result could not be saved yet. It stays pending and is settled shortly."
 
 const maxActionInvokeRequestBodyBytes = 1 << 10 // 1 KiB
 
@@ -214,8 +214,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	if len(unknownKeys) > 0 {
 		sort.Strings(unknownKeys)
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			`request body contains unrecognized key(s): %s (this endpoint accepts only "idempotencyKey" and `+
-				`"requestedRevision" — the action's own stored target supplies every parameter)`, strings.Join(unknownKeys, ", "))))
+			`Unknown request keys: %s. Send only "idempotencyKey" and "requestedRevision".`, strings.Join(unknownKeys, ", "))))
 		return
 	}
 	var idempotencyKey string

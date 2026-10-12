@@ -206,7 +206,7 @@ func TestReconcileOnStartup_AmbiguousEvidenceDegradesWithRecoveryAction(t *testi
 				State: nightStateTransitionToResting, StateEnteredAt: started, Cycle: 1,
 			},
 			obs:  nightPlayingObservations("player-01", "halloween-resting", now),
-			want: "mid-transition",
+			want: "restarted mid-change",
 		},
 	}
 

@@ -794,7 +794,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOnline(t *testing.T)
 	if report.FailingCondition != ReadinessNodeRenderUnassigned {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
 	}
-	if !strings.Contains(report.Reason, "is reporting and holds no render assignment") {
+	if !strings.Contains(report.Reason, "has nothing assigned to surface") {
 		t.Fatalf("Reason = %q, want it to confirm the node is reporting and genuinely holds no assignment", report.Reason)
 	}
 }

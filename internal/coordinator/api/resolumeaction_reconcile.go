@@ -55,10 +55,7 @@ func ReconcileStrandedResolumeActions(ctx context.Context, deps Dependencies, no
 		// this row's confirming evidence (see this file's own top comment
 		// for why), which is exactly what that state means.
 		outcomeState := string(observation.StateNotCollected)
-		reason := "resolved by startup reconciliation, not by this action's own original request (a restart or an " +
-			"abandoned connection left it dispatched but never resolved): this coordinator does not re-run a " +
-			"Resolume action's own confirmation rules retroactively, so it reports unconfirmed rather than guessing " +
-			"whether the action's effect actually landed"
+		reason := "Settled after a restart as unconfirmed: the coordinator could not check whether it took effect."
 
 		resultJSON, _ := json.Marshal(resolumeActionResultPayload{Outcome: string(ResolumeOutcomeUnconfirmed)})
 		resultStr := string(resultJSON)

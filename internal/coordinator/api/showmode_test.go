@@ -42,7 +42,7 @@ func TestGetShowModeConfigUnconfiguredReportsProgram(t *testing.T) {
 	// ADR-033 decision 3: the mode's effect is stated where the operator
 	// can see it, naming the mode as the reason.
 	effect, _ := m["resolumeWebSocketEffect"].(string)
-	if !strings.Contains(effect, "program mode") {
+	if !strings.Contains(effect, "Program mode") {
 		t.Errorf("resolumeWebSocketEffect = %q, want it to name the mode", effect)
 	}
 }
@@ -167,7 +167,7 @@ func TestPutShowModeConfigAuthAndScope(t *testing.T) {
 			t.Errorf("payload.mode = %v, want show", payload["mode"])
 		}
 		effect, _ := m["resolumeWebSocketEffect"].(string)
-		if !strings.Contains(effect, "show mode") {
+		if !strings.Contains(effect, "Show mode") {
 			t.Errorf("resolumeWebSocketEffect = %q, want it to name show mode", effect)
 		}
 	})

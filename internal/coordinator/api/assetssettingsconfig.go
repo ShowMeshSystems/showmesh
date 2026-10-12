@@ -53,9 +53,7 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.AssetSettingsMigrationDeferred {
 			writeProblem(w, h.logger, now, assetsSettingsNotStoredProblem(
-				"No assets.settings configuration is stored: the coordinator's data volume is unwritable, so "+
-					"nothing was saved. Fix the volume and restart; do not clear the SHOWMESH_ASSET_* settings "+
-					"variables."))
+				"No asset settings are stored: the data volume is unwritable. Fix it, restart, and do not clear the SHOWMESH_ASSET_* variables."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
@@ -148,7 +146,7 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 	var top map[string]json.RawMessage
 	if err := json.NewDecoder(body).Decode(&top); err != nil {
 		return assetsSettingsPutFields{}, fmt.Errorf(
-			`request body must be a JSON object with any of "contentBaseUrl","maxUploadBytes","syncIntervalSeconds","inventoryIntervalSeconds": %w`, err)
+			`request body must be JSON with any of "contentBaseUrl","maxUploadBytes","syncIntervalSeconds","inventoryIntervalSeconds": %w`, err)
 	}
 	// A literal null decodes into a nil map with no error, which would
 	// read as "every field absent" and mint a no-op revision.
@@ -164,7 +162,7 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 	for key := range top {
 		if !allowed[key] {
 			return assetsSettingsPutFields{}, fmt.Errorf(
-				`unknown field %q; the accepted fields are "contentBaseUrl","maxUploadBytes","syncIntervalSeconds","inventoryIntervalSeconds"`, key)
+				`unknown field %q; use "contentBaseUrl","maxUploadBytes","syncIntervalSeconds" or "inventoryIntervalSeconds"`, key)
 		}
 	}
 
@@ -173,7 +171,7 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 	if raw, present := top["contentBaseUrl"]; present {
 		if isJSONNull(raw) {
 			return assetsSettingsPutFields{}, errors.New(
-				`"contentBaseUrl" must not be null; omit it to leave the stored value unchanged, or pass "" to deliberately disable asset sync`)
+				`"contentBaseUrl" must not be null; leave it out to keep it, or pass "" to turn asset sync off`)
 		}
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
@@ -195,7 +193,7 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 
 	if raw, present := top["syncIntervalSeconds"]; present {
 		if isJSONNull(raw) {
-			return assetsSettingsPutFields{}, errors.New(`"syncIntervalSeconds" must not be null; omit it to leave the stored value unchanged`)
+			return assetsSettingsPutFields{}, errors.New(`"syncIntervalSeconds" must not be null; leave it out to keep the stored value`)
 		}
 		var n float64
 		if err := json.Unmarshal(raw, &n); err != nil {
@@ -206,7 +204,7 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 
 	if raw, present := top["inventoryIntervalSeconds"]; present {
 		if isJSONNull(raw) {
-			return assetsSettingsPutFields{}, errors.New(`"inventoryIntervalSeconds" must not be null; omit it to leave the stored value unchanged`)
+			return assetsSettingsPutFields{}, errors.New(`"inventoryIntervalSeconds" must not be null; leave it out to keep the stored value`)
 		}
 		var n float64
 		if err := json.Unmarshal(raw, &n); err != nil {
@@ -403,8 +401,7 @@ func (h *handlers) handlePutAssetsSettingsConfig(w http.ResponseWriter, r *http.
 // the live asset sync service follows this configuration on its very next
 // loop iteration (or promptly via a nudge on change — see
 // assetsync.Service.SetSettings), no restart needed.
-const assetsSettingsRestartRequiredReason = "this change is already in effect: the asset sync service follows " +
-	"this configuration promptly (within about ten seconds). No restart is needed."
+const assetsSettingsRestartRequiredReason = "This change is already in effect. No restart is needed."
 
 func mapAssetsSettingsConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, settings config.AssetSettings) v1.AssetsSettingsConfigResponse {
 	return v1.AssetsSettingsConfigResponse{

@@ -208,8 +208,7 @@ func (h *handlers) handleSetPrincipalRole(w http.ResponseWriter, r *http.Request
 		}
 		if locked {
 			writeProblem(w, h.logger, now, principalLockoutProblem(
-				"changing this principal's role would leave no enabled principal able to reach principal:write; "+
-					"promote another principal to admin first, or use the coordinator's own break-glass subcommands"))
+				"This would leave no one able to manage principals. Make another principal an admin first."))
 			return
 		}
 	}
@@ -259,8 +258,7 @@ func (h *handlers) setPrincipalDisabled(w http.ResponseWriter, r *http.Request, 
 		}
 		if locked {
 			writeProblem(w, h.logger, now, principalLockoutProblem(
-				"disabling this principal would leave no enabled principal able to reach principal:write; "+
-					"enable or promote another administrator first, or use the coordinator's own break-glass subcommands"))
+				"This would leave no one able to manage principals. Enable or promote another admin first."))
 			return
 		}
 	}
@@ -446,9 +444,7 @@ func (h *handlers) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if locked {
 		writeProblem(w, h.logger, now, principalLockoutProblem(
-			"revoking this token would leave no enabled principal able to reach principal:write via a password "+
-				"or another active token; issue a replacement credential first, or use the coordinator's own "+
-				"break-glass subcommands"))
+			"This would leave no one able to manage principals. Issue a replacement credential first."))
 		return
 	}
 

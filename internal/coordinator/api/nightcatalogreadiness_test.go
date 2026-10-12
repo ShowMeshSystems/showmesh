@@ -172,10 +172,10 @@ func TestNightCheckCatalogCurrent_HeldDeployReportsDegradedWithHoldReason(t *tes
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "held") {
+	if !strings.Contains(check.reason, "The deploy waits because") {
 		t.Fatalf("reason does not explain the hold: %s", check.reason)
 	}
-	if strings.Contains(check.reason, "stale or unreadable") {
+	if strings.Contains(check.reason, "waits until the node is seen idle") {
 		t.Fatalf("a genuinely playing run must not be reported as uncertain evidence: %s", check.reason)
 	}
 }
@@ -200,7 +200,7 @@ func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsDegradedWi
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "stale or unreadable") {
+	if !strings.Contains(check.reason, "waits until the node is seen idle") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
 	}
 }
@@ -226,7 +226,7 @@ func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsDegradedWithUn
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed): stale evidence must hold, not be read as confirmed idle; reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "stale or unreadable") {
+	if !strings.Contains(check.reason, "waits until the node is seen idle") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
 	}
 }

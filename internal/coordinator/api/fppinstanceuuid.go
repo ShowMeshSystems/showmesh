@@ -23,9 +23,7 @@ func fppInstanceUUIDNoUnacknowledgedChangeProblem(instanceID string) v1.Problem 
 		Type:   ProblemTypeConflict,
 		Title:  "No pending FPP instance uuid change to acknowledge",
 		Status: http.StatusConflict,
-		Detail: "FPP instance " + strconv.Quote(instanceID) + " has no unacknowledged instance uuid change. " +
-			"Either it has never reported a different uuid than its current one, or a prior acknowledgment " +
-			"already cleared it.",
+		Detail: "FPP instance " + strconv.Quote(instanceID) + " has no instance uuid change waiting to be acknowledged.",
 	}
 }
 

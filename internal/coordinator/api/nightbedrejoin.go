@@ -725,7 +725,7 @@ func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID strin
 	case reading.Stale:
 		return "This speaker was too busy to report the background music this time, so what it is doing now is unknown. It reports again on its next cycle."
 	case facts.TouchedOutsideLedger:
-		return "The background music on this speaker was changed from outside this night's own controls. The coordinator is leaving it that way; set it from the speaker's own controls if it should be playing."
+		return "This speaker's background music was changed outside this night's controls and is left that way. Use the speaker's controls to play it."
 	case facts.RejoinAlreadyFailed:
 		return "The coordinator already gave this speaker the background music again and it did not start. It is not trying again on its own; check the speaker."
 	case !reading.Present:
@@ -735,6 +735,6 @@ func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID strin
 	case reading.State == string(pkgaudio.StatePaused):
 		return "The background music is paused on this speaker. It starts again when the coordinator brings the speakers back together."
 	default:
-		return "This speaker is not playing the background music it was given, and the coordinator is not changing that on its own. Check the speaker if the music does not come back."
+		return "This speaker is not playing its background music, and that is left as is. Check the speaker if the music stays off."
 	}
 }

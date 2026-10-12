@@ -110,8 +110,7 @@ func macroRunIdempotencyRevisionConflictProblem(e *store.MacroRunIdempotencyRevi
 		Title:  "Macro run refused: idempotency key already used for a different revision of this macro",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for macro %q at revision %d (run %s); this request would pin revision %d. "+
-				"The macro was edited between the two submissions. Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to macro %q at revision %d (run %s), and the macro is now at revision %d. Use a new key.",
 			e.Existing.MacroObjectID, e.Existing.MacroRevision, e.Existing.ID, e.RequestedMacroRevision),
 		ConflictingRunID: e.Existing.ID,
 	}

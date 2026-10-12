@@ -413,7 +413,7 @@ func TestFPPCommandDoesNotConfirmFromStalePreDispatchEvidence(t *testing.T) {
 			"already agrees (this is exactly the false-confirm this fix closes)", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "from before dispatch") {
+	if !strings.Contains(reason, "from before it was sent") {
 		t.Errorf("outcomeReason = %q, want it to say the reading is from before dispatch", reason)
 	}
 	if elapsed < 100*time.Millisecond {

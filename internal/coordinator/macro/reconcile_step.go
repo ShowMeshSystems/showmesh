@@ -165,8 +165,7 @@ func (e *Executor) resolveStrandedFPPStep(ctx context.Context, runID string, ste
 		// rather than silently defaulted to a word this function cannot
 		// actually attribute to the command's own recorded result.
 		reason = fmt.Sprintf(
-			"this step dispatched before the coordinator restarted; its command resolved with no recognized outcome word, "+
-				"so this step's own outcome cannot be stated more specifically than unconfirmed: %s", cmd.OutcomeReason)
+			"This step was sent before the coordinator restarted and its result is unclear: %s", cmd.OutcomeReason)
 	}
 	outcomeState := cmd.OutcomeState
 
@@ -213,8 +212,7 @@ func (e *Executor) resolveStrandedMQTTStep(ctx context.Context, runID string, st
 	state := stepStateResolved
 	outcome := outcomeUnconfirmed
 	outcomeState := mqttStateRestartInterrupted
-	reason := "this step's dispatch was recorded as having begun before the coordinator restarted, but whether the " +
-		"publish reached the broker, or a response arrived, cannot be established from what was recorded"
+	reason := "This step was being sent when the coordinator restarted, so it is not known whether it ran."
 	dispatchedAt := entry.RecordedAt
 
 	return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
@@ -259,8 +257,7 @@ func (e *Executor) resolveStrandedResolumeStep(ctx context.Context, runID string
 	state := stepStateResolved
 	outcome := outcomeUnconfirmed
 	outcomeState := resolumeStateRestartInterrupted
-	reason := "this step's dispatch was recorded as having begun before the coordinator restarted, but whether the " +
-		"request reached Resolume, or resolved, cannot be established from what was recorded"
+	reason := "This step was being sent when the coordinator restarted, so it is not known whether it ran."
 	dispatchedAt := entry.RecordedAt
 
 	return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{

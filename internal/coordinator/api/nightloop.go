@@ -999,7 +999,7 @@ func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, pay
 	}
 	if age := now.Sub(collectedAt); age > nightShowLaunchEvidenceMaxAge {
 		return fppIfBusyRefuse, fmt.Sprintf(
-			"the coordinator's own evidence that %q was still playing on %q is %s old, past this decision's %s freshness window; FPP itself was never asked whether it is genuinely busy",
+			"The last report that %q was playing on %q is %s old, past the %s limit. FPP was not asked directly.",
 			payload.Resting.Playlist, instanceID, age.Round(time.Second), nightShowLaunchEvidenceMaxAge)
 	}
 	return fppIfBusyReplace, ""

@@ -57,21 +57,21 @@ func unavailable(format string, args ...any) error {
 // Check reports why the coordinator cannot write broker logins, or nil.
 func (b *BrokerFiles) Check() error {
 	if b.dir == "" {
-		return unavailable("The coordinator cannot manage broker logins because SHOWMESH_BROKER_CONFIG_DIR is not set. Set it to the broker's config directory, mounted read-write, and restart the coordinator.")
+		return unavailable("The coordinator cannot manage broker logins: SHOWMESH_BROKER_CONFIG_DIR is not set. Set it and restart the coordinator.")
 	}
 	for _, name := range []string{passwdFileName, aclBaseFileName} {
 		f, err := os.Open(b.path(name))
 		if err != nil {
-			return unavailable("The coordinator cannot read %s. Run deploy/mosquitto/generate-credentials.sh and check the directory's owner and mode, then try again.", b.path(name))
+			return unavailable("The coordinator cannot read %s. Run deploy/mosquitto/generate-credentials.sh, then check its owner and mode.", b.path(name))
 		}
 		_ = f.Close()
 	}
 	if _, err := os.Stat(b.path(aclMigrationMarker)); err != nil {
-		return unavailable("The broker access list has not been migrated in %s. Run deploy/mosquitto/generate-credentials.sh --migrate-existing, then try again.", b.dir)
+		return unavailable("The broker access list in %s is not migrated. Run deploy/mosquitto/generate-credentials.sh --migrate-existing.", b.dir)
 	}
 	probe, err := os.CreateTemp(b.dir, ".showmesh-write-check-")
 	if err != nil {
-		return unavailable("The coordinator cannot write to %s. Mount it read-write and give the coordinator write access, then try again.", b.dir)
+		return unavailable("The coordinator cannot write to %s. Mount it read-write for the coordinator.", b.dir)
 	}
 	_ = probe.Close()
 	_ = os.Remove(probe.Name())
@@ -165,14 +165,14 @@ func randomBrokerPassword() (string, error) {
 func writeFileAtomic(dir, name string, data []byte, mode fs.FileMode) error {
 	tmp, err := os.CreateTemp(dir, "."+name+".tmp-")
 	if err != nil {
-		return unavailable("The coordinator cannot write to %s. Mount it read-write and give the coordinator write access, then try again.", dir)
+		return unavailable("The coordinator cannot write to %s. Mount it read-write for the coordinator.", dir)
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
 	fail := func(what string, err error) error {
 		_ = tmp.Close()
 		cleanup()
-		return unavailable("The coordinator could not %s %s: %v. Check the directory's owner, mode and free space, then try again.", what, filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not %s %s: %v. Check its owner, mode and free space.", what, filepath.Join(dir, name), err)
 	}
 	if _, err := tmp.Write(data); err != nil {
 		return fail("write", err)
@@ -185,11 +185,11 @@ func writeFileAtomic(dir, name string, data []byte, mode fs.FileMode) error {
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		return unavailable("The coordinator could not write %s: %v. Check the directory's owner, mode and free space, then try again.", filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not write %s: %v. Check its owner, mode and free space.", filepath.Join(dir, name), err)
 	}
 	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
 		cleanup()
-		return unavailable("The coordinator could not replace %s: %v. Check the directory's owner and mode, then try again.", filepath.Join(dir, name), err)
+		return unavailable("The coordinator could not replace %s: %v. Check its owner and mode.", filepath.Join(dir, name), err)
 	}
 	if err := syncDir(dir); err != nil {
 		return unavailable("The coordinator replaced %s but could not flush %s: %v. Check the disk, then try again.", filepath.Join(dir, name), dir, err)

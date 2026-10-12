@@ -236,9 +236,8 @@ func mapReleaseSettingsConfigResponse(now time.Time, rev store.ConfigRevisionRec
 func releaseSettingsEnvVarSetProblem() v1.Problem {
 	return v1.Problem{
 		Type: ProblemTypeConflict, Status: http.StatusConflict,
-		Title: "The release check cannot be changed yet",
-		Detail: "The release check is still set in the coordinator's environment. Remove SHOWMESH_RELEASE_CHECK " +
-			"and SHOWMESH_RELEASE_CHECK_INTERVAL, then restart the coordinator.",
+		Title:  "The release check cannot be changed yet",
+		Detail: "Not saved: the release check is set in the environment. Remove SHOWMESH_RELEASE_CHECK and SHOWMESH_RELEASE_CHECK_INTERVAL, then restart.",
 	}
 }
 

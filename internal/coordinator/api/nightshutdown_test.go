@@ -187,7 +187,7 @@ func TestNightFadingOut_AmbiguousStopDegradesAndNeverReportsStopped(t *testing.T
 	if !got.Degraded {
 		t.Fatalf("session is not degraded after an unconfirmed stop past its deadline: %+v", got)
 	}
-	if !strings.Contains(got.DegradedReason, "not reported stopped") {
+	if !strings.Contains(got.DegradedReason, "was not seen idle") {
 		t.Fatalf("degradedReason = %q, want it to state the stop was not confirmed", got.DegradedReason)
 	}
 }
