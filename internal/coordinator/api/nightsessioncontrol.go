@@ -845,11 +845,8 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 // unreachable node costs this pass a full audioCommandConfirmDeadline
 // (15s) PER distinct session, unbounded by session count.
 //
-// Real time.Now(), deliberately independent of h.now() (Options.Clock,
-// fixed in tests to make STAMPED timestamps deterministic) — the
-// identical split confirmFPPCommand's own doc comment explains for the
-// same reason: a wait paced by a clock that never advances would never
-// end.
+// Read from h.now(), so a test drives the budget by advancing Options.Clock;
+// a clock that never advances only means the budget never runs out.
 //
 // A var, not a const, so a test can drive it to prove the bound the way
 // nightInterlockAggregateDispatchBudget already is.
@@ -890,7 +887,7 @@ var nightAnnouncementResetAtPrepareSiteBudget = 2 * audioCommandConfirmDeadline
 func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
 	dispatchCtx, cancel := nightBoundInterlockDispatch(ctx)
 	defer cancel()
-	budgetDeadline := time.Now().Add(nightAnnouncementResetAtPrepareSiteBudget)
+	budgetDeadline := h.now().Add(nightAnnouncementResetAtPrepareSiteBudget)
 	seen := map[string]bool{}
 	skipped := 0
 	for _, cue := range payload.EnterShow.Cues {
@@ -912,7 +909,7 @@ func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Conte
 // clear twice. Also skips - and reports as skipped via its own return
 // value - a pair reached after budgetDeadline: see
 // nightAnnouncementResetAtPrepareSiteBudget's own doc comment for why
-// that check happens here, in real wall-clock time, rather than through
+// that check happens here, against h.now(), rather than through
 // ctx.
 func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
 	target, _, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
@@ -936,7 +933,7 @@ func (h *handlers) nightResetAnnouncementNodeSessionOnce(ctx context.Context, no
 	}
 	seen[key] = true
 
-	if !time.Now().Before(budgetDeadline) {
+	if !h.now().Before(budgetDeadline) {
 		return 1
 	}
 
