@@ -2918,6 +2918,30 @@ describe('ApiStore: fallback programs (ADR-048, Track J’s J1)', () => {
     expect(resp.programs[0]?.packageId).toBe('pkg-1')
   })
 
+  it('getSystemVersions() GETs /system/versions and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        coordinator: { version: '0.2.0' },
+        nodes: [{ id: 'node-a', version: '0.2.0', reason: null, mismatch: false, warning: null }],
+        plugins: [],
+        release: {
+          checkEnabled: true, checkIntervalSeconds: 21600, checkedAt: null, tag: null,
+          publishedAt: null, installCommand: null, available: false, problem: null,
+        },
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getSystemVersions()
+
+    expect(gotPath).toBe('/system/versions')
+    expect(resp.coordinator.version).toBe('0.2.0')
+    expect(resp.nodes[0]?.id).toBe('node-a')
+  })
+
   it('listFallbackPrograms() rejects with a typed error on 404 (older coordinator, route unknown)', async () => {
     const s = await server((_req, res) => {
       respondProblem(res, 404, makeProblem({

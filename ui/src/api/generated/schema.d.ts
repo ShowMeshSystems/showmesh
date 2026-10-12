@@ -69,6 +69,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Component versions and the newest release
+         * @description The coordinator's version, each node's agent version and each FPP player's plugin version from its last report, and the cached answer of the newest-release check. The request never waits on the release check: `release` is the last answer and `release.checkedAt` is when it was fetched. Read-only; upgrading a node from the coordinator is not part of this API.
+         */
+        get: operations["getSystemVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes": {
         parameters: {
             query?: never;
@@ -4562,6 +4582,46 @@ export interface components {
             gap: boolean;
             oldestRetainedSeq: number | null;
         };
+        SystemVersionsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            coordinator: {
+                version: string;
+            };
+            nodes: components["schemas"]["SystemComponentVersion"][];
+            /** @description One entry per configured FPP player. */
+            plugins: components["schemas"]["SystemComponentVersion"][];
+            release: components["schemas"]["SystemRelease"];
+        };
+        SystemComponentVersion: {
+            id: string;
+            /** @description The version from the component's last report. */
+            version: string | null;
+            /** @description Why `version` is null. */
+            reason: string | null;
+            /** @description True when the coordinator's compatibility rule does not accept `version`. Before 1.0.0 only the same version is accepted; from 1.0.0 the same major version is. */
+            mismatch: boolean;
+            /** @description The operator's one line, set only when `mismatch` is true. */
+            warning: string | null;
+        };
+        SystemRelease: {
+            checkEnabled: boolean;
+            checkIntervalSeconds: number;
+            /**
+             * Format: date-time
+             * @description When the answer below was fetched.
+             */
+            checkedAt: string | null;
+            tag: string | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+            /** @description The one line that installs or upgrades to `tag`. */
+            installCommand: string | null;
+            /** @description True when `tag` is a later version than the coordinator's. */
+            available: boolean;
+            /** @description Why the latest check produced no answer. */
+            problem: string | null;
+        };
         CurrentRunsResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -8505,6 +8565,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentRunsResponse"];
+                };
+            };
+            400: components["responses"]["UnsupportedAPIVersion"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSystemVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemVersionsResponse"];
                 };
             };
             400: components["responses"]["UnsupportedAPIVersion"];

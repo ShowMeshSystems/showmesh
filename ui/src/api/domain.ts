@@ -535,6 +535,9 @@ export type FPPPlaylistEntryObservationsResponse = components['schemas']['FPPPla
 // posture as the FPP playlist types above.
 export type FallbackProgramListEntry = components['schemas']['FallbackProgramListEntry']
 export type FallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+export type SystemVersionsResponse = components['schemas']['SystemVersionsResponse']
+export type SystemComponentVersion = components['schemas']['SystemComponentVersion']
+export type SystemRelease = components['schemas']['SystemRelease']
 export type FallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 
 /**

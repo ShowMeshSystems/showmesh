@@ -180,6 +180,7 @@ type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlay
 // evidence for FPP's coordinator-loss fallback.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
 type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
+type SchemaSystemVersionsResponse = components['schemas']['SystemVersionsResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -955,6 +956,16 @@ export class ApiStore {
         `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}/entries`,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/system/versions`: every component's version and the cached newest-release answer. */
+  async getSystemVersions(): Promise<SchemaSystemVersionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaSystemVersionsResponse>('/system/versions', controller.signal)
     } finally {
       this.endSideCall(controller)
     }

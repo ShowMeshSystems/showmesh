@@ -70,6 +70,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// SHOWMESH_RESOLUME_RECOVERY_SETTLE also defaults regardless of
 		// whether the collector is active — see its own doc comment.
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		ReleaseCheckEnabled:    true,
+		ReleaseCheckInterval:   defaultReleaseCheckInterval,
 		BrokerMode:             "builtin",
 	}
 
@@ -115,6 +117,8 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		FPPMQTTTopicPrefix:     "falcon/player",
 		ResolumeID:             "resolume",
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		ReleaseCheckEnabled:    true,
+		ReleaseCheckInterval:   defaultReleaseCheckInterval,
 		BrokerMode:             "builtin",
 	}
 
@@ -1195,5 +1199,22 @@ func TestConfigLogValueAssetContentBaseURLVisible(t *testing.T) {
 
 	if !strings.Contains(rendered, "coordinator.example:8443") {
 		t.Errorf("Config.LogValue() output = %s, want it to name the configured asset content base URL", rendered)
+	}
+}
+
+func TestReleaseCheckSettingsFromEnv(t *testing.T) {
+	env := map[string]string{"SHOWMESH_RELEASE_CHECK": "false", "SHOWMESH_RELEASE_CHECK_INTERVAL": "1m"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+
+	cfg, err := LoadConfigFrom(lookup)
+	if err != nil {
+		t.Fatalf("LoadConfigFrom: %v", err)
+	}
+	if cfg.ReleaseCheckEnabled || cfg.ReleaseCheckInterval != time.Minute {
+		t.Fatalf("enabled = %v, interval = %v, want off and 1m", cfg.ReleaseCheckEnabled, cfg.ReleaseCheckInterval)
+	}
+	env["SHOWMESH_RELEASE_CHECK"] = "true"
+	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at least 5m0s") {
+		t.Fatalf("LoadConfigFrom = %v, want the interval refused", err)
 	}
 }

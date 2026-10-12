@@ -64,6 +64,10 @@ var deploymentPostureEnvVars = map[string]string{
 		"enrolled node, set by the installer beside that broker's address",
 	"SHOWMESH_NODE_MQTT_PASSWORD": "ADR-055 decision 8: the shared login an external broker hands every " +
 		"enrolled node, set by the installer beside that broker's address",
+	"SHOWMESH_RELEASE_CHECK": "whether this host may reach GitHub to ask for the newest release is a property " +
+		"of the host's network, decided when the coordinator is stood up; defaults on and never blocks a request",
+	"SHOWMESH_RELEASE_CHECK_INTERVAL": "how often that same outbound request is made; the checker's timer is " +
+		"built once at startup, defaults to six hours",
 }
 
 // tuningKnobEnvVars is a third group: values explicitly documented in

@@ -29,6 +29,7 @@ import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
 import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
+import { SettingsReleaseCheck } from './SystemVersions'
 import { brightnessReadout, normalizePairingCode, pairingSentence, type SignalFact } from './fppPairingModel'
 
 type Load<R> = { kind: 'loading' } | { kind: 'loaded'; response: R } | { kind: 'notConfigured'; detail: string } | { kind: 'failed'; reason: string }
@@ -585,6 +586,8 @@ export function SettingsConnections() {
           Discard changes
         </Button>
       </ButtonRow>
+
+      <SettingsReleaseCheck />
 
       <Drawer open={detailInstanceId !== null} onClose={() => setDetailInstanceId(null)} labelledBy="fpp-instance-detail-title" width="wide">
         {detailInstanceId !== null && <FPPInstanceDetail instanceId={detailInstanceId} />}

@@ -87,6 +87,9 @@ type Dependencies struct {
 	// *StatusStore — so no withDefaults() entry is needed.
 	FPPConnectStatus *fppconnectpush.StatusStore
 
+	// Releases is the newest-release check's cached answer. Nil reads as turned off.
+	Releases ReleaseStatusReader
+
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
 	// replaced by [noRenderPublisher], under which every render.* dispatch
@@ -1929,6 +1932,7 @@ func New(deps Dependencies, opts Options) *API {
 	// It uses the same all-read-scope guard as snapshot because one response
 	// may contain FPP, audio-node, observation, and active-show context.
 	mux.HandleFunc("GET /api/v1/current-runs", h.readGuardAll(readAllScopes, h.handleCurrentRuns))
+	mux.HandleFunc("GET /api/v1/system/versions", h.readGuardAll(readAllScopes, h.handleSystemVersions))
 	mux.HandleFunc("GET /api/v1/nodes", h.readGuard(identity.ScopeNodeRead, h.handleNodes))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))

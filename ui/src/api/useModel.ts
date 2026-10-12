@@ -128,6 +128,7 @@ type SchemaFPPDefinitionRepublishResponse = components['schemas']['FPPDefinition
 // ADR-048, Track J's J1: the fallback-program metadata list and one
 // host's full signed-program read.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaSystemVersionsResponse = components['schemas']['SystemVersionsResponse']
 type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
@@ -285,6 +286,10 @@ export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsRespons
 // thin pass-through pattern as every method above.
 export function listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
   return store.listFallbackPrograms()
+}
+
+export function getSystemVersions(): Promise<SchemaSystemVersionsResponse> {
+  return store.getSystemVersions()
 }
 
 export function getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {

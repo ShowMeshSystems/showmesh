@@ -100,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdPrincipal(rest, stdout, stderr, clock)
 	case "token":
 		return cmdToken(rest, stdout, stderr, clock)
+	case "system":
+		return cmdSystem(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -509,6 +511,7 @@ Commands:
   token revoke <principalId> <tokenId>
                            revoke an API token (write; refused 409 if this is the last
                            credential able to reach principal:write, ADR-039)
+  system versions          every component's version, a warning per mismatch, and the newest release
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

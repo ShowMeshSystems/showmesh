@@ -1,0 +1,199 @@
+package versions
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/observation"
+)
+
+type fakeFetcher struct {
+	release Release
+	err     error
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (f *fakeFetcher) LatestRelease(ctx context.Context) (Release, error) {
+	if f.started != nil {
+		close(f.started)
+		select {
+		case <-f.unblock:
+		case <-ctx.Done():
+			return Release{}, ctx.Err()
+		}
+	}
+	return f.release, f.err
+}
+
+var checkTime = time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+
+func fixedNow() time.Time { return checkTime }
+
+func TestCheckerCachesTheAnswerAndWhenItWasFetched(t *testing.T) {
+	rel := Release{Tag: "v0.3.0", PublishedAt: checkTime.Add(-48 * time.Hour)}
+	var published []Status
+	c := NewChecker(&fakeFetcher{release: rel}, true, time.Hour, fixedNow, nil, func(s Status) { published = append(published, s) })
+
+	if got := c.Status(); got.Release != nil || !got.CheckedAt.IsZero() || !got.Enabled {
+		t.Fatalf("before the first check: %+v", got)
+	}
+	c.CheckOnce(context.Background())
+	got := c.Status()
+	if got.Release == nil || *got.Release != rel || !got.CheckedAt.Equal(checkTime) || got.Problem != "" {
+		t.Fatalf("after the check: %+v", got)
+	}
+	if len(published) != 1 || published[0].Release == nil {
+		t.Fatalf("published = %+v, want the one answer", published)
+	}
+}
+
+func TestCheckerKeepsTheLastAnswerWhenALaterCheckFails(t *testing.T) {
+	f := &fakeFetcher{release: Release{Tag: "v0.3.0"}}
+	c := NewChecker(f, true, time.Hour, fixedNow, nil, nil)
+	c.CheckOnce(context.Background())
+	f.err = errors.New("dial tcp: no route to host")
+	c.CheckOnce(context.Background())
+
+	got := c.Status()
+	if got.Release == nil || got.Release.Tag != "v0.3.0" {
+		t.Fatalf("the last answer was dropped: %+v", got)
+	}
+	if got.Problem != "GitHub could not be reached. The coordinator will try again." {
+		t.Fatalf("Problem = %q", got.Problem)
+	}
+}
+
+func TestCheckerReportsARepositoryWithNoRelease(t *testing.T) {
+	c := NewChecker(&fakeFetcher{err: ErrNoRelease}, true, time.Hour, fixedNow, nil, nil)
+	c.CheckOnce(context.Background())
+	if got := c.Status().Problem; got != "GitHub lists no published ShowMesh release yet." {
+		t.Fatalf("Problem = %q", got)
+	}
+}
+
+func TestStatusNeverWaitsForACheckInProgress(t *testing.T) {
+	f := &fakeFetcher{release: Release{Tag: "v0.3.0"}, started: make(chan struct{}), unblock: make(chan struct{})}
+	c := NewChecker(f, true, time.Hour, fixedNow, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	<-f.started
+
+	answered := make(chan Status, 1)
+	go func() { answered <- c.Status() }()
+	select {
+	case got := <-answered:
+		if got.Release != nil {
+			t.Fatalf("Status returned an answer the blocked check never produced: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Status waited for the check in progress")
+	}
+	cancel()
+	<-done
+}
+
+func TestDisabledCheckerNeverFetches(t *testing.T) {
+	f := &fakeFetcher{started: make(chan struct{})}
+	var published []Status
+	c := NewChecker(f, false, time.Hour, fixedNow, nil, func(s Status) { published = append(published, s) })
+	c.Run(context.Background())
+	select {
+	case <-f.started:
+		t.Fatal("a disabled checker fetched")
+	default:
+	}
+	if len(published) != 1 || published[0].Enabled {
+		t.Fatalf("published = %+v, want one disabled status", published)
+	}
+	var nilChecker *Checker
+	if nilChecker.Status().Enabled {
+		t.Fatal("a nil checker reads as enabled")
+	}
+}
+
+func TestNewCheckerDefaultsTheInterval(t *testing.T) {
+	if got := NewChecker(&fakeFetcher{}, true, 0, fixedNow, nil, nil).Status().Interval; got != DefaultCheckInterval {
+		t.Fatalf("Interval = %v, want %v", got, DefaultCheckInterval)
+	}
+}
+
+func TestObservationsCarryTheThreeSignals(t *testing.T) {
+	s := Status{Enabled: true, Release: &Release{Tag: "v0.3.0"}, CheckedAt: checkTime}
+	obs := Observations(s, "0.2.0", checkTime.Add(time.Minute))
+	want := map[observation.SignalID]any{
+		SignalNewestTag: "v0.3.0",
+		SignalCheckedAt: "2026-10-12T18:00:00Z",
+		SignalAvailable: true,
+	}
+	if len(obs) != len(want) {
+		t.Fatalf("got %d observations, want %d", len(obs), len(want))
+	}
+	for _, o := range obs {
+		if o.Value != want[o.Signal] || o.Source != SourceID || o.Resource.Kind != observation.ResourceCoordinator {
+			t.Errorf("observation %+v, want value %v from %s", o, want[o.Signal], SourceID)
+		}
+	}
+}
+
+func TestObservationsSayWhyThereIsNoAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		status Status
+		state  observation.State
+	}{
+		{Status{Enabled: false}, observation.StateNotCollected},
+		{Status{Enabled: true}, observation.StateNotCollected},
+		{Status{Enabled: true, Problem: "GitHub could not be reached. The coordinator will try again."}, observation.StateCollectionFailed},
+	} {
+		obs := Observations(tc.status, "0.2.0", checkTime)
+		if len(obs) != 3 {
+			t.Fatalf("%+v: got %d observations, want 3", tc.status, len(obs))
+		}
+		for _, o := range obs {
+			if o.Absence != tc.state || o.Reason == "" {
+				t.Errorf("%+v: observation %+v, want absence %s with a reason", tc.status, o, tc.state)
+			}
+		}
+	}
+}
+
+func TestGitHubFetcherReadsTheNewestRelease(t *testing.T) {
+	var agent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"tag_name":"v0.3.0","published_at":"2026-10-10T12:00:00Z","body":"notes"}`))
+	}))
+	defer srv.Close()
+	f := &GitHubFetcher{Client: srv.Client(), URL: srv.URL, UserAgent: "showmesh-coordinator/0.2.0"}
+
+	rel, err := f.LatestRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.Tag != "v0.3.0" || !rel.PublishedAt.Equal(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("release = %+v", rel)
+	}
+	if agent != "showmesh-coordinator/0.2.0" {
+		t.Fatalf("User-Agent = %q", agent)
+	}
+}
+
+func TestGitHubFetcherTellsNoReleaseFromAFailure(t *testing.T) {
+	status := http.StatusNotFound
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+	defer srv.Close()
+	f := &GitHubFetcher{Client: srv.Client(), URL: srv.URL}
+
+	if _, err := f.LatestRelease(context.Background()); !errors.Is(err, ErrNoRelease) {
+		t.Fatalf("404: err = %v, want ErrNoRelease", err)
+	}
+	status = http.StatusForbidden
+	if _, err := f.LatestRelease(context.Background()); err == nil || errors.Is(err, ErrNoRelease) {
+		t.Fatalf("403: err = %v, want a plain failure", err)
+	}
+}

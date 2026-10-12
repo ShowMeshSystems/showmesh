@@ -234,6 +234,37 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /system/versions:
+    get:
+      operationId: getSystemVersions
+      summary: Component versions and the newest release
+      description: >-
+        The coordinator's version, each node's agent version and each FPP
+        player's plugin version from its last report, and the cached answer
+        of the newest-release check. The request never waits on the release
+        check: `release` is the last answer and `release.checkedAt` is when
+        it was fetched. Read-only; upgrading a node from the coordinator is
+        not part of this API.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionsResponse"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /nodes:
     get:
       operationId: listNodes
@@ -13533,6 +13564,75 @@ components:
           type: boolean
         oldestRetainedSeq:
           type: [integer, "null"]
+    SystemVersionsResponse:
+      type: object
+      required: [serverTime, coordinator, nodes, plugins, release]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        coordinator:
+          type: object
+          required: [version]
+          properties:
+            version: {type: string}
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SystemComponentVersion"
+        plugins:
+          type: array
+          description: One entry per configured FPP player.
+          items:
+            $ref: "#/components/schemas/SystemComponentVersion"
+        release:
+          $ref: "#/components/schemas/SystemRelease"
+    SystemComponentVersion:
+      type: object
+      required: [id, version, reason, mismatch, warning]
+      properties:
+        id: {type: string}
+        version:
+          type: [string, "null"]
+          description: The version from the component's last report.
+        reason:
+          type: [string, "null"]
+          description: Why `version` is null.
+        mismatch:
+          type: boolean
+          description: >-
+            True when the coordinator's compatibility rule does not accept
+            `version`. Before 1.0.0 only the same version is accepted; from
+            1.0.0 the same major version is.
+        warning:
+          type: [string, "null"]
+          description: The operator's one line, set only when `mismatch` is true.
+    SystemRelease:
+      type: object
+      required:
+        [checkEnabled, checkIntervalSeconds, checkedAt, tag, publishedAt,
+         installCommand, available, problem]
+      properties:
+        checkEnabled: {type: boolean}
+        checkIntervalSeconds: {type: integer}
+        checkedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the answer below was fetched.
+        tag:
+          type: [string, "null"]
+        publishedAt:
+          type: [string, "null"]
+          format: date-time
+        installCommand:
+          type: [string, "null"]
+          description: The one line that installs or upgrades to `tag`.
+        available:
+          type: boolean
+          description: True when `tag` is a later version than the coordinator's.
+        problem:
+          type: [string, "null"]
+          description: Why the latest check produced no answer.
     CurrentRunsResponse:
       type: object
       required: [serverTime, activeShow, runs]

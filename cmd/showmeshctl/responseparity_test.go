@@ -66,6 +66,7 @@ var getResponseTypeOverrides = map[string]string{
 	"GET /config/resolume/composition":     "resolumeCompositionResponse",
 	"GET /night/session":                   "nightSessionLifecycleResponse",
 	"GET /nodes":                           "nodesResponse",
+	"GET /system/versions":                 "systemVersionsResponse",
 	"GET /resolume/recovery":               "resolumeRecoveryResponse",
 	"GET /node-enrollments":                "nodeEnrollmentsResponse",
 }
