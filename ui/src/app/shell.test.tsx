@@ -266,6 +266,7 @@ describe('app shell', () => {
       'Assets',
       'Monitor',
       'Settings',
+      'Access',
     ])
   })
 

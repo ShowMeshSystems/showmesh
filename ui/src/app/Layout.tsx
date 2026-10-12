@@ -933,6 +933,7 @@ export function Layout() {
           <RailGroup>System</RailGroup>
           <RailLink to="/monitor">Monitor</RailLink>
           <RailLink to="/settings">Settings</RailLink>
+          <RailLink to="/access">Access</RailLink>
           <RailFooter>
             <RailAccount>{account}</RailAccount>
             <RailBuild />

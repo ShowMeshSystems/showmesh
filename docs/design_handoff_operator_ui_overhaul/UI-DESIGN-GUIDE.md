@@ -186,12 +186,12 @@ proven on phone hardware in the owner's hand.
 
 ## 3. Information architecture
 
-Seven rail destinations (`ui/src/app/Layout.tsx`). Do not add an eighth without deleting one.
+Up to ten rail destinations (`ui/src/app/Layout.tsx`).
 
 ```
 Operate   Dashboard · Show Night · Live Control (Resolume as its one sub-link)
 Author    Shows · Assets
-System    Monitor · Settings
+System    Monitor · Settings · Access
 ```
 
 - **Monitor** has five facets: **Fleet · Signals · Activity · Capabilities · Manifest**. They are
@@ -202,8 +202,8 @@ System    Monitor · Settings
 - **Shows** owns a six-tab workspace: **Playlists · Cues · Assets · Presentation · Automation ·
   Night session.** No tab navigates out of the show.
 - **Settings** has seven tabs: Connections · Content delivery · Render recovery · Appearance · Audio
-  defaults · Node routing · Mode, plus the Resolume configuration routes beneath it. Access sits in
-  the same tab row as a leaving link to `/access`, outside the seven and off the rail.
+  defaults · Node routing · Mode, plus the Resolume configuration routes beneath it. Access is the
+  eighth rail destination and sits on the rail under System.
 
 **Rail badges are attention counts, never inventory counts.** A badge means an operator has
 something to do. A signed-out or not-yet-read device shows **no badges at all**: an attention count

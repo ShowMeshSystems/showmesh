@@ -162,7 +162,7 @@ describe('Settings tab strip', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders the Resolume settings tab and the Access link, which navigates out rather than rendering a panel', async () => {
+  it('lists the Settings tabs, with no Access link because Access is on the rail', async () => {
     stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
@@ -170,7 +170,7 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(11)
+    expect(tabs).toHaveLength(10)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
@@ -182,11 +182,8 @@ describe('Settings tab strip', () => {
       'Node enrollment',
       'Mode',
       'Resolume',
-      'Access ↗',
     ])
-
-    fireEvent.click(within(nav).getByRole('link', { name: /Access/ }))
-    expect(await screen.findByText('access page')).toBeInTheDocument()
+    expect(within(nav).queryByRole('link', { name: /Access/ })).not.toBeInTheDocument()
   })
 
   it('turns high contrast on and off with its checkbox', () => {
