@@ -238,9 +238,7 @@ func mapRenderSettingsPayload(p config.RenderSettingsPayload) v1.ConfigRenderSet
 // IdleOutputEffectiveNote]'s fixed text — see that field's own doc comment
 // for why a re-apply is required and why that has to be stated rather than
 // left silent.
-const idleOutputEffectiveNote = "idleOutput takes effect on each surface's own next render.surface.apply dispatch; " +
-	"a surface already applied keeps the idleOutput value resolved into its assignment when it was last applied " +
-	"until it is re-applied."
+const idleOutputEffectiveNote = "The idle output applies the next time each surface is applied. Apply a surface again to change it now."
 
 func mapRenderSettingsConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, payload config.RenderSettingsPayload) v1.RenderSettingsConfigResponse {
 	return v1.RenderSettingsConfigResponse{

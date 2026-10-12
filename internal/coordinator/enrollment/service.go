@@ -329,14 +329,14 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 
 	rec, err := s.st.GetNodeEnrollmentCodeByHash(ctx, HashCode(normalized))
 	if errors.Is(err, store.ErrNodeEnrollmentCodeNotFound) {
-		return Redeemed{}, opErr(ErrCodeNotFound, "This enrollment code is not known to the coordinator. Check the code, or mint a new one with showmeshctl node enroll.")
+		return Redeemed{}, opErr(ErrCodeNotFound, "This enrollment code is not known. Check it, or mint a new one with showmeshctl node enroll.")
 	}
 	if err != nil {
 		return Redeemed{}, err
 	}
 	switch codeFromRecord(rec, now).State {
 	case StateRedeemed:
-		return Redeemed{}, opErr(ErrCodeUsed, "This enrollment code has already been used. Mint a new one with showmeshctl node enroll --reenroll %s.", rec.NodeID)
+		return Redeemed{}, opErr(ErrCodeUsed, "This code has already been used. Mint a new one: showmeshctl node enroll --reenroll %s", rec.NodeID)
 	case StateCancelled:
 		return Redeemed{}, opErr(ErrCodeCancelled, "This enrollment code was cancelled. Mint a new one with showmeshctl node enroll %s.", rec.NodeID)
 	case StateExpired:
@@ -349,7 +349,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 	}
 	if !rec.Reenroll {
 		if hasPrevious {
-			return Redeemed{}, opErr(ErrAlreadyEnrolled, "Node %q was enrolled after this code was minted. Mint a re-enrollment code to replace its credentials.", nodeID)
+			return Redeemed{}, opErr(ErrAlreadyEnrolled, "Node %q was enrolled after this code was minted. Mint a re-enrollment code instead.", nodeID)
 		}
 		if s.cfg.BrokerMode == BrokerModeBuiltin {
 			hasLogin, err := s.broker.HasUser(nodeID)
@@ -367,7 +367,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 	case err == nil && hasPrevious && existing.ID == previous.PrincipalID:
 		reuseID = existing.ID
 	case err == nil:
-		return Redeemed{}, opErr(ErrPrincipalConflict, "A principal named %q already exists and was not created by enrollment. Rename it, then redeem the code again.", PrincipalName(nodeID))
+		return Redeemed{}, opErr(ErrPrincipalConflict, "A principal named %q already exists outside enrollment. Rename it, then redeem the code again.", PrincipalName(nodeID))
 	case !errors.Is(err, store.ErrPrincipalNotFound):
 		return Redeemed{}, redeemFailed("look up the node's principal", err)
 	}
@@ -378,7 +378,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 		password, undo, err := s.broker.Provision(nodeID)
 		if err != nil {
 			return Redeemed{}, &operatorError{kind: ErrRedeemFailed, cause: err,
-				msg: "The coordinator could not create the node's broker login, and the code is still valid. Check the coordinator's log, then try the code again."}
+				msg: "The node's broker login could not be created. The code is still valid; check the coordinator's log and retry."}
 		}
 		result.MQTTUsername, result.MQTTPassword, undoBroker = nodeID, password, undo
 	} else {
@@ -422,7 +422,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 			return identity.AuditEntry{}, err
 		}
 		if !marked {
-			return identity.AuditEntry{}, opErr(ErrCodeUsed, "This enrollment code was used or cancelled a moment ago. Mint a new one with showmeshctl node enroll.")
+			return identity.AuditEntry{}, opErr(ErrCodeUsed, "This code was just used or cancelled. Mint a new one with showmeshctl node enroll.")
 		}
 		return identity.AuditEntry{
 			Timestamp: now, PrincipalID: rec.CreatedBy, PrincipalName: rec.CreatedByName,
@@ -458,7 +458,7 @@ func undoFailedOr(reported, err, undoErr error) error {
 		return reported
 	}
 	return &operatorError{kind: ErrRedeemFailed, cause: errors.Join(err, undoErr),
-		msg: "The coordinator could not finish the enrollment or put the broker login files back. Check the broker config directory and the coordinator's log, then mint a new code."}
+		msg: "Enrollment did not finish and the broker login files were not restored. Check the broker config folder, then mint a new code."}
 }
 
 const maxFieldBytes = 128

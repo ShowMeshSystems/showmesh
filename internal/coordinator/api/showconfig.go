@@ -691,7 +691,7 @@ func parseRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1.Probl
 		rev, ok := parseQuotedRevisionETag(ifMatch)
 		if !ok {
 			p := invalidParameterProblem(fmt.Sprintf(
-				`If-Match %q is not a quoted revision integer of 1 or greater, e.g. "7" (the value of "revision" from a prior GET or PUT response, quoted; revisions start at 1, so "0" is refused as malformed rather than accepted as a second spelling of If-None-Match: "*")`, ifMatch))
+				`If-Match %q must be a quoted version number of 1 or more, like "7". Use the version from your last read.`, ifMatch))
 			return revisionPrecondition{}, &p
 		}
 		return revisionPrecondition{Mode: revisionPreconditionIfMatch, Revision: rev}, nil
@@ -930,7 +930,7 @@ func parseDeleteRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1
 	}
 	if precondition.Mode == revisionPreconditionIfNoneMatchCreate {
 		p := invalidParameterProblem(
-			`If-None-Match has no meaning on a DELETE (it asserts an id was never created); use If-Match to guard a delete against the revision you last read, or send neither`)
+			"If-None-Match has no meaning on a delete. Send If-Match with the version you last read, or neither.")
 		return revisionPrecondition{}, &p
 	}
 	return precondition, nil

@@ -363,7 +363,7 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 				if obsRec.EvidenceBrokenAt != nil {
 					playlistObservationRefused = &api.FPPPlaylistObservationRefusal{
 						Reason: fmt.Sprintf(
-							"FPP %s reported a playlist sequence lower than the last one this coordinator accepted (sequence %d), so it is refusing further reports. Clear the playlist observation on the Monitor screen, or run showmeshctl fpp reset-observation-sequence --confirm %s.",
+							"FPP %s sent an older playlist report (after %d) and is refused. Clear it on Monitor, or run: showmeshctl fpp reset-observation-sequence --confirm %s",
 							ep.ID, obsRec.Sequence, instanceUUID.UUID,
 						),
 						RefusedAt: *obsRec.EvidenceBrokenAt,

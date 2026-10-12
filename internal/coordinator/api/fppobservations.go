@@ -57,8 +57,7 @@ func fppObservationTooLargeProblem() v1.Problem {
 		Type:   ProblemTypeResolumeCompositionTooLarge,
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
-		Detail: "the request body exceeds this endpoint's 16384 byte limit; the complete playlist definition never " +
-			"travels in this body, only its hash, so a legitimate observation never needs more",
+		Detail: "The request body is over the 16384 byte limit. Send the playlist's hash, not the playlist.",
 	}
 }
 

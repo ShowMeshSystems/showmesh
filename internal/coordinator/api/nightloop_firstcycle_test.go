@@ -187,7 +187,7 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidenc
 	// The persisted record, not just a log line, must distinguish this
 	// coordinator-caused refusal from FPP genuinely reporting busy.
 	transition := mapNightTransition(got)
-	if !strings.Contains(transition.Reason, "coordinator's own evidence") {
+	if !strings.Contains(transition.Reason, "The last report that") {
 		t.Fatalf("transition reason = %q, want it to name the coordinator's own stale evidence, not just a busy refusal", transition.Reason)
 	}
 
@@ -257,7 +257,7 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	}
 	got := f.state(t)
 	transition := mapNightTransition(got)
-	if !strings.Contains(transition.Reason, "coordinator's own evidence") {
+	if !strings.Contains(transition.Reason, "The last report that") {
 		t.Fatalf("transition reason while stale = %q, want it to keep naming the coordinator's own stale evidence", transition.Reason)
 	}
 
@@ -278,7 +278,7 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 		t.Fatalf("stale-evidence-nudge-unproductive events = %d, want exactly 1", got)
 	}
 	fallbackTransition := mapNightTransition(f.state(t))
-	if !strings.Contains(fallbackTransition.Reason, "coordinator's own evidence") {
+	if !strings.Contains(fallbackTransition.Reason, "The last report that") {
 		t.Fatalf("transition reason after the fallback refusal = %q, want it to still name the coordinator's own stale evidence", fallbackTransition.Reason)
 	}
 

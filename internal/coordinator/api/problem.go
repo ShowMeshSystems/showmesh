@@ -343,7 +343,7 @@ func csrfProblem() v1.Problem {
 		// ADR-024 decision 6: a cookie-authenticated write must come from
 		// the same origin. A bearer-token request carries no ambient
 		// cookie for a cross-site page to ride, so it is exempt.
-		Detail: "A cookie-authenticated write must come from the same origin. This request carried neither Sec-Fetch-Site: same-origin nor an Origin header naming the host it was addressed as. A bearer-token request is exempt from this check.",
+		Detail: "A cookie-authenticated write must come from the same origin. Send Sec-Fetch-Site: same-origin or a matching Origin header.",
 	}
 }
 
@@ -371,7 +371,7 @@ func loginCSRFProblem() v1.Problem {
 		// to signing in itself: no bearer exemption here, unlike
 		// [csrfProblem], because signing in has no pre-existing credential
 		// yet that could be bearer-shaped in the first place.
-		Detail: "Signing in must come from the same origin. This request carried neither Sec-Fetch-Site: same-origin nor an Origin header naming the host it was addressed as. There is no bearer-token exemption for this request.",
+		Detail: "Sign-in must come from the same origin. Send Sec-Fetch-Site: same-origin or a matching Origin header.",
 	}
 }
 
@@ -437,8 +437,7 @@ func fppEndpointsEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_FPP_ENDPOINTS is still set",
 		Status: http.StatusConflict,
-		Detail: "SHOWMESH_FPP_ENDPOINTS is still set, so this write was refused: it would conflict with that " +
-			"variable on the next restart. Remove SHOWMESH_FPP_ENDPOINTS, restart this coordinator, then retry.",
+		Detail: "Not saved: SHOWMESH_FPP_ENDPOINTS is still set. Remove it, restart the coordinator, then retry.",
 	}
 }
 
@@ -464,8 +463,7 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
-			"volume and restart; do not clear SHOWMESH_FPP_ENDPOINTS.",
+		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear SHOWMESH_FPP_ENDPOINTS.",
 	}
 }
 
@@ -479,9 +477,7 @@ func resolumeInstancesEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_RESOLUME_URL is still set",
 		Status: http.StatusConflict,
-		Detail: "SHOWMESH_RESOLUME_URL is still set, so this write was refused: it would conflict with that " +
-			"variable on the next restart. Remove SHOWMESH_RESOLUME_URL and SHOWMESH_RESOLUME_ID, restart this " +
-			"coordinator, then retry.",
+		Detail: "Not saved: SHOWMESH_RESOLUME_URL is still set. Remove it and SHOWMESH_RESOLUME_ID, restart the coordinator, then retry.",
 	}
 }
 
@@ -495,8 +491,7 @@ func resolumeInstancesMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
-			"volume and restart; do not clear SHOWMESH_RESOLUME_URL or SHOWMESH_RESOLUME_ID.",
+		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear SHOWMESH_RESOLUME_URL or SHOWMESH_RESOLUME_ID.",
 	}
 }
 
@@ -510,10 +505,7 @@ func fppMQTTEnvVarSetProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_FPP_MQTT_BROKER_URL is still set",
 		Status: http.StatusConflict,
-		Detail: "SHOWMESH_FPP_MQTT_BROKER_URL is still set, so this write was refused: it would conflict with that " +
-			"variable on the next restart. Remove SHOWMESH_FPP_MQTT_BROKER_URL, SHOWMESH_FPP_MQTT_USERNAME, " +
-			"SHOWMESH_FPP_MQTT_PASSWORD, SHOWMESH_FPP_MQTT_TOPIC_PREFIX, and SHOWMESH_FPP_MQTT_HOSTS, restart this " +
-			"coordinator, then retry.",
+		Detail: "Not saved: the SHOWMESH_FPP_MQTT_* variables are still set. Remove them, restart the coordinator, then retry.",
 	}
 }
 
@@ -527,8 +519,7 @@ func fppMQTTMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
-			"volume and restart; do not clear the SHOWMESH_FPP_MQTT_* variables.",
+		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear the SHOWMESH_FPP_MQTT_* variables.",
 	}
 }
 
@@ -541,12 +532,9 @@ func fppMQTTMigrationDeferredProblem() v1.Problem {
 func assetsSettingsEnvVarSetProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Configuration write refused: one or more SHOWMESH_ASSET_* settings variables are still set",
+		Title:  "Not saved: SHOWMESH_ASSET_* settings variables are still set",
 		Status: http.StatusConflict,
-		Detail: "One or more of SHOWMESH_ASSET_CONTENT_BASE_URL, SHOWMESH_ASSET_MAX_UPLOAD_BYTES, " +
-			"SHOWMESH_ASSET_SYNC_INTERVAL, or SHOWMESH_ASSET_INVENTORY_INTERVAL is still set, so this write was " +
-			"refused: it would conflict with those variables on the next restart. Remove all four from your " +
-			"environment (SHOWMESH_ASSET_DIR stays environment-only) and restart this coordinator, then retry.",
+		Detail: "Not saved: SHOWMESH_ASSET_CONTENT_BASE_URL, _MAX_UPLOAD_BYTES, _SYNC_INTERVAL or _INVENTORY_INTERVAL is still set. Remove them, restart, then retry.",
 	}
 }
 
@@ -561,8 +549,7 @@ func assetsSettingsMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Config write refused: the coordinator's data volume is unwritable, so nothing was saved. Fix the " +
-			"volume and restart; do not clear the SHOWMESH_ASSET_* settings variables.",
+		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear the SHOWMESH_ASSET_* variables.",
 	}
 }
 
@@ -608,9 +595,7 @@ func cueCatalogClaimConflictProblem(nodeID string, conflicts []assetsync.Catalog
 		Title:  "Cue catalog deploy refused: conflicting exclusive claims",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"the Cue catalog resolved for node %q cannot be deployed: %s. Fix the authoring conflict (change one "+
-				"Cue's outputs, or the Playlists that reference it), or resend with override: true to deploy anyway "+
-				"and accept the conflict.",
+			"The Cue list for node %q has a conflict: %s. Fix the Cues, or deploy anyway with override.",
 			nodeID, strings.Join(details, "; ")),
 	}
 }
@@ -629,9 +614,7 @@ func showmeshAudioPlaylistConflictProblem(existingID, newID string) v1.Problem {
 		Title:  "Refused: this Show already has a showmesh-audio playlist",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"show.playlist %q is already this Show's showmesh-audio playlist; there is exactly one background-audio "+
-				"session per node, so a second one (%q) is refused rather than silently choosing between them. Edit "+
-				"%q instead, or change its runner, then retry.",
+			"Playlist %q already plays this show's background audio, so %q was refused. Edit %q instead.",
 			existingID, newID, existingID),
 	}
 }
@@ -650,9 +633,7 @@ func sequenceFilenameClaimConflictProblem(cueA, cueB, filename string) v1.Proble
 		Title:  "Invalid show configuration",
 		Status: http.StatusBadRequest,
 		Detail: fmt.Sprintf(
-			"cues %q and %q both claim FPP sequence filename %q; a node cannot tell which Cue's audio a MultiSync "+
-				"START packet for that filename starts, so this is refused. Change one Cue's Playlist entry or its "+
-				"render output so the filename is claimed by only one Cue.",
+			"Cues %q and %q both use sequence file %q. Change one so each file belongs to one Cue.",
 			cueA, cueB, filename),
 	}
 }
@@ -662,7 +643,7 @@ func discoveryRunConflictProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Discovery run already in progress",
 		Status: http.StatusConflict,
-		Detail: "Another discovery run is already in progress, so this request was refused rather than queued. Wait for it to finish, then try again.",
+		Detail: "Another discovery run is in progress. Wait for it to finish, then try again.",
 	}
 }
 
@@ -674,7 +655,7 @@ func alignmentRunAlreadyActiveProblem(activeRunID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Audio alignment run already active",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf("this node already has an active audio alignment run (id %q); stop it before starting another", activeRunID),
+		Detail: fmt.Sprintf("This node already has an alignment run (%q). Stop it before starting another.", activeRunID),
 	}
 }
 
@@ -698,8 +679,7 @@ func fppCommandReplayConflictProblem(existingID, existingAction, existingTargetI
 		// was first used against — this is that scope stated in the wire
 		// text, not a citation of where the rule is defined.
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, instance %q); this request names a "+
-				"different action %q or instance %q. Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
 			existingID, existingAction, existingTargetID, requestedAction, requestedTargetID),
 	}
 }
@@ -727,9 +707,7 @@ func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existin
 		// rule stated in the wire text, not a citation of where it is
 		// defined.
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, instance %q) with params %s; this request "+
-				"has the SAME action and instance but DIFFERENT params: %s. Mint a fresh idempotencyKey for a "+
-				"genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q on %q) with params %s, not %s. Use a new key.",
 			existingID, action, targetID, existingParamsJSON, requestedParamsJSON),
 	}
 }
@@ -746,12 +724,10 @@ func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existin
 func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeFPPStartPlaylistEvidenceNotCurrent,
-		Title:  "Start Playlist refused: evidence needed to evaluate ifBusy is not current",
+		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Can't tell whether instance %q is busy: this needs current evidence of %s, and the most recent "+
-				"reading isn't current (%s). Retry once fresh evidence arrives, or resend with ifBusy=%q to start "+
-				"anyway.",
+			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",
 			instanceID, signal, reason, fppIfBusyReplace),
 	}
 }
@@ -779,8 +755,7 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 		Title:  "Start Playlist refused: a different playlist is currently playing",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Instance %q is currently playing %q, so this request is refused (ifBusy=%q, the default). Resend "+
-				"with ifBusy=%q to replace the running show, or wait for it to finish.",
+			"%q is playing %q, so this was refused (ifBusy=%q). Send ifBusy=%q to replace it, or wait.",
 			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
 	}
 }
@@ -812,7 +787,7 @@ func fppDefinitionRepublishFailedProblem(instanceID string, err error) v1.Proble
 		Type:   ProblemTypeFPPDefinitionRepublishFailed,
 		Title:  "FPP playlist definition republish failed",
 		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the playlist definition republish request to FPP instance %q did not produce a usable result: %v", instanceID, err),
+		Detail: fmt.Sprintf("FPP instance %q did not give a usable answer to the playlist resend request: %v", instanceID, err),
 	}
 }
 
@@ -824,7 +799,7 @@ func fppPairingNotWaitingProblem() v1.Problem {
 		Type:   ProblemTypeFPPPairingNotWaiting,
 		Title:  "No pairing is waiting",
 		Status: http.StatusNotFound,
-		Detail: "no pairing is waiting for this plugin. Start a pairing from the FPP instance's page and let the plugin try again.",
+		Detail: "No pairing is waiting for this plugin. Start pairing from the FPP instance's page, then let the plugin retry.",
 	}
 }
 
@@ -835,7 +810,7 @@ func fppPairingCodeTakenProblem(otherInstanceID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Pairing code already in use",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf("That code is already waiting on player %s. Enter it on that player, or wait ten minutes for it to expire and try again here.", otherInstanceID),
+		Detail: fmt.Sprintf("That code is already waiting on player %s. Enter it there, or try again here in ten minutes.", otherInstanceID),
 	}
 }
 
@@ -846,7 +821,7 @@ func fppPairingClaimTooLargeProblem() v1.Problem {
 		Type:   ProblemTypeResolumeCompositionTooLarge,
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
-		Detail: "the request body is larger than this endpoint accepts. A pairing request carries one secret and nothing else.",
+		Detail: "The request body is too large. A pairing request carries one secret and nothing else.",
 	}
 }
 

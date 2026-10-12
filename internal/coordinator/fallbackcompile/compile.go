@@ -267,7 +267,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 			// smaller than what this playlist's own authoring actually
 			// promises.
 			return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
-				"playlist %q has authored FPP entries but no stored playlist definition for hash %q; the compiler cannot resolve its entry keys",
+				"Playlist %q has FPP entries but no stored definition (hash %q). Import the playlist from the player again.",
 				p.objectID, p.payload.FPP.PlaylistHash), nil
 		}
 		if err != nil {
@@ -307,7 +307,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 			}
 			if cuePayload.Show != active.ShowID {
 				return refuse(fppInstanceUUID, OutcomeCrossShowReference,
-					"entry key %q resolves to cue %q, which belongs to show %q, not the active show %q",
+					"Entry %q uses cue %q from show %q, not the active show %q.",
 					entryKey, authored.Cue, cuePayload.Show, active.ShowID), nil
 			}
 
@@ -320,7 +320,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 				}
 				if outputs.Announcement != nil {
 					return refuse(fppInstanceUUID, OutcomeUnsupportedOutput,
-						"cue %q declares an announcement output for node %q, which a fallback program cannot pre-authorize", authored.Cue, n.NodeID), nil
+						"Cue %q has an announcement on node %q, which a fallback program cannot include.", authored.Cue, n.NodeID), nil
 				}
 				if outputs.Render == nil && outputs.Audio == nil {
 					continue
@@ -368,7 +368,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 				}
 				if ack.Revision != catalog.Revision {
 					return refuse(fppInstanceUUID, OutcomeMissingCatalogAcknowledgement,
-						"node %q acknowledged catalog revision %q, but the coordinator currently resolves %q", n.NodeID, ack.Revision, catalog.Revision), nil
+						"Node %q has Cue list %q, but the current one is %q. Deploy the Cue list to it.", n.NodeID, ack.Revision, catalog.Revision), nil
 				}
 
 				catalogRevisions[n.NodeID] = catalog.Revision
@@ -377,7 +377,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 
 			if len(targets) == 0 {
 				return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
-					"entry key %q resolves cue %q to zero node targets: absent from every declared node's catalog, or no declared node's catalog resolves a render or audio output for it; publishing this program would silently drop an authored entry rather than refuse",
+					"Entry %q uses cue %q, which no node can run. Give the cue a render or audio output on a declared node.",
 					entryKey, authored.Cue), nil
 			}
 			sort.Slice(targets, func(i, j int) bool { return targets[i].NodeID < targets[j].NodeID })
@@ -390,7 +390,7 @@ func CompileWithAddresses(ctx context.Context, st *store.Store, signer Signer, a
 
 	if len(entries) == 0 {
 		return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
-			"no entry of this host's participating playlists resolved to any node target; a signed program with zero entries would be a silently smaller program than what the inputs actually authorize"), nil
+			"None of this player's playlist entries can run on any node, so no fallback program was built."), nil
 	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].EntryKey < entries[j].EntryKey })
@@ -550,7 +550,7 @@ func authoredEntriesByPosition(fppInstanceUUID string, p fppRunnerPlaylist) (map
 		pos := sectionPosition{e.FPP.Section, e.FPP.Position}
 		if existing, ok := out[pos]; ok && existing.Cue != e.Cue {
 			r := refuse(fppInstanceUUID, OutcomeAmbiguousEntryKey,
-				"playlist %q entries %q and %q both claim section %q position %d, naming different cues %q and %q",
+				"Playlist %q entries %q and %q both claim section %q position %d with different cues, %q and %q.",
 				p.objectID, existing.ID, e.ID, pos.Section, pos.Position, existing.Cue, e.Cue)
 			return nil, &r
 		}

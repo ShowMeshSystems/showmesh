@@ -84,8 +84,7 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 		// 179-microsecond false confirm it closes (see this file's own top
 		// comment).
 		return nil, src, false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no %s reading has arrived since this command was dispatched at %s; the most recent reading is from "+
-				"%s, via %s, from before dispatch, so it cannot confirm this command",
+			"No %s reading has arrived since this was sent at %s. The latest, from %s via %s, is from before it was sent.",
 			signal, notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
 	}
 
@@ -303,8 +302,7 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 				"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated, and %s.", alreadyIdleNote)
 		case sourceFlipped:
 			return false, indexState, fmt.Sprintf(
-				"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch "+
-					"baseline (%s), so no movement can be attributed to this command, and %s.",
+				"The playlist position was read from %s after the command and %s before, so it cannot be compared, and %s.",
 				indexSource, baseline.IndexSource, alreadyIdleNote)
 		case !indexCurrent:
 			return false, indexState, fmt.Sprintf("%s, and %s.", indexReason, alreadyIdleNote)
@@ -319,9 +317,7 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 	}
 	if sourceFlipped {
 		return false, indexState, fmt.Sprintf(
-			"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch baseline "+
-				"(%s, value %v), so the readings aren't comparable and no movement can be attributed to this command; "+
-				"fpp.status has also not reached %q.", indexSource, baseline.IndexSource, baseline.IndexValue, fppStatusValueIdle)
+			"The playlist position was read from %s after the command and %s (%v) before, so it cannot be compared. FPP has not reached %q.", indexSource, baseline.IndexSource, baseline.IndexValue, fppStatusValueIdle)
 	}
 	if !indexCurrent {
 		return false, indexState, indexReason
@@ -371,8 +367,7 @@ func evaluatePrevItemEvidence(ctx context.Context, lister ObservationLister, ins
 	}
 	if indexSource != baseline.IndexSource {
 		return false, indexState, fmt.Sprintf(
-			"fpp.playlist.index's confirming reading came from a different source (%s) than the pre-dispatch baseline "+
-				"(%s, value %v), so the readings aren't comparable and no movement can be attributed to this command.",
+			"The playlist position was read from %s after the command and %s (%v) before, so it cannot be compared.",
 			indexSource, baseline.IndexSource, baseline.IndexValue)
 	}
 	if fmt.Sprint(indexVal) != fmt.Sprint(baseline.IndexValue) {

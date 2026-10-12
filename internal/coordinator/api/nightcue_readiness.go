@@ -31,9 +31,9 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not resolve cue %q's action %q: %s", first.Name, first.Action, err.Error())}
 	}
 	if !nightCueAllowedAsFirstOutwardCue(action) {
-		reason := fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its action does not declare whether it is idempotent; its own adapter cannot confirm its effect, so it may not be the first outward-facing cue until it declares idempotent true or false", first.Name)
+		reason := fmt.Sprintf("Cue %q runs first when the show starts, and its action does not say if it is safe to repeat. Set idempotent on the action.", first.Name)
 		if action.Idempotent != nil && !*action.Idempotent {
-			reason = fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its action is declared non-idempotent; its own adapter cannot confirm its effect, so it may not be the first outward-facing cue", first.Name)
+			reason = fmt.Sprintf("Cue %q runs first when the show starts, and its action is not safe to repeat. Put a repeatable cue first.", first.Name)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: reason}
 	}
@@ -64,7 +64,7 @@ func nightCheckBrightnessCompositionUnverified(transition string, cues []config.
 	for _, cue := range cues {
 		if cue.Role == config.NightSessionCueRoleLighting && cue.FadeDurationMs != nil {
 			return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
-				"cue %q declares a lighting fade; compositional brightness is implemented and has not yet been verified on a real host, so the fade will be attempted but its effect on the installation is unproven", cue.Name)}
+				"Cue %q fades the lights. The fade will run, but it has not been proven on real hardware.", cue.Name)}
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}

@@ -283,18 +283,14 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 			// The load-bearing cross-check (contract section 4.4): every id
 			// in SHOWMESH_FPP_MQTT_HOSTS must also be a configured FPP
 			// endpoint, named specifically so an operator sees exactly
-			// which id is unmatched. The message leads with the
-			// store-backed remedy (ADR-039 decision 1) rather than the env
-			// var, since [ValidateFPPMQTTHostIDs] backs the store-backed
-			// config:write surface too. wantVar names the store remedy,
-			// not "shed" alone, because the old env-first message also
-			// named the unmatched id and would pass a weaker check.
+			// which id is unmatched. wantVar names the fact, not "shed"
+			// alone, which a weaker message would also pass.
 			name: "fpp mqtt hosts id not in fpp endpoints",
 			env: map[string]string{
 				"SHOWMESH_FPP_ENDPOINTS":  "player-01=http://10.0.1.20",
 				"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
 			},
-			wantVar: "showmeshctl config set",
+			wantVar: "not a configured FPP endpoint",
 		},
 		{
 			name:    "fpp mqtt broker url invalid",
@@ -369,7 +365,7 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 				"SHOWMESH_RESOLUME_URL":  "http://127.0.0.1:9080",
 				"SHOWMESH_RESOLUME_ID":   "player-01",
 			},
-			wantVar: "SHOWMESH_RESOLUME_ID",
+			wantVar: "already used by an FPP endpoint",
 		},
 		{
 			name:    "asset dir empty",
@@ -901,8 +897,8 @@ func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	if err == nil {
 		t.Fatalf("LoadConfigFrom() error = nil, want an error naming the unmatched id even with no broker URL configured")
 	}
-	if !strings.Contains(err.Error(), "shed") || !strings.Contains(err.Error(), "showmeshctl config set") {
-		t.Errorf("LoadConfigFrom() error = %q, want it to name the unmatched id %q and the store-backed remedy", err.Error(), "shed")
+	if !strings.Contains(err.Error(), "shed") || !strings.Contains(err.Error(), "Add the endpoint or remove the host") {
+		t.Errorf("LoadConfigFrom() error = %q, want it to name the unmatched id %q and the remedy", err.Error(), "shed")
 	}
 }
 
@@ -1063,7 +1059,7 @@ func TestLoadConfigResolumeIDCollisionWithFPPEndpoint(t *testing.T) {
 	if err == nil {
 		t.Fatal("LoadConfigFrom() error = nil, want an error naming the id collision between the Resolume id and the FPP endpoint id")
 	}
-	if !strings.Contains(err.Error(), "resolume id") || !strings.Contains(err.Error(), "shed") {
+	if !strings.Contains(err.Error(), "already used by an FPP endpoint") || !strings.Contains(err.Error(), "shed") {
 		t.Errorf("LoadConfigFrom() error = %q, want it to name the colliding id %q", err.Error(), "shed")
 	}
 }

@@ -489,9 +489,7 @@ func assetRemoveReplayUndecodableProblem(existingID, nodeID string) v1.Problem {
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (node %q), but its stored record does not decode "+
-				"as an asset-remove result or identity; it cannot be answered as a replay. Mint a fresh "+
-				"idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s on node %q, not a file removal. Use a new key.",
 			existingID, nodeID),
 	}
 }

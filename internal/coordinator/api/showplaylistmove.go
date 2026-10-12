@@ -230,7 +230,7 @@ func mapPlaylistMoveEntry(e config.PlaylistMoveEntry) v1.ShowPlaylistMoveEntry {
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPosition:
 		sentences = append(sentences, fmt.Sprintf("FPP's playlist has no entry at %s any more. This cue will be removed from this playlist.", moveSlotText(e.From, true)))
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPreviousSequence && e.DuplicateFilename:
-		sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue. Its position held %s, which appears more than once, and FPP's playlist has fewer copies than before. This cue will be removed from this playlist.", e.PreviousSequence))
+		sentences = append(sentences, fmt.Sprintf("This cue has no saved sequence name and its position held %s, which appears more than once. It will be removed from this playlist.", e.PreviousSequence))
 	case e.Outcome == config.PlaylistMoveDropped && e.MatchedBy == config.PlaylistMoveByPreviousSequence:
 		sentences = append(sentences, fmt.Sprintf("No sequence name was saved for this cue. Its position held %s, which is no longer in FPP's playlist. This cue will be removed from this playlist.", e.PreviousSequence))
 	case e.Outcome == config.PlaylistMoveDropped && e.DuplicateFilename:

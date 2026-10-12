@@ -222,7 +222,7 @@ func TestReconcileStrandedFPPCommandsNeverConfirmsAnUndispatchedCommand(t *testi
 		t.Fatalf("result = %q — a command whose dispatch was NEVER ATTEMPTED must never resolve confirmed, no matter "+
 			"what evidence exists since CreatedAt (Finding 2: this is FPP's own activity, not this command's effect)", got.ResultJSON)
 	}
-	if got.OutcomeReason == "" || !strings.Contains(got.OutcomeReason, "never attempted") {
+	if got.OutcomeReason == "" || !strings.Contains(got.OutcomeReason, "never sent to FPP") {
 		t.Errorf("outcome_reason = %q, want it to say dispatch was never attempted", got.OutcomeReason)
 	}
 

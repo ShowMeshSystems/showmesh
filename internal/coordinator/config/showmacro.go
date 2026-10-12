@@ -282,7 +282,7 @@ func decodeShowMacroStep(raw json.RawMessage, field string, macroShow string, re
 		return ShowMacroStep{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: field + ".localFallback.class",
 			Detail: fmt.Sprintf(
-				"%s.localFallback.class must be %q for a step whose action is a Resolume action: a controlled device holds no fallback, so there is nothing to run locally when the coordinator is gone",
+				"%s.localFallback.class must be %q for a Resolume step, which has nothing to run locally.",
 				field, ShowMacroLocalFallbackCoordinatorRequired),
 		}
 	}

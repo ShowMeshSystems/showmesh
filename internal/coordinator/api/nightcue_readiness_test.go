@@ -89,7 +89,7 @@ func TestNightCheckFirstOutwardCueConfirmableIdempotentDeclaration(t *testing.T)
 		if got.health == nightHealthHealthy() {
 			t.Fatal("check reported healthy, want failed: the action declares idempotent false")
 		}
-		if !strings.Contains(got.reason, "declared non-idempotent") {
+		if !strings.Contains(got.reason, "its action is not safe to repeat") {
 			t.Errorf("reason = %q, want it to name the declared-false state", got.reason)
 		}
 	})
@@ -101,7 +101,7 @@ func TestNightCheckFirstOutwardCueConfirmableIdempotentDeclaration(t *testing.T)
 		if got.health == nightHealthHealthy() {
 			t.Fatal("check reported healthy, want failed: the action never declares idempotent")
 		}
-		if !strings.Contains(got.reason, "does not declare whether it is idempotent") {
+		if !strings.Contains(got.reason, "does not say if it is safe to repeat") {
 			t.Errorf("reason = %q, want it to name the undeclared state", got.reason)
 		}
 	})

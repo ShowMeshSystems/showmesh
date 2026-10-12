@@ -101,8 +101,7 @@ func ReconcileStrandedFPPCommands(ctx context.Context, deps Dependencies, now fu
 			// row silently stuck forever.
 			outcomeState = string(observation.StateUnsupported)
 			reason = fmt.Sprintf(
-				"this coordinator does not recognize action %q and cannot re-evaluate its evidence (a newer "+
-					"version's action, reached after a rollback, or a row from a different command family)", rec.Action)
+				"This coordinator version does not know action %q, so it cannot settle this command.", rec.Action)
 			if logger != nil {
 				logger.Warn("api: stranded command carries an action this coordinator does not recognize; resolving unconfirmed rather than leaving it pending forever",
 					"commandId", rec.ID, "action", rec.Action, "target", rec.TargetID)
@@ -129,9 +128,7 @@ func ReconcileStrandedFPPCommands(ctx context.Context, deps Dependencies, now fu
 			// was never sent, so this branch never calls primitive.Confirm
 			// at all.
 			outcomeState = string(observation.StateNotCollected)
-			reason = "this command's dispatch to FPP was never attempted before the prior process stopped existing " +
-				"(dispatched_at is unset): no observation, however it reads, can be attributed to a command that was " +
-				"never sent"
+			reason = "This command was never sent to FPP before the coordinator restarted."
 
 		default:
 			notBefore := *rec.DispatchedAt
@@ -155,8 +152,7 @@ func ReconcileStrandedFPPCommands(ctx context.Context, deps Dependencies, now fu
 			confirmed, outcomeState, reason = primitive.Confirm(ctx, deps.Observations, rec.TargetID, params, fppBaseline{}, notBefore, nowT)
 		}
 
-		reason = "resolved by startup reconciliation, not by this command's own original request (see this coordinator's " +
-			"own log for why: a restart or an abandoned connection left it dispatched but never resolved): " + reason
+		reason = "Settled after a restart: " + reason
 
 		outcomeWord := "unconfirmed"
 		if confirmed {

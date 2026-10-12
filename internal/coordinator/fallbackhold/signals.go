@@ -32,15 +32,15 @@ func Message(v Verdict) string {
 	case !v.Reported:
 		return ""
 	case v.Held && v.Reason == ReasonExecutor && !v.PluginReporting:
-		return "This player's plugin has stopped reporting while it was running the show from its fallback program. The coordinator starts no Cues for this player until the plugin reports again or you clear its fallback state."
+		return "This player's plugin has stopped reporting while running the show on fallback. No Cues start for it until it reports or you clear its fallback state."
 	case v.Held && v.Reason == ReasonExecutor && v.Record.State == StateResting:
-		return "This player's fallback program reached its end time. Cues already started keep playing, and no new Cue starts until the playlist ends."
+		return "This player's fallback program reached its end time. Started Cues keep playing; no new Cue starts until the playlist ends."
 	case v.Held && v.Reason == ReasonExecutor:
-		return "This player is running the show from its fallback program. The coordinator starts no Cues for it until the playlist ends."
+		return "This player is running the show on fallback. No Cues start for it until the playlist ends."
 	case v.Held && v.Reason == ReasonAwaitingAcknowledgement:
-		return "This player has finished running from its fallback program and has not confirmed its current program yet. The coordinator starts no Cues for it until it does, or until you clear its fallback state."
+		return "This player finished its fallback run and has not confirmed its current program. No Cues start for it until it does or you clear its fallback state."
 	case v.Held && v.Reason == ReasonCoordinatorStarting:
-		return "The coordinator has just started and has not heard from this player's plugin yet. It starts no Cues for this player until the plugin reports, for up to 45 seconds."
+		return "The coordinator just started and has not heard from this player's plugin. No Cues start for it until it reports, for up to 45 seconds."
 	case !v.PluginReporting:
 		return "This player's plugin has stopped reporting. Check the plugin on the FPP player."
 	}

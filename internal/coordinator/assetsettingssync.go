@@ -131,7 +131,7 @@ func migrateAssetSettingsFromEnv(ctx context.Context, identitySvc identity.Servi
 			// CreatedByPrincipalID/CreatedByPrincipalName deliberately left
 			// empty: a startup migration has no principal.
 			Source: config.AssetSettingsSourceEnvMigration,
-			Note:   "migrated from SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/SHOWMESH_ASSET_SYNC_INTERVAL/SHOWMESH_ASSET_INVENTORY_INTERVAL at coordinator startup",
+			Note:   "Moved from the SHOWMESH_ASSET_* environment variables at coordinator startup.",
 		}); cerr != nil {
 			return identity.AuditEntry{}, cerr
 		}

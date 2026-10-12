@@ -1261,8 +1261,7 @@ func ValidateFPPMQTTHostIDs(hosts map[string]string, endpoints []FPPEndpoint) er
 	}
 	for id := range hosts {
 		if !known[id] {
-			return fmt.Errorf("instance id %q is not a configured FPP endpoint; add it with `showmeshctl config set` (fpp.endpoints), or check %s for a typo, or %s if this coordinator has not migrated yet",
-				id, envFPPMQTTHosts, envFPPEndpoints)
+			return operatorMessage(fmt.Sprintf("FPP MQTT host %q is not a configured FPP endpoint. Add the endpoint or remove the host.", id))
 		}
 	}
 	return nil
@@ -1340,10 +1339,7 @@ func validateResolumeConfig(c Config) error {
 func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEndpoint) error {
 	for _, ep := range endpoints {
 		if ep.ID == resolumeID {
-			return fmt.Errorf("resolume id %q collides with a configured FPP endpoint id. Rename one: "+
-				"the Resolume instance with `showmeshctl resolume instance set` (resolume.instances), "+
-				"or the FPP endpoint with `showmeshctl config set` (fpp.endpoints); or %s/%s if this coordinator has not migrated yet",
-				resolumeID, envResolumeID, envFPPEndpoints)
+			return operatorMessage(fmt.Sprintf("Resolume id %q is already used by an FPP endpoint. Rename one of them, then retry.", resolumeID))
 		}
 	}
 	return nil

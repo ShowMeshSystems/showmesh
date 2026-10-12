@@ -652,7 +652,7 @@ func TestPlaylistReadinessCueMultisyncTriggerMissingWarns(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: a missing MultiSync trigger is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "cue-1", "no FPP sequence filename starts this cue") {
+	if !containsAll(report.Warning, "cue-1", "no FPP sequence file starts this cue") {
 		t.Fatalf("Warning = %q, want it to name cue-1 and explain that no trigger starts it", report.Warning)
 	}
 }
@@ -758,7 +758,7 @@ func TestPlaylistReadinessFPPMultisyncDisabledWarns(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: a disabled FPP instance is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "inst-1", "MultiSync turned off") {
+	if !containsAll(report.Warning, "inst-1", "has MultiSync off") {
 		t.Fatalf("Warning = %q, want it to name inst-1 and that MultiSync is turned off", report.Warning)
 	}
 }

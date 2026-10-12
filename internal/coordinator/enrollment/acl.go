@@ -27,7 +27,7 @@ func renderACL(base, passwd []byte) ([]byte, error) {
 			continue
 		}
 		if mqttproto.ValidateNodeID(username) != nil {
-			return nil, unavailable("The broker password file has a login named %q, which is not a valid node ID. Remove or rename that line in the password file, then try again.", username)
+			return nil, unavailable("The broker password file has a login named %q, which is not a valid node ID. Remove or rename that line.", username)
 		}
 		fmt.Fprintf(&out, `
 # Provisioned ShowMesh agent: %[1]s

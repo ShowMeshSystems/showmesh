@@ -473,7 +473,7 @@ func (s *Service) clearEndedWithoutPlugin(ctx context.Context, rec store.Fallbac
 		}
 		return false
 	}
-	message := fmt.Sprintf("The plugin on this FPP player stopped reporting while it was running playlist %q from its fallback program, and the player is no longer playing that playlist. The coordinator has taken the player back.", rec.PlaylistName)
+	message := fmt.Sprintf("This player's plugin went quiet while running playlist %q on fallback, and the player has stopped it. The coordinator has taken the player back.", rec.PlaylistName)
 	s.logger.Warn("fallback hold: ended without the plugin's report", "fppInstanceUuid", rec.FPPInstanceUUID,
 		"reportedState", rec.State, "playlistName", rec.PlaylistName, "lastReportAt", rec.ReceivedAt)
 	if _, err := s.st.AppendEvent(ctx, store.EventRecord{

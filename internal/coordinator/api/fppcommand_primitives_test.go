@@ -449,7 +449,7 @@ func TestStartPlaylistRefusedWhenEvidenceNotCurrent(t *testing.T) {
 	}
 	m := decodeMap(t, respBody)
 	detail, _ := m["detail"].(string)
-	if !strings.Contains(detail, "current evidence") {
+	if !strings.Contains(detail, "is not current") {
 		t.Errorf("detail = %q, want it to say current evidence is required", detail)
 	}
 }
@@ -856,7 +856,7 @@ func TestNextPlaylistItemDoesNotConfirmOnSourceFlip(t *testing.T) {
 			"confirming read must never render as movement", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "different source") {
+	if !strings.Contains(reason, "cannot be compared") {
 		t.Errorf("outcomeReason = %q, want it to name the source flip", reason)
 	}
 }
@@ -951,7 +951,7 @@ func TestPrevPlaylistItemDoesNotConfirmOnSourceFlip(t *testing.T) {
 			"FLIP, not FPP's own counter moving", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "different source") {
+	if !strings.Contains(reason, "cannot be compared") {
 		t.Errorf("outcomeReason = %q, want it to name the source flip", reason)
 	}
 }

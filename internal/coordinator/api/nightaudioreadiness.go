@@ -91,7 +91,7 @@ func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show str
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: err.Error()}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
-		"%d item(s) resolve to a current, non-superseded coordinator asset record of media type \"audio\". NOT checked: whether the stored bytes still hash-match on disk (no re-hash-on-read exists in this build), and whether audio.media.probe has confirmed a usable duration for any item (this readiness pass never dispatches a node probe)",
+		"%d item(s) are current audio assets. Their stored files and durations were not rechecked.",
 		len(ba.Items))}
 }
 
@@ -167,7 +167,7 @@ func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, 
 	id, _ := transitionCapabilityID(t)
 	if evidence.NeverPublished {
 		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
-			"audio.node %q has never published a capability advertisement; this coordinator has no signal to check whether it declares %q against (an agent built before this capability signal existed makes no claim either way)", nodeID, id)}
+			"Audio node %q has not reported what it can do, so %q could not be checked. Update the node.", nodeID, id)}
 	}
 	if !evidence.Live {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
@@ -175,7 +175,7 @@ func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, 
 	}
 	if verr := pkgaudio.ValidateItemTransitionSupport(t, confirms); verr != nil {
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-			"itemTransition %q requires output %q to declare %q, and its current capability advertisement does not; background audio will refuse to start until this is changed to \"sequential\" or the output ships that capability", ba.ItemTransition, nodeID, id)}
+			`Item transition %q needs output %q to support %q, and it does not. Use "sequential".`, ba.ItemTransition, nodeID, id)}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("output %q declares %q", nodeID, id)}
 }
@@ -298,7 +298,7 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 	// against at all.
 	if evidence.NeverPublished {
 		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
-			"audio.node %q has never published a capability advertisement; this coordinator has no signal to check against (an agent built before this capability signal existed makes no claim either way)", nodeID)}
+			"Audio node %q has not reported what it can do. Update ShowMesh on the node.", nodeID)}
 	}
 	if !evidence.Live {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
@@ -316,7 +316,7 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 		switch {
 		case usable:
 			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
-				"audio.node %q's node.audio.engine.state confirms its session engine is usable right now, but its Hello capability advertisement declares none of %v yet; this node has likely not finished its post-connect capability detection, which can take up to %s",
+				"Audio node %q is running but has not yet reported %v. This can take up to %s.",
 				nodeID, needed, capabilityDetectionTimeoutMirror)}
 		case !unavailable:
 			// Neither usable nor unavailable: no reliable
@@ -327,7 +327,7 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 			// evidence of absence, so this reads unknown, not failed,
 			// exactly like the usable case above.
 			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
-				"audio.node %q's Hello capability advertisement declares none of %v, and this coordinator has no current node.audio.engine.state evidence yet to confirm whether that is because the engine is genuinely unavailable or because this node has not finished reporting since it connected",
+				"Audio node %q does not report %v and has sent no audio status yet. Check the node.",
 				nodeID, needed)}
 		}
 		// unavailable == true: real negative evidence. Falls through to
@@ -335,10 +335,10 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 	}
 	if len(missing) > 0 {
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-			"audio.node %q's current capability advertisement does not declare %v, which this configured resting.backgroundAudio session requires", nodeID, missing)}
+			"Audio node %q does not support %v, which the background audio needs. Update the node or change the setting.", nodeID, missing)}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
-		"audio.node %q declares every capability %v this configured resting.backgroundAudio session requires", nodeID, needed)}
+		"Audio node %q supports everything the background audio needs (%v).", nodeID, needed)}
 }
 
 // nightCheckBackgroundAudioReadiness is seam F5's own resting.
@@ -370,7 +370,7 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 	if len(showAudioNodes) == 0 && resolvedFrom == config.AudioNodeResolutionDefault && len(resolvedNodeIDs) > 0 {
 		checks = append(checks, nightReadinessCheck{
 			name: "resting:background-audio-nodes-defaulted", health: nightHealthDegraded(),
-			reason: "the show has no audio node list to inherit; the background bed plays on the installation's default node instead. Set the show's audio nodes, then re-check.",
+			reason: "The show has no audio nodes set, so background audio plays on the default node. Set the show's audio nodes.",
 		})
 	}
 	for _, nodeID := range resolvedNodeIDs {
@@ -445,7 +445,7 @@ func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Contex
 			}
 			if !ok {
 				missing = append(missing, fmt.Sprintf(
-					"node %q item %q (sequence %q): no listed target holds a registered copy of this item's file",
+					"Node %q, item %q (sequence %q): none of its target nodes has this item's file. Upload it.",
 					nodeID, item.ItemID, item.Asset.Sequence))
 				continue
 			}
@@ -549,7 +549,7 @@ func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Co
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
-		"this bed's targets %v exclude the installation's program+ltc node, so it can never start aligned; decision 4 still plays it unaligned", targets)}
+		"This background audio's targets %v leave out the timecode node, so it cannot start in sync. It still plays.", targets)}
 }
 
 // nightCheckAnnouncementAssets is §13's own announcement-asset bullet (ADR-049 decisions 7 and 9):
@@ -571,12 +571,12 @@ func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []conf
 			continue
 		}
 		if !nightAnnouncementTargetDeclarable(action.Target) {
-			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q is not an audio.session.apply, so it carries no media reference to check", cue.Name, cue.Action))
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q does not play audio, so there is no file to check.", cue.Name, cue.Action))
 			continue
 		}
 		media := nightAnnouncementMediaRef(action.Target.Params)
 		if !media.Complete() {
-			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q's own params carry no complete media reference (assetId/contentHash/filename)", cue.Name, cue.Action))
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q does not name a complete audio file.", cue.Name, cue.Action))
 			continue
 		}
 		if len(action.Target.AudioNodeIDs) == 0 {
@@ -593,7 +593,7 @@ func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []conf
 			continue
 		}
 		if len(missing) > 0 {
-			undeliverable = append(undeliverable, fmt.Sprintf("%s: node(s) %v cannot get file %q (no registered copy of it exists on any of action %q's listed target nodes)", cue.Name, missing, media.Filename, cue.Action))
+			undeliverable = append(undeliverable, fmt.Sprintf("%s: node(s) %v cannot get file %q, because no target node of action %q has it. Upload it.", cue.Name, missing, media.Filename, cue.Action))
 		}
 	}
 	switch {
@@ -604,7 +604,7 @@ func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []conf
 	case len(unverifiable) > 0:
 		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: strings.Join(unverifiable, "; ")}
 	default:
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) name a complete media reference deliverable to every listed node", announcements)}
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) name an audio file every listed node can get.", announcements)}
 	}
 }
 
@@ -664,15 +664,15 @@ func (h *handlers) nightCheckAnnouncementPolicyEnforceable(ctx context.Context, 
 	case announcements == 0:
 		return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
 	case len(notApply) > 0:
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("announcement cue(s) %v are not bound to an audio.session.apply action; an announcement is an apply carrying source role \"announcement\" and a declared mix policy, followed by the audio.session.start this controller issues itself, so these cues will not play at all", notApply)}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Announcement cue(s) %v are not set to play audio, so they will not play. Bind them to an audio action.", notApply)}
 	case len(contradicted) > 0:
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("announcement cue(s) %v bind a show.action whose own params declare a mix policy different from the cue's configured announcementPolicy; operator-authored params win at dispatch, so the configured policy would be silently discarded, and neither value is safe to overrule on the operator's behalf", contradicted)}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Announcement cue(s) %v use an action whose mix setting differs from the cue's. Make them match.", contradicted)}
 	case len(cannotOutrank) > 0 && backgroundAudioConfigured:
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("announcement cue(s) %v bind a show.action declaring a source role that cannot outrank a background bed, so the node would duck nothing and resting background audio would play straight through the announcement", cannotOutrank)}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Announcement cue(s) %v cannot lower the background music, so it plays over them. Fix their action.", cannotOutrank)}
 	case len(cannotOutrank) > 0:
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("announcement cue(s) %v declare a source role that could not outrank a background bed, but no resting background audio is configured for them to make room in", cannotOutrank)}
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("Announcement cue(s) %v would lower background music, but no background audio is configured.", cannotOutrank)}
 	default:
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) bind audio.session.apply, declare no params contradicting their configured policy, and declare no source role that could not outrank a background bed", announcements)}
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) are set up to play over the background music.", announcements)}
 	}
 }
 
@@ -717,7 +717,7 @@ func (h *handlers) nightCheckAudioAlignmentForNode(ctx context.Context, now time
 
 	if stateObs == nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
-			"no node.audio.clock.alignment.state evidence has ever been reported for audio.node %q", nodeID)}
+			"Audio node %q has never reported its timecode alignment.", nodeID)}
 	}
 	switch stateObs.StateAt(now) {
 	case observation.StateNotCollected, observation.StateNotApplicable:
@@ -736,7 +736,7 @@ func (h *handlers) nightCheckAudioAlignmentForNode(ctx context.Context, now time
 	switch stateObs.Value {
 	case audioClockAlignmentStateWithin:
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
-			"audio.node %q's measured program-to-LTC alignment is within audio.settings' driftIgnoreThresholdMs", nodeID)}
+			"Audio node %q's timecode alignment is within the allowed drift.", nodeID)}
 	case audioClockAlignmentStateBeyond:
 		offsetText := "unknown"
 		if alignObs != nil && alignObs.StateAt(now) == observation.StateCurrent {
@@ -747,9 +747,9 @@ func (h *handlers) nightCheckAudioAlignmentForNode(ctx context.Context, now time
 			thresholdText = fmt.Sprintf("%dms", settings.DriftIgnoreThresholdMs)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"audio.node %q's measured program-to-LTC alignment (%s) exceeds the currently configured driftIgnoreThresholdMs (%s); this is a warning, not a failure, and the night still starts", nodeID, offsetText, thresholdText)}
+			"Audio node %q is %s out of alignment, over the %s limit. The night still starts.", nodeID, offsetText, thresholdText)}
 	default:
 		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
-			"audio.node %q's node.audio.clock.alignment.state reports an unrecognized value %q", nodeID, stateObs.Value)}
+			"Audio node %q reported an unknown alignment state %q. Update the coordinator.", nodeID, stateObs.Value)}
 	}
 }

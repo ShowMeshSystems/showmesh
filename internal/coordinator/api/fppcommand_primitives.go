@@ -850,8 +850,7 @@ func decodeFPPCommandParams(primitive fppPrimitive, top map[string]json.RawMessa
 	rawParams, hasParams := top["params"]
 	if hasParams && isJSONNull(rawParams) {
 		p := invalidParameterProblem(fmt.Sprintf(
-			"params must not be null for action %q; omit the field entirely (or send {}) to use every parameter's own "+
-				"default, since an explicit null is not the same as an omitted field", primitive.WireAction))
+			"params must not be null for action %q. Leave it out or send {} to use the defaults.", primitive.WireAction))
 		return nil, &p
 	}
 

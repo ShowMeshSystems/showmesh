@@ -74,7 +74,7 @@ func TestDecodeFPPCommandParamsExplicitNullIsAlways400(t *testing.T) {
 			if problem.Status != 400 {
 				t.Errorf("status = %d, want 400", problem.Status)
 			}
-			if !strings.Contains(problem.Detail, "not the same as an omitted field") {
+			if !strings.Contains(problem.Detail, "Leave it out or send {}") {
 				t.Errorf("detail = %q, want it to say null is not the same as omitted", problem.Detail)
 			}
 		})

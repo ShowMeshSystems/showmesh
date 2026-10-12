@@ -329,7 +329,7 @@ func rangeTermHoldsWhenPositive(f ParamRangeField, readAt time.Time, fieldLabel 
 // soloUnknownReason is ApplySoloOverride's fixed, operator-facing text —
 // named once so every caller states the identical wording rather than each
 // composing a slightly different sentence.
-const soloUnknownReason = "another layer or group in this composition has solo enabled; this project has not confirmed how Resolume's own solo interacts with an individual layer's readiness, so this layer's readiness cannot be verified while solo is active elsewhere"
+const soloUnknownReason = "Another layer or group has solo on, so this layer's readiness cannot be checked. Turn solo off in Resolume."
 
 // ApplySoloOverride is this package's honest answer to `solo` (readable on
 // both Layer and LayerGroup, per this file's own ReadinessTerm doc

@@ -85,9 +85,7 @@ func (h *handlers) handleGetFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		// never reported as absence.
 		if h.deps.FPPEndpointsMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"No fpp.endpoints configuration is stored: the coordinator's data volume is unwritable, so nothing "+
-					"was saved. GET /api/v1/fpp shows the endpoints actually in effect. Fix the volume and restart; "+
-					"do not clear SHOWMESH_FPP_ENDPOINTS."))
+				"No FPP endpoints are stored: the data volume is unwritable. GET /api/v1/fpp shows those in effect. Fix it, restart, and do not clear SHOWMESH_FPP_ENDPOINTS."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
@@ -410,8 +408,7 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	for _, id := range resolumeIDs {
 		if err := config.ValidateResolumeIDAgainstFPPEndpoints(id, endpoints); err != nil {
 			writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-				"endpoint id %q is the same id a configured Resolume instance uses; "+
-					"rename this endpoint's id, or change the Resolume instance id (PUT /api/v1/config/resolume.instances), then retry.",
+				"Endpoint id %q is already used by a Resolume instance. Rename one of them, then retry.",
 				id,
 			)))
 			return
@@ -530,8 +527,7 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 // ADR-020 makes this contract additive-only within a major version and a
 // client reading it must keep compiling. It now reports honestly that
 // nothing is pending.
-const restartRequiredReason = "this change is already in effect: command dispatch resolves the endpoint list per request, " +
-	"and the collector set follows this configuration within about ten seconds. No restart is needed."
+const restartRequiredReason = "This change is already in effect. No restart is needed."
 
 // mapFPPEndpointsConfigResponse renders one fpp.endpoints revision plus its
 // owning object's bookkeeping onto the wire. CreatedByPrincipalID/

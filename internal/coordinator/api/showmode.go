@@ -284,13 +284,9 @@ func cueActivationPinEffect(mode string, pinned bool) string {
 // reason for the behaviour, per ADR-033 decision 3.
 func showModeResolumeEffect(mode string) string {
 	if mode == config.ShowModeShow {
-		return "show mode: the Resolume WebSocket wake-up channel is held CLOSED, reducing this " +
-			"coordinator's footprint on Arena while a show runs. Returning to program mode reopens it " +
-			"without a coordinator restart."
+		return "Show mode: the live link to Resolume is closed to keep load off Arena during a show. Program mode reopens it."
 	}
-	return "program mode: the Resolume WebSocket wake-up channel is held OPEN for prompt " +
-		"clip-change evidence while programming. Switching to show mode closes it without a " +
-		"coordinator restart."
+	return "Program mode: the live link to Resolume is open so clip changes show at once. Show mode closes it."
 }
 
 func mapShowModeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, payload config.ShowModePayload, pin v1.CueActivationPin) v1.ShowModeConfigResponse {

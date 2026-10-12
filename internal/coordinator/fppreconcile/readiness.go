@@ -397,7 +397,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Ready = false
 		report.FailingCondition = ReadinessDefinitionSuperseded
 		report.Reason = fmt.Sprintf(
-			"the FPP playlist was edited since import. Instance %q playlist %q is now hash %s (captured %s); the import used hash %s (captured %s). Re-import the playlist.",
+			"The FPP playlist changed since import. Instance %q playlist %q is now %s (%s); the import used %s (%s). Import it again.",
 			p.FPP.InstanceUUID, p.FPP.PlaylistName, newest.PlaylistHash, newest.CapturedAt.Format(time.RFC3339), p.FPP.PlaylistHash, defRec.CapturedAt.Format(time.RFC3339))
 		return report, nil
 	}
@@ -433,13 +433,13 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		if entry.FPP.ExpectedSequenceFilename != "" && entry.FPP.ExpectedSequenceFilename != def.SequenceName {
 			report.Ready = false
 			report.FailingCondition = ReadinessEntryFilenameMismatch
-			report.Reason = fmt.Sprintf("entry %q expects sequence filename %q, the stored definition has %q at that position", entry.ID, entry.FPP.ExpectedSequenceFilename, def.SequenceName)
+			report.Reason = fmt.Sprintf("Entry %q expects sequence file %q, but the stored playlist has %q there.", entry.ID, entry.FPP.ExpectedSequenceFilename, def.SequenceName)
 			return report, nil
 		}
 		if entry.FPP.ExpectedMediaFilename != "" && entry.FPP.ExpectedMediaFilename != def.MediaName {
 			report.Ready = false
 			report.FailingCondition = ReadinessEntryFilenameMismatch
-			report.Reason = fmt.Sprintf("entry %q expects media filename %q, the stored definition has %q at that position", entry.ID, entry.FPP.ExpectedMediaFilename, def.MediaName)
+			report.Reason = fmt.Sprintf("Entry %q expects media file %q, but the stored playlist has %q there.", entry.ID, entry.FPP.ExpectedMediaFilename, def.MediaName)
 			return report, nil
 		}
 	}
@@ -479,18 +479,18 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-		report.Warning = appendWarning(report.Warning, "no observation has been received yet for this instance. This is normal before the first report arrives, not a fault.")
+		report.Warning = appendWarning(report.Warning, "No report has arrived from this instance yet. This is normal before its first report.")
 	case err != nil:
 		return Report{}, fmt.Errorf("fppreconcile: get latest observation: %w", err)
 	case obs.Unavailable != "":
 		report.Ready = false
 		report.FailingCondition = ReadinessEvidenceUnavailable
-		report.Reason = fmt.Sprintf("the latest observation for this instance could not establish identity (%s), so its playlistHash cannot be compared", obs.Unavailable)
+		report.Reason = fmt.Sprintf("The latest report from this instance could not be identified (%s), so its playlist cannot be compared.", obs.Unavailable)
 		return report, nil
 	case obs.PlaylistHash != p.FPP.PlaylistHash:
 		report.Ready = false
 		report.FailingCondition = ReadinessObservationHashMismatch
-		report.Reason = fmt.Sprintf("the FPP playlist was edited since import. The latest observation's playlistHash is %s, not the bound playlistHash %s.", obs.PlaylistHash, p.FPP.PlaylistHash)
+		report.Reason = fmt.Sprintf("The FPP playlist changed since import: it is now %s, not %s. Import it again.", obs.PlaylistHash, p.FPP.PlaylistHash)
 		return report, nil
 	}
 
@@ -920,7 +920,7 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 				detail = fmt.Sprintf("%s, last observed at %s", detail, found.ObservedAt.Format(time.RFC3339))
 			}
 			return false, fmt.Sprintf(
-				"node %q's render assignment reading for surface %q is %s, not current, so it is not treated as confirmed",
+				"Node %q's reading for surface %q is %s, not current, so it is not counted as confirmed.",
 				nodeID, surfaceID, detail), nil
 		}
 		return true, "", nil
@@ -934,10 +934,10 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 	info := livenessOrUnknown(liveness, nodeID)
 	if info.liveness == inventory.LivenessOnline {
 		return false, fmt.Sprintf(
-			"node %q is reporting and holds no render assignment for surface %q, which this show's cues target", nodeID, surfaceID), nil
+			"Node %q has nothing assigned to surface %q, which this show's cues use. Assign the surface.", nodeID, surfaceID), nil
 	}
 	return false, fmt.Sprintf(
-		"node %q's render assignment for surface %q cannot be confirmed: the node itself is not currently reporting (%s)",
+		"Node %q's assignment for surface %q cannot be confirmed: the node is not currently reporting (%s).",
 		nodeID, surfaceID, info.reason), nil
 }
 
@@ -1020,7 +1020,7 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 				if logger != nil {
 					logger.Warn("fppreconcile: exclusive-claim-conflict could not be fully evaluated; a stored show.cue could not be decoded", "cueId", cueID, "error", err)
 				}
-				return "", "", fmt.Sprintf("cue %q's stored configuration could not be read, so a possible conflict with another cue could not be checked", cueID), nil
+				return "", "", fmt.Sprintf("Cue %q's settings could not be read, so a conflict with another cue could not be checked.", cueID), nil
 			}
 			return "", "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
@@ -1133,7 +1133,7 @@ func nodeCatalogReadiness(ctx context.Context, st *store.Store, p config.ShowPla
 		}
 		if status != v1.CueCatalogStatusCurrent {
 			return ReadinessNodeCatalogStale, fmt.Sprintf(
-				"node %q has not confirmed it has the active show's current cue catalog %q (status: %s, node reports %q)",
+				"Node %q has not confirmed the active show's Cue list %q (status %s, node reports %q).",
 				n.NodeID, catalog.Revision, status, ackRevision), nil
 		}
 	}
@@ -1204,7 +1204,7 @@ func cueMultisyncTriggerReadiness(ctx context.Context, st *store.Store, p config
 		for _, e := range catalog.Entries {
 			if e.Outputs.Audio != nil && len(e.Triggers) == 0 {
 				return fmt.Sprintf(
-					"cue %q: no FPP sequence filename starts this cue; audio will start from the coordinator's fallback",
+					"Cue %q: no FPP sequence file starts this cue, so the coordinator starts its audio.",
 					e.CueID), nil
 			}
 		}
@@ -1309,7 +1309,7 @@ func fppMultisyncDisabledReadiness(ctx context.Context, st *store.Store, p confi
 		return "", nil
 	}
 	return fmt.Sprintf(
-		"FPP instance %q reports MultiSync turned off; every cue's audio will start from the coordinator's fallback, never a node's own MultiSync handling",
+		"FPP instance %q has MultiSync off, so the coordinator starts every cue's audio. Turn MultiSync on for tighter sync.",
 		p.FPP.InstanceUUID), nil
 }
 
@@ -1376,7 +1376,7 @@ func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, 
 		for _, e := range catalog.Entries {
 			if e.Outputs.Audio != nil {
 				return fmt.Sprintf(
-					"cue %q targets node %q, which FPP instance %q does not list as a MultiSync remote; its audio will start from the coordinator's fallback",
+					"Cue %q targets node %q, which FPP %q does not list as a MultiSync remote, so the coordinator starts its audio.",
 					e.CueID, n.NodeID, p.FPP.InstanceUUID), nil
 			}
 		}
@@ -1560,7 +1560,7 @@ func audioNodeLocalClockWarning(nodeID string, p config.AudioNodePayload) string
 		return ""
 	}
 	return fmt.Sprintf(
-		"node %q sends LTC out %s and program audio out %s, and nothing says the two run on one local clock, so timecode will drift against the music. Move LTC onto the program interface, or name this node's local clock to record that they share a clock.",
+		"Node %q sends LTC out %s and program audio out %s with no shared clock named, so timecode drifts. Put LTC on the program interface.",
 		nodeID, ltc, program)
 }
 

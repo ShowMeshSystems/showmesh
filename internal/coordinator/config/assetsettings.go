@@ -261,13 +261,13 @@ const errContentBaseURLShape = operatorMessage("Content base URL must look like 
 // reach through to the other.
 func ValidateAssetSettings(s AssetSettings) error {
 	if s.MaxUploadBytes <= 0 {
-		return fmt.Errorf("assets.settings: maxUploadBytes must be positive, got %d", s.MaxUploadBytes)
+		return operatorMessage("Maximum upload size must be more than zero. Enter a larger size.")
 	}
 	if s.SyncInterval <= 0 {
-		return fmt.Errorf("assets.settings: syncIntervalSeconds must be positive, got %s", s.SyncInterval)
+		return operatorMessage("Sync interval must be more than zero. Enter a longer interval.")
 	}
 	if s.InventoryInterval <= 0 {
-		return fmt.Errorf("assets.settings: inventoryIntervalSeconds must be positive, got %s", s.InventoryInterval)
+		return operatorMessage("Inventory interval must be more than zero. Enter a longer interval.")
 	}
 	if s.ContentBaseURL == "" {
 		return nil
@@ -280,8 +280,7 @@ func ValidateAssetSettings(s AssetSettings) error {
 		return operatorMessage("Content base URL must not contain a user name or password. Remove it.")
 	}
 	if ContentBaseURLIsLoopback(s.ContentBaseURL) {
-		return operatorMessage("Content base URL must be an address the nodes can reach, not this machine's own. " +
-			"Use http://<coordinator address>:<port>.")
+		return operatorMessage("Content base URL points at this machine, which nodes cannot reach. Use http://<coordinator address>:<port>.")
 	}
 	return nil
 }

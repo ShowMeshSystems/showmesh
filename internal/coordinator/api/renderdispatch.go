@@ -1252,7 +1252,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.transport.available reading has arrived since this probe was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
+			"No output reading has arrived since this check was sent at %s. The latest is from %s via %s.",
 			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
 	}
 	state := o.StateAt(h.now())
@@ -1466,8 +1466,7 @@ func renderCommandReplayConflictProblem(existingID, existingAction, existingNode
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, node %q); this request names a "+
-				"different action %q or node %q. Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
 			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
 	}
 }
@@ -1481,9 +1480,7 @@ func renderCommandReplayIdentityConflictProblem(existingID, action, nodeID strin
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, node %q, surface %q, sequenceId %q); this request "+
-				"has the SAME action and node but names a DIFFERENT surface %q or sequenceId %q. Mint a fresh idempotencyKey "+
-				"for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q on %q, surface %q, sequence %q), not surface %q, sequence %q. Use a new key.",
 			existingID, action, nodeID, existingSurfaceID, existingSequenceID, requestedSurfaceID, requestedSequenceID),
 	}
 }

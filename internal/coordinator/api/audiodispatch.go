@@ -301,7 +301,7 @@ func validateScheduledAtNsParam(action string, params map[string]any) *v1.Proble
 	n, ok := raw.(json.Number)
 	if !ok || !scheduledAtNsPattern.MatchString(n.String()) {
 		p := invalidParameterProblem(fmt.Sprintf(
-			"%s must be a non-negative JSON integer with no fraction or exponent: it is a reading of the target node's media clock in nanoseconds, not a duration and not wall time",
+			"%s must be a whole number of nanoseconds on the node's media clock.",
 			pkgaudio.ParamScheduledAtNs))
 		return &p
 	}
@@ -786,8 +786,7 @@ func audioSessionReplayConflictProblem(existingID, existingAction, existingNodeI
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, node %q); this request names a "+
-				"different action %q or node %q. Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
 			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
 	}
 }
@@ -803,8 +802,7 @@ func audioSessionReplayParamsConflictProblem(existingID, action, existingParamsJ
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q) with params %s; this request has the SAME "+
-				"action but DIFFERENT params: %s. Mint a fresh idempotencyKey for a genuinely new request.",
+			"idempotencyKey already belongs to command %s (%q) with params %s, not %s. Use a new key.",
 			existingID, action, existingParamsJSON, requestedParamsJSON),
 	}
 }
