@@ -14,12 +14,79 @@ import (
 // This file tests Track H seam H1's "playlist" subcommands, following
 // cmd_cue_test.go's exact pattern: each drives a real httptest.Server.
 
+const boundPlaylistBody = `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.playlist","id":"main","revision":1,
+	"payload":{"show":"halloween-2026","name":"Main show","runner":"fpp",
+		"fpp":{"instanceUuid":"u","playlistName":"p","playlistHash":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `"},
+		"entries":[{"id":"e1","cue":"thriller","fpp":{"section":"main","position":0}}]},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+const emptyPlaylistBody = `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.playlist","id":"main","revision":1,
+	"payload":{"show":"halloween-2026","name":"Main show","runner":"fpp",
+		"fpp":{"instanceUuid":"u","playlistName":"p","playlistHash":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `"},
+		"entries":[]},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+func TestCmdPlaylistListWarnsOnlyOnAnEmptyFPPPlaylist(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		warns      bool
+	}{{"empty", emptyPlaylistBody, true}, {"bound", boundPlaylistBody, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				if r.URL.Path == "/api/v1/config/show.playlist" {
+					_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.playlist","objects":[
+						{"id":"main","label":"Main show","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}]}`)
+					return
+				}
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer ts.Close()
+			var stdout, stderr bytes.Buffer
+			code := cmdPlaylist([]string{"list", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+			if code != exitOK {
+				t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+			}
+			if got := strings.Contains(stdout.String(), "WARNING: main runs no cues until songs are bound."); got != tc.warns {
+				t.Errorf("warning present = %v, want %v; stdout=%s", got, tc.warns, stdout.String())
+			}
+		})
+	}
+}
+
+func TestCmdPlaylistSetWarnsWhenCreatedWithNoEntries(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, emptyPlaylistBody)
+	}))
+	defer ts.Close()
+	var stdout, stderr bytes.Buffer
+	code := cmdPlaylist([]string{
+		"set", "--server", ts.URL, "--force",
+		"--show", "halloween-2026", "--name", "Main show", "--runner", "fpp",
+		"--fpp-json", `{"instanceUuid":"u","playlistName":"p","playlistHash":"` + strings.Repeat("a", 64) + `"}`,
+		"--entries-json", `[]`, "main",
+	}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "WARNING: main runs no cues until songs are bound.") {
+		t.Errorf("stdout = %q, want the no-cues warning", stdout.String())
+	}
+}
+
 func TestCmdPlaylistListPassesShowFilter(t *testing.T) {
 	var gotPath, gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
+		if r.URL.Path != "/api/v1/config/show.playlist" {
+			_, _ = fmt.Fprint(w, boundPlaylistBody)
+			return
+		}
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.playlist","objects":[
 			{"id":"main","label":"Main show","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}
 		]}`)

@@ -132,8 +132,9 @@ func refuse(instanceUUID string, outcome Outcome, format string, args ...any) Re
 // active show's fpp-runner show.playlist objects name, one fallback
 // program is owed to each (ADR-048 decision 1: "For every active
 // FPP-backed show, the coordinator builds a fallback program for each
-// participating FPP host."). It is empty, with no error, when no show is
-// active or the active show has no fpp-runner playlist.
+// participating FPP host."). A playlist with no entries owes no program.
+// It is empty, with no error, when no show is active or the active show
+// has no fpp-runner playlist with an entry.
 func ParticipatingFPPHosts(ctx context.Context, st *store.Store) ([]string, error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
@@ -149,6 +150,9 @@ func ParticipatingFPPHosts(ctx context.Context, st *store.Store) ([]string, erro
 	seen := make(map[string]bool)
 	var out []string
 	for _, p := range playlists {
+		if len(p.payload.Entries) == 0 {
+			continue
+		}
 		id := p.payload.FPP.InstanceUUID
 		if !seen[id] {
 			seen[id] = true

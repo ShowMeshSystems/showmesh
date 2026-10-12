@@ -383,10 +383,11 @@ func decodeShowPlaylistShowmeshAudio(top map[string]json.RawMessage, runner stri
 	return &ShowPlaylistShowmeshAudio{Repeat: repeat}, nil
 }
 
-// decodeShowPlaylistEntries decodes the required, non-empty "entries"
-// array. Duplicate entry ids and duplicate (section, position) pairs are
-// both refused: the first because an entry id must be unique to be
-// addressable, the second because two entries at the same section and
+// decodeShowPlaylistEntries decodes the required "entries" array, which may
+// be empty only for runner "fpp" (a playlist with no songs bound yet).
+// Duplicate entry ids and duplicate (section, position) pairs are both
+// refused: the first because an entry id must be unique to be addressable,
+// the second because two entries at the same section and
 // position derive the identical entry key (TRACK-H-H1-SPEC.md section
 // 3.1) and no runtime evidence could ever tell them apart. Two entries
 // referencing the SAME Cue at different positions is accepted — that is
@@ -403,8 +404,8 @@ func decodeShowPlaylistEntries(top map[string]json.RawMessage, runner, playlistS
 	if err := json.Unmarshal(entriesRaw, &rawEntries); err != nil {
 		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "entries", Detail: "entries must be a JSON array"}
 	}
-	if len(rawEntries) == 0 {
-		return nil, &ValidationError{Code: ValidationCodeEntriesEmpty, Field: "entries", Detail: "entries must contain at least one entry"}
+	if len(rawEntries) == 0 && runner != ShowPlaylistRunnerFPP {
+		return nil, &ValidationError{Code: ValidationCodeEntriesEmpty, Field: "entries", Detail: "entries must contain at least one entry unless runner is \"fpp\""}
 	}
 
 	entries := make([]ShowPlaylistEntry, 0, len(rawEntries))

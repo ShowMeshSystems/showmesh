@@ -75,6 +75,16 @@ func (t *Tx) PutFallbackProgram(ctx context.Context, rec FallbackProgramRecord) 
 	return putFallbackProgram(ctx, t.tx, rec)
 }
 
+// DeleteFallbackProgram removes instanceUUID's published fallback program. It
+// is a no-op when none is stored.
+func (s *Store) DeleteFallbackProgram(ctx context.Context, instanceUUID string) error {
+	guardNotInTx(ctx, "Store.DeleteFallbackProgram")
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM fallback_programs WHERE fpp_instance_uuid = ?`, instanceUUID); err != nil {
+		return fmt.Errorf("store: delete fallback program %q: %w", instanceUUID, err)
+	}
+	return nil
+}
+
 func scanFallbackProgram(row interface{ Scan(dest ...any) error }) (FallbackProgramRecord, error) {
 	var (
 		rec        FallbackProgramRecord

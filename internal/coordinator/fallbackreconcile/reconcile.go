@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -52,8 +53,9 @@ const (
 )
 
 const (
-	auditActionPublish = "fallback.program.publish"
-	auditActionRefuse  = "fallback.program.refuse"
+	auditActionPublish  = "fallback.program.publish"
+	auditActionRefuse   = "fallback.program.refuse"
+	auditActionWithdraw = "fallback.program.withdraw"
 )
 
 // AuditWriter is the narrow slice of identity.Service this package
@@ -217,7 +219,35 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 	if missingAck && s.catalogDeployer != nil {
 		s.autoDeployStaleCatalogs(ctx, s.now())
 	}
+	s.withdrawNonParticipating(ctx, hosts)
 	s.recordExecutorKeyPresence(ctx, hosts, s.now())
+}
+
+// withdrawNonParticipating deletes the coordinator's stored program for every
+// host that no longer runs a cue. A copy the player already installed expires
+// on its own TTL.
+func (s *Service) withdrawNonParticipating(ctx context.Context, participating []string) {
+	stored, err := s.st.ListFallbackPrograms(ctx)
+	if err != nil {
+		s.logger.Warn("fallback reconcile: list stored programs failed", "error", err)
+		return
+	}
+	for _, rec := range stored {
+		if slices.Contains(participating, rec.FPPInstanceUUID) {
+			continue
+		}
+		if err := s.st.DeleteFallbackProgram(ctx, rec.FPPInstanceUUID); err != nil {
+			s.logger.Warn("fallback reconcile: withdraw program failed", "fppInstanceUuid", rec.FPPInstanceUUID, "error", err)
+			continue
+		}
+		s.logger.Info("fallback reconcile: withdrew program of a host with no cues", "fppInstanceUuid", rec.FPPInstanceUUID)
+		s.writeAudit(ctx, identity.AuditEntry{
+			Timestamp: s.now(), PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
+			Action: auditActionWithdraw, Target: rec.FPPInstanceUUID, Kind: identity.AuditOutcome,
+			Params:        map[string]any{"packageId": rec.PackageID, "revision": rec.Revision},
+			OutcomeReason: "withdrawn",
+		})
+	}
 }
 
 // ObservationSource names this package on the observations it writes. It

@@ -62,6 +62,33 @@ func mustEncodeShowCuePayloadForTest(t *testing.T, p config.ShowCuePayload) stri
 	return raw
 }
 
+func TestNightStageFirstShowCueAudioStagesNothingForAnEmptyPlaylist(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeA, _, _, _ := nightFirstCueStageTestFixture(t, setup, now)
+	const playlistID = "playlist-empty"
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries:        []config.ShowPlaylistEntry{},
+	})
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+
+	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload); len(unstaged) != 0 {
+		t.Fatalf("unstagedNodes = %v, want none", unstaged)
+	}
+	if got := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeA); len(got) != 0 {
+		t.Fatalf("node %q: dispatched %d commands for a playlist with no cues, want 0", nodeA, len(got))
+	}
+}
+
 // TestNightStageFirstShowCueAudioStagesEveryAudioNode proves the owner
 // ruling's staging half: the first PLAYLIST entry with no audio output is
 // skipped, the next entry's Cue is staged under

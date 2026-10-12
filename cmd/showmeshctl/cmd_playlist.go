@@ -147,7 +147,26 @@ func cmdPlaylistList(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitOK
 	}
 	printShowConfigObjectsTable(stdout, resp)
+	for _, o := range resp.Objects {
+		var detail showPlaylistConfigResponse
+		if err := c.getJSON(ctx, "/api/v1/config/show.playlist/"+url.PathEscape(o.ID), nil, &detail); err != nil {
+			return reportError(stderr, "playlist list", err)
+		}
+		if w := playlistEmptyWarning(detail); w != "" {
+			_, _ = fmt.Fprintln(stdout, w)
+		}
+	}
 	return exitOK
+}
+
+// playlistEmptyWarning is the one-line warning for an FPP playlist with no
+// song bound to a cue, or "" when the playlist has any.
+func playlistEmptyWarning(resp showPlaylistConfigResponse) string {
+	var entries []json.RawMessage
+	if resp.Payload.Runner != "fpp" || json.Unmarshal(resp.Payload.Entries, &entries) != nil || len(entries) > 0 {
+		return ""
+	}
+	return fmt.Sprintf("WARNING: %s runs no cues until songs are bound.", resp.ID)
 }
 
 func cmdPlaylistGet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -308,6 +327,9 @@ func cmdPlaylistSet(args []string, stdout, stderr io.Writer, clock func() time.T
 		return exitOK
 	}
 	printPlaylistDetail(stdout, resp)
+	if w := playlistEmptyWarning(resp); w != "" {
+		_, _ = fmt.Fprintln(stdout, w)
+	}
 	return exitOK
 }
 

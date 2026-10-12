@@ -319,6 +319,9 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return Report{}, fmt.Errorf("fppreconcile: playlist readiness requires an fpp-runner playlist with an fpp binding, got runner %q", p.Runner)
 	}
 	report := Report{PlaylistID: playlistID, Ready: true}
+	if len(p.Entries) == 0 {
+		report.Warning = "No songs are bound to cues, so this playlist runs no cues. Bind a song in the playlist."
+	}
 
 	// Condition 1: a definition is stored for (instanceUuid, playlistHash).
 	defRec, err := st.GetFPPPlaylistDefinition(ctx, p.FPP.InstanceUUID, p.FPP.PlaylistHash)
@@ -467,7 +470,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-		report.Warning = "no observation has been received yet for this instance. This is normal before the first report arrives, not a fault."
+		report.Warning = appendWarning(report.Warning, "no observation has been received yet for this instance. This is normal before the first report arrives, not a fault.")
 	case err != nil:
 		return Report{}, fmt.Errorf("fppreconcile: get latest observation: %w", err)
 	case obs.Unavailable != "":

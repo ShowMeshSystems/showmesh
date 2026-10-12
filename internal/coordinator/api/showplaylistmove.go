@@ -44,7 +44,7 @@ func playlistMovePreviewProblem(status int, detail string) v1.Problem {
 const (
 	moveSummaryChanged     = "FPP's playlist changed. Review the changes to keep your cues on the right sequences."
 	moveSummaryCopyMissing = "ShowMesh no longer has the copy of FPP's playlist this playlist was made from. Review the changes to keep your cues on the right sequences."
-	moveSummaryAllDropped  = "None of this playlist's cues can be kept in FPP's changed playlist. Add the sequences back in FPP, or make a new playlist."
+	moveSummaryAllDropped  = "None of this playlist's cues can be kept in FPP's changed playlist. Move it to leave the playlist with no cues, then bind songs again."
 	moveSummaryCueGone     = "A cue this playlist uses no longer exists. Pick a different cue for it and save, then review the changes again."
 	moveSummaryCannotSave  = "This playlist would not pass the save checks after the move. Fix the playlist and save, then review the changes again."
 )
@@ -146,6 +146,9 @@ func (h *handlers) handleGetShowPlaylistDefinitionMovePreview(w http.ResponseWri
 		resp.Summary = refusal
 		jsonWrite(w, resp)
 		return
+	}
+	if len(plan.Entries) > 0 && len(plan.Proposed.Entries) == 0 {
+		resp.Summary = moveSummaryAllDropped
 	}
 	resp.CanConfirm = true
 	proposed := mapConfigShowPlaylist(plan.Proposed)

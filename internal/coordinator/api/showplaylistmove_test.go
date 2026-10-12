@@ -186,8 +186,27 @@ func TestShowPlaylistDefinitionMovePreviewEveryEntryDropped(t *testing.T) {
 	status, body := s.preview(t, "quick")
 	var got v1.ShowPlaylistMovePreviewResponse
 	_ = json.Unmarshal(body, &got)
-	if status != http.StatusOK || !got.NewerAvailable || got.CanConfirm || got.Proposed != nil || len(got.Entries) != 2 || got.Entries[0].Outcome != "dropped" || len(got.NewEntries) != 1 {
+	if status != http.StatusOK || !got.NewerAvailable || !got.CanConfirm || got.Proposed == nil || len(got.Proposed.Entries) != 0 || len(got.Entries) != 2 || got.Entries[0].Outcome != "dropped" || len(got.NewEntries) != 1 {
 		t.Fatalf("status = %d; body: %s", status, body)
+	}
+	if got.Summary != moveSummaryAllDropped {
+		t.Fatalf("summary = %q", got.Summary)
+	}
+}
+
+func TestShowPlaylistDefinitionMovePreviewMovesAnEmptyPlaylist(t *testing.T) {
+	s := newMovePreviewSetup(t)
+	s.putDefinition(t, moveOldHash, testNow.Add(-time.Hour), moveOldDefinition)
+	s.putPlaylist(t, "quick", strings.Replace(movePlaylistTemplate, movePlaylistTemplate[strings.Index(movePlaylistTemplate, `"entries"`):], `"entries": []}`, 1))
+	s.putDefinition(t, moveNewHash, testNow, moveNewDefinition)
+	status, body := s.preview(t, "quick")
+	var got v1.ShowPlaylistMovePreviewResponse
+	_ = json.Unmarshal(body, &got)
+	if status != http.StatusOK || !got.NewerAvailable || !got.CanConfirm || got.Proposed == nil || got.Proposed.FPP.PlaylistHash != moveNewHash || len(got.Proposed.Entries) != 0 {
+		t.Fatalf("status = %d; body: %s", status, body)
+	}
+	if got.Summary == moveSummaryAllDropped {
+		t.Fatalf("an empty playlist has no cues to drop; summary = %q", got.Summary)
 	}
 }
 
