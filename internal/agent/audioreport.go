@@ -525,6 +525,7 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 		RestoreNextAttemptMs:  s.RestoreNextAttempt.Milliseconds(),
 		RestoreLastReason:     s.RestoreLastReason,
 		Stale:                 s.Stale,
+		Unreferenced:          s.Unreferenced,
 	}
 	if r.Fault == "" {
 		r.Fault = "none"

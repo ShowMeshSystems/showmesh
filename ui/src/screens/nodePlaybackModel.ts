@@ -18,6 +18,17 @@ export function sourceRoleWord(role: string): string {
   return SOURCE_ROLE_WORDS[role] ?? role
 }
 
+/** Ids of the audio sessions this node reports as stopped and unused. */
+export function unusedSessionIds(entries: readonly ObservationEntry[]): Set<string> {
+  const ids = new Set<string>()
+  for (const entry of entries) {
+    if (entry.resource.kind === 'audio_session' && entry.signal === 'audio_session.unreferenced' && entry.state === 'current' && entry.value === true) {
+      ids.add(entry.resource.id)
+    }
+  }
+  return ids
+}
+
 const NOT_REPORTED_REASON = 'This node has not reported this signal.'
 
 function findSignal(entries: readonly ObservationEntry[], kind: string, id: string, signal: string): ObservationEntry | undefined {
@@ -60,6 +71,8 @@ export type SessionPlaybackRow = {
 
 export type NodePlaybackStatus = {
   sessions: SessionPlaybackRow[]
+  /** Stopped sessions nothing uses any more, kept apart from the sessions in use. */
+  unusedSessions: SessionPlaybackRow[]
   ltcTimecode: SignalFact<FreshReading>
 }
 
@@ -138,5 +151,10 @@ export function nodePlaybackStatus(node: Node, nowMs: number): NodePlaybackStatu
     }
   })
 
-  return { sessions, ltcTimecode: timecodeFact(entries, nowMs) }
+  const unused = unusedSessionIds(entries)
+  return {
+    sessions: sessions.filter((row) => !unused.has(row.sessionId)),
+    unusedSessions: sessions.filter((row) => unused.has(row.sessionId)),
+    ltcTimecode: timecodeFact(entries, nowMs),
+  }
 }

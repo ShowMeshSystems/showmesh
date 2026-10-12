@@ -1784,3 +1784,12 @@ func TestApplyAlignmentNilManagerLeavesFieldsZero(t *testing.T) {
 		t.Errorf("payload = %+v, want every Alignment* field zero for a nil manager", payload)
 	}
 }
+
+func TestSessionReportCarriesUnreferenced(t *testing.T) {
+	if !sessionReportFromSnapshot(audio.SessionSnapshot{ID: "old", Unreferenced: true}).Unreferenced {
+		t.Fatal("Unreferenced = false, want true for an unreferenced snapshot")
+	}
+	if sessionReportFromSnapshot(audio.SessionSnapshot{ID: "old"}).Unreferenced {
+		t.Fatal("Unreferenced = true, want false by default")
+	}
+}

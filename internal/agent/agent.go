@@ -533,7 +533,7 @@ func Run() int {
 		defer close(assetInventoryDone)
 		ticker := time.NewTicker(cfg.AssetInventoryInterval)
 		defer ticker.Stop()
-		runAssetInventory(sigCtx, conn, cfg.NodeID, cfg.AssetDir, time.Now, ticker.C, assetFetchTrigger, logger)
+		runAssetInventory(sigCtx, conn, cfg.NodeID, cfg.AssetDir, time.Now, ticker.C, assetFetchTrigger, audioMgr.ReprobeIdleMediaFaults, logger)
 	}()
 
 	renderReportDone := make(chan struct{})

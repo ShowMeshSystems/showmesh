@@ -800,6 +800,7 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	// this tick is itself fresh information, even when what it describes
 	// (the signals above) is not.
 	obs = append(obs, buildSessionValue(res, source, SignalSessionStale, sess.Stale, observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionUnreferenced, sess.Unreferenced, sessionAt, rep))
 
 	if sess.StartTrigger != "" {
 		obs = append(obs, buildSessionValue(res, source, SignalSessionStartTrigger, sess.StartTrigger, sessionAt, rep))

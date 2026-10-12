@@ -70,6 +70,26 @@ describe('Monitor · Signals', () => {
     expect(within(table).getByText('resolume.reachable')).toBeInTheDocument()
   })
 
+  it('lists the signals of an unused audio session under their own heading', () => {
+    const session = (id: string, signal: string, value: string | boolean) =>
+      ({ ...observation(signal), resource: { kind: 'audio_session', id }, value }) as unknown as Node['audio'][number]
+    const audioNode = {
+      ...node('media-front'),
+      audio: [
+        session('show', 'audio_session.state', 'playing'),
+        session('old-test', 'audio_session.readiness.reason', 'asset is not present'),
+        session('old-test', 'audio_session.unreferenced', true),
+      ],
+    } as Node
+    renderScreen({ nodes: [audioNode], snapshotReceivedAt: Date.now() })
+    const inUse = screen.getByRole('region', { name: 'Signals, scrollable' })
+    expect(within(inUse).getByText('audio_session.state')).toBeInTheDocument()
+    expect(within(inUse).queryByText('audio_session.readiness.reason')).toBeNull()
+    expect(screen.getByRole('heading', { level: 2, name: 'Unused audio sessions' })).toBeInTheDocument()
+    const unused = screen.getByRole('region', { name: 'Unused audio session signals, scrollable' })
+    expect(within(unused).getByText('audio_session.readiness.reason')).toBeInTheDocument()
+  })
+
   it('shows the loading absence before the first snapshot, distinct from a settled empty', () => {
     renderScreen({ snapshotReceivedAt: null })
     expect(screen.getByText('No signal history has arrived yet.')).toBeInTheDocument()

@@ -51,7 +51,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration, parseIsoMs } from '../domain/time'
 import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
-import { nodePlaybackStatus, type FreshReading } from './nodePlaybackModel'
+import { nodePlaybackStatus, type FreshReading, type SessionPlaybackRow } from './nodePlaybackModel'
 import { nodeSyncStatus, type SignalFact } from './nodeSyncModel'
 import { SurfaceEditor, type ShowChoice } from './SurfaceEditor'
 import { activeShowId, formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
@@ -445,6 +445,43 @@ function PositionCell({ fact }: { fact: SignalFact<FreshReading> }) {
   )
 }
 
+function SessionsTable({ rows, label }: { rows: readonly SessionPlaybackRow[]; label: string }) {
+  return (
+    <TableWrap label={label}>
+      <Table minWidth={620}>
+        <thead>
+          <tr>
+            <th scope="col">Session</th>
+            <th scope="col">Playing</th>
+            <th scope="col">State</th>
+            <th scope="col">Position</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.sessionId}>
+              <td>
+                <strong>{row.sessionId}</strong>
+                <br />
+                <FactLine fact={row.sourceRole} className="sm-small sm-muted" />
+              </td>
+              <td>
+                <FactLine fact={row.item} className="sm-data" />
+              </td>
+              <td>
+                <FactLine fact={row.state} className="sm-data" />
+              </td>
+              <td>
+                <PositionCell fact={row.position} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </TableWrap>
+  )
+}
+
 /** What each audio session this node reports is playing and where it is, advancing between reports (BUILD-PLAN). */
 function PlaybackSection({ node, nowMs }: { node: Node; nowMs: number }) {
   const status = nodePlaybackStatus(node, nowMs)
@@ -453,38 +490,16 @@ function PlaybackSection({ node, nowMs }: { node: Node; nowMs: number }) {
       {status.sessions.length === 0 ? (
         <RuledStrip absence="empty" label="None" fact="No audio session is running on this node." />
       ) : (
-        <TableWrap label="Audio sessions on this node, scrollable">
-          <Table minWidth={620}>
-            <thead>
-              <tr>
-                <th scope="col">Session</th>
-                <th scope="col">Playing</th>
-                <th scope="col">State</th>
-                <th scope="col">Position</th>
-              </tr>
-            </thead>
-            <tbody>
-              {status.sessions.map((row) => (
-                <tr key={row.sessionId}>
-                  <td>
-                    <strong>{row.sessionId}</strong>
-                    <br />
-                    <FactLine fact={row.sourceRole} className="sm-small sm-muted" />
-                  </td>
-                  <td>
-                    <FactLine fact={row.item} className="sm-data" />
-                  </td>
-                  <td>
-                    <FactLine fact={row.state} className="sm-data" />
-                  </td>
-                  <td>
-                    <PositionCell fact={row.position} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </TableWrap>
+        <SessionsTable rows={status.sessions} label="Audio sessions on this node, scrollable" />
+      )}
+      {status.unusedSessions.length > 0 && (
+        <>
+          <p className="sm-small sm-muted">
+            {status.unusedSessions.length} unused session{status.unusedSessions.length === 1 ? ' is' : 's are'} stopped and no cue uses them. Nothing here
+            affects the show.
+          </p>
+          <SessionsTable rows={status.unusedSessions} label="Unused audio sessions on this node, scrollable" />
+        </>
       )}
       <div className="sm-small sm-muted">
         <span>LTC timecode: </span>

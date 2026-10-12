@@ -1171,7 +1171,7 @@ func TestSessionSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(SessionSignalIDs) != 29 {
+	if len(SessionSignalIDs) != 30 {
 		t.Errorf("SessionSignalIDs has %d entries, want 29", len(SessionSignalIDs))
 	}
 }
