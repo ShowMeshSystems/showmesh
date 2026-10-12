@@ -781,9 +781,9 @@ func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.O
 // This is the one revalidation choke point: every path that reaches a
 // successful Load — Prepare, Start, and the advance/restore paths that
 // call this directly — clears any standing fault right here, and a
-// probe or Load failure classifies and records one. A reappearing
-// device or a re-probed asset therefore stays faulted until an actual
-// successful prepare, never resumes silently.
+// probe or Load failure classifies and records one. A stopped session's
+// missing-file fault clears when the file lands; everything else stays
+// faulted until a successful prepare, never resumes silently.
 func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem) (EngineObservation, error) {
 	// ProbeAsset runs under ctx unbounded by boundedEngineCallContext: it
 	// includes hashFile, a full-file sha256 read with no context

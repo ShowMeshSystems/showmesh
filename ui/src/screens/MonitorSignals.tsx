@@ -55,7 +55,7 @@ export function MonitorSignals() {
 
       {unused.length > 0 && (
         <Section id="mo-unused-sessions" title="Unused audio sessions">
-          <p className="sm-small sm-muted">These sessions are stopped and no cue uses them. Nothing here affects the show.</p>
+          <p className="sm-small sm-muted">Stopped sessions no cue uses.</p>
           <SignalsTable rows={unused} label="Unused audio session signals, scrollable" onOpen={(to) => navigate(to)} />
         </Section>
       )}

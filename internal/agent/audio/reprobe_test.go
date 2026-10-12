@@ -19,6 +19,7 @@ func TestReprobeClearsIdleMediaFaultOnceFileLands(t *testing.T) {
 	}
 	m.Apply(ctx, id, "apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
 	m.Prepare(ctx, id, "prepare", 2)
+	m.Stop(ctx, id, "stop", 3)
 
 	faultOf := func() pkgaudio.SessionFault {
 		s, _ := m.get(id)
@@ -69,5 +70,58 @@ func TestSnapshotMarksOnlyIdleLeftoverSessionsUnreferenced(t *testing.T) {
 		if got[id] != w {
 			t.Errorf("session %q Unreferenced = %v, want %v (snapshots: %v)", id, got[id], w, got)
 		}
+	}
+}
+
+func TestReprobeLeavesNonStoppedFaultedSessionsAlone(t *testing.T) {
+	for _, state := range []pkgaudio.State{pkgaudio.StatePlaying, pkgaudio.StatePaused, pkgaudio.StateFailed} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			m := newTestManager(t, newClock(time.Now()))
+			id := pkgaudio.SessionID("s-" + string(state))
+
+			ref := writeTestAsset(t, m.assetDir, "late.wav", "late", []byte("late"))
+			m.Apply(ctx, id, "apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+			s, _ := m.get(id)
+			s.mu.Lock()
+			s.state = state
+			s.fault = pkgaudio.FaultMediaDisappeared
+			s.faultReason = "file missing"
+			s.mu.Unlock()
+
+			m.ReprobeIdleMediaFaults(ctx)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fault != pkgaudio.FaultMediaDisappeared || s.state != state {
+				t.Fatalf("state/fault = %q/%q, want %q/%q untouched", s.state, s.fault, state, pkgaudio.FaultMediaDisappeared)
+			}
+		})
+	}
+}
+
+func TestReprobeKeepsStoppedMismatchAndDecodeFaults(t *testing.T) {
+	for _, fault := range []pkgaudio.SessionFault{pkgaudio.FaultMediaMismatch, pkgaudio.FaultDecodeFailure} {
+		t.Run(string(fault), func(t *testing.T) {
+			ctx := context.Background()
+			m := newTestManager(t, newClock(time.Now()))
+			id := pkgaudio.SessionID("s-" + string(fault))
+
+			ref := writeTestAsset(t, m.assetDir, "late.wav", "late", []byte("late"))
+			m.Apply(ctx, id, "apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+			s, _ := m.get(id)
+			s.mu.Lock()
+			s.state = pkgaudio.StateStopped
+			s.fault = fault
+			s.mu.Unlock()
+
+			m.ReprobeIdleMediaFaults(ctx)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.fault != fault {
+				t.Fatalf("fault = %q, want %q kept", s.fault, fault)
+			}
+		})
 	}
 }

@@ -495,8 +495,7 @@ function PlaybackSection({ node, nowMs }: { node: Node; nowMs: number }) {
       {status.unusedSessions.length > 0 && (
         <>
           <p className="sm-small sm-muted">
-            {status.unusedSessions.length} unused session{status.unusedSessions.length === 1 ? ' is' : 's are'} stopped and no cue uses them. Nothing here
-            affects the show.
+            Stopped session{status.unusedSessions.length === 1 ? '' : 's'} no cue uses: {status.unusedSessions.length}.
           </p>
           <SessionsTable rows={status.unusedSessions} label="Unused audio sessions on this node, scrollable" />
         </>

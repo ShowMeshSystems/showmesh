@@ -6,8 +6,8 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// ReprobeIdleMediaFaults re-checks the media of every idle session that holds
-// a media fault, and clears the fault when the asset is now ready. Call it
+// ReprobeIdleMediaFaults re-checks the media of every stopped session whose
+// file is missing, and clears the fault when the asset is now ready. Call it
 // whenever the node's asset inventory may have changed.
 func (m *Manager) ReprobeIdleMediaFaults(ctx context.Context) {
 	m.mu.Lock()
@@ -24,12 +24,7 @@ func (m *Manager) ReprobeIdleMediaFaults(ctx context.Context) {
 func (s *Session) reprobeIdleMediaFault(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != pkgaudio.StateStopped && s.state != pkgaudio.StateFailed {
-		return
-	}
-	switch s.fault {
-	case pkgaudio.FaultMediaDisappeared, pkgaudio.FaultMediaMismatch, pkgaudio.FaultDecodeFailure:
-	default:
+	if s.state != pkgaudio.StateStopped || s.fault != pkgaudio.FaultMediaDisappeared {
 		return
 	}
 	item, ok := s.currentItemLocked()
@@ -42,5 +37,5 @@ func (s *Session) reprobeIdleMediaFault(ctx context.Context) {
 		return
 	}
 	s.clearFaultLocked()
-	s.state = pkgaudio.StateStopped
+	s.persistBestEffortLocked("missing media fault cleared")
 }
