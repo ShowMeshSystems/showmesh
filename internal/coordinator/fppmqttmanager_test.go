@@ -324,18 +324,10 @@ func TestFPPMQTTCollectorStateMapsNotSilentToRunning(t *testing.T) {
 }
 
 // TestFPPMQTTManagerCollectorStatusesConfiguredWithZeroHostsStillEmitsOneRow
-// pins a state that reconcile itself cannot produce: both
-// config.ValidateFPPMQTTConfigKind (write time) and fppmqtt.New (construction
-// time, independent of the store-side check) refuse a broker configured
-// with no hosts, so m.bundle can never actually hold one through the real
-// reconcile path. The bundle is built directly here, bypassing reconcile,
-// specifically to prove CollectorStatuses does not let that guarantee's
-// loss make this collector silently vanish from the snapshot: ranging over
-// an empty host map would otherwise produce zero rows, and an absent
-// collector is a worse failure than a wrong one, the exact shape of
-// failure a per-host status row exists to prevent one layer up. The
-// collector field is left nil deliberately: this branch must return
-// before ever touching it.
+// pins a state reconcile never builds: a stored broker with no hosts is
+// accepted at write time but reconcile starts no collector for it, and
+// fppmqtt.New refuses an empty host map. The bundle is built directly here so
+// CollectorStatuses is proven not to drop the row when that guard is lost.
 func TestFPPMQTTManagerCollectorStatusesConfiguredWithZeroHostsStillEmitsOneRow(t *testing.T) {
 	mgr, _ := newTestFPPMQTTManager(t)
 

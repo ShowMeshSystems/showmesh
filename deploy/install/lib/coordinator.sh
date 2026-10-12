@@ -361,11 +361,13 @@ coord_fpp_event_feed() {
   MQ_URL="$(env_get "$COORD_ENV" SHOWMESH_MQTT_BROKER)" MQ_USER="$(env_get "$COORD_ENV" SHOWMESH_MQTT_USERNAME)" \
     MQ_PASS="$(env_get "$COORD_ENV" SHOWMESH_MQTT_PASSWORD)" \
     jq -n '{brokerURL: env.MQ_URL, username: env.MQ_USER, password: env.MQ_PASS}' > "$body"
-  http_request PUT "$url" "$body" "$token"
+  # Create-only: a setting saved in the UI between the read and this write is left alone.
+  http_request PUT "$url" "$body" "$token" "If-None-Match: *"
   rm -f "$body"
   case "$HTTP_STATUS" in
     2*) ok "the built-in broker is saved as the FPP event feed"
       info "Add each FPP player's host name in the UI under Settings, Connections." ;;
+    412) ok "the FPP event feed was saved by someone else meanwhile and was left as it is" ;;
     *) warn "The FPP event feed could not be saved. $(problem_detail) $by_hand" ;;
   esac
 }

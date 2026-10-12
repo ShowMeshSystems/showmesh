@@ -125,8 +125,8 @@ func fppMQTTHostsEqual(a, b map[string]string) bool {
 // ValidateFPPMQTTConfigKind validates one fpp.mqtt payload: the same
 // broker URL/host shape [validateFPPMQTTConfig] already applies to the
 // environment-sourced Config, applied to the store-backed struct, plus
-// [fppmqtt.New]'s own duplicate-HostName rejection so a shape accepted
-// here can never fail construction later.
+// [fppmqtt.New]'s own duplicate-HostName rejection. A broker with no hosts
+// is accepted here and never constructed: reconcile skips it.
 func ValidateFPPMQTTConfigKind(cfg FPPMQTTConfig, fppEndpoints []FPPEndpoint) error {
 	if cfg.BrokerURL != "" {
 		if brokerURLHasUserinfo(cfg.BrokerURL) {
