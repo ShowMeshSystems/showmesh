@@ -903,18 +903,22 @@ describe('Settings › Render recovery idle output', () => {
   })
 
   it('selects an idle output with the radio cards', async () => {
-    stubs.getRenderSettingsConfig = () =>
-      Promise.resolve({
-        serverTime: '2026-08-30T21:00:00Z',
-        kind: 'render.settings',
-        revision: 1,
-        payload: { idleOutput: 'black', restartPolicy: { initialDelaySeconds: 2, maxDelaySeconds: 30, maxConsecutiveFastFailures: 5 } },
-        updatedAt: '2026-08-30T18:00:00Z',
-        createdByPrincipalId: 'p1',
-        createdByPrincipalName: 'erbartos',
-        source: 'api',
-        idleOutputEffectiveNote: 'idleOutput takes effect on next apply',
-      })
+    const loaded = {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'render.settings',
+      revision: 1,
+      payload: { idleOutput: 'black', restartPolicy: { initialDelaySeconds: 2, maxDelaySeconds: 30, maxConsecutiveFastFailures: 5 } },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+      idleOutputEffectiveNote: 'idleOutput takes effect on next apply',
+    }
+    const put = vi.fn<(body: unknown) => Promise<unknown>>(() =>
+      Promise.resolve({ ...loaded, revision: 2, payload: { ...loaded.payload, idleOutput: 'hold' } }),
+    )
+    stubs.getRenderSettingsConfig = () => Promise.resolve(loaded)
+    stubs.putRenderSettingsConfig = put as unknown as typeof stubs.putRenderSettingsConfig
 
     renderAt('/settings/recovery')
 
@@ -924,6 +928,10 @@ describe('Settings › Render recovery idle output', () => {
     fireEvent.click(hold)
     expect(hold).toBeChecked()
     expect(black).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: /Save recovery/ }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ idleOutput: 'hold' }))
   })
 })
 
