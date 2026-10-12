@@ -178,6 +178,10 @@ Commands:
   fpp set-transition-gain <id> <percent 0-100>
                                        write the brightness transition gain, a multiplier over FPP's
                                        own scheduled ceiling (write, requires fpp:command)
+  fpp set-brightness-excluded-ranges <id> <ranges>
+                                       replace the channels the brightness ceiling never changes,
+                                       as start-count pairs like "1-512, 1025-512" (write,
+                                       requires fpp:command)
   fpp republish-playlist-definitions <id>
                                        ask that host's plugin to resend its playlist definitions;
                                        reports an accepted request, never an import (write,

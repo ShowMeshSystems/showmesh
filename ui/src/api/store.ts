@@ -111,6 +111,9 @@ type SchemaFPPPairingRequest = components['schemas']['FPPPairingRequest']
 type SchemaFPPPairingResponse = components['schemas']['FPPPairingResponse']
 type SchemaFPPBrightnessCeilingRequest = components['schemas']['FPPBrightnessCeilingRequest']
 type SchemaFPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
+type SchemaFPPChannelRange = components['schemas']['FPPChannelRange']
+type SchemaFPPBrightnessExcludedRangesRequest = components['schemas']['FPPBrightnessExcludedRangesRequest']
+type SchemaFPPBrightnessExcludedRangesResponse = components['schemas']['FPPBrightnessExcludedRangesResponse']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
 // Track G seam G-2 (ADR-039).
 type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
@@ -781,6 +784,21 @@ export class ApiStore {
       const body: SchemaFPPBrightnessCeilingRequest = { ceiling }
       return await this.client.postJson<SchemaFPPBrightnessCeilingResponse>(
         `/fpp/${encodeURIComponent(instanceId)}/brightness/ceiling`,
+        body,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/fpp/{instanceId}/brightness/excluded-ranges`. Behind `fpp:command`. Replaces the whole list; an empty list clears it. */
+  async putFPPBrightnessExcludedRanges(instanceId: string, ranges: SchemaFPPChannelRange[]): Promise<SchemaFPPBrightnessExcludedRangesResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaFPPBrightnessExcludedRangesRequest = { ranges }
+      return await this.client.putJson<SchemaFPPBrightnessExcludedRangesResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/brightness/excluded-ranges`,
         body,
         controller.signal,
       )

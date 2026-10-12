@@ -986,3 +986,25 @@ type fppBrightnessCeilingResponse struct {
 	Command    fppCommandResult `json:"command"`
 	Ceiling    *int             `json:"ceiling"`
 }
+
+// fppChannelRange is one run of channels: a 1-based first channel and how
+// many channels follow from it.
+type fppChannelRange struct {
+	StartChannel int `json:"startChannel"`
+	ChannelCount int `json:"channelCount"`
+}
+
+// fppBrightnessExcludedRangesRequest is the body of PUT
+// /api/v1/fpp/{instanceId}/brightness/excluded-ranges.
+type fppBrightnessExcludedRangesRequest struct {
+	Ranges    []fppChannelRange `json:"ranges"`
+	RequestID string            `json:"requestId"`
+}
+
+// fppBrightnessExcludedRangesResponse is the body of a successful write.
+// ExcludedRanges is absent when the plugin did not report the list in time.
+type fppBrightnessExcludedRangesResponse struct {
+	ServerTime     time.Time          `json:"serverTime"`
+	Command        fppCommandResult   `json:"command"`
+	ExcludedRanges *[]fppChannelRange `json:"excludedRanges,omitempty"`
+}

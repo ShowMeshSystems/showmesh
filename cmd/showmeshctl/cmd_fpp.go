@@ -57,8 +57,9 @@ var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Write
 	// pair and set-brightness-ceiling share this map's dispatch shape.
 	// pair is behind principal:write, not fpp:command: opening a pairing
 	// creates a principal and mints it a token.
-	"pair":                   cmdFPPPair,
-	"set-brightness-ceiling": cmdFPPSetBrightnessCeiling,
+	"pair":                           cmdFPPPair,
+	"set-brightness-ceiling":         cmdFPPSetBrightnessCeiling,
+	"set-brightness-excluded-ranges": cmdFPPSetBrightnessExcludedRanges,
 }
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -118,6 +119,7 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <instance-id> <percent 0-100> [--fade-seconds N] [--request-id KEY]")
 		_, _ = fmt.Fprintln(stderr, "  republish-playlist-definitions <instance-id> [--request-id KEY]")
 		_, _ = fmt.Fprintln(stderr, "  set-brightness-ceiling     <instance-id> <ceiling 0-100> [--request-id KEY]")
+		_, _ = fmt.Fprintln(stderr, "  set-brightness-excluded-ranges <instance-id> <ranges, like \"1-512, 1025-512\" or none>")
 		_, _ = fmt.Fprintln(stderr, "  pair                       <instance-id> <code XXXX-XXXX>")
 		_, _ = fmt.Fprintln(stderr, "  pairing                    <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-definitions dispatches FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's")

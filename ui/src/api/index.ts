@@ -34,6 +34,8 @@ export type {
   FPPPairingStateResponse,
   FPPPairingResponse,
   FPPBrightnessCeilingResponse,
+  FPPChannelRange,
+  FPPBrightnessExcludedRangesResponse,
   // The three-level emergency stop and its hard-stop arm/fire gate.
   EmergencyStopResult,
   EmergencyStopInstanceOutcome,
@@ -341,6 +343,7 @@ export {
   getFPPPairing,
   postFPPPairing,
   postFPPBrightnessCeiling,
+  putFPPBrightnessExcludedRanges,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
   acknowledgeFPPInstanceUUIDChange,

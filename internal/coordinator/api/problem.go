@@ -224,6 +224,11 @@ const (
 	// was valid and the instance configured, but FPP did not accept it.
 	ProblemTypeFPPBrightnessCeilingWriteFailed = problemBaseURI + "fpp-brightness-ceiling-write-failed"
 
+	// ProblemTypeFPPBrightnessExcludedRangesWriteFailed is
+	// PUT /fpp/{instanceId}/brightness/excluded-ranges's own upstream
+	// failure, a 502 for [ProblemTypeFPPTransitionGainWriteFailed]'s reason.
+	ProblemTypeFPPBrightnessExcludedRangesWriteFailed = problemBaseURI + "fpp-brightness-excluded-ranges-write-failed"
+
 	// ProblemTypeSequenceFilenameClaimDuplicate is
 	// [sequenceFilenameClaimConflictProblem]'s own type (ADR-051 decision
 	// 2): a show.playlist write whose entries[].fpp.expectedSequenceFilename
@@ -856,6 +861,18 @@ func fppBrightnessCeilingWriteFailedProblem(instanceID, reason string) v1.Proble
 		Title:  "FPP brightness ceiling write failed",
 		Status: http.StatusBadGateway,
 		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %s", instanceID, reason),
+	}
+}
+
+// fppBrightnessExcludedRangesWriteFailedProblem reports an excluded
+// ranges write the player did not take. reason is already the whole
+// operator sentence, carrying the plugin's own words when it sent any.
+func fppBrightnessExcludedRangesWriteFailedProblem(reason string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPBrightnessExcludedRangesWriteFailed,
+		Title:  "Excluded channels not saved",
+		Status: http.StatusBadGateway,
+		Detail: reason,
 	}
 }
 

@@ -51,6 +51,8 @@ import type {
   EmergencyStopArmResponse,
   EmergencyStopResult,
   FPPBrightnessCeilingResponse,
+  FPPBrightnessExcludedRangesResponse,
+  FPPChannelRange,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
@@ -224,6 +226,10 @@ export function postFPPPairing(instanceId: string, code: string): Promise<FPPPai
 
 export function postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<FPPBrightnessCeilingResponse> {
   return store.postFPPBrightnessCeiling(instanceId, ceiling)
+}
+
+export function putFPPBrightnessExcludedRanges(instanceId: string, ranges: FPPChannelRange[]): Promise<FPPBrightnessExcludedRangesResponse> {
+  return store.putFPPBrightnessExcludedRanges(instanceId, ranges)
 }
 
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation recovery

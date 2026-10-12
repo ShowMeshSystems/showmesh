@@ -49,6 +49,7 @@ const stubs = vi.hoisted(() => ({
   getFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   postFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   postFPPBrightnessCeiling: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putFPPBrightnessExcludedRanges: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -96,6 +97,7 @@ vi.mock('../api', async () => {
     getFPPPairing: (...args: never[]) => stubs.getFPPPairing(...args),
     postFPPPairing: (...args: never[]) => stubs.postFPPPairing(...args),
     postFPPBrightnessCeiling: (...args: never[]) => stubs.postFPPBrightnessCeiling(...args),
+    putFPPBrightnessExcludedRanges: (...args: never[]) => stubs.putFPPBrightnessExcludedRanges(...args),
   }
 })
 
@@ -536,7 +538,7 @@ describe('Settings › Connections › FPP instance detail', () => {
     await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
     openDetail()
 
-    await waitFor(() => expect(screen.getAllByText('Unobserved')).toHaveLength(5))
+    await waitFor(() => expect(screen.getAllByText('Unobserved')).toHaveLength(6))
     expect(screen.getAllByText('This FPP instance has not reported this signal.')).toHaveLength(1)
   })
 
@@ -590,6 +592,94 @@ describe('Settings › Connections › FPP instance detail', () => {
     view.rerender(settingsTree('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: 70 }))))
     await waitFor(() => expect(screen.getByLabelText('Ceiling')).toHaveValue('70'))
     expect(screen.getByLabelText('Ceiling')).toBeEnabled()
+  })
+
+  async function openExcludedRanges(observations: ReturnType<typeof makeEvidence>[], scopes = ['config:write', 'fpp:command']) {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    renderAt('/settings/connections', { session: signedIn(scopes), fpp: [makeFPPInstance('barn-player', { observations })] })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    openDetail()
+    return screen.findByRole('textbox', { name: 'Channels the ceiling never changes' })
+  }
+
+  const excludedSaved = (excludedRanges?: { startChannel: number; channelCount: number }[]) => ({
+    serverTime: '2026-09-22T00:00:00Z',
+    command: { outcome: excludedRanges === undefined ? 'unconfirmed' : 'confirmed', outcomeReason: 'The player took 1-512 and has not reported it back yet. Check again shortly.' },
+    ...(excludedRanges === undefined ? {} : { excludedRanges }),
+  })
+
+  it('shows the excluded channels the player reports, in the field and in the readout', async () => {
+    const field = await openExcludedRanges([makeEvidence({ signal: 'fpp.brightness.excluded_ranges', value: '1-512, 1025-512' })])
+    expect(field).toHaveValue('1-512, 1025-512')
+    expect(field).toHaveAccessibleDescription('First channel and count, like 1-512, 1025-512.')
+    expect(screen.getByText('Excluded channels')).toBeInTheDocument()
+    expect(screen.getByText('1-512, 1025-512')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save excluded channels' })).toBeDisabled()
+  })
+
+  it('states that no channels are excluded when the player reports an empty list', async () => {
+    const reason = 'No channels are excluded. The ceiling changes every channel it is applied to.'
+    const field = await openExcludedRanges([makeEvidence({ signal: 'fpp.brightness.excluded_ranges', value: null, state: 'not_applicable', reason })])
+    expect(field).toHaveValue('')
+    expect(screen.getByText(reason)).toBeInTheDocument()
+  })
+
+  it('saves the typed ranges and shows what the player read back', async () => {
+    const put = vi.fn(() => Promise.resolve(excludedSaved([{ startChannel: 1, channelCount: 512 }, { startChannel: 1025, channelCount: 512 }])))
+    stubs.putFPPBrightnessExcludedRanges = put
+    const field = await openExcludedRanges([])
+    fireEvent.change(field, { target: { value: '1-512,1025-512' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save excluded channels' }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('barn-player', [{ startChannel: 1, channelCount: 512 }, { startChannel: 1025, channelCount: 512 }]))
+    expect(await screen.findByText('Saved. The player now excludes 1-512, 1025-512.')).toBeInTheDocument()
+  })
+
+  it('clears the list when the field is emptied and saved', async () => {
+    const put = vi.fn(() => Promise.resolve(excludedSaved([])))
+    stubs.putFPPBrightnessExcludedRanges = put
+    const field = await openExcludedRanges([makeEvidence({ signal: 'fpp.brightness.excluded_ranges', value: '1-512' })])
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save excluded channels' }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('barn-player', []))
+    expect(await screen.findByText('Saved. The player now excludes no channels.')).toBeInTheDocument()
+  })
+
+  it('refuses text that is not start-count pairs without calling the coordinator', async () => {
+    const put = vi.fn(() => Promise.resolve(excludedSaved([])))
+    stubs.putFPPBrightnessExcludedRanges = put
+    const field = await openExcludedRanges([])
+    fireEvent.change(field, { target: { value: '1 to 512' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save excluded channels' }))
+
+    expect(await screen.findByText('That is not a list of ranges. Enter start-count pairs, like 1-512, 1025-512.')).toBeInTheDocument()
+    expect(field).toBeInvalid()
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it("shows the coordinator's own sentence when a save is refused or not read back", async () => {
+    stubs.putFPPBrightnessExcludedRanges = () => Promise.reject(new Error('Range 600-100 overlaps 1-1000. Use separate ranges, like 1-512, 1025-512.'))
+    const field = await openExcludedRanges([])
+    fireEvent.change(field, { target: { value: '1-1000, 600-100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save excluded channels' }))
+    expect(await screen.findByText('Not saved')).toBeInTheDocument()
+    expect(field).toHaveValue('1-1000, 600-100')
+
+    stubs.putFPPBrightnessExcludedRanges = () => Promise.resolve(excludedSaved())
+    fireEvent.change(field, { target: { value: '1-512' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save excluded channels' }))
+    expect(await screen.findByText('Not confirmed')).toBeInTheDocument()
+    expect(screen.getByText('The player took 1-512 and has not reported it back yet. Check again shortly.')).toBeInTheDocument()
+  })
+
+  it('disables the excluded channels field and its Save without fpp:command', async () => {
+    const field = await openExcludedRanges([], ['config:write'])
+    expect(field).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save excluded channels' })).toBeDisabled()
   })
 
   it('debounces the ceiling write and keeps one write in flight at a time', async () => {

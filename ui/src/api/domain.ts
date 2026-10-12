@@ -141,6 +141,8 @@ export type FPPCommandResult = components['schemas']['FPPCommandResult']
 export type FPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
 export type FPPPairingResponse = components['schemas']['FPPPairingResponse']
 export type FPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
+export type FPPChannelRange = components['schemas']['FPPChannelRange']
+export type FPPBrightnessExcludedRangesResponse = components['schemas']['FPPBrightnessExcludedRangesResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints' own
 // response shape, aliased for the identical reason.
 export type RenderCommandResult = components['schemas']['RenderCommandResult']
