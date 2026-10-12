@@ -253,6 +253,24 @@ describe('Shows · activation', () => {
     expect(calls[0]).toEqual({ show: 'hallowed-hollow-2026' })
   })
 
+  it('discards the chosen show when the inspector closes, so reopening cannot activate in one click', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    renderShows({ session: signedIn(['config:write']) })
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    const opener = screen.getByRole('button', { name: 'Activate a show' })
+    opener.focus()
+    fireEvent.click(opener)
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Show to activate' }), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Show to activate' })).toBeNull())
+    expect(document.activeElement).toBe(opener)
+    fireEvent.click(opener)
+    expect((await screen.findByRole<HTMLSelectElement>('combobox', { name: 'Show to activate' })).value).toBe('winter-ridge-2026')
+    expect((screen.getByRole('button', { name: 'Activate' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('refuses to activate over a stale pointer, matching D-014 for every other config write', async () => {
     let reads = 0
     stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())

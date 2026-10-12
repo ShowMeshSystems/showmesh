@@ -119,6 +119,14 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActiveConfigResponse>, { kind: 'stale' }> | null>(null)
 
+  // Closing without activating discards the choice, so a later open cannot activate in one click.
+  const closeInspector = () => {
+    setSelected(state.kind === 'loaded' ? state.response.payload.show : '')
+    setStale(null)
+    setSaveError(null)
+    setOpen(false)
+  }
+
   useEffect(() => {
     let cancelled = false
     setState({ kind: 'loading' })
@@ -197,7 +205,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
           />
         </>
       )}
-      <Drawer open={open} onClose={() => setOpen(false)} labelledBy="sh-activate-heading" width="content">
+      <Drawer open={open} onClose={closeInspector} labelledBy="sh-activate-heading" width="content">
         <div className="sm-inspector">
           <h3 className="sm-inspector__title" id="sh-activate-heading">Activate a show</h3>
           <p className="sm-small sm-muted">The active show is the one that can affect the running system.</p>
