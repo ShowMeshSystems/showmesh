@@ -70,7 +70,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
         to,
         detail:
           node.controlPlane.reason ??
-          'The coordinator cannot currently say whether this node is reporting. Unknown is not a soft online.',
+          'The coordinator cannot tell whether this node is reporting. Treat it as offline.',
         participation,
         hideable: false,
       })
@@ -110,7 +110,7 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
         fact: 'changed its instance identity',
         to,
         detail:
-          'Bindings that name this instance are held rather than guessed until the change is acknowledged. FPP itself may be healthy.',
+          'Playlists bound to this instance are held until the change is acknowledged.',
         participation,
         hideable: true,
       })
@@ -223,7 +223,7 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
     return {
       tone: 'unknown',
       state: 'Not configured',
-      fact: 'No night session is configured, so nothing has readiness to report.',
+      fact: 'No night session is configured.',
       detail: readiness.reason !== '' ? readiness.reason : null,
       action: false,
     }
@@ -256,7 +256,7 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
       tone: warned ? 'warn' : 'good',
       state: warned ? 'Next start warned' : 'Next start clear',
       fact: warned
-        ? `Readiness passed with a warning ${when}${ago}, ${passed} of ${readiness.checks.length} checks. The night will start; review readiness before it does.`
+        ? `Readiness passed with a warning ${when}${ago}. The night will start. Review it first.`
         : `Readiness passed ${when}${ago}, ${passed} of ${readiness.checks.length} checks.`,
       detail: null,
       action: warned,
@@ -293,7 +293,7 @@ export function showInProgress(session: NightSessionState | null): ReadinessVerd
     return {
       tone: 'good',
       state: 'Running',
-      fact: 'The show in progress has every output it needs. Nothing on this page will interrupt it.',
+      fact: 'The show in progress has every output it needs.',
       detail: `Cycle ${session.cycle} · ${session.state}`,
       action: false,
     }

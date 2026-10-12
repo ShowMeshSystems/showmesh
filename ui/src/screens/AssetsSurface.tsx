@@ -404,7 +404,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
                     {rows.length === 0 ? (
                       <tr>
                         <td colSpan={columnCount}>
-                          <RuledStrip absence="empty" label="None" fact="No asset matches here." />
+                          <RuledStrip absence="empty" label="None" fact="No matching assets." />
                         </td>
                       </tr>
                     ) : (
@@ -566,7 +566,7 @@ function AssetDetail({
     setResyncError(null)
     setResyncNote(null)
     resyncNodeAssets(asset.target)
-      .then(() => setResyncNote('Re-sync accepted. This node’s manifest reflects the result once it reports back in.'))
+      .then(() => setResyncNote('Re-sync accepted. The manifest updates when the node reports back.'))
       .catch((err: unknown) => setResyncError(describeApiError(err)))
       .finally(() => setResyncing(false))
   }
@@ -622,8 +622,7 @@ function AssetDetail({
           <p className="sm-inspector__value sm-data">{asset.contentHash}</p>
         </div>
         <p className="sm-callout">
-          Identity is those four facts. The runtime filename <span className="sm-data">{asset.runtimeFilename}</span> is not one of them; a different
-          asset can carry the same filename.
+          Another asset can share the filename <span className="sm-data">{asset.runtimeFilename}</span>.
         </p>
       </section>
 
@@ -644,7 +643,7 @@ function AssetDetail({
         <div className="sm-inspector__row">
           <span className="sm-inspector__label">Uploaded</span>
           <p className="sm-inspector__value sm-data">
-            {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown principal'}
+            {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown user'}
           </p>
         </div>
         {asset.mediaType === 'audio' && (
@@ -682,7 +681,7 @@ function AssetDetail({
 
       <section className="sm-inspector__group">
         <h3 className="sm-subsection__title">History</h3>
-        <p className="sm-small sm-muted">A version can become current more than once, so this reads as events, not a one-way list.</p>
+        <p className="sm-small sm-muted">A version can become current more than once.</p>
         {history.map((entry) => {
           const annotation = historyAnnotation(entry, history)
           const canMakeCurrent = !entry.current && annotation !== 'Same bytes as current'
@@ -696,7 +695,7 @@ function AssetDetail({
               <div>
                 <p className="sm-data sm-flat">{hashLabel(entry.contentHash)}</p>
                 <p className="sm-readout__fact">
-                  Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown principal'}
+                  Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown user'}
                 </p>
                 {annotation !== null && <p className="sm-readout__fact sm-eyebrow--accent sm-flat">{annotation}</p>}
 
@@ -746,7 +745,7 @@ function AssetDetail({
                     <StatusPair tone={done.rolledBack ? 'warn' : 'good'} label={done.rolledBack ? 'Rolled back' : 'Uploaded'} />
                     <span className="sm-verdict__detail">
                       {done.rolledBack
-                        ? 'This superseded version is current again; the previous current version is now superseded.'
+                        ? 'This version is current again. The previous one is superseded.'
                         : 'Registered as the current asset for this identity.'}
                     </span>
                   </p>
@@ -786,7 +785,7 @@ function AssetDetail({
         disallowedReason={writeGate.allowed ? undefined : writeGate.reason}
         onDelete={removeAsset}
       >
-        <p className="sm-small sm-muted">Deleting removes this one registered file from ShowMesh; it does not bring back an older file for the same sequence. Any copy already sent to a node stays there.</p>
+        <p className="sm-small sm-muted">Deletes this file from ShowMesh only. Copies already on a node stay.</p>
       </DeletePanel>
     </div>
   )
@@ -878,8 +877,8 @@ function AssetUploadForm({
   let blockReason: string | null = null
   if (file === null) blockReason = 'Choose a file.'
   else if (sequence.trim() === '') blockReason = 'Name the logical sequence this file belongs to.'
-  else if (scope.kind === 'all' && showId === '') blockReason = 'Identity needs a show. There is no default.'
-  else if (targetKind === 'node' && target === '') blockReason = 'Identity needs a target. There is no default.'
+  else if (scope.kind === 'all' && showId === '') blockReason = 'Choose a show.'
+  else if (targetKind === 'node' && target === '') blockReason = 'Choose a target node.'
 
   const submit = () => {
     if (blockReason !== null || file === null || mediaType === null) return
@@ -919,7 +918,7 @@ function AssetUploadForm({
 
       <div className="sm-inspector__group">
         {scope.kind === 'all' && (
-          <Field label="Show" error={showId === '' ? 'Identity needs a show. There is no default.' : undefined}>
+          <Field label="Show" error={showId === '' ? 'Choose a show.' : undefined}>
             {(props) => (
               <Select {...props} value={showId} onChange={(e) => setShowId(e.target.value)}>
                 <option value="">Choose a show…</option>
@@ -981,7 +980,7 @@ function AssetUploadForm({
         />
 
         {targetKind === 'node' && (
-          <Field label="Target" error={target === '' ? 'Identity needs a target. There is no default; picking wrong sends a node another node’s content.' : undefined}>
+          <Field label="Target" error={target === '' ? 'Choose a target node. The wrong one gets another node’s content.' : undefined}>
             {(props) => (
               <Select {...props} value={target} onChange={(e) => setTarget(e.target.value)}>
                 <option value="">Choose a node…</option>
@@ -1000,7 +999,7 @@ function AssetUploadForm({
         <Notice
           tone="warn"
           headline="This will be a rollback"
-          explanation={`Already stored as a superseded version from ${formatDateClock(matchedRollback.createdAt) ?? 'an unrecorded time'}; uploading makes it current again and supersedes today's.`}
+          explanation={`Already stored as an older version from ${formatDateClock(matchedRollback.createdAt) ?? 'an unrecorded time'}. Uploading makes it current again.`}
           live="status"
         />
       )}
@@ -1027,8 +1026,8 @@ function AssetUploadForm({
           <StatusPair tone={result.rolledBack ? 'warn' : 'good'} label={result.rolledBack ? 'Rolled back' : 'Uploaded'} />
           <span className="sm-verdict__detail">
             {result.rolledBack
-              ? 'These bytes matched a superseded version, which is now current again; the previously current version is now superseded.'
-              : 'Registered, and now the current asset for this identity. Whether a node holds it yet is a separate observation, in Monitor › Manifest.'}
+              ? 'This file matched an older version, which is current again.'
+              : 'Registered as the current asset. Monitor › Manifest shows when a node holds it.'}
           </span>
         </p>
       )}

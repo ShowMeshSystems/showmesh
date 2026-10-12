@@ -149,7 +149,7 @@ describe('Access', () => {
     renderScreen()
     await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(expect.arrayContaining(['Principals', 'Credentials for erbartos', 'Attribution', 'Bootstrap']))
+    expect(headings).toEqual(expect.arrayContaining(['Users', 'Credentials for erbartos', 'Attribution', 'Bootstrap']))
     expect(headings).toHaveLength(4)
   })
 
@@ -324,12 +324,12 @@ describe('Access', () => {
       return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal({ id: 'p9', name: 'auto-recovery', role: 'recovery' }) })
     }
     renderScreen()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Add principal' })).toBeEnabled())
-    fireEvent.click(screen.getByRole('button', { name: 'Add principal' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add user' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'auto-recovery' } })
     fireEvent.click(screen.getByRole('button', { name: 'recovery' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create principal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create user' }))
 
     await waitFor(() => expect(received?.role).toBe('recovery'))
   })
@@ -360,7 +360,7 @@ describe('Access', () => {
     })
     await waitFor(() => expect(screen.getByText(/does not include "principal:read"/)).toBeInTheDocument())
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add principal' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add user' })).toBeDisabled()
   })
 
   it('renders the attribution row only when the session reports attributionDegraded, seeded rather than read from the model alone', async () => {
@@ -368,7 +368,7 @@ describe('Access', () => {
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: nightSession({ attributionDegraded: true }) })
     renderScreen()
-    await waitFor(() => expect(screen.getByText(/no authorizing principal recorded/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/no user recorded/)).toBeInTheDocument())
   })
 
   it('does not render the attribution row when attributionDegraded is false', async () => {
@@ -377,7 +377,7 @@ describe('Access', () => {
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: nightSession({ attributionDegraded: false }) })
     renderScreen()
     await waitFor(() => expect(screen.getByText('Audit store')).toBeInTheDocument())
-    expect(screen.queryByText(/no authorizing principal recorded/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no user recorded/)).not.toBeInTheDocument()
   })
 
   it('prints no claimed-by and no claimed-at for bootstrap', async () => {
@@ -475,7 +475,7 @@ describe('Access', () => {
 
     // The signed-in principal's own row (erbartos) cannot be disabled.
     expect(screen.getByRole('button', { name: 'Disable' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Disable' })).toHaveAttribute('title', 'You cannot disable your own signed-in principal.')
+    expect(screen.getByRole('button', { name: 'Disable' })).toHaveAttribute('title', 'You cannot disable your own signed-in user.')
 
     fireEvent.click(screen.getByRole('row', { name: 'View credentials for old-laptop' }))
     await waitFor(() => expect(screen.getByText('Credentials for old-laptop')).toBeInTheDocument())
@@ -486,11 +486,11 @@ describe('Access', () => {
 
     const confirmInput = screen.getByLabelText('Type old-laptop to confirm')
     fireEvent.change(confirmInput, { target: { value: 'wrong-name' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Disable principal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Disable user' }))
     expect(received).toBeUndefined()
 
     fireEvent.change(confirmInput, { target: { value: 'old-laptop' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Disable principal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Disable user' }))
     await waitFor(() => expect(received).toBe('p2'))
   })
 
@@ -548,7 +548,7 @@ describe('Access', () => {
     await waitFor(() => expect(resetPassword).toBeEnabled())
     fireEvent.click(resetPassword)
     await waitFor(() => expect(received).toEqual({ password: 'a-new-password' }))
-    expect(await screen.findByText(/Every session and token this principal held is now invalid/)).toBeInTheDocument()
+    expect(await screen.findByText(/Every session and token this user held is now invalid/)).toBeInTheDocument()
   })
 
   it('opens the inspector as a dialog on row selection, marks the row Editing, and closes on the close button', async () => {

@@ -65,8 +65,7 @@ function InstallDetail({ issued, coordinatorVersion }: { issued: CreateNodeEnrol
       <CopyButton value={command} label="Copy command" />
       {loopback && (
         <p>
-          {COORDINATOR_PLACEHOLDER_HOST} is a placeholder because this browser reached the coordinator at an address only
-          reachable from this device. Set the coordinator&rsquo;s public URL, then mint a new code.
+          {COORDINATOR_PLACEHOLDER_HOST} is a placeholder. Set the coordinator&rsquo;s public URL, then mint a new code.
         </p>
       )}
     </>
@@ -199,7 +198,7 @@ export function SettingsNodeEnrollment() {
         )}
         {enrollments.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={enrollments.reason} />}
         {enrollments.kind === 'loaded' && enrollments.enrollments.length === 0 && (
-          <RuledStrip absence="empty" label="None" fact="No enrollment codes have been minted. Mint one above to add a node." />
+          <RuledStrip absence="empty" label="None" fact="No enrollment codes." />
         )}
         {enrollments.kind === 'loaded' && enrollments.enrollments.length > 0 && (
           <TableWrap label="Enrollment codes, scrollable">

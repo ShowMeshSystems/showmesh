@@ -409,7 +409,7 @@ describe('Shows · Playlists tab editing', () => {
       await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'Black & silence' })).toBeDisabled()
-      expect(screen.getByText(/Show versus Program mode/)).toBeInTheDocument()
+      expect(screen.getByText(/Not settable here yet/)).toBeInTheDocument()
     })
 
     it('save and discard are disabled without config:write and are actually inert', async () => {
@@ -581,7 +581,7 @@ describe('Shows · Playlists tab editing', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Re-import' }))
 
       expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
-      expect(screen.getByText(/The FPP host gave no usable answer/)).toBeInTheDocument()
+      expect(screen.getByText(/The FPP host did not answer/)).toBeInTheDocument()
       expect(screen.queryByText('Sent')).not.toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Re-import' })).not.toBeDisabled()
@@ -600,7 +600,7 @@ describe('Shows · Playlists tab editing', () => {
       await vi.advanceTimersByTimeAsync(4_000)
 
       expect(await screen.findByText('Unconfirmed')).toBeInTheDocument()
-      expect(screen.getByText(/within 30 seconds/)).toBeInTheDocument()
+      expect(screen.getByText(/in 30 seconds/)).toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
     })
 
@@ -631,7 +631,7 @@ describe('Shows · Playlists tab editing', () => {
       await vi.advanceTimersByTimeAsync(3_000)
 
       expect(await screen.findByText('Resent')).toBeInTheDocument()
-      expect(screen.getByText(/already had this one/)).toBeInTheDocument()
+      expect(screen.getByText(/already had this playlist/)).toBeInTheDocument()
       expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
     })
@@ -648,7 +648,7 @@ describe('Shows · Playlists tab editing', () => {
       await vi.advanceTimersByTimeAsync(3_000)
 
       expect(await screen.findByText(/did not resend some playlists/)).toBeInTheDocument()
-      expect(screen.getByText(/Restart the ShowMesh plugin/)).toBeInTheDocument()
+      expect(screen.getByText(/Restart its ShowMesh plugin/)).toBeInTheDocument()
       expect(screen.queryByText('Landed')).not.toBeInTheDocument()
     })
 
@@ -696,7 +696,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('renders nothing below the type gate until it is answered, and the footer says Type required', async () => {
       setupDraft()
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       expect(screen.getByRole('heading', { name: 'New playlist' })).toBeInTheDocument()
       expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
@@ -706,7 +706,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('renders nothing below the runner gate until it is answered, once Show playlist is picked, and the footer says Runner required', async () => {
       setupDraft()
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
@@ -716,7 +716,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('picking showmesh-audio swaps the mismatch field for repeat', async () => {
       setupDraft()
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
@@ -736,7 +736,7 @@ describe('Shows · Playlists tab editing', () => {
       const putSpy = vi.fn((_id: string, payload: ConfigShowPlaylist) => Promise.resolve(playlistResponse(payload, 'winter-main')))
       stubs.putShowPlaylist = putSpy
       setupDraft(['config:write'], { fpp: [makeFPPInstance('barn-player', { instanceUuid: 'uuid-1' })] })
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
@@ -752,7 +752,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('does not create with a taken id and offers to open the existing playlist', async () => {
       setupDraft()
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
@@ -768,18 +768,18 @@ describe('Shows · Playlists tab editing', () => {
 
     it('keeps New playlist disabled with a stated reason without config:write', async () => {
       setupDraft([])
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'New playlist' })).toBeDisabled()
     })
 
     it('picking Media playlist reveals the media playlist creation form, id field and first item included', async () => {
       setupDraft()
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'Media playlist' }))
       expect(screen.getByRole('heading', { name: 'New media playlist' })).toBeInTheDocument()
       expect(screen.getByLabelText('Id')).toBeInTheDocument()
-      expect(screen.getByText(/the first item is part of creation/)).toBeInTheDocument()
+      expect(screen.getByText(/needs at least one item/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Create media playlist' })).toBeDisabled()
     })
   })
@@ -979,7 +979,7 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     await openEditor()
     fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Move to FPP’s newest playlist' }))
-    expect(await screen.findByText('This playlist was changed after you opened the review, so nothing was saved. Review the changes again.')).toBeInTheDocument()
+    expect(await screen.findByText(/changed during the review/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Move to FPP’s newest playlist' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review again' })).toBeInTheDocument()
   })
@@ -1067,7 +1067,7 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     expect(review).not.toBeDisabled()
     fireEvent.change(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 0' }), { target: { value: '' } })
     expect(screen.getByRole('button', { name: 'Review changes' })).toBeDisabled()
-    expect(screen.getByText(/You have unsaved cue changes/)).toBeInTheDocument()
+    expect(screen.getByText(/Save or discard your cue changes/)).toBeInTheDocument()
   })
 
   it('blocks the confirm too when cue edits are made while the review is open, and says why', async () => {
@@ -1077,7 +1077,7 @@ describe('Shows · Playlists tab · moving to FPP’s newest playlist', () => {
     expect(confirm).not.toBeDisabled()
     fireEvent.change(screen.getByRole('combobox', { name: 'Bound cue for mainPlaylist · 0' }), { target: { value: '' } })
     expect(screen.getByRole('button', { name: 'Move to FPP’s newest playlist' })).toBeDisabled()
-    expect(screen.getAllByText(/You have unsaved cue changes/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Save or discard your cue changes/).length).toBeGreaterThan(0)
   })
 
   it('is disabled with the missing scope named when the principal cannot write config', async () => {

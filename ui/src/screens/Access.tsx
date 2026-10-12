@@ -188,10 +188,8 @@ export function Access() {
             term: 'Reads are open',
             value: (
               <>
-                Anyone who can reach this coordinator can view the show without signing in. That is deliberate:
-                a credential problem must never cost an operator sight of a running show. Close it with{' '}
-                <span className="sm-data">SHOWMESH_API_CLOSE_READS</span> if the port is exposed beyond the show
-                network.
+                Anyone on the network can view the show without signing in. To close it, set{' '}
+                <span className="sm-data">SHOWMESH_API_CLOSE_READS</span>.
               </>
             ),
           },
@@ -200,7 +198,7 @@ export function Access() {
 
       <Section
         id="ac-princ"
-        title="Principals"
+        title="Users"
         aside={
           <Button
             variant="primary"
@@ -208,20 +206,20 @@ export function Access() {
             disabled={!writeGate.allowed}
             title={writeGate.allowed ? undefined : writeGate.reason}
           >
-            Add principal
+            Add user
           </Button>
         }
       >
-        {data.kind === 'denied' && <RuledStrip absence="noPermission" label="Principals not shown" fact={data.reason} />}
+        {data.kind === 'denied' && <RuledStrip absence="noPermission" label="Users not shown" fact={data.reason} />}
         {data.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={data.reason} />}
-        {data.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Waiting on the coordinator's principal list." />}
+        {data.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Waiting on the coordinator's user list." />}
         {data.kind === 'loaded' && (
           <>
-            <TableWrap label="Principals, scrollable">
+            <TableWrap label="Users, scrollable">
               <Table minWidth={720}>
                 <thead>
                   <tr>
-                    <th scope="col">Principal</th>
+                    <th scope="col">User</th>
                     <th scope="col">Kind</th>
                     <th scope="col">Role</th>
                     <th scope="col">State</th>
@@ -262,7 +260,7 @@ export function Access() {
         ) : (
           <Section id="ac-cred" title={selectedPrincipal === undefined ? 'Credentials' : `Credentials for ${selectedPrincipal.name}`}>
             {selectedPrincipal === undefined ? (
-              <RuledStrip absence="empty" label="Nothing selected" fact="Select a principal for its credentials." />
+              <RuledStrip absence="empty" label="Nothing selected" fact="Select a user for its credentials." />
             ) : (
               <>
                 <div className="sm-inspector__row">
@@ -296,11 +294,10 @@ export function Access() {
         <RuledStrip
           absence="unavailable"
           label="Audit store"
-          fact="Whether the audit store can currently be written is not reported by the coordinator."
+          fact="The coordinator does not report whether the audit store is writable."
           detail={
             <>
-              Four of the night commands refuse outright rather than run unattributed, so an unwritable audit
-              store stops them rather than silently losing who did what.{' '}
+              Four night commands refuse to run when the audit store cannot be written.{' '}
               {auditGate.allowed ? (
                 <Link to="/monitor/activity">Open the log</Link>
               ) : (
@@ -313,7 +310,7 @@ export function Access() {
           <RuledStrip
             absence="failed"
             label="This session"
-            fact="At least one step was dispatched with no authorizing principal recorded. How many, and which, are not reported."
+            fact="A step ran with no user recorded."
           />
         )}
       </Section>
@@ -410,7 +407,7 @@ function ScopesRow({ principal, session }: { principal: PrincipalObject; session
         )
       ) : (
         <p className="sm-inspector__value sm-small sm-muted">
-          Not reported for another principal. Role <span className="sm-data">{principal.role}</span> is shown instead.
+          Not reported for another user. Role <span className="sm-data">{principal.role}</span> is shown instead.
         </p>
       )}
     </div>
@@ -437,7 +434,7 @@ function AdministrationPanel({
 }) {
   const isSelf = isSignedInPrincipal(session, principal)
   const reservedReason = principal.reserved
-    ? 'The Resolume recovery principal cannot be re-roled, disabled or re-credentialed here.'
+    ? 'The Resolume recovery user cannot be changed here.'
     : null
   const gateReason = !writeGate.allowed ? writeGate.reason : reservedReason
   const controlsDisabled = !writeGate.allowed || principal.reserved
@@ -531,7 +528,7 @@ function AdministrationPanel({
     setRoleOutcome(null)
     resetPrincipalPassword(principal.id, { password: newPassword })
       .then(() => {
-        setPasswordOutcome('Every session and token this principal held is now invalid.')
+        setPasswordOutcome('Every session and token this user held is now invalid.')
         setNewPassword('')
         setPasswordConfirming(false)
         setPasswordConfirmText('')
@@ -588,7 +585,7 @@ function AdministrationPanel({
               setDisableError(null)
             }}
             disabled={controlsDisabled || isSelf}
-            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
+            title={isSelf ? 'You cannot disable your own signed-in user.' : (gateReason ?? undefined)}
           >
             Disable
           </Button>
@@ -604,7 +601,7 @@ function AdministrationPanel({
             <Button
               variant="primary"
               disabled={controlsDisabled || roleConfirmText !== principal.name || roleSaving}
-              title={gateReason ?? (roleConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined)}
+              title={gateReason ?? (roleConfirmText !== principal.name ? "Type the user's name exactly to enable this." : undefined)}
               onClick={applyRole}
             >
               {roleSaving ? 'Changing role…' : 'Change role'}
@@ -634,12 +631,12 @@ function AdministrationPanel({
               disabled={controlsDisabled || isSelf || disableConfirmText !== principal.name || disabling}
               title={
                 isSelf
-                  ? 'You cannot disable your own signed-in principal.'
-                  : (gateReason ?? (disableConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined))
+                  ? 'You cannot disable your own signed-in user.'
+                  : (gateReason ?? (disableConfirmText !== principal.name ? "Type the user's name exactly to enable this." : undefined))
               }
               onClick={confirmDisable}
             >
-              {disabling ? 'Disabling…' : 'Disable principal'}
+              {disabling ? 'Disabling…' : 'Disable user'}
             </Button>
             <Button variant="quiet" onClick={() => setDisableConfirming(false)} disabled={disabling}>
               Cancel
@@ -677,7 +674,7 @@ function AdministrationPanel({
             <Button
               variant="primary"
               disabled={controlsDisabled || newPassword === '' || passwordConfirmText !== principal.name || resetting}
-              title={gateReason ?? (passwordConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined)}
+              title={gateReason ?? (passwordConfirmText !== principal.name ? "Type the user's name exactly to enable this." : undefined)}
               onClick={confirmResetPassword}
             >
               {resetting ? 'Resetting…' : 'Reset password'}
@@ -713,7 +710,7 @@ function BootstrapRow({ session }: { session: Model['session'] }) {
       label="Bootstrap"
       fact={
         session.bootstrapRequired
-          ? 'Bootstrap is still required. No principal has claimed it yet.'
+          ? 'Bootstrap is still required. No user has claimed it yet.'
           : 'Bootstrap has been claimed. Who claimed it and when are not reported.'
       }
     />
@@ -751,7 +748,7 @@ function CreatePrincipalPanel({
   }
 
   return (
-    <Section id="ac-cred" title="New principal" eyebrow="Draft · new principal">
+    <Section id="ac-cred" title="New user" eyebrow="Draft · new user">
       <Segmented<CreatePrincipalRequest['kind']>
         label="Kind"
         value={kind}
@@ -791,7 +788,7 @@ function CreatePrincipalPanel({
           disabled={name === '' || creating || !writeGate.allowed}
           title={!writeGate.allowed ? writeGate.reason : undefined}
         >
-          {creating ? 'Creating…' : 'Create principal'}
+          {creating ? 'Creating…' : 'Create user'}
         </Button>
         <Button variant="quiet" onClick={onDiscard} disabled={creating}>
           Discard
@@ -907,7 +904,7 @@ function CredentialsPanel({
       )}
 
       {tokens !== null && (
-        <TableWrap label="Credentials for this principal, scrollable">
+        <TableWrap label="Credentials for this user, scrollable">
           <Table minWidth={560}>
             <thead>
               <tr>

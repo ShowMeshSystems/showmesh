@@ -128,14 +128,14 @@ describe('Monitor · Manifest', () => {
     await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
     screen.getByRole('row', { name: 'View manifest for media-front' }).click()
     await waitFor(() => expect(screen.getByText('stray.fseq')).toBeInTheDocument())
-    expect(screen.getAllByText(/never a basis for deletion/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/not an error/i).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
   })
 
   it('says none is declared when the fleet is empty, distinct from a read failure', async () => {
     getAssetManifest.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', nodes: [] })
     renderScreen()
-    await waitFor(() => expect(screen.getByText('No node is declared, so there is nothing to check.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('No nodes.')).toBeInTheDocument())
   })
 
   it('retains the last read manifest and says when it was read after a refresh failure', async () => {

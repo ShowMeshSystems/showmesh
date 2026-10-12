@@ -121,7 +121,7 @@ describe('Shows · Playlists tab, media rows', () => {
       stubs.listConfigObjects = (kind: string) => withEmptyLists(kind)
       stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [] })
       renderWorkspace({ session: signedIn(['config:write']) })
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
     })
 
     it('renders a media playlist row with its Type, Runner and repeat/item-count sub-line', async () => {
@@ -176,7 +176,7 @@ describe('Shows · Playlists tab, media rows', () => {
       stubs.listConfigObjects = (kind: string) => withEmptyLists(kind)
       stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [audioAsset()] })
       renderWorkspace({ session: signedIn(['config:write']) })
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
 
       pickMediaPlaylistType()
       fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Chase bed' } })
@@ -223,7 +223,7 @@ describe('Shows · Playlists tab, media rows', () => {
       fireEvent.click(deleteButton)
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('mp1'))
-      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('No playlists yet.')).toBeInTheDocument())
     })
   })
 

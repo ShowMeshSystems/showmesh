@@ -243,7 +243,7 @@ export function ShowsPlaylists() {
           }
         >
           {rows.length === 0 ? (
-            <RuledStrip absence="empty" label="None" fact="This show has no playlist configured." />
+            <RuledStrip absence="empty" label="None" fact="No playlists yet." />
           ) : (
             <div className="sm-stack-3">
               <TableWrap label="Playlists, scrollable">
@@ -291,8 +291,7 @@ export function ShowsPlaylists() {
 
         {playlists.length > 1 && (
           <Callout>
-            Multiple playlists in the same show run concurrently. FPP advances the lighting sequence while ShowMesh
-            independently advances the music bed; two runners are never authoritative for the same playlist.
+            Playlists in one show run at the same time.
           </Callout>
         )}
       </div>
@@ -450,7 +449,7 @@ function FPPPlaylistEditor({
   const moveBlockedReason = !saveGate.allowed
     ? saveGate.reason
     : dirty
-      ? 'You have unsaved cue changes. Save or discard them, then review the changes in FPP\u2019s playlist.'
+      ? 'Save or discard your cue changes first.'
       : null
 
   const discard = () => {
@@ -537,7 +536,7 @@ function FPPPlaylistEditor({
                 {...props}
                 value={binding.instanceUuid}
                 disabled
-                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify."
+                title="Rebinding to another FPP instance or playlist is not available yet."
               >
                 <option value={binding.instanceUuid}>{instanceLabel}</option>
               </Select>
@@ -549,7 +548,7 @@ function FPPPlaylistEditor({
                 {...props}
                 value={binding.playlistName}
                 disabled
-                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify."
+                title="Rebinding to another FPP instance or playlist is not available yet."
               >
                 <option value={binding.playlistName}>{binding.playlistName}</option>
               </Select>
@@ -589,8 +588,7 @@ function FPPPlaylistEditor({
         <div>
           <p className="sm-strip__fact">FPP decides what plays next</p>
           <p className="sm-small sm-muted">
-            This list mirrors FPP&rsquo;s own playlist; entries cannot be reordered here. Bind each imported entry to
-            a cue below.
+            The order comes from FPP. Bind each entry to a cue below.
           </p>
         </div>
       </div>
@@ -660,7 +658,7 @@ function FPPPlaylistEditor({
       <div className="sm-section sm-stack-5">
         <h3 className="sm-subsection__title">Playlist readiness</h3>
         <p className="sm-small sm-muted">
-          An authoring-time verdict for this playlist, from <span className="sm-data">GET /integrations/fpp/playlists/{'{playlistId}'}/readiness</span>.
+          Checks whether this playlist can run as authored.
         </p>
         <Button onClick={readiness.check} disabled={readiness.state.state === 'loading'}>
           {readiness.state.state === 'loading' ? 'Checking…' : 'Check readiness'}
@@ -689,13 +687,12 @@ function FPPPlaylistEditor({
         <div>
           <Segmented label="On mismatch" value={storedMismatch ?? 'hold'} options={MISMATCH_OPTIONS} onChange={() => {}} disabled />
           <p className="sm-small sm-muted sm-stack-2">
-            <strong>Not settable here yet:</strong> mismatch handling is expected to follow Show versus Program mode rather than
-            being set per playlist. The stored value is shown and written back unchanged, so nothing set by showmeshctl is lost.
+            <strong>Not settable here yet.</strong> The stored value is kept unchanged on save.
           </p>
           <p className="sm-small sm-muted sm-stack-2">
             {storedMismatch === undefined
-              ? 'No policy is stored for this playlist, so the coordinator applies its own default.'
-              : 'If FPP plays something this playlist cannot resolve, this is how ShowMesh answers.'}
+              ? 'No policy stored. The coordinator uses its default.'
+              : 'What ShowMesh does when FPP plays something this playlist does not list.'}
             {safeCueRef !== '' && ` Safe cue: ${cueLabel(cues, safeCueRef)}.`}
           </p>
         </div>
@@ -951,8 +948,7 @@ function AudioPlaylistEditor({
         </Table>
       </TableWrap>
       <p className="sm-section__footnote">
-        {entries.length} {entries.length === 1 ? 'entry' : 'entries'}. Entry duration is not a field the coordinator
-        reports; each cue's own length is not shown here. Drag to reorder.
+        {entries.length} {entries.length === 1 ? 'entry' : 'entries'}. Drag to reorder.
       </p>
 
       <ButtonRow>
@@ -1158,13 +1154,12 @@ function PlaylistDraft({
     >
       <Segmented<'' | PlaylistType> label="Type" value={type} options={TYPE_OPTIONS} onChange={onTypeChange} />
       <p className="sm-small sm-faint">
-        A show playlist is a list of cues a runner steps through. A media playlist is a list of things the audio
-        engine plays as a bed.
+        A show playlist is a list of cues. A media playlist is a music bed.
       </p>
 
       {type === '' && (
         <p className="sm-small sm-muted">
-          The rest of the form appears once a type is picked. It is not shown disabled: half of it would be fields this playlist can never have.
+          Pick a type to continue.
         </p>
       )}
 
@@ -1182,20 +1177,19 @@ function PlaylistDraft({
             }}
           />
           <p className="sm-small sm-faint">
-            Stored as <span className="sm-data">fpp</span> or <span className="sm-data">showmesh-audio</span>, and immutable once
-            created, like the id: an FPP playlist and an audio playlist are different objects with different bindings.
+            Stored as <span className="sm-data">fpp</span> or <span className="sm-data">showmesh-audio</span>. Fixed once created.
           </p>
 
           {runner === '' && (
             <p className="sm-small sm-muted">
-              The rest of the form appears once a runner is picked. It is not shown disabled: half of it would be fields this playlist can never have.
+              Pick a runner to continue.
             </p>
           )}
 
           {runner !== '' && (
         <div className="sm-grid sm-form-column">
           <Field label="Name">{(props) => <Input {...props} value={name} onChange={(e) => onNameChange(e.target.value)} />}</Field>
-          <Field label="Id" help="From the name, editable until created. Night session definitions bind playlists by id.">
+          <Field label="Id" help="From the name. Fixed once created.">
             {(props) => <Input {...props} className="sm-data" value={id} onChange={(e) => onIdChange(e.target.value)} />}
           </Field>
 
@@ -1203,9 +1197,7 @@ function PlaylistDraft({
             <div>
               <Segmented label="If the FPP playlist does not match" value="hold" options={MISMATCH_OPTIONS} onChange={() => {}} disabled />
               <p className="sm-small sm-muted">
-                fpp only. What the coordinator does when the captured definition&rsquo;s hash is not the one this playlist binds.{' '}
-                <strong>Not settable here yet:</strong> mismatch handling is expected to follow Show versus Program mode rather than
-                being set per playlist, so a draft is created with no stored policy and the coordinator applies its own default.
+                <strong>Not settable here yet.</strong> The coordinator uses its default.
               </p>
             </div>
           ) : (
@@ -1219,7 +1211,7 @@ function PlaylistDraft({
                 ]}
                 onChange={setRepeat}
               />
-              <p className="sm-small sm-muted">An audio playlist carries its own order rather than binding an FPP capture.</p>
+              <p className="sm-small sm-muted">An audio playlist keeps its own order.</p>
             </div>
           )}
 
@@ -1228,7 +1220,7 @@ function PlaylistDraft({
             <p className="sm-small sm-muted">
               {runner === 'fpp'
                 ? 'Songs are bound to cues in the playlist after it is created.'
-                : 'The coordinator refuses an audio playlist with no entries, the same way it refuses a macro with no steps, so the first entry is part of creation.'}
+                : 'An audio playlist needs its first entry when it is created.'}
             </p>
             {runner === 'fpp' ? (
               <div className="sm-grid sm-grid--auto sm-stack-3">
@@ -1261,7 +1253,7 @@ function PlaylistDraft({
                   ) : definitions.state === 'failed' ? (
                     <RuledStrip absence="failed" label="Read failed" fact="Could not read this instance's imported FPP playlist definitions." />
                   ) : availableDefinitions.length === 0 ? (
-                    <RuledStrip absence="empty" label="None" fact="This instance has no imported FPP playlist definition." />
+                    <RuledStrip absence="empty" label="None" fact="No playlists imported from this FPP." />
                   ) : (
                     <Field label="FPP playlist">
                       {(props) => (

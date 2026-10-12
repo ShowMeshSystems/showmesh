@@ -18,7 +18,7 @@ export function FPPPluginReportsRefusedBanner({ instances }: { instances: FPPPlu
         <div className="sm-wdbanner" role="region" aria-label={`FPP ${instance.instanceId} reports refused`} key={instance.instanceId}>
           <div className="sm-wdbanner__fact">
             <span className="sm-wdbanner__kind" role="alert">
-              {`FPP ${instance.instanceId} reports are being refused. Open Monitor and clear the playlist observation.`}
+              {`FPP ${instance.instanceId} reports are refused. Clear the playlist observation in Monitor.`}
             </span>
           </div>
           <div className="sm-wdbanner__actions">

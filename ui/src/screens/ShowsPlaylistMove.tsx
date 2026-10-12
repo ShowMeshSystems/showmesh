@@ -19,7 +19,7 @@ type Failure = { reason: string; refused: boolean }
 type Availability = { kind: 'checking' } | { kind: 'ready'; preview: Preview } | { kind: 'failed'; failure: Failure }
 type Review = { kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; preview: Preview } | { kind: 'failed'; failure: Failure }
 
-const CHANGED_AFTER_REVIEW = 'This playlist was changed after you opened the review, so nothing was saved. Review the changes again.'
+const CHANGED_AFTER_REVIEW = 'This playlist changed during the review. Nothing was saved. Review again.'
 
 /** A 409 here is the coordinator declining to preview, not a read that failed. */
 function failureOf(err: unknown): Failure {
@@ -124,8 +124,7 @@ export function PlaylistMoveNotice({ move, blockedReason }: { move: PlaylistMove
   return (
     <div className="sm-stack-3">
       <p className="sm-small sm-muted">
-        FPP&rsquo;s playlist changed at {formatClock(move.newer.newest?.receivedAt ?? '') ?? 'an unrecorded time'}. Review the changes to keep your cues on the right
-        sequences.
+        FPP&rsquo;s playlist changed at {formatClock(move.newer.newest?.receivedAt ?? '') ?? 'an unrecorded time'}. Review the changes.
       </p>
       <Button onClick={move.open} disabled={busy || blockedReason !== null} title={blockedReason ?? undefined}>
         {move.review.kind === 'loading' ? 'Reading…' : 'Review changes'}

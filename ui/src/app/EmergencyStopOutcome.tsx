@@ -54,7 +54,7 @@ export function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeSta
         <RuledStrip
           absence="empty"
           label="No FPP instances"
-          fact="No FPP instance is configured on this coordinator, so nothing was stopped on FPP."
+          fact="No FPP instance is configured. Nothing was stopped on FPP."
         />
       )}
       {groups.map(

@@ -102,7 +102,7 @@ export function SettingsDelivery() {
     const sync = Number(syncIntervalSeconds)
     const inventory = Number(inventoryIntervalSeconds)
     if (!Number.isFinite(maxUpload) || maxUpload <= 0 || !Number.isFinite(sync) || sync <= 0 || !Number.isFinite(inventory) || inventory <= 0) {
-      setSaveError('Max upload size, sync interval and inventory interval must each be a positive number.')
+      setSaveError('Upload size and both intervals must each be a positive number.')
       return
     }
     setSaving(true)
@@ -154,7 +154,7 @@ export function SettingsDelivery() {
       <NotWiredBanner
         what="Store backend and path"
         missing="stored field for where asset bytes live"
-        detail="Nothing in this coordinator's configuration names a backend or a path. The controls below are drawn to their final shape and are inert."
+        detail="The coordinator stores no backend or path."
       />
 
       <Section id="st-store" title="Store backend">

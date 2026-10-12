@@ -9,6 +9,7 @@ import {
 } from '../domain/audioSettingsSubstitution'
 import { unusedSessionIds } from './nodePlaybackModel'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
+import { routeName } from './audioRouteModel'
 
 /** Connection state, in the terms Monitor's own pill labels use. */
 export function monitorConnection(model: Model): Connection {
@@ -248,7 +249,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       rows: observationRows(node.render, 'render'),
       absent:
         node.render.length === 0
-          ? 'This node has never published a render observation. That is not the same as a render path that is failing.'
+          ? 'This node has never reported render state.'
           : null,
     },
     {
@@ -261,7 +262,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       ),
       absent:
         node.audio.length === 0
-          ? 'This node has never claimed an audio capability, so there is nothing to observe. That is not the same as an audio path that is failing.'
+          ? 'This node has never advertised audio.'
           : null,
     },
     {
@@ -269,7 +270,7 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       rows: observationRows(node.clock, 'clock').map((row) => ({ ...row, label: row.label.replace(/^node\.clock\.ptp\./, '') })),
       absent:
         node.clock.length === 0
-          ? 'This node has never published a clock report. That is not the same as a clock that is failing.'
+          ? 'This node has never reported its clock.'
           : null,
     },
   ]
@@ -311,7 +312,7 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
           ? instance.instanceUuid === null
             ? 'The endpoint has not reported a SystemUUID yet.'
             : null
-          : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Re-association is held for an explicit inventory decision.`,
+          : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Acknowledge the replacement to rebind it.`,
       tone: instance.instanceUuidChange === null ? (instance.instanceUuid === null ? 'unknown' : 'pending') : 'warn',
     },
   ]
@@ -326,7 +327,7 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
         rows: observations,
         absent:
           observations.length === 0
-            ? 'This endpoint has not reported an FPP observation. That is not the same as an FPP path that is failing.'
+            ? 'This FPP has never reported.'
             : null,
       },
     ],
@@ -372,7 +373,7 @@ export function fallbackAcknowledgedTone(status: FallbackProgramResponse['acknow
 export function fallbackProgramMetadataRows(entry: FallbackProgramListEntry): FallbackProgramRow[] {
   return [
     { key: 'package', label: 'Package', value: entry.packageId },
-    { key: 'revision', label: 'Revision', value: entry.revision },
+    { key: 'revision', label: 'Version', value: entry.revision },
     { key: 'show', label: 'Show', value: entry.show },
     { key: 'generation', label: 'Generation', value: String(entry.generation) },
     { key: 'compiled', label: 'Compiled', value: formatClock(entry.compiledAt) ?? 'unrecorded' },
@@ -551,17 +552,41 @@ function formatAttributeValue(value: unknown): string {
   return String(value)
 }
 
-/** A capability's declared attributes, in plain words - never a raw JSON blob. */
-function summarizeAttributes(attributes: Capability['attributes']): string | null {
-  const entries = Object.entries(attributes ?? {})
-  if (entries.length === 0) return null
-  return entries.map(([key, value]) => `${key}: ${formatAttributeValue(value)}`).join(', ')
+/** One run of a capability line. `title` is the full device string behind a short name. */
+export interface CapabilityLinePart {
+  text: string
+  title?: string
 }
 
-/** One capability, as one line: id, version, and its attributes in plain words. */
-export function capabilityLine(capability: Capability): string {
-  const summary = summarizeAttributes(capability.attributes)
-  return summary === null ? `${capability.id} · v${capability.version}` : `${capability.id} · v${capability.version} · ${summary}`
+/** One audio output: its route by short name, then the rest of what it reports. */
+function outputParts(output: unknown): CapabilityLinePart[] {
+  const entry = typeof output === 'object' && output !== null ? (output as Record<string, unknown>) : {}
+  const { route, shortName, ...rest } = entry
+  if (typeof route !== 'string') return [{ text: formatAttributeValue(output) }]
+  const name = routeName(route, typeof shortName === 'string' ? shortName : undefined)
+  const tail = Object.keys(rest).length === 0 ? '' : `, ${formatAttributeValue(rest)}`
+  return [{ text: 'route: ' }, { text: name, title: route }, ...(tail === '' ? [] : [{ text: tail }])]
+}
+
+/** One capability, as one line: id, version, and its attributes in plain words, never a raw JSON blob. */
+export function capabilityLineParts(capability: Capability): CapabilityLinePart[] {
+  const head = `${capability.id} · v${capability.version}`
+  const entries = Object.entries(capability.attributes ?? {})
+  if (entries.length === 0) return [{ text: head }]
+  const parts: CapabilityLinePart[] = [{ text: `${head} · ` }]
+  entries.forEach(([key, value], index) => {
+    const lead = `${index === 0 ? '' : ', '}${key}: `
+    if (capability.id !== 'audio.output.local' || key !== 'outputs' || !Array.isArray(value)) {
+      parts.push({ text: `${lead}${formatAttributeValue(value)}` })
+      return
+    }
+    parts.push({ text: lead })
+    ;(value as unknown[]).forEach((output, outputIndex) => {
+      if (outputIndex > 0) parts.push({ text: ', ' })
+      parts.push(...outputParts(output))
+    })
+  })
+  return parts
 }
 
 // ---------------------------------------------------------------------

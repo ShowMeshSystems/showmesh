@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { RuledStrip, Section } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { MonitorHead } from './Monitor'
-import { capabilityGroups, capabilityLine, type CapabilityGroup } from './monitorModel'
+import { capabilityGroups, capabilityLineParts, type CapabilityGroup } from './monitorModel'
 
 export function MonitorCapabilities() {
   const model = useModelContext()
@@ -52,12 +52,14 @@ function CapabilityNodeGroup({ group }: { group: CapabilityGroup }) {
           absence="unobserved"
           label="Never advertised"
           fact="Nothing to observe"
-          detail="This node has never advertised a capability. That is not the same as a capability that is failing."
+          detail="This node has never advertised a capability."
         />
       ) : (
         group.capabilities.map((capability, index) => (
           <p key={`${group.key}:${capability.id}:${index}`} className="sm-data">
-            {capabilityLine(capability)}
+            {capabilityLineParts(capability).map((part, partIndex) =>
+              part.title === undefined ? part.text : <span key={partIndex} title={part.title}>{part.text}</span>,
+            )}
           </p>
         ))
       )}

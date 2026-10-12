@@ -239,11 +239,11 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    const summary = await screen.findByText(/Active version/, { selector: 'p' })
     expect(summary).toBeInTheDocument()
     expect(within(summary).getByText('3')).toBeInTheDocument()
     expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
   })
 
@@ -257,7 +257,7 @@ describe('Resolume config', () => {
     renderScreen([instance()])
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Recovery' })).toBeInTheDocument())
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('reports the read failure honestly when the recovery config’s revisions fetch is rejected', async () => {
@@ -269,7 +269,7 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
   it('lists only the ambiguous clips, reads N of the reported total', async () => {
@@ -294,7 +294,7 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    await waitFor(() => expect(screen.getByText(/0 of 72 clips are ambiguous/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/0 of 72 clips share a name/)).toBeInTheDocument())
     const heading = screen.getByRole('heading', { name: 'Clips that cannot be named' })
     const section = heading.closest('section')
     expect(section).not.toBeNull()

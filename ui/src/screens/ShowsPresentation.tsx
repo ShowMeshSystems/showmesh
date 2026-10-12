@@ -107,8 +107,7 @@ export function ShowsPresentation() {
           }
         >
           <p className="sm-small sm-muted">
-            Each surface extracts one channel range from the show&rsquo;s virtual matrix and renders it to one node, over exactly one transport. Select a
-            surface to edit it.
+            Each surface sends one channel range to one node. Select a surface to edit it.
           </p>
 
           {spans.length > 0 && (
@@ -124,7 +123,7 @@ export function ShowsPresentation() {
           )}
 
           {surfaces.length === 0 ? (
-            <RuledStrip absence="empty" label="None" fact="This show has no surface configured." />
+            <RuledStrip absence="empty" label="None" fact="No surfaces yet." />
           ) : (
             <TableWrap label="Surfaces, scrollable">
               <Table minWidth={540}>
@@ -192,7 +191,7 @@ export function ShowsPresentation() {
                     {status.detail ?? `${surface.payload.node} reports this surface's pipeline as ${status.label.toLowerCase()}.`}
                   </p>
                   <p className="sm-attn__detail">
-                    The configuration is stored and valid; this is only what the node last reported.{' '}
+                    This is what the node last reported.{' '}
                     <Link to={`/monitor/fleet/node/${surface.payload.node}`}>Open node</Link>
                   </p>
                 </div>

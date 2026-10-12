@@ -71,8 +71,7 @@ export function NotFound() {
         <h1 className="sm-page__title" id="nf-h">No page at this address</h1>
         <p className="sm-notfound__path sm-data">{pathname}</p>
         <p className="sm-plate__detail">
-          The show is running normally, the bar above is live. Nothing is wrong with the installation; this address
-          just does not exist.
+          The show is not affected. This address does not exist.
         </p>
         <p className="sm-plate__detail">
           {moved === undefined ? 'Nothing is routed here' : `That screen is now ${moved.label}`}
@@ -95,7 +94,7 @@ export function NotFound() {
       <Section
         id="moved"
         title="Where it probably went"
-        detail="Six destinations that each answered part of one question were folded into Monitor. A bookmark from before the change lands here."
+        detail="Six older pages moved into Monitor."
       >
         <TableWrap label="Old addresses and where they went">
           <Table minWidth={520}>
@@ -118,7 +117,7 @@ export function NotFound() {
             </tbody>
           </Table>
         </TableWrap>
-        <p className="sm-section__detail">Old addresses are not redirected. Update the bookmark rather than relying on this page.</p>
+        <p className="sm-section__detail">Old addresses do not redirect. Update the bookmark.</p>
       </Section>
     </>
   )

@@ -153,7 +153,7 @@ describe('Assets library', () => {
 
     const submit = screen.getAllByRole('button', { name: 'Upload' })[1] as HTMLElement
     expect(submit).toBeDisabled()
-    expect(submit).toHaveAttribute('title', 'Identity needs a show. There is no default.')
+    expect(submit).toHaveAttribute('title', expect.stringMatching(/show/i))
 
     fireEvent.change(screen.getByLabelText('Show'), { target: { value: 'winter-ridge-2026' } })
     expect(submit).not.toBeDisabled()

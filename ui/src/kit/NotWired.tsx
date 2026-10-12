@@ -21,7 +21,7 @@ export function NotWiredBanner({ what, missing, detail }: BannerProps) {
       </div>
       <div className="sm-nowire__body">
         <p className="sm-nowire__title">{what} does nothing yet.</p>
-        <p className="sm-nowire__detail">The control below is drawn to its final shape and is deliberately inert. The coordinator has no {missing}, so nothing is sent and nothing happens.</p>
+        <p className="sm-nowire__detail">The coordinator has no {missing}, so the control below sends nothing.</p>
         {detail !== undefined && <p className="sm-nowire__detail">{detail}</p>}
       </div>
     </div>

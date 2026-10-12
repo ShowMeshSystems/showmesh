@@ -19,6 +19,7 @@ import {
 import { Button, ButtonRow, Choice, DeletePanel, Field, Input, RadioCardList, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, type Absence } from '../kit'
 import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
 import { useModelContext } from '../app/ModelContext'
+import { routeName, routeShortName } from './audioRouteModel'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
@@ -190,7 +191,7 @@ export function SettingsNodeRouting() {
         ) : nodesState.kind === 'failed' ? (
           <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
         ) : nodesState.nodes.length === 0 ? (
-          <RuledStrip absence="empty" label="None" fact="No audio.node object has ever been configured." />
+          <RuledStrip absence="empty" label="None" fact="No audio nodes." />
         ) : (
           <Field label="Audio node">
             {(props) => (
@@ -400,8 +401,8 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
       : choices?.ltc.available === false && choices.ltc.reason !== undefined
         ? choices.ltc.reason
         : routeChoice?.programGroups.some((g) => g.ltcChannels.length > 0)
-          ? 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
-          : 'This output has no spare channel for timecode. Turn LTC off, or choose another output.'
+          ? 'No channel is left for timecode. Turn LTC off or pick other program channels.'
+          : 'This output has no spare channel for timecode. Turn LTC off or pick another.'
   const choiceReason =
     entryMode !== 'choices'
       ? (manualRefusal ?? undefined)
@@ -593,8 +594,8 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                   >
                     {routeChoice === null && <option value="">Choose an output</option>}
                     {choices.routes.map((route) => (
-                      <option key={route.route} value={route.route}>
-                        {route.route}, {channelCountLabel(route)}
+                      <option key={route.route} value={route.route} title={route.route}>
+                        {routeName(route.route, route.shortName)}, {channelCountLabel(route)}
                       </option>
                     ))}
                   </Select>
@@ -634,8 +635,8 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                         <option value={programRoute}>{programRoute}, no longer reported by this node</option>
                       )}
                       {programRoutes.map((route) => (
-                        <option key={route} value={route}>
-                          {route}
+                        <option key={route} value={route} title={route}>
+                          {routeName(route, routeShortName(node ?? undefined, route))}
                         </option>
                       ))}
                     </Select>
@@ -728,7 +729,9 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
           <div className="sm-grid sm-form-column sm-stack-4">
             <div className="sm-field">
               <span className="sm-field__label">Route</span>
-              <p className="sm-input sm-data sm-muted">{programRoute === '' ? 'Set a program route first' : programRoute}</p>
+              <p className="sm-input sm-data sm-muted" title={programRoute}>
+                {programRoute === '' ? 'Set a program route first' : routeName(programRoute, routeShortName(node ?? undefined, programRoute))}
+              </p>
             </div>
             {entryMode === 'choices' ? (
               chosenGroup === null ? (
@@ -865,7 +868,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         </div>
         <p className="sm-small sm-muted">
           {verdict.ok
-            ? `One route, program on channel${programChannels.length === 1 ? '' : 's'} ${programChannels.join(' and ')}${ltcOn ? `, LTC on ${ltcChannelText}` : ', no LTC'}. Both routes match and no channel is claimed twice.`
+            ? `One route, program on channel${programChannels.length === 1 ? '' : 's'} ${programChannels.join(' and ')}${ltcOn ? `, LTC on ${ltcChannelText}` : ', no LTC'}.`
             : verdict.reason}
         </p>
       </div>
@@ -888,7 +891,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                       : !outputLatencyValueUsValid
                         ? 'Output latency value must be a whole number of microseconds.'
                         : !outputLatencyProvenanceValid
-                          ? 'Measured at, reference, confidence, and configuration are all required for a measured output latency method.'
+                          ? 'A measured latency needs measured at, reference, confidence and configuration.'
                           : undefined)
                 : undefined
           }
@@ -924,7 +927,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         disallowedReason={saveGate.allowed ? undefined : saveGate.reason}
         onDelete={removeNode}
       >
-        <p className="sm-small sm-muted">Deleting this node leaves any show action or cue that targets it reporting a missing target.</p>
+        <p className="sm-small sm-muted">Show actions and cues that target this node will report a missing target.</p>
       </DeletePanel>
     </>
   )
@@ -1258,7 +1261,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         <RuledStrip
           absence="empty"
           label="Not configured"
-          fact={`No node.clock object exists for ${nodeId}. It reports unsynchronized and behaves as it did before this seam existed.`}
+          fact={`${nodeId} has no clock settings and reports unsynchronized.`}
         />
         {fields}
         <ButtonRow>
@@ -1272,8 +1275,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             label="Already exists"
             fact={
               <>
-                A node.clock object for <span className="sm-data">{nodeId}</span> was created by someone else while you were
-                editing. Your typed values are kept here.{' '}
+                Someone else saved clock settings for <span className="sm-data">{nodeId}</span>. Your values are kept.{' '}
                 <button
                   type="button"
                   className="sm-linkbutton"

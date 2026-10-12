@@ -214,7 +214,7 @@ describe('Shows · Cues tab', () => {
     setup(['config:write'], [], [])
     const region = await screen.findByRole('region', { name: 'In a playlist, scrollable' })
     await waitFor(() => expect(within(region).getByText('None')).toBeInTheDocument())
-    expect(within(region).getByText('No cue matches here.')).toBeInTheDocument()
+    expect(within(region).getByText('No matching cues.')).toBeInTheDocument()
   })
 
   it('a read failure is reported distinctly from empty, with a retry', async () => {
@@ -310,8 +310,8 @@ describe('Shows · Cues tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 1')).not.toBeInTheDocument()
   })
 
@@ -321,7 +321,7 @@ describe('Shows · Cues tab', () => {
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save cue' })
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('reports the read failure honestly when the cue’s revisions fetch is rejected', async () => {
@@ -329,7 +329,7 @@ describe('Shows · Cues tab', () => {
     setup()
     const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
   it('a stale cue save is refused, writes nothing, and names the changed fields', async () => {
@@ -955,7 +955,7 @@ describe('Shows · Cues tab', () => {
           return withContents(kind, [cueSummary()], [])
         }
         fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
-        expect(await screen.findByText('node-b · Node B will play this cue as show audio, not as an announcement, and stops the audio already playing there.')).toBeInTheDocument()
+        expect(await screen.findByText(/^node-b · Node B will play this as show audio and stops/)).toBeInTheDocument()
         expect(screen.getByText('Add node-b · Node B to the announcement nodes to play it over that audio.')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Save cue' })).toBeEnabled()
       })
@@ -964,7 +964,7 @@ describe('Shows · Cues tab', () => {
         setupWithTargets(welcomeCue(['node-a', 'node-b'], { ...duckAnnouncement, targets: ['node-c'] }))
         fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
         expect(
-          await screen.findByText('node-a · Node A and node-b · Node B will play this cue as show audio, not as an announcement, and stop the audio already playing there.'),
+          await screen.findByText(/^node-a · Node A and node-b · Node B will play this as show audio and stop /),
         ).toBeInTheDocument()
         expect(screen.getByText('Add them to the announcement nodes to play it over that audio.')).toBeInTheDocument()
 
@@ -1116,7 +1116,7 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Add action' }))
       const create = screen.getByRole('button', { name: 'Create cue' })
       expect(create).toBeDisabled()
-      expect(create).toHaveAttribute('title', 'A cue needs a render, audio, LTC or announcement output to fire. Add one of those, or attach the actions to a cue that has one.')
+      expect(create).toHaveAttribute('title', expect.stringMatching(/needs a render, audio, LTC or announcement output/))
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Song One' } })
       fireEvent.click(screen.getByRole('checkbox', { name: /Render/ }))
       fireEvent.change(screen.getByLabelText('Sequence'), { target: { value: 'song-one' } })

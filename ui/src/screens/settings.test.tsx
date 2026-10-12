@@ -402,7 +402,7 @@ describe('Settings › Connections', () => {
     expect(screen.getByLabelText('Host id')).toHaveValue('barn-player')
     expect(screen.getByLabelText('Host name')).toHaveValue('FPP-Barn')
     expect(screen.getByText('Player id', { selector: '.sm-field__label' })).toBeVisible()
-    expect(screen.getByText(/Add one row per player: its id, and the host name FPP publishes under/)).toBeInTheDocument()
+    expect(screen.getByText(/One row per player/)).toBeInTheDocument()
   })
 
   it('removing a host entry sends the map without it', async () => {
@@ -891,7 +891,7 @@ describe('Settings › Render recovery', () => {
 
     renderAt('/settings/recovery')
 
-    await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Nothing saved yet/)).toBeInTheDocument())
     expect(screen.queryByRole('heading', { name: 'What happens when weather stops the show' })).not.toBeInTheDocument()
   })
 })
@@ -960,8 +960,8 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay')
 
-    await waitFor(() => expect(screen.getByText(/Nothing has been written for weather delay yet/)).toBeInTheDocument())
-    expect(screen.getByText('No power group is configured.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/Nothing saved yet/)).toBeInTheDocument())
+    expect(screen.getByText('No power groups.')).toBeInTheDocument()
   })
 
   it('saves the alert repeat count and target nodes, every field optional', async () => {
@@ -1327,7 +1327,7 @@ describe('Settings › Node routing', () => {
     expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled()
 
     fireEvent.change(channelsInput, { target: { value: '1, 3' } })
-    expect(await screen.findByText(/already claimed by program channels/)).toBeInTheDocument()
+    expect(await screen.findByText(/already carries program/)).toBeInTheDocument()
 
     fireEvent.change(channelsInput, { target: { value: '1, 2' } })
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
@@ -1690,7 +1690,7 @@ describe('Settings › Node routing', () => {
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('audio-node-01'))
       await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Audio node' })).not.toBeInTheDocument())
-      expect(screen.getByText('No audio.node object has ever been configured.')).toBeInTheDocument()
+      expect(screen.getByText('No audio nodes.')).toBeInTheDocument()
     })
 
     it('renders the coordinator’s refusal verbatim and keeps the node open when the delete is refused', async () => {
@@ -1800,6 +1800,20 @@ describe('Settings › Node routing › choices from the node', () => {
     stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', revisions: [] })
     stubs.getAudioRoutingChoices = () => (choiceBody instanceof Error ? Promise.reject(choiceBody) : Promise.resolve(choiceBody))
   }
+
+  it('names an output by its short name and keeps the full device string as the title', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, choices({ routes: [{ ...m4Route, shortName: 'M4' }] }))
+    renderAt('/settings/node-routing', { nodes: [] })
+    const option = await screen.findByRole('option', { name: 'M4, 4 channels' })
+    expect(option).toHaveAttribute('title', M4)
+    expect(option).toHaveValue(M4)
+  })
+
+  it('names an output by its full device string when the node reports no short name', async () => {
+    setUp({ programRoute: M4, programChannels: [1, 2] }, choices())
+    renderAt('/settings/node-routing', { nodes: [] })
+    expect(await screen.findByRole('option', { name: `${M4}, 4 channels` })).toBeInTheDocument()
+  })
 
   it('offers program groups and only the LTC channels the chosen group leaves free, then saves the choice', async () => {
     setUp(
@@ -1950,7 +1964,7 @@ describe('Settings › Node routing › choices from the node', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     fireEvent.click(await screen.findByRole('radio', { name: /Channels 1 and 2/ }))
-    const message = 'These program channels leave no channel for timecode. Turn LTC off, or choose other program channels.'
+    const message = 'No channel is left for timecode. Turn LTC off or pick other program channels.'
     expect(screen.getAllByText(message)).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Save routing' })).toHaveAttribute('title', message)
   })
@@ -2175,7 +2189,7 @@ describe('Settings › Node routing › PTP clock', () => {
     renderAt('/settings/node-routing', { nodes: [] })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
@@ -2196,7 +2210,7 @@ describe('Settings › Node routing › PTP clock', () => {
     renderAt('/settings/node-routing', { nodes: [] })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
@@ -2420,7 +2434,7 @@ describe('Settings › Mode', () => {
     await waitFor(() => expect(screen.getByText('The coordinator is unreachable.')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: /Apply mode/ })).not.toBeInTheDocument()
     expect(revisions).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Active revision/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Active version/)).not.toBeInTheDocument()
     cleanup()
 
     stubs.getShowModeConfig = () =>
@@ -2439,7 +2453,7 @@ describe('Settings › Mode', () => {
     renderAt('/settings/mode')
 
     const apply = await screen.findByRole('button', { name: /Apply mode/ })
-    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active version/)).toBeInTheDocument())
   })
 
   it('selects a mode with the radio cards and applies the chosen one', async () => {
@@ -2615,11 +2629,11 @@ describe('RevisionHistory, shared across editors', () => {
 
     renderAt('/settings/delivery')
 
-    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    const summary = await screen.findByText(/Active version/, { selector: 'p' })
     expect(summary).toBeInTheDocument()
     expect(within(summary).getByText('2')).toBeInTheDocument()
     expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 2')).not.toBeInTheDocument()
     expect(screen.queryByText(/raised max upload size/)).not.toBeInTheDocument()
   })
@@ -2632,8 +2646,8 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/audio-defaults')
 
     await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
-    expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(await screen.findByText('No earlier versions.')).toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('names which node substituted which audio field on Audio defaults', async () => {
@@ -2667,7 +2681,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/delivery')
 
     await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
-    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
 
   it('leaves the editor around it intact and reports the failure honestly when the revisions read is rejected, on Content delivery', async () => {
@@ -2678,7 +2692,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/delivery')
 
     await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
-    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save delivery' })).toBeInTheDocument()
   })
 
@@ -2693,7 +2707,7 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     const delivery = renderAt('/settings/delivery')
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
     delivery.unmount()
     cleanup()
 
@@ -2706,7 +2720,7 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     renderAt('/settings/audio-defaults')
-    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(await screen.findByText(/Active version/, { selector: 'p' })).toBeInTheDocument()
   })
 
   it('keeps the revision summary in the Node routing save row', async () => {
@@ -2737,7 +2751,7 @@ describe('RevisionHistory, shared across editors', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     const save = await screen.findByRole('button', { name: /Save routing/ })
-    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
-    expect(screen.queryByRole('heading', { level: 2, name: 'Revisions' })).not.toBeInTheDocument()
+    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active version/)).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'History' })).not.toBeInTheDocument()
   })
 })

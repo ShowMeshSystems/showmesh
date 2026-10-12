@@ -158,7 +158,7 @@ export function nextTransition(model: Model): NextTransition {
     return { known: false, reason: 'The playhead position has not been observed.' }
   }
   if (remaining.state !== 'current') {
-    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
+    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the next transition time is unknown.` }
   }
   return { known: true, remainingSeconds: Math.max(0, remaining.value), source: instance.instanceId }
 }
@@ -223,7 +223,7 @@ export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
   if (audio.pinnedMaxGainDb === null) {
     return audio.reason !== '' ? `Pinned ceiling: none. ${audio.reason}` : 'This session pinned no background-audio ceiling.'
   }
-  return `Pinned ceiling for this running session: ${audio.pinnedMaxGainDb} dB. This session locked that in when it started; later config changes do not affect it.`
+  return `Ceiling for this session: ${audio.pinnedMaxGainDb} dB, fixed when it started.`
 }
 
 /**
@@ -253,7 +253,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
         : 'No readiness result has been recorded.'
       : `${READINESS_WORD[readiness.outcome ?? 'unknown']} at ${formatClock(readiness.completedAt ?? null) ?? 'an unrecorded time'}` +
         `${readinessAge === null ? '' : `, ${formatDuration(readinessAge)} ago`}` +
-        `${readiness.sameEpoch ? ', this epoch' : ', from an earlier epoch'}` +
+        `${readiness.sameEpoch ? ', since the last prepare' : ', before the last prepare'}` +
         `${readiness.fresh ? '' : ', no longer fresh'}.`
 
   const hold = session.stopHold
@@ -265,7 +265,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
             key: 'stopHold',
             label: 'Stopped',
             tone: 'bad' as const,
-            fact: `${hold.reason} Nothing starts until Resume, which starts the show playlist from its first song.${
+            fact: `${hold.reason} Resume starts the show playlist from its first song.${
               hold.principal === undefined || hold.principal === '' ? '' : ` Stopped by ${hold.principal}.`
             }`,
           },
@@ -309,8 +309,8 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       label: session.attributionDegraded ? 'Attribution degraded' : 'Attribution complete',
       tone: session.attributionDegraded ? 'bad' : 'good',
       fact: session.attributionDegraded
-        ? 'A step was dispatched with no authorizing principal recorded. This never clears for the rest of the session.'
-        : 'Every dispatch this session has an authorizing principal recorded.',
+        ? 'A step ran with no user recorded. This stays for the session.'
+        : 'Every dispatch this session has an authorizing user recorded.',
     },
     {
       key: 'authorization',
@@ -318,7 +318,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       tone: session.authorization.state === 'recorded' ? 'pending' : 'unknown',
       fact:
         session.authorization.state === 'recorded'
-          ? `${session.authorization.command ?? 'a command'} by ${session.authorization.principalName ?? 'an unnamed principal'}, recorded ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
+          ? `${session.authorization.command ?? 'a command'} by ${session.authorization.principalName ?? 'an unknown user'}, recorded ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
           : session.authorization.reason !== undefined && session.authorization.reason !== ''
             ? session.authorization.reason
             : 'No authorizing command has been recorded for this session.',
@@ -327,18 +327,18 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       key: 'definition',
       label: 'Definition',
       tone: 'pending',
-      fact: `${session.configObjectId} at revision ${session.configRevision}.`,
+      fact: `${session.configObjectId} at version ${session.configRevision}.`,
     },
     {
       key: 'armed-show',
-      label: session.armedShowId === '' ? 'No show armed' : session.showCommitted ? 'Show committed' : 'Show armed',
+      label: session.armedShowId === '' ? 'No show ready' : session.showCommitted ? 'Show committed' : 'Show ready',
       tone: session.armedShowId === '' ? 'unknown' : session.showCommitted ? 'good' : 'pending',
       fact:
         session.armedShowId === ''
-          ? 'No show is armed for this session.'
+          ? 'No show is ready for this session.'
           : session.showCommitted
-            ? `${session.armedShowId} is armed and committed for this session.`
-            : `${session.armedShowId} is armed but not yet committed.`,
+            ? `${session.armedShowId} is ready and committed for this session.`
+            : `${session.armedShowId} is ready but not yet committed.`,
     },
     {
       key: 'admission',
@@ -393,14 +393,14 @@ export function runOfShow(session: NightSessionState): RunStep[] {
     const outcome = cue.outcome
     return {
       key: `${cue.name}:${index}`,
-      when: cue.dispatchedAt === null ? 'Armed' : (formatClock(cue.dispatchedAt) ?? 'dispatched'),
+      when: cue.dispatchedAt === null ? 'Waiting' : (formatClock(cue.dispatchedAt) ?? 'dispatched'),
       name: cue.name,
-      detail: cue.actionRevision === null ? cue.role : `${cue.role} · rev ${cue.actionRevision}`,
+      detail: cue.actionRevision === null ? cue.role : `${cue.role} · version ${cue.actionRevision}`,
       phase: CUE_PHASE[cue.phase],
       target: cue.role,
       action: cue.action,
       tone: outcome === undefined ? (cue.state === 'not_dispatched' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
-      state: outcome ?? (cue.state === 'not_dispatched' ? 'Armed' : cue.state.replace('_', ' ')),
+      state: outcome ?? (cue.state === 'not_dispatched' ? 'Waiting' : cue.state.replace('_', ' ')),
       resolved: cue.resolvedAt === null ? (cue.reason ?? null) : formatClock(cue.resolvedAt),
     }
   })
@@ -425,12 +425,12 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
     const outcome = step.outcome
     return {
       key: `${step.cueName}:${step.kind}:${step.nodeId}:${index}`,
-      when: step.dispatchedAt === null ? 'Armed' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
+      when: step.dispatchedAt === null ? 'Waiting' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
       sequence: step.sequence,
       cueName: step.cueName,
       nodeId: step.nodeId,
       kind: step.kind,
-      detail: `rev ${step.actionRevision}`,
+      detail: `version ${step.actionRevision}`,
       tone: outcome === undefined ? (step.state === 'pending' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
       state: outcome ?? step.state.replace('_', ' '),
       resolved: step.resolvedAt === null ? (step.reason ?? null) : formatClock(step.resolvedAt),
@@ -459,7 +459,7 @@ export function plannedBackgroundAudio(audio: NightBackgroundAudio): PlannedBack
     return { kind: 'unavailable', fact: plan.reason !== '' ? plan.reason : 'The planned background audio could not be read.' }
   }
   if (!plan.configured) {
-    return { kind: 'not_configured', fact: 'This night session has no background audio. Add it to the night definition if the night needs it.' }
+    return { kind: 'not_configured', fact: 'No background audio. Add it in the night definition.' }
   }
   const transition =
     plan.itemTransition === 'crossfade' && plan.crossfadeMs !== null

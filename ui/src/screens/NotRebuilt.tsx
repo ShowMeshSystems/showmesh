@@ -13,7 +13,7 @@ export function NotRebuilt({ title, mock }: { title: string; mock: string }) {
         stamp="Soon"
         eyebrow={`${title} · not rebuilt`}
         title="This screen has not been rebuilt yet"
-        detail={`The operator UI is being rebuilt one screen at a time against ${mock}. This route is still in the queue. Its controls are recorded in docs/ui-rebuild/CONTROL-INVENTORY.md and nothing has been dropped.`}
+        detail={`This screen is still being rebuilt against ${mock}.`}
       />
     </>
   )

@@ -12,7 +12,7 @@ const RESERVED_NODE_IDS = new Set(['enroll', 'enrollments', 'coordinator', 'fpp'
 export function nodeIdHint(nodeId: string): string | null {
   if (nodeId === '') return null
   if (!NODE_ID_PATTERN.test(nodeId)) {
-    return 'Use 1 to 64 lowercase letters, digits and inner hyphens, not starting or ending with a hyphen.'
+    return 'Use 1 to 64 lowercase letters, digits and hyphens. No hyphen first or last.'
   }
   if (RESERVED_NODE_IDS.has(nodeId)) {
     return `"${nodeId}" is reserved and cannot be used as a node id.`

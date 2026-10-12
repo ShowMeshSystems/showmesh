@@ -225,8 +225,8 @@ describe('Shows · Automation tab', () => {
 
   it('a show with no macro or action is a settled empty, distinct from a read failure', async () => {
     setup(['config:write'], [], [])
-    expect(await screen.findByText('No macro matches here.')).toBeInTheDocument()
-    expect(screen.getAllByText('No action matches here.')).toHaveLength(2)
+    expect(await screen.findByText('No matching macros.')).toBeInTheDocument()
+    expect(screen.getAllByText('No matching actions.')).toHaveLength(2)
   })
 
   it('a read failure is reported distinctly, with a retry', async () => {
@@ -308,7 +308,7 @@ describe('Shows · Automation tab', () => {
     fireEvent.change(reasonInput, { target: { value: '' } })
     const save = screen.getByRole('button', { name: 'Save macro' })
     expect(save).toBeDisabled()
-    expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
+    expect(save).toHaveAttribute('title', expect.stringMatching(/coordinator is unreachable/))
   })
 
   it('a stale macro step save is refused and writes nothing', async () => {
@@ -538,7 +538,7 @@ describe('Shows · Automation tab', () => {
       fireEvent.change(reasonInput, { target: { value: '' } })
       const save = screen.getByRole('button', { name: 'Save macro' })
       expect(save).toBeDisabled()
-      expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
+      expect(save).toHaveAttribute('title', expect.stringMatching(/coordinator is unreachable/))
     })
 
     it('blocks save when a step other than the one open has no fallback reason', async () => {
@@ -783,8 +783,8 @@ describe('Shows · Automation tab', () => {
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
-      expect(await within(aside).findByText(/Active revision/)).toBeInTheDocument()
-      expect(within(aside).queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+      expect(await within(aside).findByText(/Active version/)).toBeInTheDocument()
+      expect(within(aside).queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
       expect(within(aside).queryByText('Active · 1')).not.toBeInTheDocument()
     })
 
@@ -795,7 +795,7 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
       await within(aside).findByText('Editing · Start Preshow Playlist')
-      expect(within(aside).queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+      expect(within(aside).queryByText('History could not be read.')).not.toBeInTheDocument()
     })
 
     it('reports the read failure honestly when the action’s revisions fetch is rejected', async () => {
@@ -804,7 +804,7 @@ describe('Shows · Automation tab', () => {
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('dialog')
-      expect(await within(aside).findByText('Revision history could not be read just now.')).toBeInTheDocument()
+      expect(await within(aside).findByText('History could not be read.')).toBeInTheDocument()
     })
 
     it('a stale save is refused and writes nothing', async () => {

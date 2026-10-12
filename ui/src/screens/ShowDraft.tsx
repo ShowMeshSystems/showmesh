@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { getShow, listConfigObjects, putShow, type AudioNodeSummary, type ConfigShowWrite } from '../api'
 import { Button, ButtonRow, ChoiceGroup, Field, Input, RuledStrip, Section, Textarea } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { hasRouteLabel } from './audioRouteModel'
+import { AudioNodeRoute } from './audioRouteName'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate } from '../domain/save'
 import { slugify } from './showsModel'
@@ -27,10 +29,6 @@ function useAudioNodes(): AudioNodesState {
     }
   }, [])
   return state
-}
-
-function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
-  return node.label !== '' && node.label !== node.id ? node.label : undefined
 }
 
 export function ShowDraft() {
@@ -96,7 +94,7 @@ export function ShowDraft() {
       <div className="sm-page__head sm-stack-2">
         <div>
           <h1 className="sm-page__title">New show</h1>
-          <p className="sm-page__lede">Identity only. What a show contains is authored in its workspace tabs once it exists.</p>
+          <p className="sm-page__lede">Name the show. Its contents are added after it exists.</p>
         </div>
       </div>
 
@@ -123,8 +121,8 @@ export function ShowDraft() {
           ) : (
             <ChoiceGroup
               label="Audio nodes"
-              help="Every cue, announcement, and night bed plays on these nodes unless it excludes one."
-              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
+              help="Cues, announcements and the night bed play on these nodes."
+              options={audioNodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: hasRouteLabel(node) ? <AudioNodeRoute node={node} /> : undefined }))}
               value={audioNodes}
               onChange={setAudioNodes}
             />
@@ -162,7 +160,7 @@ export function ShowDraft() {
             'An id is required.'
           ) : (
             <>
-              Creates <span className="sm-data">{id}</span> at revision <span className="sm-data">1</span>
+              Creates <span className="sm-data">{id}</span> at version <span className="sm-data">1</span>
             </>
           )}
         </span>

@@ -90,18 +90,18 @@ export function audioNodeVerdict(payload: {
   const hasLtcRoute = payload.ltcRoute.trim() !== ''
   const hasLtcChannel = payload.ltcChannel.trim() !== ''
   if (hasLtcRoute !== hasLtcChannel) {
-    return { ok: false, reason: 'LTC route and LTC channel must be given together, or both left blank for a program-only node.' }
+    return { ok: false, reason: 'Give the LTC route and LTC channel together, or leave both blank.' }
   }
   if (hasLtcRoute && payload.programRoute.trim() !== payload.ltcRoute.trim()) {
     return {
       ok: false,
-      reason: 'LTC route names a different interface than program route. Name the same route for both, so timecode cannot drift against the music.',
+      reason: 'LTC and program must use the same route.',
     }
   }
   if (hasLtcChannel) {
     const ltc = Number(payload.ltcChannel)
     if (seen.has(ltc)) {
-      return { ok: false, reason: `LTC channel ${ltc} is already claimed by program channels; LTC must be on a channel discrete from program.` }
+      return { ok: false, reason: `Channel ${ltc} already carries program. Put LTC on another channel.` }
     }
   }
   return { ok: true }
@@ -153,7 +153,7 @@ export function nodeClockVerdict(payload: {
   if (payload.holdoverLimitSecondsText.trim() !== '') {
     const holdover = Number(payload.holdoverLimitSecondsText)
     if (!Number.isInteger(holdover) || holdover <= 0) {
-      return { ok: false, reason: 'Holdover limit must be a positive whole number of seconds, or left blank for the default.' }
+      return { ok: false, reason: 'Holdover limit must be a whole number of seconds above 0, or blank.' }
     }
   }
   if (payload.priority1Text.trim() !== '') {

@@ -94,12 +94,12 @@ const TYPE_ROLES = [
   { cls: 'sm-subhead', sample: 'Program output routing', role: 'subhead', spec: '15 / 1.3 / 600 · field-group h3' },
   { cls: 'sm-body', sample: 'FPP remains authoritative for its own schedule, playlist order, and playhead.', role: 'body', spec: '14 / 1.5 / 400 · prose, labels, controls' },
   { cls: 'sm-small sm-muted', sample: 'Helper text appears only when it changes the decision.', role: 'small', spec: '12.5 / 1.45 / 400 · helper, detail, captions' },
-  { cls: 'sm-meta sm-faint', sample: 'Freshness · Revision · Source', role: 'meta', spec: '11 / 1.35 / 600 mono / .09em caps · labels' },
-  { cls: 'sm-data', sample: 'rev 47 · 21:04:11.882 · a3f91c2', role: 'data', spec: '13 / 1.4 / 500 mono tabular · values, IDs' },
+  { cls: 'sm-meta sm-faint', sample: 'Freshness · Version · Source', role: 'meta', spec: '11 / 1.35 / 600 mono / .09em caps · labels' },
+  { cls: 'sm-data', sample: 'version 47 · 21:04:11.882 · a3f91c2', role: 'data', spec: '13 / 1.4 / 500 mono tabular · values, IDs' },
 ]
 
 const STRIPS = [
-  { absence: 'loading' as const, label: 'Loading', fact: 'Waiting for the first snapshot', detail: 'An empty list here would not be evidence of an empty fleet.' },
+  { absence: 'loading' as const, label: 'Loading', fact: 'Waiting for the first snapshot' },
   { absence: 'empty' as const, label: 'Empty', fact: 'No cues authored yet', detail: <>A cue binds a transition step to a playlist item. <a href="#specimen-states">Add the first cue</a></> },
   { absence: 'stale' as const, label: 'Stale · 4 m 12 s', fact: 'Pipeline state pre-dates the current stream gap', detail: <>Stale is unknown, never healthy. <a href="#specimen-states">Re-fetch snapshot</a></> },
   { absence: 'failed' as const, label: 'Failed · retry', fact: 'Discovery did not complete', detail: <>The agent on <span className="sm-data">node-04</span> did not answer in 5 s. <a href="#specimen-states">Run discovery again</a></> },
@@ -175,10 +175,7 @@ export function Specimen() {
           <p className="sm-eyebrow sm-eyebrow--accent">Foundation</p>
           <h1 className="sm-page__title" id="specimen-lead">A restrained, technical system for show-time decisions</h1>
           <p className="sm-spec-lead">
-            Dark graphite is the show-time default. Light is a daylight setup mode. High contrast is a deliberate
-            operator setting for gloves and outdoor night work, never inferred. One blue-green accent carries
-            selection, focus, links, and the single primary action; green, amber, and red are reserved for
-            labelled evidence.
+            Dark is the show-time default, light is for daylight setup, and high contrast is an operator setting. Green, amber and red are for labelled status only.
           </p>
           <DefinitionStrip
             items={[
@@ -234,8 +231,7 @@ export function Specimen() {
             ))}
           </div>
           <Callout>
-            A dashed edge belongs only to an explicit unobserved state block, never a generic unknown status.
-            Absent evidence must not be able to borrow the shape of a settled state, in any theme, at any zoom.
+            A dashed edge belongs only to an unobserved state block, never a generic unknown status.
           </Callout>
         </SpecSection>
 
@@ -279,7 +275,7 @@ export function Specimen() {
                 </Select>
               )}
             </Field>
-            <Field label="Idle output" error="The coordinator rejected an empty value at revision 47.">
+            <Field label="Idle output" error="The coordinator rejected an empty value at version 47.">
               {(props) => <Input defaultValue="" {...props} />}
             </Field>
           </FieldGrid>
@@ -299,9 +295,7 @@ export function Specimen() {
             onChange={setChoiceGroupValue}
           />
           <p className="sm-small sm-muted">
-            Two nodes sharing one route: the identity is the primary line, the route a muted secondary one, so the
-            same route on two hosts never reads as one option. The route itself is a real, unbreakable device
-            string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
+            Two nodes sharing one route. The long device string proves the choice wraps at phone width.
           </p>
           <Slider
             label="Brightness ceiling"
@@ -317,8 +311,7 @@ export function Specimen() {
             <Button variant="primary">Pair</Button>
           </div>
           <p className="sm-small sm-muted">
-            <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button in an
-            inline row, such as a pairing code. Never for a field that can hold an operator-length string.
+            <span className="sm-data">.sm-input--narrow</span>: a short, fixed-format value next to a button, such as a pairing code.
           </p>
           <div className="sm-inline-row">
             <Input aria-label="Player id" defaultValue="barn-player" className="sm-input--id" />
@@ -348,7 +341,7 @@ export function Specimen() {
           />
         </SpecSection>
 
-        <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">
+        <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="The ruled strip is the default. The blanking plate is for a whole region that cannot render.">
           <div className="sm-strips__title">
             <span className="sm-spec-mark">A</span>
             <span className="sm-subhead">Ruled strip, the default</span>
@@ -383,7 +376,7 @@ export function Specimen() {
               stamp="No sig"
               eyebrow="Audio routing · unobserved"
               title="This node has never reported an audio inventory"
-              detail="Output groups, free channels, and route ownership all come from the agent. Until it answers, there is nothing here to choose between."
+              detail="Agent did not answer in 5 s. Run discovery again."
               actions={<><Button>Run discovery</Button><Button variant="quiet">Enter a route manually</Button></>}
             />
             <BlankingPlate
@@ -419,9 +412,7 @@ export function Specimen() {
             </NotWired>
           </ButtonRow>
           <Callout>
-            Amber, not red: nothing is broken and nothing has failed. The tag rides on the control so the warning
-            cannot be scrolled away from the button it describes, and the child is forced disabled so the tag can
-            never appear on something that works.
+            Amber, not red: nothing has failed. The tag rides on the control, and the control is forced disabled.
           </Callout>
 
           <div className="sm-strips__title sm-spec-plate-title">
@@ -458,9 +449,7 @@ export function Specimen() {
             ))}
           </div>
           <Callout>
-            Stopped and error are settled facts, so both keep a solid edge; unknown is reserved for a cycle the
-            coordinator never reported anything about, so it keeps the dashed edge the same as any never-collected
-            evidence.
+            Stopped and error keep a solid edge. Unknown, a cycle never reported, keeps the dashed edge.
           </Callout>
         </SpecSection>
 
@@ -482,7 +471,7 @@ export function Specimen() {
               emergency={<ChromeStop stopLabel="Emergency stop" onStop={() => {}} moreLabel="More emergency stop levels" onMore={() => {}} moreExpanded={false} />}
             />
             <ChromeProgress value={0.61} label="Position in the current item" />
-            <ClockSkewStrip>This browser&rsquo;s clock is behind the coordinator&rsquo;s, the reference clock, by about 4 m 12 s. Every age and relative time shown here is off by roughly that much.</ClockSkewStrip>
+            <ClockSkewStrip>This browser&rsquo;s clock is about 4 m 12 s behind the coordinator&rsquo;s. Ages shown here are off by that much.</ClockSkewStrip>
             <WeatherDelayBanner
               kindLabel="Weather delay"
               elapsedLabel="Started 6 m 12 s ago"
@@ -635,9 +624,7 @@ export function Specimen() {
             <li>State the reason literally, then the action. <span className="sm-muted">“Agent did not answer in 5 s. Run discovery again.”</span></li>
           </ul>
           <p className="sm-small sm-muted">
-            <code>sm-grid--wider</code> floors its columns at 520px, for a body with a small number of
-            large field groups (Resolume Config's stored composition and layer map). It still collapses
-            to one column below the shell's narrow-viewport breakpoints, the same as <code>sm-grid--auto</code>
+            <code>sm-grid--wider</code> floors its columns at 520px, for a few large field groups. It collapses to one column like <code>sm-grid--auto</code>
             and <code>sm-grid--wide</code>.
           </p>
           <div className="sm-grid sm-grid--wider">
@@ -646,7 +633,7 @@ export function Specimen() {
           </div>
         </SpecSection>
 
-        <SpecSection number="10 · Drawer" id="specimen-drawer" title="The inspector floats, it does not crowd a column" detail="D-021: a right-side drawer over the page, under the chrome bar, sized to its content. The scrim is a click target, not a focus trap; the page behind it stays readable.">
+        <SpecSection number="10 · Drawer" id="specimen-drawer" title="The inspector floats, it does not crowd a column" detail="A right-side drawer over the page, under the chrome bar, sized to its content. The scrim is a click target.">
           <ButtonRow>
             <Button onClick={() => setDrawerOpen(true)}>Inspect node</Button>
           </ButtonRow>
@@ -673,7 +660,7 @@ export function Specimen() {
           </Drawer>
         </SpecSection>
 
-        <SpecSection number="11 · Confirm dialog" id="specimen-confirm" title="A real modal, for the rare choice that must not slip past" detail="Replaces window.confirm. Names the real risk instead of a generic 'Are you sure?', and the destructive action sits on the danger button, never the default focus.">
+        <SpecSection number="11 · Confirm dialog" id="specimen-confirm" title="A real modal, for the rare choice that must not slip past" detail="Replaces window.confirm. It names the real risk, and the danger button never takes default focus.">
           <ButtonRow>
             <Button variant="danger" onClick={() => setConfirmOpen(true)}>Deploy anyway</Button>
           </ButtonRow>
@@ -683,7 +670,7 @@ export function Specimen() {
             detail={
               <>
                 <p className="sm-body">Cues &ldquo;cue-a&rdquo; and &ldquo;cue-b&rdquo; both hold the exclusive claim &ldquo;program-audio-route:media-garage:usb-interface&rdquo;.</p>
-                <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed revision.</p>
+                <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed version.</p>
               </>
             }
             confirmLabel="Deploy anyway"
@@ -703,7 +690,7 @@ export function Specimen() {
           number="12 · Lifecycle commands"
           id="specimen-lifecycle"
           title="One element, two layouts"
-          detail="An untitled group renders Show Night's flat grid; a titled group renders Live Control's subsection. Start night's option renders under its own consequence line, never beside the button."
+          detail="An untitled group renders Show Night's flat grid. A titled group renders Live Control's subsection."
         >
           <p className="sm-small sm-muted">Untitled group (Show Night):</p>
           <LifecycleCommands
@@ -711,7 +698,7 @@ export function Specimen() {
               {
                 id: 'specimen-lc-flat',
                 commands: [
-                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a new preparation.', onRun: () => {} },
                   {
                     command: 'start-night',
                     label: 'Start night',
@@ -742,7 +729,7 @@ export function Specimen() {
                 id: 'specimen-lc-prepare',
                 title: 'Prepare',
                 commands: [
-                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a new preparation.', onRun: () => {} },
                   { command: 'run-readiness', label: 'Run readiness', detail: 'Re-runs every readiness check.', onRun: () => {} },
                 ],
               },
@@ -762,7 +749,7 @@ export function Specimen() {
           number="13 · Workbench"
           id="specimen-workbench"
           title="Controls left, the state they drive right"
-          detail="A two-column layout for control-heavy pages. The left column holds the driving controls; the right column holds the status, log, or results they act on. It lives inside the page, sets no width, and collapses to one column at the shell breakpoint, main first."
+          detail="Two columns for control-heavy pages: controls on the left, their status or log on the right. One column at the shell breakpoint."
         >
           <Workbench
             sideLabel="Specimen status"
@@ -791,7 +778,7 @@ export function Specimen() {
           number="14 · Delete panel"
           id="specimen-delete"
           title="One type-to-confirm shape for every config object"
-          detail="D-019: deleting a config object is sharp, danger-styled, never adjacent to the save control, and asks the operator to type the object's own name before the button enables."
+          detail="Deleting is danger-styled, apart from Save, and asks the operator to type the object's own name."
         >
           <DeletePanel
             title="Delete this cue"

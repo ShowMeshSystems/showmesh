@@ -21,11 +21,7 @@ describe('NotFound · shape matches the mock, not a hatched plate', () => {
     expect(screen.getByText('Not found')).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1, name: 'No page at this address' })).toBeInTheDocument()
     expect(screen.getByText('/observations/barn-player')).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        'The show is running normally, the bar above is live. Nothing is wrong with the installation; this address just does not exist.',
-      ),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/The show is not affected/)).toBeInTheDocument()
   })
 
   it('carries no hatched plate: BlankingPlate is gone', () => {

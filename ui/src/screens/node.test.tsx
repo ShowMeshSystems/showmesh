@@ -216,8 +216,7 @@ describe('Node detail', () => {
 
   it('says a node never advertised audio rather than showing it as failing, in the Signals section', () => {
     renderScreen([node({ audio: [] })])
-    expect(screen.getByText(/never claimed an audio capability/)).toBeInTheDocument()
-    expect(screen.getByText(/That is not the same as an audio path that is failing/)).toBeInTheDocument()
+    expect(screen.getByText(/never advertised audio/)).toBeInTheDocument()
   })
 
   it('never wraps a Signals row value in a status chip', () => {
@@ -256,7 +255,7 @@ describe('Node detail', () => {
       }),
     ])
     expect(screen.getByText(/Last will received at/)).toBeInTheDocument()
-    expect(screen.getByText(/so the agent went away rather than the network dropping/)).toBeInTheDocument()
+    expect(screen.getByText(/The agent stopped\./)).toBeInTheDocument()
   })
 
   it('does not claim the agent went away when the last-will record still says online', () => {
@@ -271,7 +270,7 @@ describe('Node detail', () => {
       }),
     ])
     expect(screen.queryByText(/Last will received at/)).not.toBeInTheDocument()
-    expect(screen.getByText(/still says the agent was online/)).toBeInTheDocument()
+    expect(screen.getByText(/The cause is unknown/)).toBeInTheDocument()
   })
 
   it('does not claim a last will when the evidence is not_collected', () => {
@@ -286,13 +285,13 @@ describe('Node detail', () => {
       }),
     ])
     expect(screen.queryByText(/Last will received at/)).not.toBeInTheDocument()
-    expect(screen.getByText(/nothing here distinguishes the agent going away/)).toBeInTheDocument()
+    expect(screen.getByText(/The agent stopped or the network dropped/)).toBeInTheDocument()
   })
 
   it('renders capabilities from the node’s own list and states the no-audio-routing fact', () => {
     renderScreen([node({ capabilities: [{ id: 'display.hdmi', version: 1, attributes: { outputs: 2 } }] })])
     expect(screen.getAllByText('display.hdmi').length).toBeGreaterThan(0)
-    expect(screen.getByText(/has no audio routing to configure/)).toBeInTheDocument()
+    expect(screen.getByText(/This node has no audio output\./)).toBeInTheDocument()
     expect(screen.getByText(/reports a count but no names/)).toBeInTheDocument()
   })
 
@@ -826,7 +825,7 @@ describe('Node detail · Drift recording', () => {
     renderScreen([node()])
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Drift recording' })).toBeInTheDocument())
-    expect(screen.getByText(/can never receive an alignment sample/)).toBeInTheDocument()
+    expect(screen.getByText(/cannot record drift/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Start drift recording' })).not.toBeInTheDocument()
   })
 
@@ -1219,7 +1218,7 @@ describe('Node detail · Cue catalog override', () => {
     renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Redeploy cue catalog' })).toBeEnabled())
-    expect(screen.getByText('This node has not reported rendering this surface. Redeploy the cue catalog to restore it.')).toBeInTheDocument()
+    expect(screen.getByText(/is not rendering this surface/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Redeploy cue catalog' }))
     await waitFor(() => expect(stubs.deployNodeCueCatalog).toHaveBeenCalledWith('media-garage', undefined))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmed'))
