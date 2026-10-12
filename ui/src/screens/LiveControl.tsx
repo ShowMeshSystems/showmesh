@@ -72,7 +72,14 @@ import {
   Textarea,
   Workbench,
 } from '../kit'
-import { instanceOutcomeTone, useEmergencyStop } from '../app/emergencyStop'
+import {
+  instanceOutcomeTone,
+  STOP_CONFIRM_DETAIL,
+  STOP_CONFIRM_TITLE,
+  STOP_POWER_DOWN_CONFIRM_DETAIL,
+  STOP_POWER_DOWN_CONFIRM_TITLE,
+  useEmergencyStop,
+} from '../app/emergencyStop'
 import { EmergencyStopOutcome } from '../app/EmergencyStopOutcome'
 import { useModelContext } from '../app/ModelContext'
 import { RESUME_CONFIRM_TITLE, useCurrentNightSession, useResumeShow } from '../app/stopHold'
@@ -356,6 +363,8 @@ export function LiveControl() {
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false)
+  const [powerDownConfirmOpen, setPowerDownConfirmOpen] = useState(false)
   const [resolumeBlackoutOutcome, setResolumeBlackoutOutcome] = useState<ResolumeActionResult | null>(null)
   const [resolumeBlackoutError, setResolumeBlackoutError] = useState<string | null>(null)
   const runResolumeBlackout = useCallback(() => {
@@ -521,6 +530,28 @@ export function LiveControl() {
   )
   const emergencySection = (
       <Section id="lc-emergency" title="Emergency stop">
+        <ConfirmDialog
+          open={stopConfirmOpen}
+          title={STOP_CONFIRM_TITLE}
+          detail={STOP_CONFIRM_DETAIL}
+          confirmLabel="Stop"
+          onConfirm={() => {
+            setStopConfirmOpen(false)
+            runStop()
+          }}
+          onCancel={() => setStopConfirmOpen(false)}
+        />
+        <ConfirmDialog
+          open={powerDownConfirmOpen}
+          title={STOP_POWER_DOWN_CONFIRM_TITLE}
+          detail={STOP_POWER_DOWN_CONFIRM_DETAIL}
+          confirmLabel="Stop and power down"
+          onConfirm={() => {
+            setPowerDownConfirmOpen(false)
+            runStopPowerDown()
+          }}
+          onCancel={() => setPowerDownConfirmOpen(false)}
+        />
         <div className="sm-lc-emergency">
           <ButtonRow>
             <Button
@@ -528,10 +559,7 @@ export function LiveControl() {
               size="gloved"
               disabled={!emergencyGate.allowed || emergencyBusy !== false}
               title={emergencyGate.allowed ? 'Stops every configured FPP instance and any configured stop actions, such as stopping audio or blacking out Resolume.' : emergencyGate.reason}
-              onClick={() => {
-                if (!window.confirm('Stop every configured FPP instance now? Any stop actions your site configured, such as stopping audio or blacking out Resolume, also run.')) return
-                runStop()
-              }}
+              onClick={() => setStopConfirmOpen(true)}
             >
               Stop
             </Button>
@@ -543,15 +571,7 @@ export function LiveControl() {
               size="gloved"
               disabled={!emergencyGate.allowed || emergencyBusy !== false}
               title={emergencyGate.allowed ? 'Stop, plus forces an active night session into its power-down sequence immediately.' : emergencyGate.reason}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    'Stop every configured FPP instance now, run any stop actions your site configured, and force an active night session straight into its own graceful power-down?',
-                  )
-                )
-                  return
-                runStopPowerDown()
-              }}
+              onClick={() => setPowerDownConfirmOpen(true)}
             >
               Stop and power down
             </Button>

@@ -64,7 +64,7 @@ export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal,
         {!phone && (
           <>
             <span className="sm-chrome__divider" aria-hidden="true" />
-            {principal}
+            <span className="sm-chrome__principal">{principal}</span>
           </>
         )}
         {emergency}
@@ -80,20 +80,23 @@ type ChromeStopProps = {
   onMore: () => void
   /** Whether the popup the second button opens is showing. */
   moreExpanded: boolean
+  /** When set, both buttons are marked disabled and carry this reason as their title. They still open, so the reason is readable. */
+  disabledReason?: string | undefined
 }
 
 /** The emergency stop pair on the bar: the first button asks to stop, the second opens the other levels. Neither acts on its own press. */
-export function ChromeStop({ stopLabel, onStop, moreLabel, onMore, moreExpanded }: ChromeStopProps) {
+export function ChromeStop({ stopLabel, onStop, moreLabel, onMore, moreExpanded, disabledReason }: ChromeStopProps) {
   return (
     <span className="sm-chrome-stop">
-      <button type="button" className="sm-chrome-stop__btn" aria-label={stopLabel} title={stopLabel} aria-haspopup="dialog" onClick={onStop}>
+      <button type="button" className="sm-chrome-stop__btn" aria-label={stopLabel} title={disabledReason ?? stopLabel} aria-disabled={disabledReason !== undefined || undefined} aria-haspopup="dialog" onClick={onStop}>
         <span className="sm-chrome-stop__square" aria-hidden="true" />
       </button>
       <button
         type="button"
         className="sm-chrome-stop__btn"
         aria-label={moreLabel}
-        title={moreLabel}
+        title={disabledReason ?? moreLabel}
+        aria-disabled={disabledReason !== undefined || undefined}
         aria-haspopup="dialog"
         aria-expanded={moreExpanded}
         onClick={onMore}

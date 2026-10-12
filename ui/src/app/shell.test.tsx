@@ -734,6 +734,12 @@ describe('app shell', () => {
       fireEvent.click(bar.getByRole('button', { name: 'More emergency stop levels' }))
       const popup = within(screen.getByRole('dialog', { name: 'Emergency stop' }))
       fireEvent.click(popup.getByRole('button', { name: 'Stop and power down' }))
+      expect(emergencyStopPowerDownMock).not.toHaveBeenCalled()
+      const confirm = within(screen.getByRole('dialog', { name: 'Stop and power down now?' }))
+      fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }))
+      expect(emergencyStopPowerDownMock).not.toHaveBeenCalled()
+      fireEvent.click(popup.getByRole('button', { name: 'Stop and power down' }))
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop and power down now?' })).getByRole('button', { name: 'Stop and power down' }))
       expect(emergencyStopPowerDownMock).toHaveBeenCalledTimes(1)
       expect(await popup.findByText('No night session was active.')).toBeInTheDocument()
     })
@@ -754,6 +760,24 @@ describe('app shell', () => {
         expect(popup.getByRole('button', { name })).toBeDisabled()
       }
       expect(emergencyStopMock).not.toHaveBeenCalled()
+    })
+
+    it('marks both bar buttons disabled with the reason as their title without the scope, and still opens them', () => {
+      const bar = renderBar(['config:write'])
+      for (const name of ['Emergency stop', 'More emergency stop levels']) {
+        const button = bar.getByRole('button', { name })
+        expect(button).toHaveAttribute('aria-disabled', 'true')
+        expect(button).toHaveAttribute('title', expect.stringMatching(/does not include "show:emergencystop:invoke"/))
+      }
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      expect(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).toBeInTheDocument()
+    })
+
+    it('leaves both bar buttons enabled with the scope', () => {
+      const bar = renderBar()
+      for (const name of ['Emergency stop', 'More emergency stop levels']) {
+        expect(bar.getByRole('button', { name })).not.toHaveAttribute('aria-disabled')
+      }
     })
 
     it('keeps both buttons on the bar at phone width', () => {

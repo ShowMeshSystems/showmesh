@@ -1,7 +1,14 @@
 import { useState } from 'react'
 import type { Model } from '../api'
 import { Button, ButtonRow, ChromeStop, ConfirmDialog, Drawer, Notice } from '../kit'
-import { EMERGENCY_LEVEL_LABEL, useEmergencyStop } from './emergencyStop'
+import {
+  EMERGENCY_LEVEL_LABEL,
+  STOP_CONFIRM_DETAIL,
+  STOP_CONFIRM_TITLE,
+  STOP_POWER_DOWN_CONFIRM_DETAIL,
+  STOP_POWER_DOWN_CONFIRM_TITLE,
+  useEmergencyStop,
+} from './emergencyStop'
 import { EmergencyStopOutcome } from './EmergencyStopOutcome'
 
 /**
@@ -12,6 +19,7 @@ export function EmergencyStopChrome({ model }: { model: Model }) {
   const emergency = useEmergencyStop(model)
   const { gate, busy, hardStopArm, armRemainingMs, armExpired } = emergency
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [powerDownConfirmOpen, setPowerDownConfirmOpen] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
 
   // An arm nobody can see is not left standing: closing the popup drops it.
@@ -28,11 +36,12 @@ export function EmergencyStopChrome({ model }: { model: Model }) {
         moreLabel="More emergency stop levels"
         onMore={() => (panelOpen ? closePanel() : setPanelOpen(true))}
         moreExpanded={panelOpen}
+        disabledReason={gate.allowed ? undefined : gate.reason}
       />
       <ConfirmDialog
         open={confirmOpen}
-        title="Stop every configured FPP instance now?"
-        detail={gate.allowed ? 'Your stop actions also run, such as stopping audio or blacking out Resolume.' : gate.reason}
+        title={STOP_CONFIRM_TITLE}
+        detail={gate.allowed ? STOP_CONFIRM_DETAIL : gate.reason}
         confirmLabel="Stop"
         confirmDisabled={!gate.allowed || busy !== false}
         onConfirm={() => {
@@ -42,6 +51,18 @@ export function EmergencyStopChrome({ model }: { model: Model }) {
         }}
         onCancel={() => setConfirmOpen(false)}
       />
+      <ConfirmDialog
+        open={powerDownConfirmOpen}
+        title={STOP_POWER_DOWN_CONFIRM_TITLE}
+        detail={gate.allowed ? STOP_POWER_DOWN_CONFIRM_DETAIL : gate.reason}
+        confirmLabel="Stop and power down"
+        confirmDisabled={!gate.allowed || busy !== false}
+        onConfirm={() => {
+          setPowerDownConfirmOpen(false)
+          emergency.stopPowerDown()
+        }}
+        onCancel={() => setPowerDownConfirmOpen(false)}
+      />
       <Drawer open={panelOpen} onClose={closePanel} labelledBy="chrome-estop-heading">
         <div className="sm-inspector">
           <h3 className="sm-inspector__title" id="chrome-estop-heading">Emergency stop</h3>
@@ -49,7 +70,7 @@ export function EmergencyStopChrome({ model }: { model: Model }) {
           <div className="sm-lc-emergency">
             <p className="sm-small sm-muted">Stop, plus an active night session goes straight to its power-down.</p>
             <ButtonRow>
-              <Button variant="danger" size="gloved" disabled={!gate.allowed || busy !== false} onClick={emergency.stopPowerDown}>
+              <Button variant="danger" size="gloved" disabled={!gate.allowed || busy !== false} onClick={() => setPowerDownConfirmOpen(true)}>
                 Stop and power down
               </Button>
             </ButtonRow>
