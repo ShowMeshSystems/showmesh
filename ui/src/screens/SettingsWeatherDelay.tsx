@@ -105,8 +105,7 @@ function nextPowerGroupKey(): string {
 /**
  * ADR-053 decision 13's `show.weatherdelay` config: the alert, its power
  * groups, and its automatic triggers, every field optional with a working
- * default. Kept as its own load/save cycle, independent of render
- * recovery's, since the two config kinds share nothing.
+ * default. One load and save cycle for this config kind alone.
  */
 export function SettingsWeatherDelay() {
   const model = useModelContext()
