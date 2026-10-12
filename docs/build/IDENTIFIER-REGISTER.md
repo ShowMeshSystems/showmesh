@@ -1276,17 +1276,19 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
-| `audio-ltc-separate-local-clock` | shipped | ADR-052 decision 4: a node's LTC route names a different interface than its program route and no local clock override says they share a clock. Reported only as `warning`, never `failingCondition` |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-nodes-defaulted` | shipped | ADR-049 decision 10 — reported only as `warning`, never `failingCondition`; the same condition name is used at the night readiness layer for the background bed and announcements, which report through `nightReadinessCheck`, not this file's own `ReadinessCondition` |
 | `version-mismatch` | shipped | a node or FPP plugin runs a version the coordinator's compatibility rule does not accept; warning only, never `failingCondition` |
+| `audio-ltc-separate-local-clock` | shipped | ADR-052 decision 4: a node's LTC route names a different interface than its program route and no local clock override says they share a clock. Reported only as `warning`, never `failingCondition` |
+| `audio-ltc-capable-unconfigured` | shipped | a node advertises a discrete LTC-capable route and its `audio.node` names no LTC channel; warning only, never `failingCondition` |
 
-**`cue-multisync-trigger-missing`, `fpp-multisync-disabled` and
-`audio-node-not-multisync-remote` are warning-only, not a
-`failingCondition`.** Every condition above this row can make `ready`
-false; these three never do (ADR-051 decisions 2 and 4: a Cue with an
+**`cue-multisync-trigger-missing`, `fpp-multisync-disabled`,
+`audio-node-not-multisync-remote`, `audio-nodes-defaulted`,
+`audio-ltc-separate-local-clock` and `audio-ltc-capable-unconfigured` are
+warning-only, not a `failingCondition`.** Every condition above the
+`cue-multisync-trigger-missing` row can make `ready` false; these never do (ADR-051 decisions 2 and 4: a Cue with an
 audio output and no trigger, an FPP instance with MultiSync turned off, or
 a target audio node absent from that instance's own MultiSync systems
 list still plays, from the coordinator's own fallback, only later). They
