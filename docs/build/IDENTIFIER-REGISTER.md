@@ -636,6 +636,7 @@ register entry comes from the code and never from a plan.
 | `fallback.program.publish` | shipped | Track J seam J1: the coordinator building and signing a new fallback-program revision |
 | `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
 | `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
+| `fallback.program.withdraw` | shipped | the coordinator withdrawing one FPP host's fallback program when its playlist no longer has a cue or the show is deactivated; the host's installed copy expires on its own TTL |
 | `fallback.executor_key.register` | shipped | Track J seam J3: a paired FPP plugin registering or replacing the public key it signs fallback activations with |
 | `fallback.player_state.report` | shipped | Track J seam J5: a paired FPP plugin reporting that its fallback state changed. Written on a change of state only, never for the 10 second repeat |
 | `fallback.player_state.clear` | shipped | Track J seam J5: an operator clearing what the coordinator stored about one FPP player's fallback state |
