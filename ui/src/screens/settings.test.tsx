@@ -882,7 +882,7 @@ describe('Settings › Render recovery', () => {
     renderAt('/settings/recovery')
 
     await waitFor(() => expect(screen.getByText(/Nothing has been written for render recovery yet/)).toBeInTheDocument())
-    expect(screen.queryByRole('heading', { name: 'Weather delay' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What happens when weather stops the show' })).not.toBeInTheDocument()
   })
 })
 
@@ -925,7 +925,7 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay', { nodes: [makeNode('stage-node', { label: 'Stage' })] })
 
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /stage-node/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -947,7 +947,7 @@ describe('Settings › Weather delay', () => {
     )
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Add power group' }))
     fireEvent.change(screen.getByLabelText('Id'), { target: { value: 'lighting' } })
@@ -971,7 +971,7 @@ describe('Settings › Weather delay', () => {
 
     renderAt('/settings/weather-delay')
 
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     expect(screen.getByLabelText<HTMLSelectElement>('Delay alert').value).toBe('asset-siren')
     expect(screen.getByRole('option', { name: 'asset-siren', selected: true })).toBeInTheDocument()
   })
@@ -985,7 +985,7 @@ describe('Settings › Weather delay', () => {
     )
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.change(screen.getByLabelText('Latitude'), { target: { value: '43.07' } })
@@ -1019,7 +1019,7 @@ describe('Settings › Weather delay', () => {
     stubs.putWeatherDelayConfig = vi.fn(() => Promise.resolve(weatherDelayConfig({}, 2)))
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     fireEvent.click(screen.getByRole('checkbox', { name: /enable the weather service poller/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
@@ -1042,7 +1042,7 @@ describe('Settings › Weather delay', () => {
       })
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
 
     expect(await screen.findByText(/The alerts API did not answer\./)).toBeInTheDocument()
     expect(screen.getByText('An official warning feed does not cover ordinary lightning on its own.')).toBeInTheDocument()
@@ -1056,7 +1056,7 @@ describe('Settings › Weather delay', () => {
       Promise.reject(new ApiError('A weather delay is active. Configuration cannot change until it is cleared.', 409))
 
     renderAt('/settings/weather-delay')
-    await screen.findByRole('heading', { name: 'Weather delay' })
+    await screen.findByRole('heading', { name: 'What happens when weather stops the show' })
     fireEvent.change(await screen.findByLabelText('Repeat count'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save weather delay' }))
 
@@ -2355,6 +2355,44 @@ describe('Settings › Mode', () => {
     expect(screen.getByRole('button', { name: /Apply mode/ })).toBeDisabled()
   })
 
+  it('keeps revision history in the save row, and shows none while the read has failed', async () => {
+    const revisions = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revisions: [{ revision: 2, active: true, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalName: 'operator', note: '' }],
+      }),
+    )
+    stubs.getShowModeConfigRevisions = revisions
+    stubs.getShowModeConfig = () => Promise.reject(new ApiError('The coordinator is unreachable.', 500, 'https://showmesh.dev/problems/internal'))
+
+    renderAt('/settings/mode')
+
+    await waitFor(() => expect(screen.getByText('The coordinator is unreachable.')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Apply mode/ })).not.toBeInTheDocument()
+    expect(revisions).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Active revision/)).not.toBeInTheDocument()
+    cleanup()
+
+    stubs.getShowModeConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revision: 2,
+        payload: { mode: 'show' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'operator',
+        source: 'api',
+        resolumeWebSocketEffect: 'closed in show mode',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
+      })
+    renderAt('/settings/mode')
+
+    const apply = await screen.findByRole('button', { name: /Apply mode/ })
+    await waitFor(() => expect(within(apply.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+  })
+
   it('seeds the night session itself, because the model only ever gets one from a stream frame', async () => {
     stubs.getShowModeConfig = () =>
       Promise.resolve({
@@ -2591,7 +2629,7 @@ describe('RevisionHistory, shared across editors', () => {
     expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
   })
 
-  it('keeps the expandable revision list on Node routing, matching its own mock', async () => {
+  it('keeps the revision summary in the Node routing save row', async () => {
     stubs.listConfigObjects = () =>
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
     stubs.getAudioNode = () =>
@@ -2618,8 +2656,8 @@ describe('RevisionHistory, shared across editors', () => {
 
     renderAt('/settings/node-routing', { nodes: [] })
 
-    expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
-    expect(await screen.findByText('Active · 4')).toBeInTheDocument()
-    expect(screen.getByText(/LTC moved to channel 3/)).toBeInTheDocument()
+    const save = await screen.findByRole('button', { name: /Save routing/ })
+    await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active revision/)).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 2, name: 'Revisions' })).not.toBeInTheDocument()
   })
 })

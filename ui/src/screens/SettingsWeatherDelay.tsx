@@ -302,331 +302,327 @@ export function SettingsWeatherDelay() {
 
   return (
     <>
-      <Section
-        id="st-weatherdelay"
-        title="Weather delay"
-        detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it."
-      >
-        {state.kind === 'loading' ? (
-          <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for weather delay settings." />
-        ) : state.kind === 'failed' ? (
-          <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
-        ) : (
-          <>
-            {state.response.revision === 0 && state.response.source === 'default' && (
-              <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for weather delay yet. These are the coordinator's own defaults." />
-            )}
+      <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Weather delay</p>
+      <h2 className="sm-section__title">What happens when weather stops the show</h2>
+      {state.kind === 'loading' ? (
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for weather delay settings." />
+      ) : state.kind === 'failed' ? (
+        <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
+      ) : (
+        <>
+          {state.response.revision === 0 && state.response.source === 'default' && (
+            <RuledStrip absence="unobserved" label="Default" fact="Nothing has been written for weather delay yet. These are the coordinator's own defaults." />
+          )}
 
-            <Section id="st-weatherdelay-alert" title="Alert">
-              <div className="sm-grid sm-grid--auto">
-                <WeatherAlertAssetPicker
-                  label="Delay alert"
-                  help="Plays when Weather delay starts."
-                  assets={assets}
-                  value={delayAssetId}
-                  onChange={(id) => {
-                    setDelayAssetId(id)
-                    setDirty(true)
-                  }}
-                />
-                <WeatherAlertAssetPicker
-                  label="Cancel-night alert"
-                  help="Plays when Cancel night starts."
-                  assets={assets}
-                  value={cancelNightAssetId}
-                  onChange={(id) => {
-                    setCancelNightAssetId(id)
-                    setDirty(true)
-                  }}
-                />
-                <Field label="Repeat count" help="How many times the alert plays. Defaults to 10.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={0}
-                      value={repeatCount}
-                      onChange={(e) => {
-                        setRepeatCount(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-              </div>
-              <ChoiceGroup
-                label="Target nodes"
-                help="Empty means every declared audio node."
-                options={nodeOptions}
-                value={alertNodeIds}
-                onChange={(value) => {
-                  setAlertNodeIds(value)
+          <Section id="st-weatherdelay-alert" title="Alert" detail="The alert, power groups and automatic triggers are each optional. Leave any of them empty to go without it.">
+            <div className="sm-grid sm-grid--auto">
+              <WeatherAlertAssetPicker
+                label="Delay alert"
+                help="Plays when Weather delay starts."
+                assets={assets}
+                value={delayAssetId}
+                onChange={(id) => {
+                  setDelayAssetId(id)
                   setDirty(true)
                 }}
               />
-            </Section>
-
-            <Section
-              id="st-weatherdelay-power"
-              title="Power groups"
-              detail="ShowMesh never switches power itself. Each group's dark heartbeat is for an installation's own power controller to watch."
-              aside={
-                <Button variant="quiet" size="compact" onClick={addPowerGroup}>
-                  Add power group
-                </Button>
-              }
-            >
-              {powerGroups.length === 0 ? (
-                <RuledStrip absence="empty" label="No power groups" fact="No power group is configured." />
-              ) : (
-                powerGroups.map((group) => (
-                  <div key={group.key} className="sm-panel sm-grid sm-stack-3">
-                    <div className="sm-grid sm-grid--auto">
-                      <Field label="Id">
-                        {(props) => (
-                          <Input {...props} value={group.id} onChange={(e) => updatePowerGroup(group.key, { id: e.target.value })} />
-                        )}
-                      </Field>
-                      <Field label="Label">
-                        {(props) => (
-                          <Input {...props} value={group.label} onChange={(e) => updatePowerGroup(group.key, { label: e.target.value })} />
-                        )}
-                      </Field>
-                      <Field label="Heartbeat interval (seconds)">
-                        {(props) => (
-                          <Input
-                            {...props}
-                            type="number"
-                            min={1}
-                            value={group.heartbeatIntervalSeconds}
-                            onChange={(e) => updatePowerGroup(group.key, { heartbeatIntervalSeconds: e.target.value })}
-                          />
-                        )}
-                      </Field>
-                    </div>
-                    <Choice
-                      type="checkbox"
-                      label="Publish this group's dark heartbeat"
-                      checked={group.heartbeatEnabled}
-                      onChange={(e) => updatePowerGroup(group.key, { heartbeatEnabled: e.target.checked })}
-                    />
-                    <ChoiceGroup
-                      label="FPP instances"
-                      options={fppOptions}
-                      value={group.fppInstanceIds}
-                      onChange={(value) => updatePowerGroup(group.key, { fppInstanceIds: value })}
-                    />
-                    <ChoiceGroup
-                      label="Resolume instances"
-                      options={resolumeOptions}
-                      value={group.resolumeInstanceIds}
-                      onChange={(value) => updatePowerGroup(group.key, { resolumeInstanceIds: value })}
-                    />
-                    <ChoiceGroup
-                      label="Render nodes"
-                      options={nodeOptions}
-                      value={group.renderNodeIds}
-                      onChange={(value) => updatePowerGroup(group.key, { renderNodeIds: value })}
-                    />
-                    <ButtonRow>
-                      <Button variant="quiet" size="compact" onClick={() => removePowerGroup(group.key)}>
-                        Remove power group
-                      </Button>
-                    </ButtonRow>
-                  </div>
-                ))
-              )}
-            </Section>
-
-            <Section id="st-weatherdelay-triggers" title="Automatic triggers" detail="A trigger may start a delay; it may never end one.">
-              <div className="sm-grid sm-grid--auto">
-                <Field label="Answer window (seconds)" help="How long a trigger waits for an operator before starting a delay on its own. Defaults to 30.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={1}
-                      value={answerWindowSeconds}
-                      onChange={(e) => {
-                        setAnswerWindowSeconds(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Cancel answer window (seconds)" help="The longer window used when too little of the night would remain. Defaults to 180.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={1}
-                      value={cancelAnswerWindowSeconds}
-                      onChange={(e) => {
-                        setCancelAnswerWindowSeconds(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Restart minutes" help="Below this much night remaining after a warning expires, the question becomes delay or cancel. Defaults to 15.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={1}
-                      value={restartMinutes}
-                      onChange={(e) => {
-                        setRestartMinutes(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. 0 suppresses nothing. Defaults to 30.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={0}
-                      value={dismissQuietMinutes}
-                      onChange={(e) => {
-                        setDismissQuietMinutes(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-              </div>
-            </Section>
-
-            <Section
-              id="st-weatherdelay-nws"
-              title="Weather service poller"
-              detail="Reads only event type, severity and expiry from the United States National Weather Service alerts API, never its warning text. Disabled by default."
-            >
-              <Choice
-                type="checkbox"
-                label="Enable the weather service poller"
-                checked={nwsEnabled}
-                onChange={(e) => {
-                  setNwsEnabled(e.target.checked)
+              <WeatherAlertAssetPicker
+                label="Cancel-night alert"
+                help="Plays when Cancel night starts."
+                assets={assets}
+                value={cancelNightAssetId}
+                onChange={(id) => {
+                  setCancelNightAssetId(id)
                   setDirty(true)
                 }}
               />
-              <div className="sm-grid sm-grid--auto">
-                <Field label="Latitude">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      value={nwsLatitude}
-                      onChange={(e) => {
-                        setNwsLatitude(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Longitude">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      value={nwsLongitude}
-                      onChange={(e) => {
-                        setNwsLongitude(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Contact" help="Required to enable: that API's own policy requires a contact.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      value={nwsContact}
-                      onChange={(e) => {
-                        setNwsContact(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-                <Field label="Poll seconds" help="Defaults to 60.">
-                  {(props) => (
-                    <Input
-                      {...props}
-                      type="number"
-                      min={1}
-                      value={nwsPollSeconds}
-                      onChange={(e) => {
-                        setNwsPollSeconds(e.target.value)
-                        setDirty(true)
-                      }}
-                    />
-                  )}
-                </Field>
-              </div>
-              <Field label="Event types" help="Comma-separated. Defaults to Tornado Warning, Severe Thunderstorm Warning.">
+              <Field label="Repeat count" help="How many times the alert plays. Defaults to 10.">
                 {(props) => (
                   <Input
                     {...props}
-                    value={nwsEventTypes}
+                    type="number"
+                    min={0}
+                    value={repeatCount}
                     onChange={(e) => {
-                      setNwsEventTypes(e.target.value)
+                      setRepeatCount(e.target.value)
                       setDirty(true)
                     }}
                   />
                 )}
               </Field>
-              {weatherDelay.state.kind === 'loaded' && (weatherDelay.state.response.sources?.length ?? 0) > 0 && (
-                <div className="sm-stack-2">
-                  <p className="sm-small sm-faint">Trigger source health</p>
-                  {weatherDelay.state.response.sources?.map((source) => (
-                    <p key={source.source} className="sm-small">
-                      <span className="sm-data">{source.source}</span>{' '}
-                      {source.enabled ? 'Enabled.' : 'Disabled.'}
-                      {source.lastError !== undefined && ` ${source.lastError}`}
-                    </p>
-                  ))}
-                  {weatherDelay.state.response.sourcesMessage !== undefined && (
-                    <p className="sm-small sm-faint">{weatherDelay.state.response.sourcesMessage}</p>
-                  )}
-                </div>
-              )}
-            </Section>
-          </>
-        )}
-
-        <ButtonRow>
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={!dirty || saving || state.kind !== 'loaded' || !gate.allowed}
-            title={gate.allowed ? undefined : gate.reason}
-          >
-            {saving ? 'Saving…' : 'Save weather delay'}
-          </Button>
-          <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
-            Discard changes
-          </Button>
-          {state.kind === 'loaded' && (
-            <div className="sm-push-end">
-              <RevisionHistory fetch={getWeatherDelayConfigRevisions} reloadKey={attempt} />
             </div>
-          )}
-        </ButtonRow>
-        {stale !== null && (
-          <StaleWriteStrip
-            stale={stale}
-            onReload={() => {
-              setStale(null)
-              setAttempt((n) => n + 1)
-            }}
-          />
+            <ChoiceGroup
+              label="Target nodes"
+              help="Empty means every declared audio node."
+              options={nodeOptions}
+              value={alertNodeIds}
+              onChange={(value) => {
+                setAlertNodeIds(value)
+                setDirty(true)
+              }}
+            />
+          </Section>
+
+          <Section
+            id="st-weatherdelay-power"
+            title="Power groups"
+            detail="ShowMesh never switches power itself. Each group's dark heartbeat is for an installation's own power controller to watch."
+            aside={
+              <Button variant="quiet" size="compact" onClick={addPowerGroup}>
+                Add power group
+              </Button>
+            }
+          >
+            {powerGroups.length === 0 ? (
+              <RuledStrip absence="empty" label="No power groups" fact="No power group is configured." />
+            ) : (
+              powerGroups.map((group) => (
+                <div key={group.key} className="sm-panel sm-grid sm-stack-3">
+                  <div className="sm-grid sm-grid--auto">
+                    <Field label="Id">
+                      {(props) => (
+                        <Input {...props} value={group.id} onChange={(e) => updatePowerGroup(group.key, { id: e.target.value })} />
+                      )}
+                    </Field>
+                    <Field label="Label">
+                      {(props) => (
+                        <Input {...props} value={group.label} onChange={(e) => updatePowerGroup(group.key, { label: e.target.value })} />
+                      )}
+                    </Field>
+                    <Field label="Heartbeat interval (seconds)">
+                      {(props) => (
+                        <Input
+                          {...props}
+                          type="number"
+                          min={1}
+                          value={group.heartbeatIntervalSeconds}
+                          onChange={(e) => updatePowerGroup(group.key, { heartbeatIntervalSeconds: e.target.value })}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  <Choice
+                    type="checkbox"
+                    label="Publish this group's dark heartbeat"
+                    checked={group.heartbeatEnabled}
+                    onChange={(e) => updatePowerGroup(group.key, { heartbeatEnabled: e.target.checked })}
+                  />
+                  <ChoiceGroup
+                    label="FPP instances"
+                    options={fppOptions}
+                    value={group.fppInstanceIds}
+                    onChange={(value) => updatePowerGroup(group.key, { fppInstanceIds: value })}
+                  />
+                  <ChoiceGroup
+                    label="Resolume instances"
+                    options={resolumeOptions}
+                    value={group.resolumeInstanceIds}
+                    onChange={(value) => updatePowerGroup(group.key, { resolumeInstanceIds: value })}
+                  />
+                  <ChoiceGroup
+                    label="Render nodes"
+                    options={nodeOptions}
+                    value={group.renderNodeIds}
+                    onChange={(value) => updatePowerGroup(group.key, { renderNodeIds: value })}
+                  />
+                  <ButtonRow>
+                    <Button variant="quiet" size="compact" onClick={() => removePowerGroup(group.key)}>
+                      Remove power group
+                    </Button>
+                  </ButtonRow>
+                </div>
+              ))
+            )}
+          </Section>
+
+          <Section id="st-weatherdelay-triggers" title="Automatic triggers" detail="A trigger may start a delay; it may never end one.">
+            <div className="sm-grid sm-grid--auto">
+              <Field label="Answer window (seconds)" help="How long a trigger waits for an operator before starting a delay on its own. Defaults to 30.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={answerWindowSeconds}
+                    onChange={(e) => {
+                      setAnswerWindowSeconds(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Cancel answer window (seconds)" help="The longer window used when too little of the night would remain. Defaults to 180.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={cancelAnswerWindowSeconds}
+                    onChange={(e) => {
+                      setCancelAnswerWindowSeconds(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Restart minutes" help="Below this much night remaining after a warning expires, the question becomes delay or cancel. Defaults to 15.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={restartMinutes}
+                    onChange={(e) => {
+                      setRestartMinutes(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Dismiss quiet minutes" help="How long a dismiss answer suppresses a new question about the same source and warning. 0 suppresses nothing. Defaults to 30.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    value={dismissQuietMinutes}
+                    onChange={(e) => {
+                      setDismissQuietMinutes(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+          </Section>
+
+          <Section
+            id="st-weatherdelay-nws"
+            title="Weather service poller"
+            detail="Reads only event type, severity and expiry from the United States National Weather Service alerts API, never its warning text. Disabled by default."
+          >
+            <Choice
+              type="checkbox"
+              label="Enable the weather service poller"
+              checked={nwsEnabled}
+              onChange={(e) => {
+                setNwsEnabled(e.target.checked)
+                setDirty(true)
+              }}
+            />
+            <div className="sm-grid sm-grid--auto">
+              <Field label="Latitude">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    value={nwsLatitude}
+                    onChange={(e) => {
+                      setNwsLatitude(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Longitude">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    value={nwsLongitude}
+                    onChange={(e) => {
+                      setNwsLongitude(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Contact" help="Required to enable: that API's own policy requires a contact.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={nwsContact}
+                    onChange={(e) => {
+                      setNwsContact(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Poll seconds" help="Defaults to 60.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={nwsPollSeconds}
+                    onChange={(e) => {
+                      setNwsPollSeconds(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+            <Field label="Event types" help="Comma-separated. Defaults to Tornado Warning, Severe Thunderstorm Warning.">
+              {(props) => (
+                <Input
+                  {...props}
+                  value={nwsEventTypes}
+                  onChange={(e) => {
+                    setNwsEventTypes(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+            {weatherDelay.state.kind === 'loaded' && (weatherDelay.state.response.sources?.length ?? 0) > 0 && (
+              <div className="sm-stack-2">
+                <p className="sm-small sm-faint">Trigger source health</p>
+                {weatherDelay.state.response.sources?.map((source) => (
+                  <p key={source.source} className="sm-small">
+                    <span className="sm-data">{source.source}</span>{' '}
+                    {source.enabled ? 'Enabled.' : 'Disabled.'}
+                    {source.lastError !== undefined && ` ${source.lastError}`}
+                  </p>
+                ))}
+                {weatherDelay.state.response.sourcesMessage !== undefined && (
+                  <p className="sm-small sm-faint">{weatherDelay.state.response.sourcesMessage}</p>
+                )}
+              </div>
+            )}
+          </Section>
+        </>
+      )}
+
+      <ButtonRow>
+        <Button
+          variant="primary"
+          onClick={save}
+          disabled={!dirty || saving || state.kind !== 'loaded' || !gate.allowed}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {saving ? 'Saving…' : 'Save weather delay'}
+        </Button>
+        <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
+          Discard changes
+        </Button>
+        {state.kind === 'loaded' && (
+          <div className="sm-push-end">
+            <RevisionHistory fetch={getWeatherDelayConfigRevisions} reloadKey={attempt} />
+          </div>
         )}
-        {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-      </Section>
+      </ButtonRow>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </>
   )
 }

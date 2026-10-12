@@ -898,9 +898,9 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
           Discard changes
         </Button>
-        <span className="sm-small sm-muted sm-push-end">
-          Active revision <span className="sm-data">{state.response.revision}</span>
-        </span>
+        <div className="sm-push-end">
+          <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} />
+        </div>
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -912,8 +912,6 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" />
 
       <DeletePanel
         title="Delete this node"
@@ -1305,9 +1303,9 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
           Discard changes
         </Button>
-        <span className="sm-small sm-muted sm-push-end">
-          Active revision <span className="sm-data">{state.response.revision}</span>
-        </span>
+        <div className="sm-push-end">
+          <RevisionHistory fetch={() => getNodeClockConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} id="st-node-clock-rev" />
+        </div>
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -1319,8 +1317,6 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={() => getNodeClockConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" id="st-node-clock-rev" />
     </Section>
   )
 }

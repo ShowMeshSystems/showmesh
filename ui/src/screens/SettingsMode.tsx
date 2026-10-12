@@ -129,7 +129,7 @@ export function SettingsMode() {
       ) : (
         <>
           <Section id="st-mode" title="Mode">
-            <fieldset className="sm-grid" style={{ border: 0, padding: 0, margin: 0 }}>
+            <fieldset className="sm-option-group">
               <legend className="sm-sr-only">Mode</legend>
               {MODE_OPTIONS.map((option) => {
                 const isActive = state.response.payload.mode === option.value
@@ -175,6 +175,9 @@ export function SettingsMode() {
                 {requestedMode === 'show' ? 'Show' : 'Program'} mode is already active, so there is nothing to apply.
               </span>
             )}
+            <div className="sm-push-end">
+              <RevisionHistory fetch={getShowModeConfigRevisions} reloadKey={attempt} />
+            </div>
           </ButtonRow>
         </>
       )}
@@ -189,8 +192,6 @@ export function SettingsMode() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={getShowModeConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

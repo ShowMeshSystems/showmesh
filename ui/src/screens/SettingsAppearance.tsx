@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Segmented } from '../kit'
+import { Section, Segmented } from '../kit'
 import { useTheme } from '../app/useTheme'
 
 type BaseTheme = 'system' | 'dark' | 'light'
@@ -24,8 +24,7 @@ export function SettingsAppearance() {
       <p className="sm-small sm-muted">Settings <span className="sm-faint">/</span> Appearance</p>
       <h2 className="sm-section__title">How this browser looks</h2>
 
-      <section aria-labelledby="st-theme" className="sm-section">
-        <h3 id="st-theme" className="sm-eyebrow">Theme</h3>
+      <Section id="st-theme" title="Theme">
         <Segmented
           label="Theme"
           value={baseTheme}
@@ -35,10 +34,9 @@ export function SettingsAppearance() {
             setTheme(value)
           }}
         />
-      </section>
+      </Section>
 
-      <section aria-labelledby="st-hc" className="sm-section">
-        <h3 id="st-hc" className="sm-eyebrow">High contrast</h3>
+      <Section id="st-hc" title="High contrast">
         <label className="sm-panel sm-inline-row sm-stack-3">
           <input
             type="checkbox"
@@ -47,9 +45,9 @@ export function SettingsAppearance() {
               setTheme(e.target.checked ? 'contrast' : baseTheme)
             }}
           />
-          <span className="sm-body sm-flat" style={{ fontWeight: 500 }}>Maximum legibility mode</span>
+          <span className="sm-subhead">Maximum legibility mode</span>
         </label>
-      </section>
+      </Section>
     </>
   )
 }
