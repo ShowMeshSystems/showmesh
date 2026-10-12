@@ -164,7 +164,7 @@ func TestPutFPPMQTTConfigValidatesBeforeActivation(t *testing.T) {
 	deps, _ := fppMQTTConfigTestDeps(svc, st)
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	invalidBody := `{"brokerURL":"tcp://10.0.1.5:1883"}` // broker set, no hosts
+	invalidBody := `{"brokerURL":"ftp://10.0.1.5:21"}` // not a broker scheme
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.mqtt", invalidBody,
 		map[string]string{"Authorization": "Bearer " + adminToken})
 	resp, body := doRawRequest(t, api.Handler, req)

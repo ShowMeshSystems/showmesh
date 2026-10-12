@@ -66,10 +66,10 @@ func TestFPPMQTTConfigEqual(t *testing.T) {
 	}
 }
 
-func TestValidateFPPMQTTConfigKindRejectsBrokerWithNoHosts(t *testing.T) {
+func TestValidateFPPMQTTConfigKindAcceptsBrokerWithNoHosts(t *testing.T) {
 	cfg := FPPMQTTConfig{BrokerURL: "tcp://broker:1883"}
-	if err := ValidateFPPMQTTConfigKind(cfg, nil); err == nil {
-		t.Fatalf("ValidateFPPMQTTConfigKind: want an error for a broker URL with no hosts")
+	if err := ValidateFPPMQTTConfigKind(cfg, nil); err != nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: a broker saved before any FPP player is mapped must be accepted, got %v", err)
 	}
 }
 
