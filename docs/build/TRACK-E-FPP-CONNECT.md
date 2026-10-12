@@ -553,9 +553,10 @@ unread pipe. Both the show id and the slug are resolved once, at bind time
 in `fppconnectheld.go`, and stored on the held record so the render report
 and the registration request always agree; a display name that no longer
 resolves to exactly one show id leaves the file unbound with its own
-reason, the same as any other unresolved binding. A `music` or `videos`
+reason, the same as any other unresolved binding. A `videos`
 upload is held and bound exactly as FC2 already does, but its record's
-`registrationState` is `skipped` and says so; nothing from those two
+`registrationState` is `skipped` and says so; a `music` upload registers as a
+show-wide audio asset named after its sequence; nothing from videos
 directories ever reaches `POST /api/v1/assets`. A `200` is verified against
 FC2's own content hash before it is trusted: a mismatch is recorded as a
 failure, never as a registration. `400`, `401`, `403`, `405`, and `413` are
