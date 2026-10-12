@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Model, NightSessionState, PrincipalObject, SessionResponse, TokenObject } from '../api'
@@ -528,19 +528,27 @@ describe('Access', () => {
     }
     renderScreen()
     await waitFor(() => expect(screen.getByText('Administration')).toBeInTheDocument())
+    await act(async () => {})
 
-    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'a-new-password' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Set password' }))
+    const passwordInput = await screen.findByLabelText('New password')
+    fireEvent.change(passwordInput, { target: { value: 'a-new-password' } })
+    await waitFor(() => expect(passwordInput).toHaveValue('a-new-password'))
+    const setPassword = screen.getByRole('button', { name: 'Set password' })
+    await waitFor(() => expect(setPassword).toBeEnabled())
+    fireEvent.click(setPassword)
 
-    const confirmInput = screen.getByLabelText('Type erbartos to confirm')
+    const confirmInput = await screen.findByLabelText('Type erbartos to confirm')
+    const resetPassword = screen.getByRole('button', { name: 'Reset password' })
     fireEvent.change(confirmInput, { target: { value: 'wrong-name' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
+    await waitFor(() => expect(confirmInput).toHaveValue('wrong-name'))
+    expect(resetPassword).toBeDisabled()
     expect(received).toBeUndefined()
 
     fireEvent.change(confirmInput, { target: { value: 'erbartos' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
+    await waitFor(() => expect(resetPassword).toBeEnabled())
+    fireEvent.click(resetPassword)
     await waitFor(() => expect(received).toEqual({ password: 'a-new-password' }))
-    await waitFor(() => expect(screen.getByText(/Every session and token this principal held is now invalid/)).toBeInTheDocument())
+    expect(await screen.findByText(/Every session and token this principal held is now invalid/)).toBeInTheDocument()
   })
 
   it('opens the inspector as a dialog on row selection, marks the row Editing, and closes on the close button', async () => {
