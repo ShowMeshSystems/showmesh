@@ -2130,6 +2130,7 @@ func New(deps Dependencies, opts Options) *API {
 
 	mux.HandleFunc("GET /api/v1/config/release.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/release.settings", h.writeGuard(&scopeConfigWrite, h.handlePutReleaseSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/release.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfigRevisions))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

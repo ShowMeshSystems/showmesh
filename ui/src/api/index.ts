@@ -356,6 +356,7 @@ export {
   refreshSystemVersions,
   getReleaseSettingsConfig,
   putReleaseSettingsConfig,
+  getReleaseSettingsConfigRevisions,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

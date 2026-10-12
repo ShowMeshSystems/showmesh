@@ -53,13 +53,46 @@ func (h *handlers) handleGetReleaseSettingsConfig(w http.ResponseWriter, r *http
 		return
 	}
 	if !ok {
+		source := "default"
+		if h.deps.ReleaseSettingsEnvVarsSet && h.deps.ReleaseSettingsMigrationDeferred {
+			source = config.ReleaseSettingsSourceEnv
+		}
 		jsonWrite(w, v1.ReleaseSettingsConfigResponse{
 			ServerTime: formatTime(now), Kind: config.ReleaseSettingsConfigKind,
-			Payload: mapReleaseSettingsPayload(h.runningReleaseSettings()), UpdatedAt: formatTime(now), Source: "default",
+			Payload: mapReleaseSettingsPayload(h.runningReleaseSettings()), UpdatedAt: formatTime(now), Source: source,
 		})
 		return
 	}
 	jsonWrite(w, mapReleaseSettingsConfigResponse(now, rev, obj.UpdatedAt, settings))
+}
+
+// handleGetReleaseSettingsConfigRevisions serves GET /api/v1/config/release.settings/revisions:
+// every revision's metadata, newest first, and an empty list when nothing is stored.
+func (h *handlers) handleGetReleaseSettingsConfigRevisions(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+
+	activeRevision := int64(0)
+	obj, err := h.deps.Config.GetConfigObject(r.Context(), config.ReleaseSettingsConfigKind, config.ReleaseSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+	case err != nil:
+		h.writeInternalError(w, now, "get release.settings config object", err)
+		return
+	default:
+		activeRevision = obj.CurrentRevision
+	}
+
+	revs, err := h.deps.Config.ListConfigRevisions(r.Context(), config.ReleaseSettingsConfigKind, config.ReleaseSettingsConfigObjectID)
+	if err != nil {
+		h.writeInternalError(w, now, "list release.settings config revisions", err)
+		return
+	}
+
+	out := make([]v1.ConfigRevisionMeta, 0, len(revs))
+	for i := len(revs) - 1; i >= 0; i-- {
+		out = append(out, mapConfigRevisionMeta(revs[i], activeRevision))
+	}
+	jsonWrite(w, v1.ConfigRevisionsResponse{ServerTime: formatTime(now), Kind: config.ReleaseSettingsConfigKind, Revisions: out})
 }
 
 // decodeReleaseSettingsPutBody reads a partial update: an absent field keeps
@@ -86,7 +119,7 @@ func decodeReleaseSettingsPutBody(body io.Reader, base config.ReleaseSettings) (
 			if err := json.Unmarshal(raw, &seconds); err != nil {
 				return base, fmt.Errorf(`"checkIntervalSeconds" must be a whole number: %w`, err)
 			}
-			base.CheckInterval = time.Duration(seconds) * time.Second
+			base.CheckInterval = config.ReleaseCheckIntervalFromSeconds(seconds)
 		default:
 			return base, fmt.Errorf(`unknown field %q; the accepted fields are "enabled","checkIntervalSeconds"`, key)
 		}

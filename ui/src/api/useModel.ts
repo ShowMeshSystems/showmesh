@@ -305,6 +305,10 @@ export function putReleaseSettingsConfig(
   return store.putReleaseSettingsConfig(payload, ifMatchRevision)
 }
 
+export function getReleaseSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getReleaseSettingsConfigRevisions()
+}
+
 /** Refetches the model's system versions now, for a caller that just changed what they report. */
 export function refreshSystemVersions(): void {
   store.refreshSystemVersions()

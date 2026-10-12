@@ -996,6 +996,9 @@ func (c Config) Validate() error {
 	if c.ReleaseCheckInterval < MinReleaseCheckInterval {
 		return fmt.Errorf("%s must be at least %s, got %s", envReleaseCheckInterval, MinReleaseCheckInterval, c.ReleaseCheckInterval)
 	}
+	if c.ReleaseCheckInterval > MaxReleaseCheckInterval {
+		return fmt.Errorf("%s must be at most %s, got %s", envReleaseCheckInterval, MaxReleaseCheckInterval, c.ReleaseCheckInterval)
+	}
 	if c.ResolumeRecoverySettle < 0 || c.ResolumeRecoverySettle > maxResolumeRecoverySettle {
 		return fmt.Errorf("%s must be between 0s and %s, got %s", envResolumeRecoverySettle, maxResolumeRecoverySettle, c.ResolumeRecoverySettle)
 	}

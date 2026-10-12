@@ -1226,6 +1226,10 @@ func TestReleaseCheckSettingsFromEnv(t *testing.T) {
 	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at least 5m0s") {
 		t.Fatalf("LoadConfigFrom = %v, want the interval refused", err)
 	}
+	env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "169h"
+	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at most 168h0m0s") {
+		t.Fatalf("LoadConfigFrom = %v, want the long interval refused", err)
+	}
 }
 
 func TestReleaseSettingsPayloadRoundTripsAndRefusesAShortInterval(t *testing.T) {
@@ -1246,5 +1250,17 @@ func TestReleaseSettingsPayloadRoundTripsAndRefusesAShortInterval(t *testing.T) 
 	want300 := "The check interval is too short. Set it to 300 seconds or more."
 	if got := ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 299 * time.Second}); got != want300 {
 		t.Fatalf("problem = %q, want %q", got, want300)
+	}
+	wantWeek := "The check interval is too long. Set it to 604800 seconds or less."
+	if got := ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 604801 * time.Second}); got != wantWeek {
+		t.Fatalf("problem = %q, want %q", got, wantWeek)
+	}
+	if ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 604800 * time.Second}) != "" {
+		t.Fatal("one week was refused")
+	}
+	for _, seconds := range []int64{604801, 9223372036854775807, -1, -9223372036854775808} {
+		if ReleaseSettingsProblem(ReleaseSettings{CheckInterval: ReleaseCheckIntervalFromSeconds(seconds)}) == "" {
+			t.Errorf("%d seconds was accepted", seconds)
+		}
 	}
 }

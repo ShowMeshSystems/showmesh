@@ -417,6 +417,32 @@ func TestOpenAPIAssetsSettingsConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
+// TestOpenAPIReleaseSettingsConfigResponsesMatchRealResponses checks a full
+// PUT, a partial PUT, a GET and the revision history against the schema.
+func TestOpenAPIReleaseSettingsConfigResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, token, _, _ := releaseSettingsTestAPI(t, nil)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	_, defaultBody := doRequest(t, api.Handler, "GET", releaseSettingsPath, auth)
+	assertMatchesSchema(t, c, "ReleaseSettingsConfigResponse", defaultBody)
+
+	for _, body := range []string{`{"enabled":false,"checkIntervalSeconds":900}`, `{"checkIntervalSeconds":604800}`} {
+		assertMatchesSchema(t, c, "ConfigReleaseSettingsPutPayload", []byte(body))
+		resp, putBody := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, releaseSettingsPath, body, auth))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s: status = %d, want 200; body: %s", body, resp.StatusCode, putBody)
+		}
+		assertMatchesSchema(t, c, "ReleaseSettingsConfigResponse", putBody)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", releaseSettingsPath, auth)
+	assertMatchesSchema(t, c, "ReleaseSettingsConfigResponse", getBody)
+
+	_, revBody := doRequest(t, api.Handler, "GET", releaseSettingsPath+"/revisions", auth)
+	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
+}
+
 // TestOpenAPIDiscoveryResponsesMatchRealResponses is finding 15's own
 // regression test: seam B's three routes (POST /discovery/runs, POST
 // /nodes/{nodeId}/declaration, DELETE /nodes/{nodeId}/declaration) had NO

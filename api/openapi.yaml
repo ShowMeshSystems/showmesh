@@ -6270,7 +6270,9 @@ paths:
         Requires `config:write`. Whether the coordinator asks GitHub for
         the newest release, and how often. Never `404`s: when nothing has
         been written, the payload is what the coordinator runs with,
-        reported with `revision` `0` and `source` `"default"`.
+        reported with `revision` `0` and `source` `"default"`, or `"env"`
+        when it comes from the coordinator's environment and could not be
+        stored.
       responses:
         "200":
           description: OK
@@ -6295,8 +6297,8 @@ paths:
       description: >-
         Requires `config:write` (admin only). A partial update: a field
         left out keeps its stored value, and a `null` or unknown field is
-        refused with `400`. `checkIntervalSeconds` under 300 is refused
-        with `400`. On success, appends a new immutable revision and
+        refused with `400`. `checkIntervalSeconds` under 300 or over 604800
+        (one week) is refused with `400`. On success, appends a new immutable revision and
         activates it in the same transaction as its audit log entry
         (ADR-024 decision 11), and the running check follows at once with
         no restart. Refused with `409` while `SHOWMESH_RELEASE_CHECK` or
@@ -6349,6 +6351,32 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/release.settings/revisions:
+    get:
+      operationId: getReleaseSettingsConfigRevisions
+      summary: release.settings revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only, mirroring
+        `GET /config/assets.settings/revisions`. `200` with an empty
+        array when nothing has been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.emergencystop:
@@ -14752,7 +14780,8 @@ components:
         /config/assets.settings/revisions, GET
         /config/audio.settings/revisions, GET
         /config/audio.node/{id}/revisions, GET
-        /config/fppconnect.settings/revisions, and GET
+        /config/fppconnect.settings/revisions, GET
+        /config/release.settings/revisions, and GET
         /config/media.playlist/{id}/revisions, newest first - one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
@@ -14770,7 +14799,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings]
         revisions:
           type: array
           items:
@@ -15875,7 +15904,9 @@ components:
           description: Whether the coordinator asks GitHub for the newest release.
         checkIntervalSeconds:
           type: integer
-          description: How often it asks, in seconds. At least 300.
+          minimum: 300
+          maximum: 604800
+          description: How often it asks, in seconds. From 300 to 604800 (one week).
     ConfigReleaseSettingsPutPayload:
       type: object
       description: >-
@@ -15887,12 +15918,16 @@ components:
           type: boolean
         checkIntervalSeconds:
           type: integer
+          minimum: 300
+          maximum: 604800
     ReleaseSettingsConfigResponse:
       type: object
       description: >-
         The body of GET and PUT /config/release.settings. `revision` `0`
-        with `source` `"default"` means nothing has been written and the
-        payload is what the coordinator runs with.
+        means nothing has been written and the payload is what the
+        coordinator runs with: `source` is `"default"`, or `"env"` when the
+        payload comes from the coordinator's environment and could not be
+        stored.
       required:
         [serverTime, kind, revision, payload, updatedAt,
          createdByPrincipalId, createdByPrincipalName, source]

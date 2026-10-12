@@ -120,3 +120,39 @@ func TestCmdReleaseSettingsSetShowsARefusalAndNeedsAFlag(t *testing.T) {
 		t.Fatalf("a set with no flags reached the coordinator: %+v", *seen)
 	}
 }
+
+func TestCmdReleaseSettingsRevisionsPrintsTheHistoryNewestFirst(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = w.Write([]byte(`{"serverTime":"2026-10-12T18:05:00Z","kind":"release.settings","revisions":[
+			{"revision":2,"createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api","createdAt":"2026-10-12T18:00:00Z","active":true},
+			{"revision":1,"createdByPrincipalId":null,"createdByPrincipalName":null,"source":"env_migration","createdAt":"2026-10-12T17:00:00Z","active":false}
+		]}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	code, out, errOut := runRelease(t, ts, "revisions")
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, errOut)
+	}
+	if gotPath != "/api/v1/config/release.settings/revisions" {
+		t.Errorf("path = %q, want /api/v1/config/release.settings/revisions", gotPath)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("output = %q, want a header and two rows", out)
+	}
+	if got := strings.Fields(lines[1]); len(got) < 5 || got[0] != "2" || got[1] != "*" || got[3] != "ada" || got[4] != "api" {
+		t.Errorf("newest row = %q, want revision 2, active, by ada, from api", lines[1])
+	}
+	if got := strings.Fields(lines[2]); len(got) < 4 || got[0] != "1" || got[3] != "env_migration" {
+		t.Errorf("oldest row = %q, want revision 1 from env_migration", lines[2])
+	}
+
+	if code, _, _ := runRelease(t, ts, "revisions", "extra"); code != exitUsage {
+		t.Errorf("extra argument: exit code = %d, want exitUsage", code)
+	}
+}

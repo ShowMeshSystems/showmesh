@@ -60,6 +60,8 @@ func cmdReleaseSettings(args []string, stdout, stderr io.Writer, clock func() ti
 		return cmdReleaseSettingsGet(rest, stdout, stderr, clock)
 	case "set":
 		return cmdReleaseSettingsSet(rest, stdout, stderr, clock)
+	case "revisions":
+		return cmdReleaseSettingsRevisions(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl release settings: unknown subcommand %q\n\n", sub)
 		printReleaseUsage(stderr)
@@ -68,7 +70,7 @@ func cmdReleaseSettings(args []string, stdout, stderr io.Writer, clock func() ti
 }
 
 func printReleaseUsage(w io.Writer) {
-	_, _ = fmt.Fprint(w, `usage: showmeshctl release settings <get|set> [flags]
+	_, _ = fmt.Fprint(w, `usage: showmeshctl release settings <get|set|revisions> [flags]
 
 The newest-release check: whether the coordinator asks GitHub for the newest
 ShowMesh release, and how often. It installs nothing. See the answer with
@@ -77,6 +79,7 @@ ShowMesh release, and how often. It installs nothing. See the answer with
 Subcommands:
   settings get   show the release check settings
   settings set   change them (requires config:write); takes effect at once
+  settings revisions   list every saved change, newest first
 `)
 }
 
@@ -109,6 +112,47 @@ func cmdReleaseSettingsGet(args []string, stdout, stderr io.Writer, clock func()
 		return reportError(stderr, "release settings get", err)
 	}
 	return printReleaseSettingsResult(stdout, stderr, "release settings get", g, resp, clock)
+}
+
+func cmdReleaseSettingsRevisions(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const name = "release settings revisions"
+	fs, g := newFlagSet("showmeshctl "+name, stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl release settings revisions [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nList every saved change to the release check settings, newest first (GET")
+		_, _ = fmt.Fprintln(stderr, releaseSettingsAPIPath+"/revisions).")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, name, err)
+	}
+	if extra := fs.Args(); len(extra) > 0 {
+		fs.Usage()
+		return exitUsage
+	}
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, name, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp configRevisionsResponse
+	if err := c.getJSON(ctx, releaseSettingsAPIPath+"/revisions", nil, &resp); err != nil {
+		return reportError(stderr, name, err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, name, err)
+		}
+		return exitOK
+	}
+	printConfigRevisionsTable(stdout, resp)
+	return exitOK
 }
 
 func cmdReleaseSettingsSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

@@ -516,6 +516,8 @@ Commands:
   system versions          every component's version, a warning per mismatch, and the newest release
   release settings get     show the newest-release check settings: on or off, and how often
   release settings set     change them (write); only the flags passed are changed
+  release settings revisions
+                           list every saved change, newest first
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

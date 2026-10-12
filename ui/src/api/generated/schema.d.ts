@@ -2104,16 +2104,36 @@ export interface paths {
         };
         /**
          * The newest-release check settings
-         * @description Requires `config:write`. Whether the coordinator asks GitHub for the newest release, and how often. Never `404`s: when nothing has been written, the payload is what the coordinator runs with, reported with `revision` `0` and `source` `"default"`.
+         * @description Requires `config:write`. Whether the coordinator asks GitHub for the newest release, and how often. Never `404`s: when nothing has been written, the payload is what the coordinator runs with, reported with `revision` `0` and `source` `"default"`, or `"env"` when it comes from the coordinator's environment and could not be stored.
          */
         get: operations["getReleaseSettingsConfig"];
         /**
          * Change the newest-release check settings
-         * @description Requires `config:write` (admin only). A partial update: a field left out keeps its stored value, and a `null` or unknown field is refused with `400`. `checkIntervalSeconds` under 300 is refused with `400`. On success, appends a new immutable revision and activates it in the same transaction as its audit log entry (ADR-024 decision 11), and the running check follows at once with no restart. Refused with `409` while `SHOWMESH_RELEASE_CHECK` or `SHOWMESH_RELEASE_CHECK_INTERVAL` is still set in the coordinator's environment (ADR-039 decision 4). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write` (admin only). A partial update: a field left out keeps its stored value, and a `null` or unknown field is refused with `400`. `checkIntervalSeconds` under 300 or over 604800 (one week) is refused with `400`. On success, appends a new immutable revision and activates it in the same transaction as its audit log entry (ADR-024 decision 11), and the running check follows at once with no restart. Refused with `409` while `SHOWMESH_RELEASE_CHECK` or `SHOWMESH_RELEASE_CHECK_INTERVAL` is still set in the coordinator's environment (ADR-039 decision 4). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          *
          *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putReleaseSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/release.settings/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * release.settings revision history, newest first
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/assets.settings/revisions`. `200` with an empty array when nothing has been written.
+         */
+        get: operations["getReleaseSettingsConfigRevisions"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -5070,12 +5090,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, GET /config/fppconnect.settings/revisions, and GET /config/media.playlist/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, Track E phase 2 seam FC1a's fppconnect.settings one more, and media.playlist one more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, GET /config/fppconnect.settings/revisions, GET /config/release.settings/revisions, and GET /config/media.playlist/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, Track E phase 2 seam FC1a's fppconnect.settings one more, and media.playlist one more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -5524,7 +5544,7 @@ export interface components {
         ConfigReleaseSettingsPayload: {
             /** @description Whether the coordinator asks GitHub for the newest release. */
             enabled: boolean;
-            /** @description How often it asks, in seconds. At least 300. */
+            /** @description How often it asks, in seconds. From 300 to 604800 (one week). */
             checkIntervalSeconds: number;
         };
         /** @description The body PUT /config/release.settings accepts. Each field is optional: one left out keeps its stored value (ADR-039 decision 5). A field that is present must not be `null`. */
@@ -5532,7 +5552,7 @@ export interface components {
             enabled?: boolean;
             checkIntervalSeconds?: number;
         };
-        /** @description The body of GET and PUT /config/release.settings. `revision` `0` with `source` `"default"` means nothing has been written and the payload is what the coordinator runs with. */
+        /** @description The body of GET and PUT /config/release.settings. `revision` `0` means nothing has been written and the payload is what the coordinator runs with: `source` is `"default"`, or `"env"` when the payload comes from the coordinator's environment and could not be stored. */
         ReleaseSettingsConfigResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -12777,6 +12797,31 @@ export interface operations {
             };
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getReleaseSettingsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -983,6 +983,19 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/config/release.settings/revisions`: revision history, newest first, metadata only. */
+  async getReleaseSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/release.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /**
    * `PUT /api/v1/config/release.settings`. A field left out keeps its stored
    * value. ifMatchRevision, when 1 or more, is sent as If-Match.

@@ -138,3 +138,62 @@ func TestPutReleaseSettingsIsRefusedWhileTheVariablesAreStillSet(t *testing.T) {
 		t.Fatalf("a refused write reached the running check: %+v", checker.applied)
 	}
 }
+
+func TestGetReleaseSettingsRevisionsListsNewestFirst(t *testing.T) {
+	api, admin, viewer, _ := releaseSettingsTestAPI(t, nil)
+	const path = releaseSettingsPath + "/revisions"
+
+	if resp, body := doRequest(t, api.Handler, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + viewer}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer GET status = %d, want 403: %s", resp.StatusCode, body)
+	}
+	resp, body := doRequest(t, api.Handler, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + admin})
+	if revs, ok := decodeMap(t, body)["revisions"].([]any); resp.StatusCode != http.StatusOK || !ok || len(revs) != 0 {
+		t.Fatalf("nothing stored: status %d, body %s, want 200 with an empty list", resp.StatusCode, body)
+	}
+
+	for _, put := range []string{`{"enabled":false}`, `{"checkIntervalSeconds":900}`} {
+		if resp, m := putReleaseSettings(t, api, admin, put, nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s: status %d, body %v", put, resp.StatusCode, m)
+		}
+	}
+	resp, body = doRequest(t, api.Handler, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + admin})
+	m := decodeMap(t, body)
+	revs, ok := m["revisions"].([]any)
+	if resp.StatusCode != http.StatusOK || m["kind"] != "release.settings" || !ok || len(revs) != 2 {
+		t.Fatalf("status %d, body %s, want 200 with two release.settings revisions", resp.StatusCode, body)
+	}
+	newest, oldest := revs[0].(map[string]any), revs[1].(map[string]any)
+	if newest["revision"] != float64(2) || newest["active"] != true || oldest["revision"] != float64(1) || oldest["active"] != false {
+		t.Fatalf("revisions = %v, want 2 (active) then 1", revs)
+	}
+}
+
+func TestGetReleaseSettingsNamesTheEnvironmentWhileTheMigrationIsDeferred(t *testing.T) {
+	api, admin, _, _ := releaseSettingsTestAPI(t, func(d *Dependencies) {
+		d.ReleaseSettingsEnvVarsSet, d.ReleaseSettingsMigrationDeferred = true, true
+		d.Releases = &releaseCheckerFake{status: versions.Status{Enabled: false, Interval: 10 * time.Minute}}
+	})
+	resp, body := doRequest(t, api.Handler, http.MethodGet, releaseSettingsPath, map[string]string{"Authorization": "Bearer " + admin})
+	m := decodeMap(t, body)
+	payload, _ := m["payload"].(map[string]any)
+	if resp.StatusCode != http.StatusOK || m["revision"] != float64(0) || m["source"] != "env" || payload["enabled"] != false || payload["checkIntervalSeconds"] != float64(600) {
+		t.Fatalf("status %d, body %s, want revision 0, source env, off, 600 seconds", resp.StatusCode, body)
+	}
+}
+
+func TestPutReleaseSettingsRefusesAnIntervalOverOneWeek(t *testing.T) {
+	api, admin, _, checker := releaseSettingsTestAPI(t, nil)
+	const want = "The check interval is too long. Set it to 604800 seconds or less."
+	for _, body := range []string{`{"checkIntervalSeconds":604801}`, `{"checkIntervalSeconds":9223372036854775807}`} {
+		resp, m := putReleaseSettings(t, api, admin, body, nil)
+		if resp.StatusCode != http.StatusBadRequest || m["detail"] != want {
+			t.Errorf("PUT %s: status %d, body %v, want 400 %q", body, resp.StatusCode, m, want)
+		}
+	}
+	if resp, m := putReleaseSettings(t, api, admin, `{"checkIntervalSeconds":604800}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("one week: status %d, body %v, want 200", resp.StatusCode, m)
+	}
+	if len(checker.applied) != 1 || checker.applied[0].Interval != 7*24*time.Hour {
+		t.Fatalf("applied = %+v, want only the one-week write", checker.applied)
+	}
+}

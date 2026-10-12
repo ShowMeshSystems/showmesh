@@ -9,8 +9,9 @@ type ConfigReleaseSettingsPayload struct {
 }
 
 // ReleaseSettingsConfigResponse is the body of GET and PUT
-// /config/release.settings. Revision 0 with source "default" means nothing
-// is stored and the payload is what the coordinator runs with.
+// /config/release.settings. Revision 0 means nothing is stored and the payload
+// is what the coordinator runs with: source "default", or "env" when it comes
+// from the environment and could not be stored.
 type ReleaseSettingsConfigResponse struct {
 	ServerTime             string                       `json:"serverTime"`
 	Kind                   string                       `json:"kind"`
