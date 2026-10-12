@@ -70,6 +70,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// SHOWMESH_RESOLUME_RECOVERY_SETTLE also defaults regardless of
 		// whether the collector is active — see its own doc comment.
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		ReleaseCheckEnabled:    true,
+		ReleaseCheckInterval:   defaultReleaseCheckInterval,
 		BrokerMode:             "builtin",
 	}
 
@@ -115,6 +117,8 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		FPPMQTTTopicPrefix:     "falcon/player",
 		ResolumeID:             "resolume",
 		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
+		ReleaseCheckEnabled:    true,
+		ReleaseCheckInterval:   defaultReleaseCheckInterval,
 		BrokerMode:             "builtin",
 	}
 
@@ -1195,5 +1199,68 @@ func TestConfigLogValueAssetContentBaseURLVisible(t *testing.T) {
 
 	if !strings.Contains(rendered, "coordinator.example:8443") {
 		t.Errorf("Config.LogValue() output = %s, want it to name the configured asset content base URL", rendered)
+	}
+}
+
+func TestReleaseCheckSettingsFromEnv(t *testing.T) {
+	env := map[string]string{}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+
+	cfg, err := LoadConfigFrom(lookup)
+	if err != nil {
+		t.Fatalf("LoadConfigFrom: %v", err)
+	}
+	if cfg.ReleaseSettingsEnvVarsSet {
+		t.Fatal("ReleaseSettingsEnvVarsSet is true with neither variable set")
+	}
+
+	env["SHOWMESH_RELEASE_CHECK"], env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "false", "10m"
+	cfg, err = LoadConfigFrom(lookup)
+	if err != nil {
+		t.Fatalf("LoadConfigFrom: %v", err)
+	}
+	if cfg.ReleaseCheckEnabled || cfg.ReleaseCheckInterval != 10*time.Minute || !cfg.ReleaseSettingsEnvVarsSet {
+		t.Fatalf("enabled = %v, interval = %v, set = %v, want off, 10m and set", cfg.ReleaseCheckEnabled, cfg.ReleaseCheckInterval, cfg.ReleaseSettingsEnvVarsSet)
+	}
+	env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "1m"
+	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at least 5m0s") {
+		t.Fatalf("LoadConfigFrom = %v, want the interval refused", err)
+	}
+	env["SHOWMESH_RELEASE_CHECK_INTERVAL"] = "169h"
+	if _, err := LoadConfigFrom(lookup); err == nil || !strings.Contains(err.Error(), "SHOWMESH_RELEASE_CHECK_INTERVAL must be at most 168h0m0s") {
+		t.Fatalf("LoadConfigFrom = %v, want the long interval refused", err)
+	}
+}
+
+func TestReleaseSettingsPayloadRoundTripsAndRefusesAShortInterval(t *testing.T) {
+	want := ReleaseSettings{Enabled: false, CheckInterval: 15 * time.Minute}
+	raw, err := EncodeReleaseSettingsPayload(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != `{"enabled":false,"checkIntervalSeconds":900}` {
+		t.Fatalf("payload = %s", raw)
+	}
+	if got, err := DecodeReleaseSettingsPayload(raw); err != nil || got != want {
+		t.Fatalf("decoded = %+v, %v, want %+v", got, err, want)
+	}
+	if d := DefaultReleaseSettings(); !d.Enabled || d.CheckInterval != 21600*time.Second || ReleaseSettingsProblem(d) != "" {
+		t.Fatalf("default = %+v, want on, 21600 seconds and valid", d)
+	}
+	want300 := "The check interval is too short. Set it to 300 seconds or more."
+	if got := ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 299 * time.Second}); got != want300 {
+		t.Fatalf("problem = %q, want %q", got, want300)
+	}
+	wantWeek := "The check interval is too long. Set it to 604800 seconds or less."
+	if got := ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 604801 * time.Second}); got != wantWeek {
+		t.Fatalf("problem = %q, want %q", got, wantWeek)
+	}
+	if ReleaseSettingsProblem(ReleaseSettings{Enabled: true, CheckInterval: 604800 * time.Second}) != "" {
+		t.Fatal("one week was refused")
+	}
+	for _, seconds := range []int64{604801, 9223372036854775807, -1, -9223372036854775808} {
+		if ReleaseSettingsProblem(ReleaseSettings{CheckInterval: ReleaseCheckIntervalFromSeconds(seconds)}) == "" {
+			t.Errorf("%d seconds was accepted", seconds)
+		}
 	}
 }

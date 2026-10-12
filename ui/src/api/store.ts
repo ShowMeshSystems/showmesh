@@ -180,6 +180,9 @@ type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlay
 // evidence for FPP's coordinator-loss fallback.
 type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
 type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
+type SchemaSystemVersionsResponse = components['schemas']['SystemVersionsResponse']
+type SchemaReleaseSettingsConfigResponse = components['schemas']['ReleaseSettingsConfigResponse']
+type SchemaConfigReleaseSettingsPutPayload = components['schemas']['ConfigReleaseSettingsPutPayload']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -954,6 +957,60 @@ export class ApiStore {
       return await this.client.getJson<SchemaFPPPlaylistDefinitionEntriesResponse>(
         `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}/entries`,
         controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/system/versions`: every component's version and the cached newest-release answer. */
+  async getSystemVersions(): Promise<SchemaSystemVersionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaSystemVersionsResponse>('/system/versions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/release.settings`. Never 404s: revision 0 means nothing is stored yet. */
+  async getReleaseSettingsConfig(): Promise<SchemaReleaseSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaReleaseSettingsConfigResponse>('/config/release.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/release.settings/revisions`: revision history, newest first, metadata only. */
+  async getReleaseSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/release.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/release.settings`. A field left out keeps its stored
+   * value. ifMatchRevision, when 1 or more, is sent as If-Match.
+   */
+  async putReleaseSettingsConfig(
+    payload: SchemaConfigReleaseSettingsPutPayload,
+    ifMatchRevision?: number,
+  ): Promise<SchemaReleaseSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaReleaseSettingsConfigResponse>(
+        '/config/release.settings',
+        payload,
+        controller.signal,
+        ifMatchRevision !== undefined && ifMatchRevision >= 1 ? ifMatchRevision : undefined,
       )
     } finally {
       this.endSideCall(controller)
@@ -4403,6 +4460,7 @@ export class ApiStore {
     // valid inventory baseline. The request remains tied to the connection
     // signal and its result is applied only for this generation.
     void this.fetchCurrentRuns(gen, signal)
+    void this.fetchSystemVersions(gen, signal)
 
     // ADR-024 decision 12: a reconnect is exactly the moment the coordinator
     // may have closed the PREVIOUS connection over a generation bump (decision
@@ -4440,6 +4498,7 @@ export class ApiStore {
         const snapshot = await this.client.getJson<Pick<SchemaSnapshot, 'auditStore'>>('/snapshot', signal)
         if (signal.aborted || gen !== this.generation) return
         this.setModel({ ...this.model, auditStore: snapshot.auditStore })
+        void this.fetchSystemVersions(gen, signal)
       } catch {
         // Best-effort: a failed poll fetch leaves the model's own
         // auditStore at its last-known value and simply retries next
@@ -4664,6 +4723,7 @@ export class ApiStore {
 
   private applyNodeChanged(node: SchemaNode, serverTime: string): void {
     const idx = this.model.nodes.findIndex((n) => n.nodeId === node.nodeId)
+    const agentVersionChanged = (idx === -1 ? null : this.model.nodes[idx]?.agentVersion) !== node.agentVersion
     const nodes =
       idx === -1
         ? [...this.model.nodes, node].sort(compareByNodeId)
@@ -4676,6 +4736,27 @@ export class ApiStore {
       serverTimeReceivedAt: receivedAt,
       nodes,
     })
+    if (agentVersionChanged) this.refreshSystemVersions()
+  }
+
+  /** Refetches `GET /system/versions` into the model, on the live connection. A no-op while disconnected. */
+  refreshSystemVersions(): void {
+    const signal = this.loopAbort?.signal
+    if (signal === undefined || signal.aborted) return
+    void this.fetchSystemVersions(this.generation, signal)
+  }
+
+  private async fetchSystemVersions(gen: number, signal: AbortSignal): Promise<void> {
+    try {
+      const systemVersions = await this.client.getJson<SchemaSystemVersionsResponse>('/system/versions', signal)
+      if (signal.aborted || gen !== this.generation) return
+      this.setModel({ ...this.model, systemVersions, systemVersionsFailure: null })
+    } catch (err) {
+      if (isAbortError(err) || signal.aborted || gen !== this.generation) return
+      // A repeated failure changes nothing an operator sees, so it does not notify again.
+      if (this.model.systemVersionsFailure !== null) return
+      this.setModel({ ...this.model, systemVersionsFailure: { error: err } })
+    }
   }
 
   /**

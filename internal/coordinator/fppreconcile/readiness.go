@@ -15,6 +15,8 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/versions"
+	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -259,6 +261,10 @@ const (
 	// the music across a cue. Never a failure. See
 	// [audioLTCSeparateLocalClockReadiness]'s own doc comment.
 	ReadinessAudioLTCSeparateLocalClock ReadinessCondition = "audio-ltc-separate-local-clock"
+
+	// ReadinessVersionMismatch: a node's last reported agent version is one
+	// the coordinator's compatibility rule does not accept. Never a failure.
+	ReadinessVersionMismatch ReadinessCondition = "version-mismatch"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -600,7 +606,61 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
+	// Condition 17: one warning per node this playlist uses that runs a version
+	// the coordinator's compatibility rule does not accept. Never a failure.
+	warnings, err := versionMismatchReadiness(ctx, st, p)
+	if err != nil {
+		return Report{}, err
+	}
+	for _, warning := range warnings {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
 	return report, nil
+}
+
+// versionMismatchReadiness returns [ReadinessVersionMismatch]'s warnings, in
+// node id order, for the nodes one of p's cues has an output on. Like the
+// other catalog conditions it reports nothing unless p's show is the active one.
+func versionMismatchReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) ([]string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return nil, nil
+	}
+	playlistCues := make(map[string]bool, len(p.Entries))
+	for _, e := range p.Entries {
+		playlistCues[e.Cue] = true
+	}
+	nodes, err := st.ListNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fppreconcile: list nodes: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	var warnings []string
+	for _, n := range nodes {
+		if n.Hello == nil {
+			continue
+		}
+		w := versions.NodeWarning(n.NodeID, n.Hello.AgentVersion, version.Version)
+		if w == "" {
+			continue
+		}
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return nil, fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		for _, e := range catalog.Entries {
+			o := e.Outputs
+			if playlistCues[e.CueID] && (o.Render != nil || o.Audio != nil || o.LTC != nil || o.Announcement != nil) {
+				warnings = append(warnings, w)
+				break
+			}
+		}
+	}
+	return warnings, nil
 }
 
 // appendWarning combines two independently-produced Report.Warning texts

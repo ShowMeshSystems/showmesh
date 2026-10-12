@@ -324,6 +324,13 @@ type Config struct {
 	// [0s, 60s]; anything else fails [Config.Validate].
 	ResolumeRecoverySettle time.Duration
 
+	// ReleaseCheckEnabled is SHOWMESH_RELEASE_CHECK and ReleaseCheckInterval is
+	// SHOWMESH_RELEASE_CHECK_INTERVAL, read only to migrate them into the stored
+	// release.settings kind. ReleaseSettingsEnvVarsSet is true when either is set.
+	ReleaseCheckEnabled       bool
+	ReleaseCheckInterval      time.Duration
+	ReleaseSettingsEnvVarsSet bool
+
 	// Node enrollment (ADR-055 decisions 5, 7 and 8). BrokerMode is
 	// "builtin" (the default) or "external". BrokerConfigDir is where the
 	// built-in broker's passwd and acl.generated.conf live. NodeBrokerURL
@@ -501,6 +508,11 @@ const (
 	// revisioned show-state config: see that field's own doc comment.
 	envResolumeRecoverySettle = "SHOWMESH_RESOLUME_RECOVERY_SETTLE"
 
+	envReleaseCheck         = "SHOWMESH_RELEASE_CHECK"
+	envReleaseCheckInterval = "SHOWMESH_RELEASE_CHECK_INTERVAL"
+
+	defaultReleaseCheckInterval = 6 * time.Hour
+
 	// defaultResolumeRecoverySettle is [Config.ResolumeRecoverySettle]'s
 	// default. SHOWMESH GUESS, NOT MEASURED — chosen to sit comfortably
 	// past the measured 1.2s wrong-composition window with room for a
@@ -620,6 +632,17 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	releaseCheckEnabled, err := parseBoolEnv(lookup, envReleaseCheck, true)
+	if err != nil {
+		return Config{}, err
+	}
+	releaseCheckInterval, err := parseDurationEnv(lookup, envReleaseCheckInterval, defaultReleaseCheckInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	rawReleaseCheck, _ := lookup(envReleaseCheck)
+	rawReleaseCheckInterval, _ := lookup(envReleaseCheckInterval)
+
 	dataDir := getEnvDefault(lookup, EnvDataDir, DefaultDataDir)
 
 	assetMaxUploadBytes, err := parseInt64Env(lookup, envAssetMaxUploadBytes, assetstore.DefaultMaxUploadBytes)
@@ -691,6 +714,10 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		AssetInventoryInterval:  assetInventoryInterval,
 		AssetSettingsEnvVarsSet: assetSettingsEnvVarsSet,
 		ResolumeRecoverySettle:  resolumeRecoverySettle,
+		ReleaseCheckEnabled:     releaseCheckEnabled,
+		ReleaseCheckInterval:    releaseCheckInterval,
+
+		ReleaseSettingsEnvVarsSet: rawReleaseCheck != "" || rawReleaseCheckInterval != "",
 
 		BrokerMode:       getEnvDefault(lookup, envBrokerMode, "builtin"),
 		BrokerConfigDir:  getEnvDefault(lookup, envBrokerConfigDir, ""),
@@ -965,6 +992,12 @@ func (c Config) Validate() error {
 	}
 	if c.ResolumePollInterval < 0 {
 		return fmt.Errorf("%s must not be negative, got %s", envResolumePollInterval, c.ResolumePollInterval)
+	}
+	if c.ReleaseCheckInterval < MinReleaseCheckInterval {
+		return fmt.Errorf("%s must be at least %s, got %s", envReleaseCheckInterval, MinReleaseCheckInterval, c.ReleaseCheckInterval)
+	}
+	if c.ReleaseCheckInterval > MaxReleaseCheckInterval {
+		return fmt.Errorf("%s must be at most %s, got %s", envReleaseCheckInterval, MaxReleaseCheckInterval, c.ReleaseCheckInterval)
 	}
 	if c.ResolumeRecoverySettle < 0 || c.ResolumeRecoverySettle > maxResolumeRecoverySettle {
 		return fmt.Errorf("%s must be between 0s and %s, got %s", envResolumeRecoverySettle, maxResolumeRecoverySettle, c.ResolumeRecoverySettle)

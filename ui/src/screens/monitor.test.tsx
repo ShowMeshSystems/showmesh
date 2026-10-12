@@ -119,6 +119,7 @@ describe('Monitor · Fleet', () => {
       'Needs an operator',
       'Fleet',
       'Activity',
+      'Versions',
     ])
   })
 

@@ -45,6 +45,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/versions"
 	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -697,9 +698,25 @@ func Run() int {
 		logger.Warn("node enrollment cannot hand out broker logins until this is fixed", "reason", err.Error())
 	}
 
+	// The newest-release check: its answer is cached for the API and stored as
+	// observations. Its settings are the stored release.settings kind (ADR-039).
+	releaseSettings, releaseSettingsMigrationDeferred := resolveReleaseSettings(ctx, st, identitySvc, cfg.ReleaseSettingsEnvVarsSet,
+		config.ReleaseSettings{Enabled: cfg.ReleaseCheckEnabled, CheckInterval: cfg.ReleaseCheckInterval}, time.Now, logger)
+	releaseChecker := versions.NewChecker(versions.NewGitHubFetcher("showmesh-coordinator/"+version.Version),
+		versions.Settings{Enabled: releaseSettings.Enabled, Interval: releaseSettings.CheckInterval}, time.Now, logger, func(s versions.Status) {
+			if err := st.ReplaceObservations(ctx, versions.Observations(s, version.Version, time.Now())); err != nil {
+				logger.Error("coordinator: failed to store release check observations", "error", err)
+				return
+			}
+			notifyHub()
+		})
+
 	apiDeps := api.Dependencies{
-		NodeEnrollment:       enrollmentSvc,
-		CoordinatorPublicKey: coordinatorPublicKey,
+		Releases:                         releaseChecker,
+		ReleaseSettingsEnvVarsSet:        cfg.ReleaseSettingsEnvVarsSet,
+		ReleaseSettingsMigrationDeferred: releaseSettingsMigrationDeferred,
+		NodeEnrollment:                   enrollmentSvc,
+		CoordinatorPublicKey:             coordinatorPublicKey,
 		// livenessObservingNodeLister (internal/coordinator/apiwiring.go)
 		// wraps inv so every Snapshot call — not only one triggered by an
 		// inbound MQTT message — also feeds each node's freshly computed
@@ -1493,6 +1510,10 @@ func Run() int {
 	// fresh" role runShowMode plays for show.mode one state over.
 	spawnBackground(func() {
 		runWeatherDelay(ctx, st, weatherDelayState, bm, assetSync, time.Now, logger, weatherDelayReconcileInterval)
+	})
+
+	spawnBackground(func() {
+		releaseChecker.Run(ctx)
 	})
 
 	// The loops above are running and the listener starts now, so this is

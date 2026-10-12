@@ -87,6 +87,13 @@ type Dependencies struct {
 	// *StatusStore — so no withDefaults() entry is needed.
 	FPPConnectStatus *fppconnectpush.StatusStore
 
+	// Releases is the newest-release check. Nil reads as turned off.
+	Releases ReleaseChecker
+	// ReleaseSettingsEnvVarsSet refuses release.settings writes while one of the two
+	// startup variables is still set; ReleaseSettingsMigrationDeferred says its migration could not be stored.
+	ReleaseSettingsEnvVarsSet        bool
+	ReleaseSettingsMigrationDeferred bool
+
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
 	// replaced by [noRenderPublisher], under which every render.* dispatch
@@ -1929,6 +1936,7 @@ func New(deps Dependencies, opts Options) *API {
 	// It uses the same all-read-scope guard as snapshot because one response
 	// may contain FPP, audio-node, observation, and active-show context.
 	mux.HandleFunc("GET /api/v1/current-runs", h.readGuardAll(readAllScopes, h.handleCurrentRuns))
+	mux.HandleFunc("GET /api/v1/system/versions", h.readGuardAll(readAllScopes, h.handleSystemVersions))
 	mux.HandleFunc("GET /api/v1/nodes", h.readGuard(identity.ScopeNodeRead, h.handleNodes))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))
@@ -2119,6 +2127,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/assets.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/assets.settings", h.writeGuard(&scopeConfigWrite, h.handlePutAssetsSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/assets.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfigRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/release.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/release.settings", h.writeGuard(&scopeConfigWrite, h.handlePutReleaseSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/release.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfigRevisions))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

@@ -321,6 +321,11 @@ export type {
   FallbackProgramListEntry,
   FallbackProgramListResponse,
   FallbackProgramResponse,
+  SystemVersionsResponse,
+  SystemComponentVersion,
+  SystemRelease,
+  ReleaseSettingsConfigResponse,
+  ConfigReleaseSettingsPutPayload,
 } from './domain'
 export {
   useModel,
@@ -347,6 +352,11 @@ export {
   republishFPPPlaylistDefinitions,
   listFallbackPrograms,
   getFallbackProgram,
+  getSystemVersions,
+  refreshSystemVersions,
+  getReleaseSettingsConfig,
+  putReleaseSettingsConfig,
+  getReleaseSettingsConfigRevisions,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

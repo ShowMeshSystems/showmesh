@@ -342,7 +342,7 @@ func TestDeleteAudioNodeNotFoundForNeverCreatedAndAlreadyDeleted(t *testing.T) {
 	}
 }
 
-// singletonConfigDeletePaths lists every one of the twelve singleton
+// singletonConfigDeletePaths lists every one of the thirteen singleton
 // configuration kinds' own GET/PUT path (config.go's own doc comment for
 // the design ruling behind this list): a singleton is emptied or reset
 // through its own PUT and is never deleted, so none of these registers a
@@ -355,6 +355,7 @@ var singletonConfigDeletePaths = []string{
 	"/api/v1/config/fpp.endpoints",
 	"/api/v1/config/fpp.mqtt",
 	"/api/v1/config/night.session.active",
+	"/api/v1/config/release.settings",
 	"/api/v1/config/render.settings",
 	"/api/v1/config/resolume.instances",
 	"/api/v1/config/resolume.recovery",

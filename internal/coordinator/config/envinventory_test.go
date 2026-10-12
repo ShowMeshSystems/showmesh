@@ -131,6 +131,8 @@ var retiredEnvVars = map[string]string{
 	"SHOWMESH_ASSET_CONTENT_BASE_URL":   "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_SYNC_INTERVAL":      "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_INVENTORY_INTERVAL": "Track G seam G-4's migration to the assets.settings store-backed kind",
+	"SHOWMESH_RELEASE_CHECK":            "never in a release; read at startup only so a coordinator that ran a pre-merge build keeps its setting in release.settings",
+	"SHOWMESH_RELEASE_CHECK_INTERVAL":   "never in a release; read at startup only so a coordinator that ran a pre-merge build keeps its setting in release.settings",
 }
 
 // retiredRefusesToStartEnvVars is the narrowest group of all: a variable

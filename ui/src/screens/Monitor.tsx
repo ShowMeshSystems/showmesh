@@ -44,6 +44,7 @@ const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, stri
   not_configured: 'No active show.',
 }
 import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
+import { MonitorVersions } from './SystemVersions'
 import {
   activityRows,
   facetCounts,
@@ -307,6 +308,8 @@ export function Monitor() {
               </>
             )}
           </Section>
+
+          <MonitorVersions />
         </div>
 
         <aside>

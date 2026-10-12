@@ -422,6 +422,10 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
       message: 'the released connect-time /session response was never applied',
     })
 
+    await waitFor(() => store.getSnapshot().systemVersionsFailure !== null, {
+      message: 'the connect-time /system/versions read never settled',
+    })
+
     const countAfterLive = notifications
     const modelAfterLive = store.getSnapshot()
 
@@ -2916,6 +2920,99 @@ describe('ApiStore: fallback programs (ADR-048, Track J’s J1)', () => {
     expect(resp.programs).toHaveLength(1)
     expect(resp.programs[0]?.fppInstanceUuid).toBe('uuid-1')
     expect(resp.programs[0]?.packageId).toBe('pkg-1')
+  })
+
+  it('keeps Model.systemVersions current: on connect, on the refresh tick, and when a node reports a new agent version', async () => {
+    let reads = 0
+    let streamRes: import('node:http').ServerResponse | null = null
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        streamRes = res
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ nodes: [makeNode('n0', { agentVersion: '0.2.0' })] }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      if (req.url === '/system/versions') {
+        reads += 1
+        respondJson(res, 200, {
+          serverTime: new Date().toISOString(),
+          coordinator: { version: `read-${reads}` },
+          nodes: [],
+          plugins: [],
+          release: {
+            checkEnabled: true, checkIntervalSeconds: 21600, checkedAt: null, tag: null,
+            publishedAt: null, installCommand: null, available: false, problem: null,
+          },
+        })
+        return
+      }
+      res.writeHead(404).end()
+    })
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, auditStorePollIntervalMs: 30 })
+    const shown = () => store.getSnapshot().systemVersions?.coordinator.version
+    store.connect()
+
+    await waitFor(() => shown() === 'read-1', { message: 'connect never read /system/versions' })
+
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'node.changed', {
+      serverTime: new Date().toISOString(),
+      node: makeNode('n0', { agentVersion: '0.2.0' }),
+    })
+    writeSSEFrame(streamRes, 'node.changed', {
+      serverTime: new Date().toISOString(),
+      node: makeNode('n0', { agentVersion: '0.3.0' }),
+    })
+    await waitFor(() => shown() === 'read-2', { message: 'a new agent version never re-read /system/versions' })
+    // The first frame carried the version already held, so only the second one caused a read.
+    expect(reads).toBe(2)
+
+    store.refreshSystemVersions()
+    await waitFor(() => shown() === 'read-3', { message: 'refreshSystemVersions() never re-read /system/versions' })
+
+    // Last, because the poll loop arms its timer some time after the first read lands.
+    await waitFor(
+      () => {
+        clock.advance(30)
+        return reads >= 4
+      },
+      { message: 'the refresh tick never re-read /system/versions' },
+    )
+  })
+
+  it('getSystemVersions() GETs /system/versions and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        coordinator: { version: '0.2.0' },
+        nodes: [{ id: 'node-a', version: '0.2.0', reason: null, mismatch: false, warning: null }],
+        plugins: [],
+        release: {
+          checkEnabled: true, checkIntervalSeconds: 21600, checkedAt: null, tag: null,
+          publishedAt: null, installCommand: null, available: false, problem: null,
+        },
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getSystemVersions()
+
+    expect(gotPath).toBe('/system/versions')
+    expect(resp.coordinator.version).toBe('0.2.0')
+    expect(resp.nodes[0]?.id).toBe('node-a')
   })
 
   it('listFallbackPrograms() rejects with a typed error on 404 (older coordinator, route unknown)', async () => {

@@ -119,6 +119,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
+| `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -518,6 +519,7 @@ the wrong device, because every collector shares one
 | `fallback-reconcile` | shipped | Track J seam J3 (`fallbackreconcile`). A direct source written by the fallback reconciler on each pass, not a `collector.Runner` entry |
 | `fallback-player-state` | shipped | Track J seam J5 (`fallbackhold`). A direct source written when an FPP plugin reports its fallback state and every 5 seconds after, not a `collector.Runner` entry |
 | `fpp-brightness` | shipped | `collector/fppbrightness`, the plugin's own brightness route. Its `collector.Runner` key is `fpp-brightness:<instanceId>`, never the bare instance id the FPP REST collector already holds on the same Runner |
+| `coordinator-release` | shipped | the coordinator's own newest-release check |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -706,6 +708,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
 | `fallback_program` | `fallback_program.*` | shipped | Track J seam J1. Track J seam J3 writes the first signal in it: `fallback_program.executor_key_present`. Track J seam J5 adds four, from what the FPP plugin reports: `fallback_program.player_state`, `fallback_program.coordinator_holding`, `fallback_program.plugin_reporting`, `fallback_program.acknowledgement_wait_seconds` |
 | `node` | `node.fallback.*` | shipped | Track J seam J3 (what a node holds and answered on its fallback routes): `coordinator_key_loaded`, `program_count`, `enrolled_program_count`, `unenrolled_fpp_instance_uuids`, `execution_record_problem`, `accepted_count`, `refused_count`, `last_outcome`, `last_reason`, `last_at`, `last_refusal_outcome`, `last_refusal_reason`, `last_refusal_at`, `last_refusal_fpp_instance_uuid` |
+| `coordinator` | `coordinator.release.*` | shipped | the coordinator's own newest-release check: `coordinator.release.newest_tag`, `coordinator.release.checked_at`, `coordinator.release.available` |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -1276,6 +1279,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-nodes-defaulted` | shipped | ADR-049 decision 10 — reported only as `warning`, never `failingCondition`; the same condition name is used at the night readiness layer for the background bed and announcements, which report through `nightReadinessCheck`, not this file's own `ReadinessCondition` |
+| `version-mismatch` | shipped | a node or FPP plugin runs a version the coordinator's compatibility rule does not accept; warning only, never `failingCondition` |
 
 **`cue-multisync-trigger-missing`, `fpp-multisync-disabled` and
 `audio-node-not-multisync-remote` are warning-only, not a

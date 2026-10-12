@@ -118,16 +118,17 @@ info:
     each of their `{id}`
     paths carries a `DELETE` operation: a tombstone, not a hard delete, so
     `config_revisions` stays immutable and readable through that kind's own
-    `/revisions` path afterward (ADR-009). The twelve remaining
+    `/revisions` path afterward (ADR-009). The thirteen remaining
     configuration kinds, `assets.settings`, `audio.settings`,
     `show.emergencystop`, `fppconnect.settings`, `fpp.endpoints`,
-    `fpp.mqtt`, `night.session.active`, `render.settings`,
+    `fpp.mqtt`, `night.session.active`, `release.settings`,
+    `render.settings`,
     `resolume.instances`, `resolume.recovery`, `show.active`, and
     `show.mode`, are singletons: one fixed id per installation holding
     either a settings blob or a whole list as one object. None of them
     carries a `DELETE` operation. A singleton configuration object is
     emptied or reset through its own `PUT`, never deleted; `DELETE` against
-    any of these twelve paths returns `405 Method Not Allowed` with an
+    any of these thirteen paths returns `405 Method Not Allowed` with an
     `Allow` header naming the methods that path actually serves, the
     identical contract this document already states for every other route
     with no `DELETE` of its own.
@@ -224,6 +225,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CurrentRunsResponse"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /system/versions:
+    get:
+      operationId: getSystemVersions
+      summary: Component versions and the newest release
+      description: >-
+        The coordinator's version, each node's agent version and each FPP
+        player's plugin version from its last report, and the cached answer
+        of the newest-release check. The request never waits on the release
+        check: `release` is the last answer and `release.checkedAt` is when
+        it was fetched. Read-only; upgrading a node from the coordinator is
+        not part of this API.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionsResponse"
         "400":
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
@@ -6230,6 +6262,123 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/release.settings:
+    get:
+      operationId: getReleaseSettingsConfig
+      summary: The newest-release check settings
+      description: >-
+        Requires `config:write`. Whether the coordinator asks GitHub for
+        the newest release, and how often. Never `404`s: when nothing has
+        been written, the payload is what the coordinator runs with,
+        reported with `revision` `0` and `source` `"default"`, or `"env"`
+        when it comes from the coordinator's environment and could not be
+        stored.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putReleaseSettingsConfig
+      summary: Change the newest-release check settings
+      description: >-
+        Requires `config:write` (admin only). A partial update: a field
+        left out keeps its stored value, and a `null` or unknown field is
+        refused with `400`. `checkIntervalSeconds` under 300 or over 604800
+        (one week) is refused with `400`. On success, appends a new immutable revision and
+        activates it in the same transaction as its audit log entry
+        (ADR-024 decision 11), and the running check follows at once with
+        no restart. Refused with `409` while `SHOWMESH_RELEASE_CHECK` or
+        `SHOWMESH_RELEASE_CHECK_INTERVAL` is still set in the
+        coordinator's environment (ADR-039 decision 4). A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+
+
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigReleaseSettingsPutPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/release.settings/revisions:
+    get:
+      operationId: getReleaseSettingsConfigRevisions
+      summary: release.settings revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only, mirroring
+        `GET /config/assets.settings/revisions`. `200` with an empty
+        array when nothing has been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.emergencystop:
@@ -13541,6 +13690,75 @@ components:
           type: boolean
         oldestRetainedSeq:
           type: [integer, "null"]
+    SystemVersionsResponse:
+      type: object
+      required: [serverTime, coordinator, nodes, plugins, release]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        coordinator:
+          type: object
+          required: [version]
+          properties:
+            version: {type: string}
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SystemComponentVersion"
+        plugins:
+          type: array
+          description: One entry per configured FPP player.
+          items:
+            $ref: "#/components/schemas/SystemComponentVersion"
+        release:
+          $ref: "#/components/schemas/SystemRelease"
+    SystemComponentVersion:
+      type: object
+      required: [id, version, reason, mismatch, warning]
+      properties:
+        id: {type: string}
+        version:
+          type: [string, "null"]
+          description: The version from the component's last report.
+        reason:
+          type: [string, "null"]
+          description: Why `version` is null.
+        mismatch:
+          type: boolean
+          description: >-
+            True when the coordinator's compatibility rule does not accept
+            `version`. Before 1.0.0 only the same version is accepted; from
+            1.0.0 the same major version is.
+        warning:
+          type: [string, "null"]
+          description: The operator's one line, set only when `mismatch` is true.
+    SystemRelease:
+      type: object
+      required:
+        [checkEnabled, checkIntervalSeconds, checkedAt, tag, publishedAt,
+         installCommand, available, problem]
+      properties:
+        checkEnabled: {type: boolean}
+        checkIntervalSeconds: {type: integer}
+        checkedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the answer below was fetched.
+        tag:
+          type: [string, "null"]
+        publishedAt:
+          type: [string, "null"]
+          format: date-time
+        installCommand:
+          type: [string, "null"]
+          description: The one line that installs or upgrades to `tag`.
+        available:
+          type: boolean
+          description: True when `tag` is a later version than the coordinator's.
+        problem:
+          type: [string, "null"]
+          description: Why the latest check produced no answer.
     CurrentRunsResponse:
       type: object
       required: [serverTime, activeShow, runs]
@@ -14570,7 +14788,8 @@ components:
         /config/assets.settings/revisions, GET
         /config/audio.settings/revisions, GET
         /config/audio.node/{id}/revisions, GET
-        /config/fppconnect.settings/revisions, and GET
+        /config/fppconnect.settings/revisions, GET
+        /config/release.settings/revisions, and GET
         /config/media.playlist/{id}/revisions, newest first - one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
@@ -14588,7 +14807,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings]
         revisions:
           type: array
           items:
@@ -15674,6 +15893,62 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigEmergencyStopPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigReleaseSettingsPayload:
+      type: object
+      description: The release.settings payload as a response carries it.
+      required: [enabled, checkIntervalSeconds]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the coordinator asks GitHub for the newest release.
+        checkIntervalSeconds:
+          type: integer
+          minimum: 300
+          maximum: 604800
+          description: How often it asks, in seconds. From 300 to 604800 (one week).
+    ConfigReleaseSettingsPutPayload:
+      type: object
+      description: >-
+        The body PUT /config/release.settings accepts. Each field is
+        optional: one left out keeps its stored value (ADR-039 decision
+        5). A field that is present must not be `null`.
+      properties:
+        enabled:
+          type: boolean
+        checkIntervalSeconds:
+          type: integer
+          minimum: 300
+          maximum: 604800
+    ReleaseSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/release.settings. `revision` `0`
+        means nothing has been written and the payload is what the
+        coordinator runs with: `source` is `"default"`, or `"env"` when the
+        payload comes from the coordinator's environment and could not be
+        stored.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigReleaseSettingsPayload"
         updatedAt:
           type: string
           format: date-time
