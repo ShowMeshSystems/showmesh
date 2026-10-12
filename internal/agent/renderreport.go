@@ -310,7 +310,7 @@ func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignm
 	if hash == "" {
 		logger.Warn("persisted render assignment has a fseqFilename with no fseqContentHash; withholding this surface's content identity",
 			"surface_id", a.SurfaceID)
-		rep.ContentIdentityReason = "persisted assignment has a fseqFilename but no fseqContentHash (hand-edited or pre-content-identity-contract assignments.json); content identity withheld"
+		rep.ContentIdentityReason = "This surface's saved sequence has no content record. Assign the sequence again."
 		return
 	}
 

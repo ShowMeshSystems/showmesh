@@ -46,15 +46,15 @@ type resumeDecision struct {
 func decideBootResume(a pipeline.Assignment, held heldcatalog.HeldCatalog, hasCatalog bool, weatherDelayActive bool) resumeDecision {
 	if weatherDelayActive {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"A weather delay is active. %q's saved assignment was cleared and stays cleared until the show resumes.", a.SurfaceID)}
+			"A weather delay is active, so %q stays cleared until the show resumes.", a.SurfaceID)}
 	}
 	if !hasCatalog {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"%q's saved assignment was cleared because this node has no cue catalog loaded. Deploy a catalog to it.", a.SurfaceID)}
+			"%q was cleared because this node has no Cue list. Deploy the Cue list to it.", a.SurfaceID)}
 	}
 	if a.Auth == nil {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"%q's saved assignment was cleared because it has no authorization on record. Redeploy it.", a.SurfaceID)}
+			"%q was cleared because its approval is missing. Deploy it again.", a.SurfaceID)}
 	}
 	if a.Auth.Show != held.Show || a.Auth.Generation != held.Generation || a.Auth.CatalogRevision != held.Revision {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(

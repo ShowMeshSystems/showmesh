@@ -640,7 +640,7 @@ func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPay
 
 	for _, r := range d.Routes {
 		p.Routes = append(p.Routes, mqttproto.AudioRouteReport{
-			Device: r.Device, Available: r.Available, Reason: r.Reason,
+			Device: r.Device, ShortName: r.ShortName, Available: r.Available, Reason: r.Reason,
 			Channels: int64(r.Channels), Rate: int64(r.Rate), Format: r.Format,
 		})
 	}

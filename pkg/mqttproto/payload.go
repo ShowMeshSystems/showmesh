@@ -1393,6 +1393,10 @@ type AudioRouteReport struct {
 	// Never "null" or "default" — see internal/agent/audio.CandidateDevices.
 	Device string `json:"device"`
 
+	// ShortName is the operator's name for the interface, when the node
+	// has one shorter than Device.
+	ShortName string `json:"shortName,omitempty"`
+
 	// Available is true only when a real pipeline reached PLAYING against
 	// Device — never inferred from enumeration alone.
 	Available bool `json:"available"`

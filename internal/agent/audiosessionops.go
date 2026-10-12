@@ -161,7 +161,7 @@ type sessionExec func(ctx context.Context, mgr *audio.Manager, id pkgaudio.Sessi
 func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 		if mgr == nil {
-			return OperationResult{}, fmt.Errorf("audio session operations are not wired on this node (no asset directory configured)")
+			return OperationResult{}, operatorErrorf(reasonAudioNotSetUp)
 		}
 		id, inv, rev, err := parseAudioSessionCommon("audio.session", params)
 		if err != nil {

@@ -219,7 +219,7 @@ func decodeSingleFPPInstance(body []byte) (inst fppInstance, serverTime time.Tim
 	}
 	if wrapped.ServerTime.IsZero() {
 		return fppInstance{}, time.Time{}, newCLIError(exitAPIError,
-			"fpp instance response is missing serverTime, violating contract section 6.2 (every response body must carry it)")
+			missingServerTimeMessage)
 	}
 	if wrapped.Instance.InstanceID == "" {
 		return fppInstance{}, time.Time{}, newCLIError(exitAPIError,

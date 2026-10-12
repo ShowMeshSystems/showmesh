@@ -963,7 +963,37 @@ func TestCmdAudioNodeChoicesStatesWhyNothingIsOffered(t *testing.T) {
 	if code := cmdAudio([]string{"node", "choices", "--server", ts.URL, "--token", "t", "audio-old"}, &stdout, &stderr, time.Now); code != exitOK {
 		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "does not list its channels") || strings.Contains(stdout.String(), "ROUTE") {
+	if !strings.Contains(stdout.String(), "does not list its channels") || strings.Contains(stdout.String(), "OUTPUT") {
 		t.Errorf("output = %s, want the reason and no choices table", stdout.String())
+	}
+}
+
+func TestCmdAudioNodeChoicesShowsShortNameAndFullDeviceOnlyWhenVerbose(t *testing.T) {
+	const device = "alsa_output.usb-MOTU_M4_M4MA0-00.pro-output-0"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-28T00:00:00Z","nodeId":"audio-m4","discovery":"available",
+			"manualEntry":{"allowed":true},"ltc":{"available":true},
+			"routes":[{"route":"`+device+`","shortName":"M4","interface":"`+device+`","source":"pipewire","channels":4,"channelBasis":"inventory","ltcCapable":true,
+			  "programGroups":[{"channels":[1,2],"ltcChannels":[3,4],"conflicts":[]}]}],
+			"current":{"programRoute":"`+device+`","programChannels":[1,2],"ltcChannel":3,"offered":true}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdAudio([]string{"node", "choices", "--server", ts.URL, "--token", "t", "audio-m4"}, &stdout, &stderr, time.Now); code != exitOK {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Saved:                  M4 program 1,2, LTC 3") || strings.Contains(stdout.String(), device) {
+		t.Errorf("default output should name the output M4 and omit the full device name:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := cmdAudio([]string{"node", "choices", "--verbose", "--server", ts.URL, "--token", "t", "audio-m4"}, &stdout, &stderr, time.Now); code != exitOK {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "DEVICE") || !strings.Contains(stdout.String(), device) {
+		t.Errorf("--verbose output should carry the full device name:\n%s", stdout.String())
 	}
 }

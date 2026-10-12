@@ -236,7 +236,7 @@ func cmdResolumeRecoverySetToggle(args []string, stdout, stderr io.Writer, clock
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", label)
-		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.recovery configuration revision (requires config:write, admin only).")
+		_, _ = fmt.Fprintln(stderr, "\nSave new Resolume recovery settings (needs config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
@@ -350,7 +350,7 @@ func reportResolumeRecoveryRestore(stdout io.Writer, restore resolumeRecoveryRes
 		}
 	}
 	if restore.OmittedLayerCount > 0 {
-		_, _ = fmt.Fprintf(stdout, "  %d further layer(s) were not attempted (composition larger than one restore covers). Run the restore again to continue.\n", restore.OmittedLayerCount)
+		_, _ = fmt.Fprintf(stdout, "  %d more layer(s) were not attempted. Run the restore again to continue.\n", restore.OmittedLayerCount)
 	}
 	return exitCodeForResolumeRecoveryRestore(restore)
 }

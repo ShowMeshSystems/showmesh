@@ -93,7 +93,7 @@ func TestSecondSurfaceWithDifferentStepTimeIsRefusedAndNothingChanges(t *testing
 	}
 	if err := f.apply("right", "b.fseq", 25); err != nil {
 		// right applied with a different step time: must fail
-		want := "This sequence runs at 25 ms per frame but the surface left on this node is playing a 50 ms sequence. Render both sequences at the same frame timing in xLights."
+		want := "This sequence is 25 ms per frame but surface left is playing 50 ms. Render both at one frame timing."
 		if err.Error() != want {
 			t.Fatalf("error = %q, want %q", err.Error(), want)
 		}
@@ -182,7 +182,7 @@ func TestResumeRefusesSurfaceWithDifferentStepTime(t *testing.T) {
 		t.Fatalf("first resume: %v", err)
 	}
 	err := f.ops.ResumeAssignment("right", f.params("right", "b.fseq", 25))
-	if err == nil || !strings.Contains(err.Error(), "playing a 50 ms sequence") {
+	if err == nil || !strings.Contains(err.Error(), "is playing 50 ms") {
 		t.Fatalf("second resume error = %v, want a step time refusal", err)
 	}
 	if got := f.writerFile("left"); got != "a.fseq" {
@@ -332,7 +332,7 @@ func TestCueActivationConflictingWithASurfaceOutsideTheSetRefusesEverything(t *t
 	before := f.savedFilename("left")
 	fds := openFDCount(t)
 	err := f.ops.activateRender(act, out, f.clock.now)
-	if err == nil || !strings.Contains(err.Error(), `surface "left": This sequence runs at 50 ms per frame but the surface right`) {
+	if err == nil || !strings.Contains(err.Error(), `surface "left": This sequence is 50 ms per frame but surface right`) {
 		t.Fatalf("error = %v, want a refusal that names surface left", err)
 	}
 	if got := f.writerFile("left"); got != "a.fseq" {
@@ -369,7 +369,7 @@ func TestPartialCueHoldsBlackASurfaceLeftAtADifferentStepTime(t *testing.T) {
 	out := f.renderOutput("new.fseq", 25)
 	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
 	err := f.ops.activateRender(act, out, f.clock.now)
-	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || !strings.Contains(err.Error(), "is black because its sequence runs at 50 ms per frame and the show now runs at 25 ms") {
+	if err == nil || !strings.Contains(err.Error(), "Surface right could not switch") || !strings.Contains(err.Error(), "Surface right is black: its sequence is 50 ms per frame and the show is 25 ms") {
 		t.Fatalf("error = %v, want it to name surface right and say it is black", err)
 	}
 	if got := f.writerFile("left"); got != "new.fseq" {
@@ -396,7 +396,7 @@ func TestPartialCueLeavesASurfaceAtTheSameStepTimePlaying(t *testing.T) {
 	out := f.renderOutput("new.fseq", 25)
 	act := testActivation("act-1", "cue-1", 1, "show-1", 1, "rev-a", 0)
 	err := f.ops.activateRender(act, out, f.clock.now)
-	if err == nil || !strings.Contains(err.Error(), `surface "right"`) || strings.Contains(err.Error(), "black") {
+	if err == nil || !strings.Contains(err.Error(), "Surface right could not switch") || strings.Contains(err.Error(), "black") {
 		t.Fatalf("error = %v, want it to name surface right without holding it black", err)
 	}
 	if got := f.writerFile("right"); got != "b.fseq" {

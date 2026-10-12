@@ -134,7 +134,7 @@ func decodeSingleNode(body []byte) (n node, serverTime time.Time, err error) {
 	}
 	if wrapped.ServerTime.IsZero() {
 		return node{}, time.Time{}, newCLIError(exitAPIError,
-			"node response is missing serverTime, violating contract section 6.2 (every response body must carry it)")
+			missingServerTimeMessage)
 	}
 	if wrapped.Node.NodeID == "" {
 		return node{}, time.Time{}, newCLIError(exitAPIError,

@@ -310,7 +310,7 @@ func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() t
 	var idempotencyKey string
 	var override bool
 	fs.StringVar(&idempotencyKey, "idempotency-key", "", "reuse a prior request's key to replay its result instead of dispatching again")
-	fs.BoolVar(&override, "override", false, "accept an H0.5 exclusive-claim conflict and deploy anyway; has no effect when the catalog carries no conflict")
+	fs.BoolVar(&override, "override", false, "deploy even if Cues conflict over an exclusive output")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cuecatalog deploy <nodeId> [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nResolve this coordinator's own current Cue catalog for <nodeId> and push it")

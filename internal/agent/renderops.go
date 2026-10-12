@@ -592,7 +592,7 @@ type stepTimeConflictError struct {
 }
 
 func (e stepTimeConflictError) Error() string {
-	return fmt.Sprintf("This sequence runs at %d ms per frame but the surface %s on this node is playing a %d ms sequence. Render both sequences at the same frame timing in xLights.",
+	return fmt.Sprintf("This sequence is %d ms per frame but surface %s is playing %d ms. Render both at one frame timing.",
 		e.stepTimeMS, e.otherSurfaceID, e.otherStepTimeMS)
 }
 
@@ -861,9 +861,10 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
 	}
 	if gotHash != a.fseqContentHash {
-		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf(
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, withOperatorReason(fmt.Errorf(
 			"%s: fseq asset %q content hash %q does not match assignment's %q",
-			action, a.fseqFilename, gotHash, a.fseqContentHash)
+			action, a.fseqFilename, gotHash, a.fseqContentHash),
+			"%s on this node is not the version that was assigned. Upload it again and deploy.", a.fseqFilename)
 	}
 
 	f, err := fseq.Open(path)
@@ -1172,10 +1173,10 @@ func (o *renderOperations) blackoutSurface(ctx context.Context, params map[strin
 	// see its own doc comment. This surface is already in o.holdBlack by
 	// now, so it skips re-persisting it here; the call below still does.
 	if err := o.materializeHeldBlackDefaultOnFirstWrite(); err != nil {
-		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be fully persisted: %w", action, err)
+		return OperationResult{}, withOperatorReason(fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be fully persisted: %w", action, err), reasonBlackNotSaved)
 	}
 	if err := o.holdBlackStore.Set(surfaceID, true); err != nil {
-		return OperationResult{}, fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be persisted: %w", action, err)
+		return OperationResult{}, withOperatorReason(fmt.Errorf("%s: surface is drawing black, but the held-black flag could not be persisted: %w", action, err), reasonBlackNotSaved)
 	}
 
 	// running names whether a frame writer is currently on this surface:

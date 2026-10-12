@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -49,7 +48,7 @@ func audioNodeSilenceOperations(mgr *audio.Manager) map[string]OperationFunc {
 func silenceNode(mgr *audio.Manager) OperationFunc {
 	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 		if mgr == nil {
-			return OperationResult{}, fmt.Errorf("audio.node.silence: audio session operations are not wired on this node (no asset directory configured)")
+			return OperationResult{}, operatorErrorf(reasonAudioNotSetUp)
 		}
 		if err := rejectUnknownKeys("audio.node.silence", params, audioNodeSilenceKnownKeys); err != nil {
 			return OperationResult{}, err

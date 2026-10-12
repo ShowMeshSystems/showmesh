@@ -75,8 +75,8 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 // 48 kHz, chosen because no device probe is possible while PipeWire
 // holds the card.
 const (
-	pipewireNoProbeSampleRateSource   = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card"
-	pipewireNoProbeChannelCountSource = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card; bindings' highest program or LTC channel index"
+	pipewireNoProbeSampleRateSource   = "assumed: PipeWire holds the card, so it could not be checked"
+	pipewireNoProbeChannelCountSource = "assumed from the highest channel in use: PipeWire holds the card"
 )
 
 // pipewireFallbackSampleRateSource and pipewireFallbackChannelCountSource
@@ -89,14 +89,14 @@ const (
 // value must be able to tell "not found" from "could not be read" apart.
 func pipewireFallbackSampleRateSource(d audio.Discovery) string {
 	if d.PipeWireEnumeratedReason != "" {
-		return fmt.Sprintf("fallback: pipewiresink backend, this node's PipeWire graph could not be read (%s)", d.PipeWireEnumeratedReason)
+		return "assumed: PipeWire outputs could not be read: " + d.PipeWireEnumeratedReason
 	}
 	return pipewireNoProbeSampleRateSource
 }
 
 func pipewireFallbackChannelCountSource(d audio.Discovery) string {
 	if d.PipeWireEnumeratedReason != "" {
-		return fmt.Sprintf("fallback: pipewiresink backend, this node's PipeWire graph could not be read (%s); bindings' highest program or LTC channel index", d.PipeWireEnumeratedReason)
+		return "assumed from the highest channel in use. PipeWire outputs could not be read: " + d.PipeWireEnumeratedReason
 	}
 	return pipewireNoProbeChannelCountSource
 }
@@ -489,10 +489,10 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 
 	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
 	if cfg.SampleRate <= 0 || cfg.ChannelCount <= 0 {
-		reason := fmt.Sprintf("this node has no advertised probe evidence for %q, so no output pipeline was built (sample rate: %s; channel count: %s)",
-			node.ProgramRoute, rateSource, channelCountSource)
+		reason := fmt.Sprintf("This node has not found output %s, so it plays no audio. Check the output and its cable.", node.ProgramRoute)
 		if r.logger != nil {
-			r.logger.Error("refused to build the real audio engine against a route with no probe evidence", "revision", node.Revision, "program_route", node.ProgramRoute, "reason", reason)
+			r.logger.Error("refused to build the real audio engine against a route with no probe evidence", "revision", node.Revision, "program_route", node.ProgramRoute,
+				"sample_rate_source", rateSource, "channel_count_source", channelCountSource)
 		}
 		r.heldNodeOK = false
 		r.bind(gstengine.NewUnavailable(reason))
@@ -506,7 +506,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 	if node.SinkBackend == pipewireAudioSinkFactory {
 		cfg.Clock, cfg.ClockKind, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
 	} else {
-		cfg.ClockUnavailableReason = fmt.Sprintf("sinkBackend is %q, not %q: this route deliberately runs on the default clock instead of a PHC pipeline clock", node.SinkBackend, pipewireAudioSinkFactory)
+		cfg.ClockUnavailableReason = "This output uses the sound card's own clock, so no network clock is applied."
 	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {

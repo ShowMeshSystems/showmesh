@@ -153,3 +153,25 @@ func TestPutAudioNodeRefusesChannelBeyondReportedInventory(t *testing.T) {
 		t.Errorf("clock = %v, want same_interface on alsa_output.m4", clock)
 	}
 }
+
+func TestAudioRoutingChoicesCarryTheNodesShortName(t *testing.T) {
+	const attrs = `{"routes":["alsa_output.usb-MOTU_M4-00.pro-output-0","hw:0,0"],"outputCount":2,"discoveryComplete":true,
+ "outputs":[{"route":"alsa_output.usb-MOTU_M4-00.pro-output-0","shortName":"M4","interface":"alsa_output.usb-MOTU_M4-00.pro-output-0","source":"pipewire","channels":4,"channelBasis":"inventory","ltcCapable":true},
+  {"route":"hw:0,0","interface":"hw:0","source":"alsa","channels":2,"channelBasis":"atLeast","ltcCapable":false}]}`
+	api, token := newRoutingChoicesAPI(t, nodeViewReportingOutputs(t, "audio-m4", true, attrs))
+	status, body := getRoutingChoices(t, api, token, "audio-m4")
+	if status != 200 {
+		t.Fatalf("status = %d, body = %v", status, body)
+	}
+	routes := body["routes"].([]any)
+	if len(routes) != 2 {
+		t.Fatalf("routes = %v, want two", routes)
+	}
+	named, unnamed := routes[0].(map[string]any), routes[1].(map[string]any)
+	if named["shortName"] != "M4" || named["route"] != "alsa_output.usb-MOTU_M4-00.pro-output-0" {
+		t.Errorf("named route = %v, want shortName M4 beside the full route", named)
+	}
+	if _, present := unnamed["shortName"]; present {
+		t.Errorf("route with no reported short name carries one: %v", unnamed)
+	}
+}

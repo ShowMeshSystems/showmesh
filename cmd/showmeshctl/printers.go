@@ -268,8 +268,7 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 	// WHY a uuid changed or WHICH other endpoint shares it.
 	for _, f := range resp.Instances {
 		if f.InstanceUUIDChange != nil {
-			_, _ = fmt.Fprintf(w, "CONFLICT: %s now reports instance uuid %s, previously %s (changed %s), "+
-				"acknowledge with \"showmeshctl fpp acknowledge-instance-uuid-change %s\" once verified\n",
+			_, _ = fmt.Fprintf(w, "CONFLICT: %s changed instance uuid from %[3]s to %[2]s at %[4]s. Verify, then run:\n  showmeshctl fpp acknowledge-instance-uuid-change %[5]s\n",
 				f.InstanceID, stringOrDash(f.InstanceUUID), f.InstanceUUIDChange.PreviousUUID,
 				f.InstanceUUIDChange.ChangedAt.Format(time.RFC3339), f.InstanceID)
 		}
@@ -380,7 +379,7 @@ func printEventsTable(w io.Writer, resp eventsResponse) {
 		if resp.OldestRetainedSeq != nil {
 			oldest = fmt.Sprintf("%d", *resp.OldestRetainedSeq)
 		}
-		_, _ = fmt.Fprintf(w, "GAP: events older than seq %s have been pruned from history and are gone; this page is not a complete history for the range requested.\n", oldest)
+		_, _ = fmt.Fprintf(w, "GAP: events older than seq %s are gone, so this page is not the full history.\n", oldest)
 	}
 	if len(resp.Events) == 0 {
 		_, _ = fmt.Fprintln(w, "(no events)")
@@ -411,7 +410,7 @@ func printSessionDetail(w io.Writer, s sessionResponse) {
 	if !s.Authenticated {
 		_, _ = fmt.Fprintln(w, "Authenticated: no")
 		if s.BootstrapRequired {
-			_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED — this coordinator holds zero principals (ADR-024 decision 9)")
+			_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED: this coordinator has no principals yet")
 		}
 		_, _ = fmt.Fprintln(w, "\nNo credential authenticated this request. Set --token or $SHOWMESH_CTL_TOKEN")
 		_, _ = fmt.Fprintln(w, "to an API token minted for a principal by an admin.")
@@ -446,7 +445,7 @@ func printSessionDetail(w io.Writer, s sessionResponse) {
 		}
 	}
 	if s.BootstrapRequired {
-		_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED — this coordinator holds zero principals (ADR-024 decision 9)")
+		_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED: this coordinator has no principals yet")
 	}
 }
 
@@ -621,7 +620,7 @@ func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {
 func printDeclarationDetail(w io.Writer, d nodeDeclaration) {
 	_, _ = fmt.Fprintln(w, "Declaration:")
 	if !d.Declared {
-		_, _ = fmt.Fprintln(w, "  (not declared — an observed node nobody has promoted; see `showmeshctl discover`)")
+		_, _ = fmt.Fprintln(w, "  (not declared: seen but never added; see `showmeshctl discover`)")
 		return
 	}
 	_, _ = fmt.Fprintf(w, "  Label:            %s\n", stringOrDash(d.Label))
@@ -663,7 +662,7 @@ func printDiscoveryRunResult(w io.Writer, resp discoveryRunResponse) {
 	_, _ = fmt.Fprintf(w, "  Initiated by: %s (%s)\n\n", resp.Run.InitiatedByPrincipalName, resp.Run.InitiatedByPrincipalID)
 
 	if len(resp.Proposals) == 0 {
-		_, _ = fmt.Fprintln(w, "No undeclared entities observed. This run performed no active probing — it cannot find equipment that has never talked to ShowMesh; see `showmeshctl discover --help`.")
+		_, _ = fmt.Fprintln(w, "Nothing undeclared was seen. Equipment that never contacted ShowMesh is not found.")
 		return
 	}
 	_, _ = fmt.Fprintln(w, "Proposals (observed but not declared — promote with `showmeshctl declare <id>`):")

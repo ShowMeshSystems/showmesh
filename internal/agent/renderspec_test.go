@@ -98,7 +98,7 @@ func TestBuildSurfaceSpecFallsBackToTestPatternForHDMI(t *testing.T) {
 	if outcome.Transport != "hdmi" {
 		t.Errorf("outcome.Transport = %q, want hdmi", outcome.Transport)
 	}
-	if !strings.Contains(outcome.Reason, "hdmi") {
+	if !strings.Contains(outcome.Reason, "HDMI") {
 		t.Errorf("outcome.Reason = %q, want it to name hdmi specifically", outcome.Reason)
 	}
 	if spec.OutputDegradedReason != outcome.Reason {
@@ -121,7 +121,7 @@ func TestBuildSurfaceSpecFallsBackWhenNDISourceNameEmpty(t *testing.T) {
 	if !outcome.Configured || outcome.RealSink {
 		t.Fatalf("outcome = %+v, want Configured=true RealSink=false", outcome)
 	}
-	if !strings.Contains(outcome.Reason, "sourceName") {
+	if !strings.Contains(outcome.Reason, "No NDI source name is set") {
 		t.Errorf("outcome.Reason = %q, want it to name the missing sourceName specifically", outcome.Reason)
 	}
 	if spec.OutputDegradedReason == "" {

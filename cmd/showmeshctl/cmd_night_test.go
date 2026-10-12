@@ -227,7 +227,7 @@ func TestCmdNightGetRendersBackgroundAudioWithNoTargetsDeclared(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Targets: none: each node plays its registered items") {
+	if !strings.Contains(stdout.String(), "Targets: none, so each node plays its own items") {
 		t.Errorf("stdout missing the no-targets fallback sentence; got: %s", stdout.String())
 	}
 }

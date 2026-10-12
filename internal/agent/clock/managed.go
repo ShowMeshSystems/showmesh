@@ -187,7 +187,7 @@ func ownershipConflict(iface, rwSocket string) (conflict bool, reason string) {
 		return true, fmt.Sprintf("a ptp4l process (pid %d) is already bound to interface %s: %s", pid, iface, cmdline)
 	}
 	if _, err := os.Stat(rwSocket); err == nil {
-		return true, fmt.Sprintf("management socket %s already exists; another ptp4l instance may already own this interface and domain", rwSocket)
+		return true, fmt.Sprintf("Another clock service may already run on this interface. Its socket: %s", rwSocket)
 	}
 	return false, ""
 }

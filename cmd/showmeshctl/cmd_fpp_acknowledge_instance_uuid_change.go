@@ -21,7 +21,7 @@ import (
 func cmdFPPAcknowledgeInstanceUUIDChange(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fpp acknowledge-instance-uuid-change", stderr)
 	var confirm bool
-	fs.BoolVar(&confirm, "confirm", false, "required: confirms this endpoint's current instance uuid change has been verified")
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms you verified this player's new instance uuid")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp acknowledge-instance-uuid-change --confirm <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nClear a pending, unacknowledged FPP instance uuid change (the changed-uuid rule:")
@@ -70,7 +70,7 @@ func cmdFPPAcknowledgeInstanceUUIDChange(args []string, stdout, stderr io.Writer
 		return exitOK
 	}
 	if resp.Instance == nil {
-		_, _ = fmt.Fprintf(stdout, "instance uuid change acknowledged for %s (instance is no longer among the configured FPP endpoints)\n",
+		_, _ = fmt.Fprintf(stdout, "instance uuid change acknowledged for %s, no longer a configured FPP player\n",
 			instanceID)
 		return exitOK
 	}

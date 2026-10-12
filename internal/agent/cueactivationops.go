@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -76,6 +77,8 @@ type cueActivationOperation struct {
 	nodeID       string
 	hashCache    *verifiedHashCache
 	weatherDelay *WeatherDelayHolder
+	// logger receives the technical cause of an output failure; nil in tests.
+	logger *slog.Logger
 
 	// announcementMu guards announcementActivationID/announcementCueID:
 	// TRACK-H-cues-and-playlists.md section H5 build item 3's own state,
@@ -104,7 +107,7 @@ type cueActivationOperation struct {
 func (o *cueActivationOperation) heldStateAndEntry(cueID string) (held cueauth.HeldState, entry cuecatalog.Entry, entryFound bool, err error) {
 	rec, ok, loadErr := o.catalogStore.Load()
 	if loadErr != nil {
-		return cueauth.HeldState{}, cuecatalog.Entry{}, false, fmt.Errorf("could not load the held cue catalog: %w", loadErr)
+		return cueauth.HeldState{}, cuecatalog.Entry{}, false, withOperatorReason(fmt.Errorf("could not load the held cue catalog: %w", loadErr), "This node could not read its Cue list. Deploy the Cue list again.")
 	}
 	if !ok {
 		return cueauth.HeldState{}, cuecatalog.Entry{}, false, nil
@@ -314,7 +317,8 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		if o.render == nil {
 			applyErrs = append(applyErrs, "This Cue needs a render surface, but none are configured on this node.")
 		} else if err := o.render.activateRender(act, *entry.Outputs.Render, now); err != nil {
-			applyErrs = append(applyErrs, err.Error())
+			o.logOutputFailure("render", act.CueID, err)
+			applyErrs = append(applyErrs, operatorReason("cue.activate (render)", err))
 		}
 	}
 	if o.render != nil {
@@ -335,7 +339,8 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 			// in-flight announcement mid-sentence.
 			applyErrs = append(applyErrs, concurrentAnnouncementReason)
 		} else if reason, trigger, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement, now); err != nil {
-			applyErrs = append(applyErrs, err.Error())
+			o.logOutputFailure("audio", act.CueID, err)
+			applyErrs = append(applyErrs, operatorReason("cue.activate", err))
 		} else {
 			unalignedReason = reason
 			startTrigger = trigger
@@ -348,7 +353,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		// the show audio session's own Start/Seek path (activateAudio) —
 		// there is no session to attach an LTC offset to without an audio
 		// output declared on the same Cue. Stated, never silently skipped.
-		applyErrs = append(applyErrs, "This Cue has a timecode output but no audio output. Timecode needs an audio output on the same Cue.")
+		applyErrs = append(applyErrs, "This Cue has timecode but no audio. Add an audio output to the Cue.")
 	}
 
 	observedAt := now()
@@ -444,7 +449,7 @@ func (o *cueActivationOperation) concurrentAnnouncementRefusalReason(ctx context
 		priorCueID = "unknown (this node did not record it)"
 	}
 	return fmt.Sprintf(
-		"Cue %q was refused because Cue %q is already playing as the announcement. Wait for it to finish.",
+		"Cue %q was refused: Cue %q is still playing as the announcement. Wait for it to end.",
 		act.CueID, priorCueID)
 }
 
@@ -456,4 +461,10 @@ func (o *cueActivationOperation) recordAnnouncementActivation(act cueactivation.
 	o.announcementMu.Lock()
 	o.announcementActivationID, o.announcementCueID = act.ActivationID, act.CueID
 	o.announcementMu.Unlock()
+}
+
+func (o *cueActivationOperation) logOutputFailure(output, cueID string, err error) {
+	if o.logger != nil {
+		o.logger.Warn("cue.activate: output failed", "output", output, "cue_id", cueID, "error", err)
+	}
 }

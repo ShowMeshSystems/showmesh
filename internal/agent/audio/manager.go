@@ -157,7 +157,7 @@ func NewManager(engine Engine, store SessionStore, assetDir string, decoder Deco
 
 // RebindReasonEngineRebind is the [pkgaudio.FaultRouteChanged] reason
 // recorded on every session [Manager.RebindEngine] invalidates.
-const RebindReasonEngineRebind = "audio output configuration changed; this session's engine handle is no longer valid"
+const RebindReasonEngineRebind = "This node's audio output settings changed. Start this audio again."
 
 // RebindEngine invalidates every session with an active engine handle
 // (never a silent drop: each is set to StateFailed with
@@ -276,6 +276,39 @@ func (m *Manager) logf(format string, args ...any) {
 	if m.logger != nil {
 		m.logger.Warn(fmt.Sprintf(format, args...))
 	}
+}
+
+// reasonNotYetConfirmed is reported when the engine has not yet shown the
+// result of a request.
+const reasonNotYetConfirmed = "The node has not confirmed this yet. Check again in a moment."
+
+const (
+	reasonAudioNotSetUp        = "This audio is not set up on this node. Set it up, then try again."
+	reasonNextAudioNotPrepared = "The next audio is not prepared yet. Prepare it, then switch."
+)
+
+// engineFailureReason is the line an operator reads for an engine failure.
+// The engine's own error goes to this node's log.
+func (m *Manager) engineFailureReason(err error) string {
+	m.logf("audio: engine call failed: %v", err)
+	if errors.Is(err, ErrNoEngineBinding) {
+		return "No audio engine is connected yet. Retry once one connects."
+	}
+	switch pkgaudio.ClassifyFault(err) {
+	case pkgaudio.FaultDecodeFailure:
+		return "This audio file could not be played. Export it again and upload it."
+	case pkgaudio.FaultMediaDisappeared:
+		return "The audio file is missing from this node. Upload it again."
+	case pkgaudio.FaultRouteChanged:
+		return "This node's audio output changed. Check the output, then start again."
+	case pkgaudio.FaultPipelineCrash:
+		return "This node's audio engine stopped. Start the audio again."
+	case pkgaudio.FaultFreeze:
+		return "This node's audio engine stopped responding. Start the audio again."
+	case pkgaudio.FaultTimingAuthorityLost:
+		return "This node lost its clock. Check the clock, then start again."
+	}
+	return "This node's audio engine reported a fault. Check this node's log."
 }
 
 // startTiming is where one start spent its time, phase by phase, so a
@@ -465,7 +498,7 @@ func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation p
 func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reasonAudioNotSetUp}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -474,7 +507,7 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 		dispatchedAt := m.now()
 		item, ok := s.currentItemLocked()
 		if !ok {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to prepare"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "This audio has no file or playlist. Choose one, then prepare it."}
 		}
 		// Prepare never leaves a session Playing (it ends Ready or
 		// Failed), so any LTC run it owned from before must stop
@@ -484,7 +517,7 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 		obs, err := s.prepareLocked(ctx, item)
 		if err != nil {
 			s.state = pkgaudio.StateFailed
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.state = pkgaudio.StateReady
 		s.timingKnown = true
@@ -548,7 +581,7 @@ func (m *Manager) StartFrom(ctx context.Context, id pkgaudio.SessionID, invocati
 func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration, startPoint *ResumePoint) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reasonAudioNotSetUp}
 	}
 	s.mu.Lock()
 
@@ -569,7 +602,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		}
 		item, ok := s.currentItemLocked()
 		if !ok {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to start"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "This audio has no file or playlist. Choose one, then start it."}
 		}
 		// A paused session whose bookmark still names the item currently
 		// loaded is a Resume, not a Start: under the known pause-fidelity
@@ -579,7 +612,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		// Apply landed while paused) is not this case and falls through to
 		// the ordinary stale-handle handling below.
 		if s.state == pkgaudio.StatePaused && s.bookmark != nil && s.bookmark.Identity == itemIdentity(item) {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is paused; use Resume to continue this item, not Start"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "This audio is paused. Resume it instead of starting it."}
 		}
 		// A handle loaded for a now-superseded item identity (a media or
 		// playlist revision landed via Apply between Prepare and Start) is
@@ -603,7 +636,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				}
 				s.state = pkgaudio.StateFailed
 				m.stopLTCLocked(ctx, s)
-				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 			}
 		}
 		var position time.Duration
@@ -618,7 +651,8 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				// is cleared so a subsequent Start is not refused forever by
 				// the same dead reference.
 				s.bookmark = nil
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+				m.logf("audio session %s: saved pause position could not be resolved and was cleared: %v", id, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The saved pause position no longer applies and was cleared. Start again."}
 			}
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
@@ -630,7 +664,8 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			err := sched.waitUntilT0(ctx)
 			timing.wait = lap()
 			if err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
+				m.logf("audio session %s: wait for the scheduled start was cut short: %v", id, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "The wait for the start time was cut short. Start it again."}
 			}
 		}
 
@@ -677,7 +712,8 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				sched.t0 = sched.t0.Add(time.Duration(fadeMs) * time.Millisecond)
 			}
 			if err := m.waitDuckFade(ctx, fadeMs); err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the duck fade to complete: " + err.Error()}
+				m.logf("audio session %s: background fade before the start was cut short: %v", id, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "The background fade was cut short, so this did not start. Start it again."}
 			}
 		}
 
@@ -700,7 +736,7 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			// identically.
 			s.releaseEngineLocked(ctx)
 			m.stopLTCLocked(ctx, s)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = true
@@ -824,18 +860,18 @@ func (m *Manager) PromoteAtPosition(ctx context.Context, fromID, toID pkgaudio.S
 func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration) pkgaudio.OutcomeResult {
 	to, ok := m.get(toID)
 	if !ok {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reasonAudioNotSetUp}
 	}
 	from, ok := m.get(fromID)
 	if !ok {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no session staged for promotion"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reasonNextAudioNotPrepared}
 	}
 
 	to.mu.Lock()
 	item, ok := to.currentItemLocked()
 	if !ok {
 		to.mu.Unlock()
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media to promote onto"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "This audio has no file or playlist. Choose one, then switch."}
 	}
 	wantIdentity := itemIdentity(item)
 	to.mu.Unlock()
@@ -844,13 +880,13 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 	switch {
 	case from.state != pkgaudio.StateReady:
 		from.mu.Unlock()
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session is not ready"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: reasonNextAudioNotPrepared}
 	case !from.handleLoaded:
 		from.mu.Unlock()
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session holds no loaded handle"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The prepared audio is no longer loaded. Prepare it again."}
 	case from.loadedIdentity != wantIdentity:
 		from.mu.Unlock()
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session's content no longer matches what toID now desires"}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The prepared audio no longer matches what was asked for. Prepare it again."}
 	}
 	handle := from.handle
 	capturedIdentity := from.loadedIdentity
@@ -878,7 +914,7 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 				m.logf("audio session %s: engine release of an orphaned promoted handle failed: %v", toID, err)
 			}
 			relCancel()
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The content changed while promoting, so the staged session was released. Prepare and start it again."}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The audio changed during the switch. Prepare and start it again."}
 		}
 		// Release whatever handle to already holds before taking the
 		// staged one, or it survives in the engine, unaddressable by
@@ -897,7 +933,8 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 			position, err = to.resolveBookmarkPositionLocked(item)
 			if err != nil {
 				to.bookmark = nil
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+				m.logf("audio session %s: saved pause position could not be resolved and was cleared: %v", toID, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The saved pause position no longer applies and was cleared. Start again."}
 			}
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
@@ -906,7 +943,8 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 		}
 		if sched != nil {
 			if err := sched.waitUntilT0(ctx); err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
+				m.logf("audio session %s: wait for the scheduled start was cut short: %v", toID, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "The wait for the start time was cut short. Start it again."}
 			}
 		}
 
@@ -929,7 +967,8 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 				sched.t0 = sched.t0.Add(time.Duration(fadeMs) * time.Millisecond)
 			}
 			if err := m.waitDuckFade(ctx, fadeMs); err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the duck fade to complete: " + err.Error()}
+				m.logf("audio session %s: background fade before the start was cut short: %v", toID, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "The background fade was cut short, so this did not start. Start it again."}
 			}
 		}
 
@@ -940,7 +979,7 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 			to.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			to.releaseEngineLocked(ctx)
 			m.stopLTCLocked(ctx, to)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		to.state = pkgaudio.StatePlaying
 		to.timingKnown = true
@@ -1043,7 +1082,7 @@ func (m *Manager) PauseWithBookmark(ctx context.Context, id pkgaudio.SessionID, 
 		obs, err := s.mgr.engine.Pause(ctx, s.handle)
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.state = pkgaudio.StatePaused
 		s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Identity: s.loadedIdentity, Index: s.currentIndex, Position: obs.Position}
@@ -1078,7 +1117,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is not paused"}
 		}
 		if len(s.interruptedByAll) > 0 {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "An announcement is playing. This audio resumes on its own when it ends."}
 		}
 		if point != nil {
 			if err := s.applyResumePointLocked(*point); err != nil {
@@ -1109,12 +1148,13 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 				}
 				s.state = pkgaudio.StateFailed
 				m.stopLTCLocked(ctx, s)
-				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 			}
 			position, err := s.resolveBookmarkPositionLocked(item)
 			if err != nil {
 				s.bookmark = nil
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+				m.logf("audio session %s: saved pause position could not be resolved and was cleared: %v", id, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The saved pause position no longer applies and was cleared. Start again."}
 			}
 			dispatchedAt := m.now()
 			obs, err := s.mgr.engine.Start(ctx, s.handle, position)
@@ -1123,7 +1163,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 				s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 				s.releaseEngineLocked(ctx)
 				m.stopLTCLocked(ctx, s)
-				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 			}
 			s.state = pkgaudio.StatePlaying
 			s.timingKnown = true
@@ -1142,7 +1182,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 			// branch above instead of refusing forever against a handle
 			// that no longer exists.
 			s.releaseEngineLocked(ctx)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.bookmark = nil
@@ -1181,7 +1221,7 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is not paused"}
 		}
 		if len(s.interruptedByAll) > 0 {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "An announcement is playing. This audio resumes on its own when it ends."}
 		}
 		if point != nil {
 			if err := s.applyResumePointLocked(*point); err != nil {
@@ -1195,7 +1235,8 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 		position, err := s.resolveBookmarkPositionLocked(item)
 		if err != nil {
 			s.bookmark = nil
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+			m.logf("audio session %s: saved pause position could not be resolved and was cleared: %v", id, err)
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "The saved pause position no longer applies and was cleared. Start again."}
 		}
 		// Release and prepare before waiting for the instant, as [Manager.start]
 		// does, so preparation time never delays presentation.
@@ -1206,7 +1247,7 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			}
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
 		if refusal != nil {
@@ -1218,7 +1259,8 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 		if sched != nil {
 			if err := sched.waitUntilT0(ctx); err != nil {
 				s.releaseEngineLocked(ctx)
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled resume instant: " + err.Error()}
+				m.logf("audio session %s: wait for the scheduled resume was cut short: %v", id, err)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "The wait for the resume time was cut short. Resume it again."}
 			}
 		}
 		dispatchedAt := m.now()
@@ -1228,7 +1270,7 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			s.releaseEngineLocked(ctx)
 			m.stopLTCLocked(ctx, s)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = true
@@ -1272,7 +1314,7 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		obs, err := s.mgr.engine.Seek(ctx, s.handle, position)
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: m.engineFailureReason(err)})
 		}
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt

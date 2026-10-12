@@ -53,6 +53,7 @@ func parseAudioOutputsAttribute(raw any) ([]config.AudioOutputEvidence, bool) {
 		var okRoute, okIface, okSource, okBasis, okLTC bool
 		o.Route, okRoute = m["route"].(string)
 		o.Interface, okIface = m["interface"].(string)
+		o.ShortName, _ = m["shortName"].(string)
 		o.Source, okSource = m["source"].(string)
 		o.ChannelBasis, okBasis = m["channelBasis"].(string)
 		o.LTCCapable, okLTC = m["ltcCapable"].(bool)
@@ -120,7 +121,7 @@ func mapAudioRoutingChoices(now time.Time, id string, c config.AudioRoutingChoic
 	}
 	for _, r := range c.Routes {
 		rc := v1.AudioRoutingRouteChoice{
-			Route: r.Route, Interface: r.Interface, Source: r.Source,
+			Route: r.Route, ShortName: r.ShortName, Interface: r.Interface, Source: r.Source,
 			Channels: r.Channels, ChannelBasis: r.ChannelBasis,
 			LTCCapable: r.LTCCapable, LTCReason: r.LTCReason,
 			ProgramGroups: make([]v1.AudioProgramGroup, 0, len(r.ProgramGroups)),

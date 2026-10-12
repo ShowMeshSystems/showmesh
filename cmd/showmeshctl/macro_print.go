@@ -79,7 +79,7 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 		} else if len(t.ExcludeNodes) > 0 {
 			_, _ = fmt.Fprintf(w, "  Node:        the show's audio nodes, excluding %s\n", strings.Join(t.ExcludeNodes, ", "))
 		} else {
-			_, _ = fmt.Fprintf(w, "  Node:        the show's audio nodes, or the installation default if none are set\n")
+			_, _ = fmt.Fprintf(w, "  Node:        the show's audio nodes, or the installation default\n")
 		}
 		_, _ = fmt.Fprintf(w, "  Session:     %s\n", t.AudioSessionID)
 		_, _ = fmt.Fprintf(w, "  Action:      %s\n", t.AudioAction)
@@ -199,7 +199,7 @@ func printMacroRunDetail(w io.Writer, run macroRun) {
 	_, _ = fmt.Fprintf(w, "State:        %s\n", run.State)
 	_, _ = fmt.Fprintf(w, "Outcome:      %s\n", macroRunOutcomeGlyph(run.State, run.Completed, run.Confirmed, run.Reason))
 	if run.AttributionDegraded {
-		_, _ = fmt.Fprintln(w, "WARNING:      this run's audit attribution is degraded (the audit store was unwritable for at least one exempt step)")
+		_, _ = fmt.Fprintln(w, "WARNING:      part of this run could not be written to the audit log")
 	}
 	_, _ = fmt.Fprintf(w, "\nSteps (%d):\n", len(run.Steps))
 	tw := newTabWriter(w)

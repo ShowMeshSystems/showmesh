@@ -417,9 +417,7 @@ func cmdWeatherDelayPresign(args []string, stdout, stderr io.Writer, clock func(
 	const cmdLabel = "showmeshctl weather-delay presign"
 	fs, g := newFlagSet(cmdLabel, stderr)
 	kind := fs.String("kind", "delay", `the kind to presign: "delay" or "cancelNight"`)
-	validDays := fs.Int("valid-days", 1, "how many days from now this presigned start stays acceptable to a node (1-400); "+
-		"an outside system can hold and send it any time before then, and replaying it afterward can only start a "+
-		"delay or a cancel night, never a resume")
+	validDays := fs.Int("valid-days", 1, "days this presigned start stays valid (1-400)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", cmdLabel)
 		fs.PrintDefaults()
@@ -461,10 +459,10 @@ func cmdWeatherDelayPresign(args []string, stdout, stderr io.Writer, clock func(
 	if err != nil {
 		return reportError(stderr, cmdLabel, err)
 	}
-	_, _ = fmt.Fprintln(stdout, "  hold this document and POST it, unmodified, to any of the URLs below when this coordinator is down:")
+	_, _ = fmt.Fprintln(stdout, "  if the coordinator is down, POST this document unchanged to a URL below:")
 	_, _ = fmt.Fprintln(stdout, "  "+string(doc))
 	if len(resp.NodeURLs) == 0 {
-		_, _ = fmt.Fprintln(stdout, "  (no node URL is known right now; use -o json and this coordinator's own node inventory instead)")
+		_, _ = fmt.Fprintln(stdout, "  (no node URL is known; use -o json and the node list instead)")
 	}
 	for _, u := range resp.NodeURLs {
 		_, _ = fmt.Fprintln(stdout, "    "+u)
@@ -593,7 +591,7 @@ func cmdWeatherDelayTrigger(args []string, stdout, stderr io.Writer, clock func(
 	expiresAt := fs.String("expires-at", "", "the warning's own expiry, RFC 3339")
 	distanceKm := fs.Float64("distance-km", 0, "a lightning report's own distance, kilometers (0 means unknown)")
 	suggestCancel := fs.Bool("suggest-cancel", false,
-		"set only when this source itself knows tonight's schedule and judges too little of it would remain")
+		"set only when this source knows too little of tonight's schedule would remain")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s -source <id> -kind <warning|lightning> [flags]\n", cmdLabel)
 		fs.PrintDefaults()

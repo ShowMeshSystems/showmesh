@@ -199,9 +199,9 @@ func runAudioRestoreRetryTick(
 		// binding raced in and won concurrently — not a build refusal,
 		// but still worth surfacing rather than leaving the prior reason
 		// stale.
-		reason = "a newer audio.node binding was accepted concurrently with this automatic retry attempt"
+		reason = "New audio settings arrived during the retry. The node tries again with them."
 	case reason == "":
-		reason = "the engine rebuilt but automatic retry still did not fully resolve"
+		reason = "The audio engine restarted but audio is not restored yet. The node tries again."
 	}
 	retry.lastReason = reason
 

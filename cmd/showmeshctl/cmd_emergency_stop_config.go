@@ -137,7 +137,7 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", cmdLabel)
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.emergencystop configuration revision (a full replacement:")
 		_, _ = fmt.Fprintln(stderr, "all three level keys required, each with its own required actions array).")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"emergency-stop config get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"emergency-stop config get --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")

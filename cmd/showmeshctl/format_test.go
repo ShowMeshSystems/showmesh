@@ -126,8 +126,8 @@ func TestClockSkewWarningFixedClock(t *testing.T) {
 		if got == "" {
 			t.Fatal("clockSkewWarning = \"\", want a warning for a 1m skew")
 		}
-		if !strings.Contains(got, "serverTime") {
-			t.Errorf("clockSkewWarning = %q, want it to mention serverTime", got)
+		if !strings.Contains(got, "ages use the coordinator's") {
+			t.Errorf("clockSkewWarning = %q, want it to say whose clock the ages use", got)
 		}
 	})
 

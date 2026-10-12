@@ -192,7 +192,7 @@ func dashIfEmpty(s string) string {
 func printFallbackTable(w io.Writer, resp fallbackProgramListResponse) {
 	rows := resp.rows()
 	if len(rows) == 0 {
-		_, _ = fmt.Fprintln(w, "No fallback program is published for any FPP player, and no plugin has reported a fallback state.")
+		_, _ = fmt.Fprintln(w, "No FPP player has a fallback program, and no plugin has reported one.")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -270,7 +270,7 @@ func printFallbackDetail(w io.Writer, p fallbackProgramListEntry) {
 	if s == nil {
 		_, _ = fmt.Fprintf(tw, "Plugin state:\tnot reported\n")
 		_ = tw.Flush()
-		_, _ = fmt.Fprintln(w, "\nThis player's plugin has never reported a fallback state, so the coordinator never holds this player.")
+		_, _ = fmt.Fprintln(w, "\nThis player's plugin has never reported, so the coordinator never holds it.")
 		return
 	}
 	_, _ = fmt.Fprintf(tw, "Plugin state:\t%s since %s\n", s.State, s.Since)

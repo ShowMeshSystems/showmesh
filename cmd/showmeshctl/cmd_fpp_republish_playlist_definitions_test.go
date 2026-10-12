@@ -49,10 +49,10 @@ func TestCmdFPPRepublishPlaylistDefinitionsReportsAcceptanceNotArrival(t *testin
 	out := stdout.String()
 	for _, want := range []string{
 		"the plugin agreed to resend",
-		"cleared 6 definition(s) for resend",
-		"0 still held",
-		"1 refused terminally and will not be re-sent",
-		"the resend is owed, not done",
+		"resends 6 definition(s)",
+		"holds 0",
+		"refused 1 for good",
+		"The resend is queued. No definition has reached the coordinator yet.",
 		"showmeshctl fpp playlist-definitions list",
 	} {
 		if !strings.Contains(out, want) {
@@ -89,7 +89,7 @@ func TestCmdFPPRepublishPlaylistDefinitionsAppliedFalseIsASuccess(t *testing.T) 
 	}
 	// Sending finished is still not arrival, and the wording must keep
 	// those apart.
-	if !strings.Contains(out, "finished sending") || !strings.Contains(out, "not the same as the coordinator having stored") {
+	if !strings.Contains(out, "The plugin has sent them") || !strings.Contains(out, "Check that the coordinator stored them") {
 		t.Errorf("stdout = %q, want it to distinguish the plugin finishing its send from the coordinator having stored it", out)
 	}
 }

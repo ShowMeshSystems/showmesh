@@ -738,8 +738,8 @@ func TestResumeAtWithMismatchedPointIsRefused(t *testing.T) {
 	if out.Outcome != pkgaudio.OutcomeRefused {
 		t.Fatalf("ResumeAt(mismatched point) = %q (%s), want refused", out.Outcome, out.Reason)
 	}
-	if !containsString(out.Reason, "item-does-not-exist") || !containsString(out.Reason, "index 1") {
-		t.Fatalf("refusal reason = %q, want it to name the mismatched item and index", out.Reason)
+	if !containsString(out.Reason, "item-does-not-exist") || !containsString(out.Reason, "position 1") {
+		t.Fatalf("refusal reason = %q, want it to name the mismatched item and position", out.Reason)
 	}
 }
 

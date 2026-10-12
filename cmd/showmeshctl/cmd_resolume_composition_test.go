@@ -209,7 +209,7 @@ func TestCmdResolumeCompositionShowNothingStored(t *testing.T) {
 		t.Errorf("exit code = %d, want exitNotFound (%d) — matching \"config get\"'s own unset-configuration case; stderr=%s", code, exitNotFound, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "no Resolume composition") && !strings.Contains(out, "uploaded yet") {
+	if !strings.Contains(out, "No Resolume composition yet") {
 		t.Errorf("stdout = %q, want a plain statement that nothing is stored", out)
 	}
 	if !strings.Contains(out, "upload") {

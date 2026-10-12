@@ -141,11 +141,11 @@ func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writ
 	fs, g := newFlagSet("showmeshctl "+label, stderr)
 	var stopFPP *bool
 	if offerStopFPP {
-		stopFPP = fs.Bool("stop-fpp-playback", false, "also stop whatever each of the night's FPP instances is playing; without it FPP keeps playing")
+		stopFPP = fs.Bool("stop-fpp-playback", false, "also stop whatever the night's FPP players are playing")
 	}
 	var overrides []nightCommandOverrideWire
 	fs.Var(nightOverrideFlag{overrides: &overrides}, "override",
-		"override one withholding interlock rule: RULE=REASON (repeatable; requires night:override and that rule's own overridePolicy: authorized-operator)")
+		"override one blocking safety rule: RULE=REASON (repeatable, needs night:override)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s [flags]\n\n%s\n", label, help)
 		fs.PrintDefaults()
@@ -172,17 +172,17 @@ func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writ
 
 func cmdNightPrepareSite(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, "night prepare-site", "prepare-site",
-		"Open a new preparation epoch (POST /api/v1/night/commands/prepare-site,\nrequires night:command). Idempotent within the same preparation or\nactive session; rejected during finalization or fade-out.\n\nA configured \"block\" interlock for phase prepare-site is dispatched LIVE,\nat the instant this command runs, and can refuse it (409) unless covered\nby --override.\n\nFPP keeps playing unless --stop-fpp-playback is given, which also stops\nwhatever each of the night's FPP instances is playing and reports the\nresult. A stop FPP refuses or does not confirm is reported and does not\nfail prepare-site.", true)
+		"Start preparing the site for tonight. Safe to repeat.\nFPP keeps playing unless --stop-fpp-playback is given.\nA blocking safety rule can refuse this; see --override.", true)
 }
 
 func cmdNightReadiness(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night readiness", "run-readiness",
-		"Run readiness for the current preparation epoch (POST\n/api/v1/night/commands/run-readiness). Rejected when no preparation\nepoch is open.\n\nThis build checks FPP reachability for the session's own referenced FPP\ninstances (\"fpp:<id>:reachable\"), the pinned resting FSEQ asset's own\nparseable non-zero duration (\"resting:asset-duration\"), the resting\nplaylist's idle-read shape (\"resting:playlist-shape:<playlist>\"), the\nshow playlist's presence (\"show:playlist-present:<playlist>\"), and every\nconfigured interlock's own current outcome (\"interlock:<phase>:<name>\"),\ndispatched live at run-readiness time. \"resting:asset-exact-variant:<playlist>\"\nis PERMANENTLY \"not_verifiable\": FPP exposes no content hash, so this\ncannot confirm the live host is running the pinned asset's exact bytes,\nstated rather than defaulted to a pass, but excluded from \"outcome\" (it\nstays listed), so \"ready\" is still reachable once every checkable check\npasses. A worst check reported as degraded yields outcome\n\"ready_with_warnings\": the night can still start, but at least one check\nwants an operator's eye before it does. Neither that, a plain \"unknown\"\noutcome, nor \"ready_with_warnings\" blocks start-night by itself; only a\nmissing or stale readiness result does. Read every check name and reason\nbefore trusting this as a complete pre-flight.\n\nA configured \"block\" interlock for phase run-readiness is dispatched\nLIVE, at the instant this command runs, and can refuse the command itself\n(409, nothing computed or stored) unless covered by --override; a rule\ndeclared for any OTHER phase is still evaluated and shown above, never\nwithholding this command.")
+		"Check that the site is ready for tonight and list every check.\nRefused until the site is being prepared. Read each check before starting.\nA blocking safety rule can refuse this; see --override.")
 }
 
 func cmdNightPreshow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night preshow", "start-preshow",
-		"Enter the configured pre-show presentation (POST\n/api/v1/night/commands/start-preshow). Requires the current preparation\nepoch.\n\nA configured \"block\" interlock for phase start-preshow is gated against\nthe most recent readiness result (at most as fresh as the last\nrun-readiness call, never a live dispatch) and can refuse this command\n(409) unless covered by --override.")
+		"Start the pre-show. Refused until the site is being prepared.\nA blocking safety rule can refuse this; see --override.")
 }
 
 // nightOverrideFlag is flag.Value for a repeatable "--override
@@ -210,32 +210,32 @@ func (f nightOverrideFlag) Set(s string) error {
 
 func cmdNightStart(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night start", "start-night",
-		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch. When that result is older than\nthe coordinator's configured maximum age, this runs a fresh run-readiness\npass itself before proceeding (a pre-show commonly runs one to two\nhours, well past a maximum age measured in minutes); a fresh pass that\nitself fails refuses this command with THAT failure, never a staleness\nmessage.\n\nA configured \"block\" interlock for phase start-night is gated against\nthe readiness result start-night actually proceeds on (a live re-run's,\nwhen one ran; otherwise the stored one, never a live dispatch of its own)\nand can refuse this command (409) unless covered by --override.")
+		"Start the night. Needs a readiness check from this preparation.\nAn old check is run again first, and a failed one refuses the start.\nA blocking safety rule can refuse this; see --override.")
 }
 
 func cmdNightFinalShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night final-show", "request-final-show",
-		"Close admission after one final complete show (POST\n/api/v1/night/commands/request-final-show). Never starts a second show\nafter the final playlist.\n\nAccepted against a DEGRADED session: it is directional, and refusing it\nwould leave the operator less able to end the night than if this\ncoordinator were switched off. See \"night end-session\" for the full list\nof four.")
+		"Play one more complete show, then admit no more.\nWorks while the night is degraded.")
 }
 
 func cmdNightFadeOut(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night fade-out", "fade-out-night",
-		"Fade the active non-live presentation out (POST\n/api/v1/night/commands/fade-out-night). Closes admission immediately and\ncancels any armed, uncommitted next show; never refused for want of an\naudit write, and never gated on this session's own degraded flag.\n\nThe session enters \"fading-out\", not \"stopped\": it runs the configured\nfade cues, issues a real stop to FPP, and reports \"stopped\" only once it\nhas observed FPP idle with no playlist after that stop. An unconfirmed\nstop degrades the session rather than claiming success. During a live or\nalready-committed show the fade is deferred until that show finishes, and\nthe end-of-night resting playlist is then not started.\n\nA configured \"block\" interlock for phase fade-out-night is dispatched\nLIVE, at the instant this command runs, and CAN refuse this exact\ncommand (409) unless covered by --override; a rule with an unavailable\nsource and onUnavailable: block still refuses this way, but every such\nrule now requires overridePolicy: authorized-operator (a plain\noverridePolicy: none is refused at PUT /config/night.session/{id} time),\nso an authorized override always exists. \"night end-session\" also\nconsults no interlock and always reaches \"stopped\", but only fade-out-night\nand power-down-presentation actually issue FPP's own stop.\n\nAccepted against a DEGRADED session: see \"night end-session\" for the full\nlist of four.")
+		"Fade the presentation out and stop FPP. During a show the fade is deferred\nuntil that show ends. The night reads \"fading-out\", then \"stopped\" once\nFPP is seen idle.\nWorks while the night is degraded.\nA blocking safety rule can refuse this; see --override.")
 }
 
 func cmdNightPowerDown(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night power-down", "power-down-presentation",
-		"Close the session after playback and the fade have stopped (POST\n/api/v1/night/commands/power-down-presentation). Implies fade-out-night\nif it has not already occurred, so the session enters \"fading-out\" and\nreaches \"stopped\" only on observed idle evidence. With no power\nconfiguration the optional power phase records \"not_configured\" at that\npoint, without error; with siteControl.presentationPowerOff configured but\nnot yet automatically dispatched by this build, it records\n\"configured_not_dispatched\" instead.\n\nA configured \"block\" interlock for phase power-down-presentation is\ndispatched LIVE, at the instant this command runs, and CAN refuse this\nexact command (409) unless covered by --override, the identical\nguarantee \"night fade-out\" describes for its own phase. \"night\nend-session\" also consults no interlock and always reaches \"stopped\",\nbut only fade-out-night and power-down-presentation actually issue\nFPP's own stop.\n\nAccepted against a DEGRADED session: see \"night end-session\" for the full\nlist of four.")
+		"Fade out if needed, stop FPP, then run the configured power-off step.\nWorks while the night is degraded.\nA blocking safety rule can refuse this; see --override.")
 }
 
 func cmdNightEndSession(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night end-session", "end-session",
-		"PROVISIONAL operator recovery action (POST /api/v1/night/commands/\nend-session): abandons the current session, reaches \"stopped\", and\nlaunches nothing. Does not clear the degraded record; recover with\n\"night prepare-site\" afterward.\n\nFour commands are accepted against a DEGRADED session:\n\n  request-final-show        close admission after one more show\n  fade-out-night            fade the presentation out and stop FPP\n  power-down-presentation   the above, plus any configured power phase\n  end-session               abandon the session outright\n\nThe first three are directional safety and shutdown actions and are never\nrefused for want of this coordinator's own evidence. end-session is the\nonly one that abandons the session rather than ending the night through\nit. Every other lifecycle command refuses while degraded.\n\nend-session declares no interlock phase and consults no gate at all: it\nis unconditionally the way to reach \"stopped\" even when a configured\n\"block\" interlock on fade-out-night or power-down-presentation has no\noverride path (overridePolicy: none) and an unavailable source. It never\nissues an FPP stop or resolves the power phase, so use fade-out-night or\npower-down-presentation first whenever either one is reachable.")
+		"Abandons the current night without stopping FPP or powering anything off.\nUse fade-out-night or power-down-presentation first when either works.\nRun \"night prepare-site\" afterward to recover a degraded night.\n\nThese still work while the night is degraded:\n  request-final-show        admit no more after one more show\n  fade-out-night            fade out and stop FPP\n  power-down-presentation   fade out, stop FPP, then power off\n  end-session               abandon the night\nThe first three end the night in order. Only end-session abandons it.")
 }
 
 func cmdNightResumeShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night resume-show", "resume-show",
-		"After Stop (emergency stop level 1) holds the night, start the show\nplaylist from its first song (POST /api/v1/night/commands/resume-show).\nThe night never returns to resting first. Refused when the show is not\nstopped, while a weather delay is active, and when the night has not\nstarted, is shutting down, or has already played its last show.\n\n\"night status\" prints the hold while it stands.")
+		"After Stop holds the night, start the show playlist from its first song.\nRefused during a weather delay, and before or after the night's shows.")
 }
 
 // runSimpleNightLifecycleCommand is the flag-parsing wrapper every

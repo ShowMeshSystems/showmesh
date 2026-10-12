@@ -27,6 +27,7 @@ type audioRoutingChoicesResponse struct {
 	} `json:"ltc"`
 	Routes []struct {
 		Route         string `json:"route"`
+		ShortName     string `json:"shortName,omitempty"`
 		Interface     string `json:"interface"`
 		Source        string `json:"source"`
 		Channels      int    `json:"channels"`
@@ -58,9 +59,10 @@ type audioRoutingChoicesResponse struct {
 
 func cmdAudioNodeChoices(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node choices", stderr)
+	verbose := fs.Bool("verbose", false, "also show each output's full device name")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node choices [flags] <node-id>")
-		_, _ = fmt.Fprintln(stderr, "\nShow the program and LTC channels this node's own outputs offer (GET /api/v1/nodes/{nodeId}/audio/routing-choices).")
+		_, _ = fmt.Fprintln(stderr, "\nShow the program and LTC channels this node's outputs offer.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -94,11 +96,21 @@ func cmdAudioNodeChoices(args []string, stdout, stderr io.Writer, clock func() t
 		}
 		return exitOK
 	}
-	printAudioRoutingChoices(stdout, resp)
+	printAudioRoutingChoices(stdout, resp, *verbose)
 	return exitOK
 }
 
-func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse) {
+// printAudioRoutingChoices names each output by its short name. The full
+// device name appears only with verbose, or when the node reports no short one.
+func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse, verbose bool) {
+	short := func(route string) string {
+		for _, r := range resp.Routes {
+			if r.Route == route && r.ShortName != "" {
+				return r.ShortName
+			}
+		}
+		return route
+	}
 	_, _ = fmt.Fprintf(w, "Node ID:                %s\n", resp.NodeID)
 	_, _ = fmt.Fprintf(w, "Discovery:              %s\n", resp.Discovery)
 	if resp.Reason != "" {
@@ -112,7 +124,7 @@ func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse) {
 		if cur.LTCChannel != 0 {
 			ltc = strconv.Itoa(cur.LTCChannel)
 		}
-		_, _ = fmt.Fprintf(w, "Saved:                  %s program %s, LTC %s\n", cur.ProgramRoute, joinInts(cur.ProgramChannels), ltc)
+		_, _ = fmt.Fprintf(w, "Saved:                  %s program %s, LTC %s\n", short(cur.ProgramRoute), joinInts(cur.ProgramChannels), ltc)
 		_, _ = fmt.Fprintf(w, "                        %s\n", availability(cur.Offered, "one of the choices below", cur.Reason))
 	}
 	if resp.Clock != nil {
@@ -124,22 +136,30 @@ func printAudioRoutingChoices(w io.Writer, resp audioRoutingChoicesResponse) {
 	}
 	_, _ = fmt.Fprintln(w)
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "ROUTE\tSOURCE\tCHANNELS\tPROGRAM\tLTC CHANNELS")
+	header := "OUTPUT\tSOURCE\tCHANNELS\tPROGRAM\tLTC CHANNELS"
+	if verbose {
+		header += "\tDEVICE"
+	}
+	_, _ = fmt.Fprintln(tw, header)
 	for _, r := range resp.Routes {
 		count := strconv.Itoa(r.Channels)
 		if r.ChannelBasis == "atLeast" {
 			count = "at least " + count
 		}
 		for i, g := range r.ProgramGroups {
-			route, source, channels := r.Route, r.Source, count
+			route, source, channels, device := short(r.Route), r.Source, count, r.Route
 			if i > 0 {
-				route, source, channels = "", "", ""
+				route, source, channels, device = "", "", "", ""
 			}
 			ltc := joinInts(g.LTCChannels)
 			if ltc == "" {
 				ltc = "none"
 			}
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", route, source, channels, joinInts(g.Channels), ltc)
+			row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", route, source, channels, joinInts(g.Channels), ltc)
+			if verbose {
+				row += "\t" + device
+			}
+			_, _ = fmt.Fprintln(tw, row)
 		}
 	}
 	_ = tw.Flush()

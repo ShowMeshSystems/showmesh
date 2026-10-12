@@ -6127,6 +6127,8 @@ export interface components {
         /** @description One output the node reports and the program groups it offers. */
         AudioRoutingRouteChoice: {
             route: string;
+            /** @description The node's short name for the interface. Absent when it reports none. */
+            shortName?: string;
             /** @description The interface the route leaves through, which is its local clock. */
             interface: string;
             /** @enum {string} */

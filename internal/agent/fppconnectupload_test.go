@@ -428,7 +428,7 @@ func TestFPPConnectUploadNameBoundCases(t *testing.T) {
 }
 
 // TestFPPConnectUploadPerFileCap proves Upload-Length over maxFileBytes is
-// refused with a message naming that cap.
+// refused with a line naming the file.
 func TestFPPConnectUploadPerFileCap(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	view := fakeFPPConnectView{enabled: true, maxFileBytes: 5}
@@ -438,8 +438,8 @@ func TestFPPConnectUploadPerFileCap(t *testing.T) {
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413; body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "5") || !strings.Contains(string(body), "100") {
-		t.Fatalf("body = %s, want it to name both the cap (5) and the declared length (100)", body)
+	if want := "TooBig.fseq is larger than this node accepts. Raise the file size limit or upload a smaller file."; !strings.Contains(string(body), want) {
+		t.Fatalf("body = %s, want it to contain %q", body, want)
 	}
 	if _, ok := findHeldRecord(t, held, "sequences", "TooBig.fseq"); ok {
 		t.Fatal("a held record exists for a refused oversized upload")

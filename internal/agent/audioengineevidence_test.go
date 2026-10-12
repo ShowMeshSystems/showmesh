@@ -49,7 +49,7 @@ func TestRebuildRefusesAHardwareRouteWithNoProbeEvidence(t *testing.T) {
 	if ok {
 		t.Fatal("Available() = true, want false: nothing was built")
 	}
-	if !strings.Contains(reason, "no advertised probe evidence") {
+	if !strings.Contains(reason, "has not found output hw:CARD=M4,DEV=0") {
 		t.Errorf("reason = %q, want it to state that this route has no advertised probe evidence rather than a rebuild still in progress", reason)
 	}
 }
@@ -168,8 +168,8 @@ func TestBuildGstEngineConfigReportsPipewireFallbackHonestly(t *testing.T) {
 	if strings.Contains(channelCountSource, "advertised probe evidence") {
 		t.Errorf("channel count source = %q, want it to say no device probe was possible, not reuse the probe-evidence vocabulary", channelCountSource)
 	}
-	if !strings.Contains(rateSource, "pipewiresink") || !strings.Contains(channelCountSource, "pipewiresink") {
-		t.Errorf("rate source %q / channel count source %q, want both to name the pipewiresink backend", rateSource, channelCountSource)
+	if !strings.Contains(rateSource, "PipeWire holds the card") || !strings.Contains(channelCountSource, "PipeWire holds the card") {
+		t.Errorf("rate source %q / channel count source %q, want both to say PipeWire holds the card", rateSource, channelCountSource)
 	}
 }
 

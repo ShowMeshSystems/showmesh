@@ -226,7 +226,7 @@ func cmdMediaPlaylistSet(args []string, stdout, stderr io.Writer, clock func() t
 		maxGainDb, maxGainSet = v, true
 		return nil
 	})
-	fs.Func("fade-out-ms", "fadeOutMs, milliseconds (must be configured together with --fade-in-ms, or both omitted)", func(s string) error {
+	fs.Func("fade-out-ms", "fade-out in milliseconds; set with --fade-in-ms or leave both out", func(s string) error {
 		v, err := strconv.Atoi(s)
 		if err != nil || v < 1 {
 			return fmt.Errorf("must be a positive integer, got %q", s)
@@ -234,7 +234,7 @@ func cmdMediaPlaylistSet(args []string, stdout, stderr io.Writer, clock func() t
 		fadeOutMs, fadeOutSet = v, true
 		return nil
 	})
-	fs.Func("fade-in-ms", "fadeInMs, milliseconds (must be configured together with --fade-out-ms, or both omitted)", func(s string) error {
+	fs.Func("fade-in-ms", "fade-in in milliseconds; set with --fade-out-ms or leave both out", func(s string) error {
 		v, err := strconv.Atoi(s)
 		if err != nil || v < 1 {
 			return fmt.Errorf("must be a positive integer, got %q", s)

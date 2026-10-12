@@ -211,7 +211,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "The payload is a full show.action object: show, label, safetyClass, and")
 		_, _ = fmt.Fprintln(stderr, "target. Validated before activation: an invalid payload, or a reference")
 		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and does not create a new revision.")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"action show --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"action show --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is \"action show --output json\"'s own shape, otherwise a fresh read), refusing")
 		_, _ = fmt.Fprintln(stderr, "with a 409 if the action changed since it was read.")
@@ -408,8 +408,7 @@ func effectiveActionInvokeTimeout(flagTimeout time.Duration) time.Duration {
 func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl action invoke", stderr)
 	var revision int64
-	fs.Int64Var(&revision, "revision", 0, "pin the exact show.action revision to execute; 0 (default) "+
-		"means \"whichever revision is active right now\"")
+	fs.Int64Var(&revision, "revision", 0, "the show.action revision to run; 0 (default) runs the active one")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action invoke [flags] <action-id>")
 		_, _ = fmt.Fprintln(stderr, "\nInvoke one stored show.action by id, outside of any macro run")

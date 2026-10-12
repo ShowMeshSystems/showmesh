@@ -140,8 +140,10 @@ func alsaCardKey(device string) string {
 type PipeWireNode struct {
 	Name        string
 	Description string
-	Channels    int
-	Rate        int
+	// Nick is node.nick, the short name PipeWire itself gives the device.
+	Nick     string
+	Channels int
+	Rate     int
 }
 
 // PipeWireEnumerator reports what this node's PipeWire graph currently
@@ -226,9 +228,11 @@ func parsePwDumpSinkNodes(out string) ([]PipeWireNode, error) {
 			continue
 		}
 		desc, _ := obj.Info.Props["node.description"].(string)
+		nick, _ := obj.Info.Props["node.nick"].(string)
 		nodes = append(nodes, PipeWireNode{
 			Name:        name,
 			Description: desc,
+			Nick:        nick,
 			Channels:    pwDumpPropInt(obj.Info.Props, "audio.channels"),
 			Rate:        pwDumpPropInt(obj.Info.Props, "audio.rate"),
 		})

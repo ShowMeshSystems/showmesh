@@ -53,7 +53,7 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 		return fmt.Errorf("could not load this node's surface assignments: %w", err)
 	}
 	if len(assignments) == 0 {
-		return fmt.Errorf("no surface is assigned on this node, so Cue %q's projection could not be activated", act.CueID)
+		return operatorErrorf("No surface is set up on this node, so Cue %q could not show. Assign a surface.", act.CueID)
 	}
 
 	// Phase 1 validates every surface's new file and reserves all their step
@@ -68,7 +68,8 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 	for _, a := range assignments {
 		p, err := o.prepareSurfaceRender(a, act, out, now)
 		if err != nil {
-			errs = append(errs, err.Error())
+			o.logger.Warn("cue.activate (render): surface could not take the new sequence", "surface_id", a.SurfaceID, "error", err)
+			errs = append(errs, surfaceSwitchReason(a.SurfaceID, err))
 			continue
 		}
 		if p != nil {
@@ -89,7 +90,8 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 	swapped := make(map[string]bool, len(pending))
 	for _, p := range pending {
 		if err := o.swapSurfaceRender(p, act, now); err != nil {
-			errs = append(errs, err.Error())
+			o.logger.Warn("cue.activate (render): surface could not switch to the new sequence", "surface_id", p.assignment.SurfaceID, "error", err)
+			errs = append(errs, surfaceSwitchReason(p.assignment.SurfaceID, err))
 			continue
 		}
 		swapped[p.assignment.SurfaceID] = true
@@ -100,11 +102,28 @@ func (o *renderOperations) activateRender(act cueactivation.Activation, out cuec
 	return joinCueErrors(errs)
 }
 
+// surfaceSwitchReason is the line an operator reads when one surface could
+// not take a Cue's sequence.
+func surfaceSwitchReason(surfaceID string, err error) string {
+	if reason, ok := knownOperatorReason(err); ok {
+		return reason
+	}
+	return fmt.Sprintf("Surface %s could not switch to the new sequence. Check this node's log.", surfaceID)
+}
+
 func joinCueErrors(errs []string) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s", strings.Join(errs, "; "))
+	seen := make(map[string]bool, len(errs))
+	var reasons []string
+	for _, e := range errs {
+		if !seen[e] {
+			seen[e] = true
+			reasons = append(reasons, e)
+		}
+	}
+	return operatorErrorf("%s", strings.Join(reasons, " "))
 }
 
 // holdBlackWhereTimingDiffers holds black every surface that still plays
@@ -130,7 +149,7 @@ func (o *renderOperations) holdBlackWhereTimingDiffers(newStepMS byte, swapped m
 		if err := o.holdSurfaceBlack(id); err != nil {
 			o.logger.Warn("cue.activate (render): failed to persist the held-black flag", "surface_id", id, "error", err)
 		}
-		errs = append(errs, fmt.Sprintf("surface %q is black because its sequence runs at %d ms per frame and the show now runs at %d ms. Render its sequences at the same frame timing in xLights and activate the cue again.",
+		errs = append(errs, fmt.Sprintf("Surface %s is black: its sequence is %d ms per frame and the show is %d ms. Render them to match.",
 			id, steps[id], newStepMS))
 	}
 	return errs
@@ -194,9 +213,7 @@ func (o *renderOperations) prepareSurfaceRender(a pipeline.Assignment, act cueac
 	const action = "cue.activate (render)"
 
 	if out.Filename == "" {
-		return nil, fmt.Errorf(
-			"surface %q's Cue %q (revision %d) uses render sequence %q, which has not been uploaded to this node, upload it and redeploy",
-			a.SurfaceID, act.CueID, act.CueRevision, out.Sequence)
+		return nil, operatorErrorf("Sequence %q for Cue %q is not on this node. Upload it and deploy again.", out.Sequence, act.CueID)
 	}
 
 	// Ruling 1: MultiSync's own Filename is corroboration/mismatch
@@ -210,9 +227,8 @@ func (o *renderOperations) prepareSurfaceRender(a pipeline.Assignment, act cueac
 	// never switched on a filename's say-so, never silently continued as
 	// if healthy.
 	if snap := o.timeline.Snapshot(); snap.Filename != "" && snap.Filename != out.Filename {
-		return nil, fmt.Errorf(
-			"surface %q is currently playing %q, which does not match Cue %q (revision %d)'s expected file %q, content was not switched",
-			a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
+		return nil, operatorErrorf("The player is on %s, not Cue %q's %s, so surface %s was not switched.",
+			snap.Filename, act.CueID, out.Filename, a.SurfaceID)
 	}
 
 	// Already exactly this Cue's resolved FSEQ, running under act's Show

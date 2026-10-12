@@ -156,7 +156,7 @@ func cmdConfigGet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl config set", stderr)
 	var file string
-	fs.StringVar(&file, "file", "", "path to a JSON file matching {\"endpoints\":[{\"id\":string,\"url\":string},...]}; reads stdin if not given")
+	fs.StringVar(&file, "file", "", "path to a JSON file like {\"endpoints\":[{\"id\":...,\"url\":...}]}; default stdin")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl config set [flags]")
@@ -166,7 +166,7 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart: dispatch resolves the")
 		_, _ = fmt.Fprintln(stderr, "endpoint list per request, and the collector set follows within about")
 		_, _ = fmt.Fprintln(stderr, "ten seconds.")
-		_, _ = fmt.Fprintln(stderr, "\nAccepts either a bare {\"endpoints\":[...]} payload, or the full object \"config get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nAccepts {\"endpoints\":[...]} or the output of \"config get --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is \"config get --output json\"'s own shape, otherwise a fresh read), refusing")
 		_, _ = fmt.Fprintln(stderr, "with a 409 if the configuration changed since it was read.")
@@ -295,13 +295,12 @@ func unwrapConfigGetResponse(raw []byte) ([]byte, error) {
 	_, hasRevision := top["revision"]
 	if !hasKind || !hasRevision {
 		return nil, errors.New(
-			`top level has a "payload" key but not both "kind" and "revision"; this command accepts either ` +
-				`a bare payload object, or the full object the matching "get --output json" prints`)
+			`"payload" needs "kind" and "revision" beside it; pass "get --output json" output`)
 	}
 
 	if bytes.Equal(bytes.TrimSpace(payloadRaw), []byte("null")) {
 		return nil, errors.New(
-			`"payload" is JSON null, not an object; this does not look like a usable "get --output json" response`)
+			`"payload" is null, not an object; pass the output of "get --output json"`)
 	}
 
 	return payloadRaw, nil
@@ -349,7 +348,7 @@ func parseConfigSetPayload(raw []byte) (configFPPEndpointsPayload, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return configFPPEndpointsPayload{}, fmt.Errorf(
-			`payload must be a JSON object matching {"endpoints":[{"id":string,"url":string},...]}: %w`, err)
+			`payload must be a JSON object like {"endpoints":[{"id":...,"url":...}]}: %w`, err)
 	}
 
 	endpointsRaw, ok := top["endpoints"]
@@ -358,8 +357,7 @@ func parseConfigSetPayload(raw []byte) (configFPPEndpointsPayload, error) {
 		payloadRaw, hasPayload := top["payload"]
 		if !hasPayload {
 			return configFPPEndpointsPayload{}, errors.New(
-				`no "endpoints" key found at the top level, and no "payload" key either; this command accepts either ` +
-					`a bare {"endpoints":[...]} payload, or the full object "showmeshctl config get --output json" prints`)
+				`no "endpoints" key found; pass {"endpoints":[...]} or "config get" JSON output`)
 		}
 		var payloadFields map[string]json.RawMessage
 		if err := json.Unmarshal(payloadRaw, &payloadFields); err != nil {
@@ -368,14 +366,14 @@ func parseConfigSetPayload(raw []byte) (configFPPEndpointsPayload, error) {
 		endpointsRaw, ok = payloadFields["endpoints"]
 		if !ok {
 			return configFPPEndpointsPayload{}, errors.New(
-				`"payload" has no "endpoints" key; this does not look like a "config get" response`)
+				`"payload" has no "endpoints" key; pass the output of "config get --output json"`)
 		}
 		source = `"payload"'s "endpoints" key`
 	}
 
 	if bytes.Equal(bytes.TrimSpace(endpointsRaw), []byte("null")) {
 		return configFPPEndpointsPayload{}, fmt.Errorf(
-			`%s is JSON null, not an array; pass an empty array ("endpoints": []) to deliberately configure zero endpoints`, source)
+			`%s is null, not an array; pass "endpoints": [] to configure none`, source)
 	}
 
 	var endpoints []configFPPEndpoint

@@ -44,18 +44,18 @@ func registerParticipationFlags(fs *flag.FlagSet, withUnset bool) *participation
 		return nil
 	})
 	fs.BoolVar(&p.fppNone, "fpp-none", false,
-		"record that NO FPP instance takes part in this show (an explicit empty selection, not an absent one)")
+		"record that no FPP instance takes part in this show")
 	fs.Func("resolume", "comma-separated Resolume instance ids that take part in this show", func(v string) error {
 		p.resolume, p.resolumeSet = v, true
 		return nil
 	})
 	fs.BoolVar(&p.resolumeNone, "resolume-none", false,
-		"record that NO Resolume instance takes part in this show (an explicit empty selection, not an absent one)")
+		"record that no Resolume instance takes part in this show")
 	if withUnset {
 		fs.BoolVar(&p.fppUnset, "fpp-unset", false,
 			"remove the FPP selection entirely, returning this show to \"never configured\"")
 		fs.BoolVar(&p.resolumeUnset, "resolume-unset", false,
-			"remove the Resolume selection entirely, returning this show to \"never configured\"")
+			"remove the Resolume selection, as if it was never set")
 	}
 	return p
 }

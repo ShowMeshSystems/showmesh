@@ -401,7 +401,7 @@ func TestHandleMessageFPPConnectConfigureSaveFailureDoesNotStrandTheIdempotencyK
 	if result1.Outcome != mqttproto.OutcomeFailed {
 		t.Fatalf("first delivery outcome = %q, want %q", result1.Outcome, mqttproto.OutcomeFailed)
 	}
-	if !strings.Contains(result1.Reason, "persist state") {
+	if !strings.Contains(result1.Reason, "could not save its upload settings") {
 		t.Errorf("first delivery reason = %q, want it to name the persist failure", result1.Reason)
 	}
 	if got := state.ChannelRanges(); got != "" {

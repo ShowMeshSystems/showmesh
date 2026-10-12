@@ -765,9 +765,10 @@ func (s *Session) dispatchLocked(invocation pkgaudio.InvocationID, revision pkga
 // holds s.mu.
 func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.OutcomeResult {
 	if err := s.persistLocked(); err != nil {
+		s.mgr.logf("audio session %s: failed to persist state after a command ran: %v", s.id, err)
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeFailed,
-			Reason:  "operation executed but could not be durably persisted: " + err.Error(),
+			Reason:  "This ran, but the node could not save it. Check this node's disk.",
 		}
 	}
 	return outcome
@@ -1005,11 +1006,12 @@ type ResumePoint struct {
 // one). Caller holds s.mu.
 func (s *Session) applyResumePointLocked(point ResumePoint) error {
 	if s.desired.Playlist == nil || point.Index < 0 || point.Index >= len(s.desired.Playlist.Items) {
-		return fmt.Errorf("resume point names item %q at index %d, but this session has no playlist item there", point.ItemID, point.Index)
+		return &sentenceError{fmt.Sprintf("Item %q is not at position %d of this playlist. Start from the beginning.", point.ItemID, point.Index)}
 	}
 	item := s.desired.Playlist.Items[point.Index]
 	if item.ItemID != point.ItemID {
-		return fmt.Errorf("resume point names item %q at index %d, but this session's playlist has %q there", point.ItemID, point.Index, item.ItemID)
+		s.mgr.logf("audio session %s: resume point names item %q at index %d, but the playlist has %q there", s.id, point.ItemID, point.Index, item.ItemID)
+		return &sentenceError{fmt.Sprintf("Item %q is not at position %d of this playlist. Start from the beginning.", point.ItemID, point.Index)}
 	}
 	s.currentIndex = point.Index
 	s.currentItemID = item.ItemID
@@ -1117,7 +1119,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.state = pkgaudio.StateFailed
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	startCtx, startCancel := boundedEngineCallContext(ctx)
 	obs, err := s.mgr.engine.Start(startCtx, s.handle, 0)
@@ -1127,7 +1129,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: s.mgr.engineFailureReason(err)}
 	}
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
@@ -1487,13 +1489,11 @@ func (s *Session) staleFallbackSnapshot(budget time.Duration) SessionSnapshot {
 	last := s.lastSnapshot.Load()
 	if last == nil {
 		return SessionSnapshot{
-			ID:    s.id,
-			State: pkgaudio.StateUnknown,
-			Fault: pkgaudio.FaultOther,
-			FaultReason: fmt.Sprintf(
-				"audio session telemetry could not be collected within %s of this report tick, and no prior snapshot exists to fall back to; the session is likely inside an in-flight engine call",
-				budget),
-			Stale: true,
+			ID:          s.id,
+			State:       pkgaudio.StateUnknown,
+			Fault:       pkgaudio.FaultOther,
+			FaultReason: "This audio is busy and did not report in time. It reports again shortly.",
+			Stale:       true,
 		}
 	}
 	snap := *last
@@ -1514,13 +1514,13 @@ func confirmLocked(want pkgaudio.State, outcomeIfConfirmed pkgaudio.Outcome, obs
 	if obs.ObservedAt.Before(dispatchedAt) {
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeUnconfirmable,
-			Reason:  "engine evidence predates this dispatch",
+			Reason:  reasonNotYetConfirmed,
 		}
 	}
 	if obs.State != want {
 		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeUnconfirmable,
-			Reason:  fmt.Sprintf("engine reports state %q, expected %q", obs.State, want),
+			Reason:  "The node did not reach the expected state. Check again in a moment.",
 		}
 	}
 	return pkgaudio.OutcomeResult{Outcome: outcomeIfConfirmed}

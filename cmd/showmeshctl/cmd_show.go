@@ -254,7 +254,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	var name, notes, audioNodes string
 	fs.StringVar(&name, "name", "", "the show's name (required)")
 	fs.StringVar(&notes, "notes", "", "the show's notes")
-	fs.StringVar(&audioNodes, "audio-nodes", "", "comma-separated audio.node ids this show's audio-bearing objects inherit by default (ADR-049 decision 10); omit to clear")
+	fs.StringVar(&audioNodes, "audio-nodes", "", "comma-separated audio.node ids this show's audio uses by default; omit to clear")
 	participation := registerParticipationFlags(fs, true)
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
@@ -512,7 +512,7 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	if len(resp.Payload.AudioNodes) > 0 {
 		_, _ = fmt.Fprintf(w, "Audio nodes: %s\n", strings.Join(resp.Payload.AudioNodes, ", "))
 	} else {
-		_, _ = fmt.Fprintf(w, "Audio nodes: (none configured; audio-bearing objects use the installation default)\n")
+		_, _ = fmt.Fprintf(w, "Audio nodes: none set, so audio uses the installation default\n")
 	}
 	_, _ = fmt.Fprintf(w, "Revision:  %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:   %s\n", resp.UpdatedAt.Format(time.RFC3339))

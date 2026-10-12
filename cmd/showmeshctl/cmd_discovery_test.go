@@ -72,7 +72,7 @@ func TestCmdDiscoverNoProposalsStatesHonestLimit(t *testing.T) {
 	out := stdout.String()
 	// B1's honest consequence: this program must not imply discovery finds
 	// equipment it structurally cannot.
-	if !strings.Contains(out, "never talked to ShowMesh") {
+	if !strings.Contains(out, "never contacted ShowMesh") {
 		t.Errorf("output does not state the no-active-probing limitation:\n%s", out)
 	}
 }

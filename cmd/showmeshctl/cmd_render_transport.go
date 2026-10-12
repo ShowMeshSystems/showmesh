@@ -147,7 +147,7 @@ func interpretTransportObservations(obs []observationEntry) renderTransportResul
 
 	if available == nil {
 		return renderTransportResult{Probed: false, State: stateNotCollected,
-			Reason: "no transport probe evidence for this surface: this coordinator has never observed a render report naming it"}
+			Reason: "This surface has not reported its output yet. Check that its node is online."}
 	}
 
 	if available.State != stateCurrent {

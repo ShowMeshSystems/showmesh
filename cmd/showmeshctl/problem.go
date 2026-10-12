@@ -348,3 +348,7 @@ func exitCodeForProblem(status int, p *problem) int {
 		return exitAPIError
 	}
 }
+
+// missingServerTimeMessage is reported when a response omits serverTime,
+// which every coordinator response carries.
+const missingServerTimeMessage = "The coordinator's reply has no serverTime. Update the coordinator or showmeshctl."

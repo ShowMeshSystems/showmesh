@@ -301,7 +301,7 @@ const ndiUnavailableReasonMarker = "Failed loading NDI SDK"
 // vendors, links, or overrides it (ADR-010, ADR-026 decision 6).
 func ndiUnavailableReason(stderrTail string) string {
 	if strings.Contains(stderrTail, ndiUnavailableReasonMarker) {
-		return "NDI runtime not found: install the NDI SDK runtime library, then either leave it at its default install location or point NDI_RUNTIME_DIR_V6 (NDI_RUNTIME_DIR_V5 for older SDKs) at its lib directory"
+		return "NDI runtime not found. Install it, or point NDI_RUNTIME_DIR_V6 at its lib folder."
 	}
 	return genericUnavailableReason(stderrTail)
 }

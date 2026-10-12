@@ -94,10 +94,10 @@ func (b *nightSessionBackgroundAudio) UnmarshalJSON(data []byte) error {
 	hasMediaPlaylist := wire.MediaPlaylist != ""
 	hasItems := len(wire.Items) > 0
 	if hasMediaPlaylist && hasItems {
-		return fmt.Errorf("resting.backgroundAudio carries both mediaPlaylist and items; the server refuses this shape on write")
+		return fmt.Errorf("resting.backgroundAudio has both mediaPlaylist and items; keep only one")
 	}
 	if !hasMediaPlaylist && !hasItems {
-		return fmt.Errorf("resting.backgroundAudio carries neither mediaPlaylist nor items; the server refuses this shape on write")
+		return fmt.Errorf("resting.backgroundAudio has neither mediaPlaylist nor items; set one")
 	}
 	b.MediaPlaylist = wire.MediaPlaylist
 	b.Items = wire.Items

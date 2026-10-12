@@ -67,7 +67,7 @@ func cmdResolumeStatusList(ctx context.Context, c *client, g *globalFlags, stdou
 		return exitOK
 	}
 	if len(resp.Instances) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No Resolume instance is configured on this coordinator (SHOWMESH_RESOLUME_URL is unset).")
+		_, _ = fmt.Fprintln(stdout, "No Resolume instance is configured (SHOWMESH_RESOLUME_URL is unset).")
 		return exitOK
 	}
 	printResolumeInstancesTable(stdout, resp)
@@ -108,7 +108,7 @@ func decodeSingleResolumeInstance(body []byte) (inst resolumeInstance, serverTim
 	}
 	if wrapped.ServerTime.IsZero() {
 		return resolumeInstance{}, time.Time{}, newCLIError(exitAPIError,
-			"resolume instance response is missing serverTime, violating contract section 6.2 (every response body must carry it)")
+			missingServerTimeMessage)
 	}
 	if wrapped.Instance.InstanceID == "" {
 		return resolumeInstance{}, time.Time{}, newCLIError(exitAPIError,

@@ -108,12 +108,12 @@ func applyOutputSink(base pipeline.Spec, surfaceID string, params map[string]any
 func degradedOutputReason(out surfaceOutputParams) string {
 	switch out.Transport {
 	case "ndi":
-		return "ndi output has no sourceName; the pipeline is running a diagnostic fallback sink and is not sending NDI"
+		return "No NDI source name is set, so a test picture plays. Set a source name."
 	case "hdmi":
-		return "transport hdmi has no output sink in this build (Track B seam B4 implements NDI only); the pipeline is running a diagnostic fallback sink"
+		return "HDMI output is not available in this version, so a test picture plays. Use NDI."
 	case "":
-		return "output.transport is empty; the pipeline is running a diagnostic fallback sink"
+		return "No output type is set, so a test picture plays. Choose NDI."
 	default:
-		return fmt.Sprintf("output.transport %q is not recognized; the pipeline is running a diagnostic fallback sink", out.Transport)
+		return fmt.Sprintf("Output type %q is not known, so a test picture plays. Choose NDI.", out.Transport)
 	}
 }

@@ -50,7 +50,7 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		if h.Principal != "" {
 			by = " by " + h.Principal
 		}
-		_, _ = fmt.Fprintf(w, "\nSTOPPED:     %s Held since %s%s. Run \"showmeshctl night resume-show\" to start the show playlist from its first song.\n", h.Reason, h.At, by)
+		_, _ = fmt.Fprintf(w, "\nSTOPPED:     %s Held since %s%s. Run \"showmeshctl night resume-show\" to restart the show.\n", h.Reason, h.At, by)
 	}
 	if f := s.FallbackHold; f != nil {
 		_, _ = fmt.Fprintf(w, "\nWAITING:     The night is not advancing because FPP player %s is held. %s\n", f.FPPInstanceID, f.Message)
@@ -60,7 +60,7 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, "\nDEGRADED:    %s\n", s.DegradedReason)
 	}
 	if s.AttributionDegraded {
-		_, _ = fmt.Fprintf(w, "ATTRIBUTION DEGRADED: this command applied, but its audit entry could not be written\n")
+		_, _ = fmt.Fprintf(w, "ATTRIBUTION DEGRADED: this applied, but its audit entry was not written\n")
 	}
 
 	if s.Authorization.State == "recorded" {

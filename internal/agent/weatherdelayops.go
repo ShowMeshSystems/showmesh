@@ -154,7 +154,7 @@ func (o *weatherDelayOperations) start(ctx context.Context, params map[string]an
 
 // weatherDelayAlreadyCancelledMessage is reported when a delay start finds
 // the night already cancelled; the cancel alert keeps playing.
-const weatherDelayAlreadyCancelledMessage = "The night is already cancelled, so the cancel alert keeps playing. Resume the show to clear it."
+const weatherDelayAlreadyCancelledMessage = "The night is already cancelled. Resume the show to stop the alert."
 
 // decodeWeatherDelayPlanParam round-trips params.plan (already decoded by
 // the command envelope into a generic map[string]any) through JSON into a
@@ -272,7 +272,7 @@ func (o *weatherDelayOperations) startAlertLocked(ctx context.Context, kind stri
 	}
 
 	if !o.holder.Current().Active {
-		return false, "The weather delay ended before the alert started. Start it again to play the alert.", ""
+		return false, "The weather delay ended before the alert played. Start it again.", ""
 	}
 	if o.holder.startedAlertKind == kind {
 		// Read from the session, never from the kind alone: an emergency

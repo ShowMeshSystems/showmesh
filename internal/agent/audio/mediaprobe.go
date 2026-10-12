@@ -125,12 +125,12 @@ func classifyDecode(dr DecodeResult, path string) MediaItemResult {
 	}
 	if !isAudioMIME(dr.MIMEType) && !dr.Decoded {
 		return faulted(MediaFaultUnsupportedFormat, fmt.Sprintf(
-			"this file's actual content is %q and a bounded decode of it produced no audio, regardless of its assigned filename", dr.MIMEType))
+			"This file is %s and has no audio this node can play. Upload an audio file.", dr.MIMEType))
 	}
 	if !dr.Decoded {
 		reason := fmt.Sprintf("GStreamer identified %q but a bounded decode of it produced no audio", dr.MIMEType)
 		if dr.Discoverer.Ran && !dr.Discoverer.Errored {
-			reason = "gst-discoverer-1.0's container metadata reported this file as playable, but a bounded decode of it produced no audio — metadata is not proof of decodability"
+			reason = "This file has no audio this node can play. Export it again and upload it."
 		}
 		return faulted(MediaFaultUndecodable, reason)
 	}
@@ -159,10 +159,7 @@ func classifyDecode(dr DecodeResult, path string) MediaItemResult {
 	}
 
 	if dr.Discoverer.Ran {
-		reason := "a bounded decode confirms this file plays, but gst-discoverer-1.0 reported no usable duration"
-		if dr.Discoverer.Errored {
-			reason = fmt.Sprintf("a bounded decode confirms this file plays, but gst-discoverer-1.0 could not determine its duration: %s", dr.Discoverer.Reason)
-		}
+		reason := "This file plays, but its length could not be read. Export it again and upload it."
 		return MediaItemResult{
 			State: MediaFaulted, Fault: MediaFaultDurationUnknown, Reason: reason, DurationSource: DurationSourceContainerMetadata,
 			Container: dr.MIMEType, Codec: dr.Codec, Channels: dr.Channels, SampleRate: dr.SampleRate,
@@ -174,7 +171,7 @@ func classifyDecode(dr DecodeResult, path string) MediaItemResult {
 	// with no duration claimed.
 	return MediaItemResult{
 		State: MediaReady, DurationSource: DurationSourceBoundedDecode,
-		Reason:    "gst-discoverer-1.0 is not available on this node; readiness rests on a bounded decode only, and duration is not known",
+		Reason:    "This file plays, but this node cannot measure its length. Install gst-discoverer-1.0.",
 		Container: dr.MIMEType, Codec: dr.Codec, Channels: dr.Channels, SampleRate: dr.SampleRate,
 	}
 }
