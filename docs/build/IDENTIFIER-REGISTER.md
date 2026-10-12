@@ -1283,11 +1283,12 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `version-mismatch` | shipped | a node or FPP plugin runs a version the coordinator's compatibility rule does not accept; warning only, never `failingCondition` |
 | `audio-ltc-separate-local-clock` | shipped | ADR-052 decision 4: a node's LTC route names a different interface than its program route and no local clock override says they share a clock. Reported only as `warning`, never `failingCondition` |
 | `audio-ltc-capable-unconfigured` | shipped | a node advertises a discrete LTC-capable route and its `audio.node` names no LTC channel; warning only, never `failingCondition` |
+| `audio-route-missing` | shipped | a node's stored program or LTC route is no longer among the routes the node reports; the interface is unplugged or failed; warning only, never `failingCondition` |
 
 **`cue-multisync-trigger-missing`, `fpp-multisync-disabled`,
 `audio-node-not-multisync-remote`, `audio-nodes-defaulted`,
-`audio-ltc-separate-local-clock` and `audio-ltc-capable-unconfigured` are
-warning-only, not a `failingCondition`.** Every condition above the
+`audio-ltc-separate-local-clock`, `audio-ltc-capable-unconfigured` and
+`audio-route-missing` are warning-only, not a `failingCondition`.** Every condition above the
 `cue-multisync-trigger-missing` row can make `ready` false; these never do (ADR-051 decisions 2 and 4: a Cue with an
 audio output and no trigger, an FPP instance with MultiSync turned off, or
 a target audio node absent from that instance's own MultiSync systems

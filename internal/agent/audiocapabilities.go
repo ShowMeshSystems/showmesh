@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -117,6 +118,62 @@ func (c *routeEvidenceCache) reset() {
 	c.routes = map[string]audio.RouteEvidence{}
 }
 
+// heldRouteMissLimit is how many consecutive complete enumeration passes a
+// held route may be absent from before it stops reading Available.
+const heldRouteMissLimit = 2
+
+// heldRouteMisses counts, per held device, the consecutive complete
+// enumeration passes that did not list it.
+type heldRouteMisses struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+// observe records one enumeration pass and returns the held devices that
+// have now been missing for heldRouteMissLimit passes. An incomplete pass
+// changes nothing, so a failed or slow probe never counts as a miss.
+func (h *heldRouteMisses) observe(routes []audio.RouteEvidence, held audioNodeConfig, heldOK, complete bool) map[string]bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !heldOK {
+		h.counts = nil
+		return nil
+	}
+	listed := make(map[string]bool, len(routes))
+	for _, r := range routes {
+		listed[r.Device] = true
+	}
+	next := map[string]int{}
+	gone := map[string]bool{}
+	for _, dev := range []string{held.ProgramRoute, held.LTCRoute} {
+		if dev == "" {
+			continue
+		}
+		n := h.counts[dev]
+		switch {
+		case listed[dev]:
+			n = 0
+		case complete:
+			n++
+		}
+		next[dev] = n
+		if n >= heldRouteMissLimit {
+			gone[dev] = true
+		}
+	}
+	h.counts = next
+	return gone
+}
+
+// reset clears the counters. Test-only, like routeEvidenceCache.reset.
+func (h *heldRouteMisses) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.counts = nil
+}
+
+var heldRouteMissCounts = &heldRouteMisses{}
+
 // lastKnownGoodRoutes is this node's single route-evidence cache,
 // process-lifetime state shared across every detectAudioCapabilities
 // call, matching detectedCapabilityCache's own package-level convention.
@@ -224,7 +281,8 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	// false with an empty reason is a clean "no PipeWire here" absence,
 	// not a failure, and does not block eviction.
 	pipeWireFailed := !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != ""
-	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated && !pipeWireFailed)
+	complete := d.HardwareEnumerated && !d.Truncated && !pipeWireFailed
+	lastKnownGoodRoutes.update(d.Routes, complete)
 	if !d.EngineUsable {
 		return nil
 	}
@@ -238,15 +296,28 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	heldNode, heldOK := audioEngineHeldNode()
-	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, heldNode, heldOK))
+	gone := heldRouteMissCounts.observe(d.Routes, heldNode, heldOK, complete)
+	trustedNode := heldNode
+	if gone[trustedNode.ProgramRoute] {
+		trustedNode.ProgramRoute = ""
+	}
+	if gone[trustedNode.LTCRoute] {
+		trustedNode.LTCRoute = ""
+	}
+	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, trustedNode, heldOK))
 
-	if len(usable) > 0 {
+	if len(usable) > 0 || len(gone) > 0 {
 		attrs := routeAttributes(usable)
 		outputs, missing := outputEvidence(usable)
 		attrs["outputs"] = outputs
-		complete, reason := discoveryCompleteness(d, missing)
-		attrs["discoveryComplete"] = complete
-		if !complete {
+		discovered, reason := discoveryCompleteness(d, missing)
+		if len(gone) > 0 {
+			missingRoutes := goneRouteAttributes(gone)
+			attrs["missingRoutes"] = missingRoutes
+			discovered, reason = false, missingRoutes[0]["reason"].(string)
+		}
+		attrs["discoveryComplete"] = discovered
+		if !discovered {
 			attrs["discoveryIncompleteReason"] = reason
 		}
 		set = append(set, capability.Capability{
@@ -262,6 +333,24 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	return set
+}
+
+// goneRouteAttributes names each held route that has gone missing, sorted
+// so the advertisement is stable between passes.
+func goneRouteAttributes(gone map[string]bool) []map[string]any {
+	devices := make([]string, 0, len(gone))
+	for dev := range gone {
+		devices = append(devices, dev)
+	}
+	sort.Strings(devices)
+	out := make([]map[string]any, 0, len(devices))
+	for _, dev := range devices {
+		out = append(out, map[string]any{
+			"route":  dev,
+			"reason": fmt.Sprintf("Interface %s is no longer found on this node. Reconnect it or pick another route.", audio.RouteInterface(dev)),
+		})
+	}
+	return out
 }
 
 // withHeldRouteTrusted returns routes with any entry matching heldNode's
