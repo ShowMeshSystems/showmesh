@@ -112,4 +112,6 @@ export const PROBLEM_TYPE = {
   nightStateRejected: 'https://showmesh.dev/problems/night-state-rejected',
   nightAmbiguous: 'https://showmesh.dev/problems/night-ambiguous',
   nightCommandRefusedAuditUnavailable: 'https://showmesh.dev/problems/night-command-refused-audit-unavailable',
+  // GET /config/assets.settings 404 when the settings are in effect but could not be saved.
+  assetsSettingsNotStored: 'https://showmesh.dev/problems/assets-settings-not-stored',
 } as const

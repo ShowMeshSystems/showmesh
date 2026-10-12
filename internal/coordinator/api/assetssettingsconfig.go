@@ -52,14 +52,14 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	obj, err := h.deps.Config.GetConfigObject(r.Context(), config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.AssetSettingsMigrationDeferred {
-			writeProblem(w, h.logger, now, resourceNotFoundProblem(
+			writeProblem(w, h.logger, now, assetsSettingsNotStoredProblem(
 				"No assets.settings configuration is stored: the coordinator's data volume is unwritable, so "+
 					"nothing was saved. Fix the volume and restart; do not clear the SHOWMESH_ASSET_* settings "+
 					"variables."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no assets.settings configuration has been created yet; PUT one to create it"))
+			"Asset delivery settings have not been saved yet. Save them to create them."))
 		return
 	}
 	if err != nil {
@@ -68,7 +68,7 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	}
 	if obj.CurrentRevision == 0 {
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			"no assets.settings configuration has been created yet; PUT one to create it"))
+			"Asset delivery settings have not been saved yet. Save them to create them."))
 		return
 	}
 

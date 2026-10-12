@@ -255,25 +255,30 @@ func TestValidateAssetSettingsAcceptsRoutableContentBaseURL(t *testing.T) {
 	}
 }
 
-// TestValidateAssetSettingsLoopbackErrorNamesTheShowmeshctlRemedyFirst pins
-// commit e2d6c47's ordering convention (see fppmqtt_test.go's identical
-// assertion for ValidateFPPMQTTHostIDs): the refusal must lead with the
-// `showmeshctl assets settings set` remedy and name
-// SHOWMESH_ASSET_CONTENT_BASE_URL only as a trailing hedge for a
-// coordinator that has not migrated yet.
-func TestValidateAssetSettingsLoopbackErrorNamesTheShowmeshctlRemedyFirst(t *testing.T) {
-	s := testAssetSettings
-	s.ContentBaseURL = "http://localhost:8080"
-	err := ValidateAssetSettings(s)
-	if err == nil {
-		t.Fatal("ValidateAssetSettings() error = nil, want an error for a loopback contentBaseUrl")
+// TestValidateAssetSettingsContentBaseURLMessages pins one plain line per
+// refusal, each ending in the right form or the action to take.
+func TestValidateAssetSettingsContentBaseURLMessages(t *testing.T) {
+	const shape = "Content base URL must look like http://<coordinator address>:<port>."
+	cases := []struct{ name, url, want string }{
+		{"no host", "http:///192.168.1.10:8080", shape},
+		{"not a url", "not a url", shape},
+		{"wrong scheme", "ftp://coordinator.example", shape},
+		{"userinfo", "https://user:pass@coordinator.example", "Content base URL must not contain a user name or password. Remove it."},
+		{"loopback", "http://localhost:8080", "Content base URL must be an address the nodes can reach, not this machine's own. Use http://<coordinator address>:<port>."},
 	}
-	got := err.Error()
-	remedyIdx := strings.Index(got, "showmeshctl assets settings set")
-	if remedyIdx < 0 {
-		t.Fatalf("error = %q, want it to lead with the `showmeshctl assets settings set` remedy", got)
-	}
-	if idx := strings.Index(got, "SHOWMESH_ASSET_CONTENT_BASE_URL"); idx >= 0 && idx < remedyIdx {
-		t.Errorf("error = %q, want the showmeshctl remedy to lead and SHOWMESH_ASSET_CONTENT_BASE_URL to appear only as a trailing hedge", got)
+	for _, c := range cases {
+		s := testAssetSettings
+		s.ContentBaseURL = c.url
+		err := ValidateAssetSettings(s)
+		if err == nil {
+			t.Errorf("%s: error = nil, want %q", c.name, c.want)
+			continue
+		}
+		if err.Error() != c.want {
+			t.Errorf("%s: error = %q, want %q", c.name, err.Error(), c.want)
+		}
+		if strings.Contains(err.Error(), c.url) && c.name == "userinfo" {
+			t.Errorf("%s: error repeats the credentials: %q", c.name, err.Error())
+		}
 	}
 }

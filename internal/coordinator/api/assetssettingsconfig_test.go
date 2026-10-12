@@ -64,6 +64,25 @@ func TestPutAssetsSettingsConfigAuthAndScope(t *testing.T) {
 	})
 }
 
+func TestGetAssetsSettingsConfigNotSavedYetSaysSoPlainly(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	if got := fmt.Sprint(decodeMap(t, body)["type"]); got != ProblemTypeResourceNotFound {
+		t.Errorf("type = %q, want %q", got, ProblemTypeResourceNotFound)
+	}
+	const want = "Asset delivery settings have not been saved yet. Save them to create them."
+	if got := fmt.Sprint(decodeMap(t, body)["detail"]); got != want {
+		t.Errorf("detail = %q, want %q", got, want)
+	}
+}
+
 func TestGetAssetsSettingsConfigRequiresConfigWriteScope(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	viewer := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
@@ -250,6 +269,9 @@ func TestGetAssetsSettingsConfigDeferredMigrationStatesItRatherThanReportingNoth
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	if got := fmt.Sprint(decodeMap(t, body)["type"]); got != ProblemTypeAssetsSettingsNotStored {
+		t.Errorf("type = %q, want %q", got, ProblemTypeAssetsSettingsNotStored)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
 	if strings.Contains(detail, "has been created yet") {
@@ -485,5 +507,31 @@ func TestPutAssetsSettingsConfigRevisionPreconditionWiring(t *testing.T) {
 	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
 	if payload["contentBaseUrl"] != "https://coordinator-v2.example" {
 		t.Errorf("payload.contentBaseUrl = %v, want the matching-If-Match writer's value, which must have survived the refused stale write; body: %s", payload["contentBaseUrl"], getBody)
+	}
+}
+
+func TestPutAssetsSettingsConfigCreateOnlyRefusesOnceSaved(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(contentBaseURL string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken, "If-None-Match": "*"}
+		body := fmt.Sprintf(`{"contentBaseUrl":%q}`, contentBaseURL)
+		return doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", body, h))
+	}
+
+	if resp, body := put("http://coordinator.example:8080"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first create-only write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put("http://other.example:8080")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second create-only write: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["contentBaseUrl"] != "http://coordinator.example:8080" {
+		t.Errorf("contentBaseUrl = %v, want the first writer's value to survive", payload["contentBaseUrl"])
 	}
 }

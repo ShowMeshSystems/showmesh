@@ -212,6 +212,12 @@ const (
 	// which guess was closer.
 	ProblemTypeFPPPairingNotWaiting = problemBaseURI + "fpp-pairing-not-waiting"
 
+	// ProblemTypeAssetsSettingsNotStored is GET /config/assets.settings'
+	// 404 for a coordinator whose settings ARE in effect from the
+	// environment but could not be saved; a client must not offer the
+	// first-save form for it, unlike the plain resource-not-found 404.
+	ProblemTypeAssetsSettingsNotStored = problemBaseURI + "assets-settings-not-stored"
+
 	// ProblemTypeFPPBrightnessCeilingWriteFailed is
 	// POST /fpp/{instanceId}/brightness/ceiling's own upstream failure,
 	// for [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the command
@@ -274,6 +280,15 @@ func unsupportedAPIVersionProblem(detail string) v1.Problem {
 func resourceNotFoundProblem(detail string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeResourceNotFound,
+		Title:  "Resource not found",
+		Status: http.StatusNotFound,
+		Detail: detail,
+	}
+}
+
+func assetsSettingsNotStoredProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeAssetsSettingsNotStored,
 		Title:  "Resource not found",
 		Status: http.StatusNotFound,
 		Detail: detail,

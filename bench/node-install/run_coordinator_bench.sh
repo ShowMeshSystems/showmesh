@@ -91,6 +91,8 @@ pw_before="$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.en
 VOL=/var/lib/docker/volumes/showmesh_showmesh-data/_data
 DB="$(in_box "ls $VOL/*.db | head -n 1")"
 in_box "sqlite3 $DB \"PRAGMA busy_timeout=5000; INSERT INTO nodes(node_id, agent_version, hello_observed_at, hello_provenance, first_seen_at, updated_at) VALUES ('bench-old', '0.0.0-bench1', '2026-09-01T00:00:00.000000000Z', 'agent_report', '2026-09-01T00:00:00.000000000Z', '2026-09-01T00:00:00.000000000Z'), ('bench-cur', '0.0.0-bench2', '2026-09-01T00:00:00.000000000Z', 'agent_report', '2026-09-01T00:00:00.000000000Z', '2026-09-01T00:00:00.000000000Z');\"" >/dev/null
+check "a fresh install saves the content base URL as the coordinator's own address" "in_box 'showmeshctl assets settings get --output json | grep -Eq \"contentBaseUrl\\\"?: *\\\"http://192.0.2.44:8080\\\"\"'"
+check ".env does not pin the content base URL" "in_box '! grep -q SHOWMESH_ASSET_CONTENT_BASE_URL /opt/showmesh/coordinator/.env'"
 check "the bench seeded two node rows" "[ \"\$(in_box \"sqlite3 $DB 'SELECT count(*) FROM nodes'\")\" = 2 ]"
 
 # A night is running: the upgrade must refuse and change nothing.
@@ -110,8 +112,10 @@ run_install 0.0.0-bench2 --yes
 check "a coordinator that does not answer refuses the upgrade" "[ $? -ne 0 ] && in_box 'grep -q \"cannot tell whether a night is running\" /tmp/install-0.0.0-bench2.log'"
 in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env'
 
+in_box 'showmeshctl assets settings set --content-base-url http://192.0.2.99:8080 >/dev/null 2>&1'
 run_install 0.0.0-bench2 --yes
 check "upgrade succeeds with no options" "[ $? -eq 0 ]"
+check "an upgrade leaves a changed content base URL alone" "in_box 'showmeshctl assets settings get --output json | grep -Eq \"contentBaseUrl\\\"?: *\\\"http://192.0.2.99:8080\\\"\" && grep -q \"the content base URL is already saved and was left as it is\" /tmp/install-0.0.0-bench2.log'"
 check "upgrade runs the bench2 images" "in_box 'cd /opt/showmesh/coordinator && docker compose -f docker-compose.yml -f docker-compose.published.yml ps --format \"{{.Image}}\" | grep -c 0.0.0-bench2 | grep -qx 2'"
 check "upgrade keeps the administrator token" "in_box 'grep -q \"showmeshctl already signs in as an administrator\" /tmp/install-0.0.0-bench2.log'"
 check "upgrade keeps the broker login" "[ \"\$(in_box 'grep ^SHOWMESH_MQTT_PASSWORD= /opt/showmesh/coordinator/.env')\" = \"$pw_before\" ]"

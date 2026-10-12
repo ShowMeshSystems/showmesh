@@ -355,7 +355,7 @@ lan_address() {
   printf '%s' "$addr"
 }
 
-# http_request METHOD URL [BODY_FILE] [TOKEN] sets HTTP_STATUS, HTTP_BODY, HTTP_CONTENT_TYPE and HTTP_RETRY_AFTER.
+# http_request METHOD URL [BODY_FILE] [TOKEN] [HEADER] sets HTTP_STATUS, HTTP_BODY, HTTP_CONTENT_TYPE and HTTP_RETRY_AFTER.
 http_request() {
   local method="$1" url="$2" body_file="${3:-}" token="${4:-}" extra_header="${5:-}" out hdr
   out="$(run_tmp)"
