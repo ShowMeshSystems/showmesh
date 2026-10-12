@@ -209,6 +209,22 @@ describe('Settings release check', () => {
     expect(puts).toBe(0)
   })
 
+  it('refuses an interval over one week without calling the coordinator', async () => {
+    let puts = 0
+    stubs.getReleaseSettingsConfig = () => Promise.resolve(settings(0, true, 21600))
+    stubs.putReleaseSettingsConfig = () => {
+      puts += 1
+      return Promise.resolve(settings(1, true, 604800))
+    }
+    renderWith(<SettingsReleaseCheck />, {})
+
+    fireEvent.change(await screen.findByLabelText('Minutes between checks'), { target: { value: '10081' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save release check' }))
+
+    expect(await screen.findByText('The check interval is too long. Set it to 10080 minutes or less.')).toBeTruthy()
+    expect(puts).toBe(0)
+  })
+
   it('shows the coordinator\'s reason when a save is refused', async () => {
     const detail =
       "The release check is still set in the coordinator's environment. Remove SHOWMESH_RELEASE_CHECK and SHOWMESH_RELEASE_CHECK_INTERVAL, then restart the coordinator."

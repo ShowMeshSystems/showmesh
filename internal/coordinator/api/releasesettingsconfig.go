@@ -232,7 +232,7 @@ func mapReleaseSettingsConfigResponse(now time.Time, rev store.ConfigRevisionRec
 	}
 }
 
-// releaseSettingsEnvVarSetProblem refuses a write while a retired variable is still set (ADR-039 decision 4).
+// releaseSettingsEnvVarSetProblem refuses a write while a startup variable is still set (ADR-039 decision 4).
 func releaseSettingsEnvVarSetProblem() v1.Problem {
 	return v1.Problem{
 		Type: ProblemTypeConflict, Status: http.StatusConflict,

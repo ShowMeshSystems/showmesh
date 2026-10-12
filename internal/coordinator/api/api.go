@@ -89,8 +89,8 @@ type Dependencies struct {
 
 	// Releases is the newest-release check. Nil reads as turned off.
 	Releases ReleaseChecker
-	// ReleaseSettingsEnvVarsSet refuses release.settings writes while a retired
-	// variable is still set; ReleaseSettingsMigrationDeferred says its migration could not be stored.
+	// ReleaseSettingsEnvVarsSet refuses release.settings writes while one of the two
+	// startup variables is still set; ReleaseSettingsMigrationDeferred says its migration could not be stored.
 	ReleaseSettingsEnvVarsSet        bool
 	ReleaseSettingsMigrationDeferred bool
 

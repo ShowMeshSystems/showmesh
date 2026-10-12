@@ -12,7 +12,7 @@ import (
 )
 
 // resolveReleaseSettings returns the release.settings the checker starts with.
-// The stored configuration wins. With nothing stored, the two retired variables
+// The stored configuration wins. With nothing stored, the two startup variables
 // are migrated once when set (ADR-039 decision 3). It never refuses to start:
 // every failure is logged and answered with the best settings still known.
 func resolveReleaseSettings(ctx context.Context, st *store.Store, identitySvc identity.Service, envVarsSet bool, env config.ReleaseSettings, now func() time.Time, logger *slog.Logger) (settings config.ReleaseSettings, migrationDeferred bool) {

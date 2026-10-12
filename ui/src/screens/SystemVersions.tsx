@@ -121,6 +121,7 @@ function releaseResult(release: SystemRelease): string {
 }
 
 const MIN_INTERVAL_MINUTES = 5
+const MAX_INTERVAL_MINUTES = 10080
 
 type SettingsLoad = { kind: 'loading' } | { kind: 'loaded'; response: ReleaseSettingsConfigResponse } | { kind: 'failed'; reason: string }
 
@@ -162,6 +163,10 @@ export function SettingsReleaseCheck() {
     const interval = Number(minutes)
     if (!Number.isFinite(interval) || interval < MIN_INTERVAL_MINUTES) {
       setError(`The check interval is too short. Set it to ${MIN_INTERVAL_MINUTES} minutes or more.`)
+      return
+    }
+    if (interval > MAX_INTERVAL_MINUTES) {
+      setError(`The check interval is too long. Set it to ${MAX_INTERVAL_MINUTES} minutes or less.`)
       return
     }
     setSaving(true)
@@ -216,6 +221,7 @@ export function SettingsReleaseCheck() {
               <Input
                 type="number"
                 min={MIN_INTERVAL_MINUTES}
+                max={MAX_INTERVAL_MINUTES}
                 value={minutes}
                 onChange={(e) => {
                   setMinutes(e.target.value)

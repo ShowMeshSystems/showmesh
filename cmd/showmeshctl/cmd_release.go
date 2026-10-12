@@ -160,7 +160,7 @@ func cmdReleaseSettingsSet(args []string, stdout, stderr io.Writer, clock func()
 	var enabled bool
 	var interval time.Duration
 	fs.BoolVar(&enabled, "enabled", true, "whether the coordinator asks GitHub for the newest release; --enabled=false turns it off")
-	fs.DurationVar(&interval, "interval", 0, "how often it asks, e.g. 6h; at least 5m")
+	fs.DurationVar(&interval, "interval", 0, "how often it asks, e.g. 6h; from 5m to 168h")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl release settings set [--enabled=true|false] [--interval 6h] [flags]")
