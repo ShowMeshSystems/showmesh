@@ -61,13 +61,13 @@ export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal,
       <div className="sm-chrome__now">{nowPlaying}</div>
       <div className="sm-chrome__right">
         {connection}
+        {emergency}
         {!phone && (
           <>
             <span className="sm-chrome__divider" aria-hidden="true" />
             <span className="sm-chrome__principal">{principal}</span>
           </>
         )}
-        {emergency}
       </div>
     </header>
   )
