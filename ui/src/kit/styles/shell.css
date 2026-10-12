@@ -97,6 +97,56 @@
   flex: 0 0 auto;
 }
 
+/* The emergency stop pair, on the bar at every width. The confirm step it
+   opens is the mispress guard, so it needs no distance from its neighbours. */
+.sm-chrome-stop {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sm-chrome-stop__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: var(--ctrl-h-compact);
+  border: 1px solid var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sm-chrome-stop__btn:first-child {
+  border-radius: var(--r-card) 0 0 var(--r-card);
+}
+
+.sm-chrome-stop__btn:last-child {
+  margin-left: -1px;
+  border-radius: 0 var(--r-card) var(--r-card) 0;
+}
+
+.sm-chrome-stop__btn:hover {
+  z-index: 1;
+  border-color: var(--bad-fg);
+  background: var(--bad-fg);
+  color: var(--bg);
+}
+
+.sm-chrome-stop__btn:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.sm-chrome-stop__square {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+
 .sm-signout-confirm {
   display: inline-flex;
   align-items: center;

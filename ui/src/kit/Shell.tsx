@@ -36,13 +36,15 @@ type ChromeProps = {
   connection: ReactNode
   /** Not rendered at phone width, where `RailAccount` carries it instead. */
   principal: ReactNode
+  /** The emergency stop pair. Rendered at every width. */
+  emergency?: ReactNode
 }
 
 /**
  * The bar must not wrap. If its height changes, the rail's sticky offset
  * puts the first nav group behind it: fix the wrap, never the offset.
  */
-export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal }: ChromeProps) {
+export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal, emergency }: ChromeProps) {
   const phone = useNarrow(PHONE_BREAKPOINT)
   return (
     <header className="sm-chrome" data-chrome>
@@ -65,8 +67,40 @@ export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal 
             {principal}
           </>
         )}
+        {emergency}
       </div>
     </header>
+  )
+}
+
+type ChromeStopProps = {
+  stopLabel: string
+  onStop: () => void
+  moreLabel: string
+  onMore: () => void
+  /** Whether the popup the second button opens is showing. */
+  moreExpanded: boolean
+}
+
+/** The emergency stop pair on the bar: the first button asks to stop, the second opens the other levels. Neither acts on its own press. */
+export function ChromeStop({ stopLabel, onStop, moreLabel, onMore, moreExpanded }: ChromeStopProps) {
+  return (
+    <span className="sm-chrome-stop">
+      <button type="button" className="sm-chrome-stop__btn" aria-label={stopLabel} title={stopLabel} aria-haspopup="dialog" onClick={onStop}>
+        <span className="sm-chrome-stop__square" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="sm-chrome-stop__btn"
+        aria-label={moreLabel}
+        title={moreLabel}
+        aria-haspopup="dialog"
+        aria-expanded={moreExpanded}
+        onClick={onMore}
+      >
+        <span aria-hidden="true">▾</span>
+      </button>
+    </span>
   )
 }
 

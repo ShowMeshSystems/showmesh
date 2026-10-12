@@ -10,6 +10,7 @@ import {
   ChoiceRow,
   ChromeBar,
   ChromeProgress,
+  ChromeStop,
   ClockSkewStrip,
   FPPPluginReportsRefusedBanner,
   StickyBanners,
@@ -470,6 +471,7 @@ export function Specimen() {
               }
               connection={<ConnectionPill state="degraded" label="Reconnecting · 8 s" />}
               principal={<span className="sm-small sm-muted">erbartos</span>}
+              emergency={<ChromeStop stopLabel="Emergency stop" onStop={() => {}} moreLabel="More emergency stop levels" onMore={() => {}} moreExpanded={false} />}
             />
             <ChromeProgress value={0.61} label="Position in the current item" />
             <ClockSkewStrip>This browser&rsquo;s clock is behind the coordinator&rsquo;s, the reference clock, by about 4 m 12 s. Every age and relative time shown here is off by roughly that much.</ClockSkewStrip>

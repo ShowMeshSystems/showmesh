@@ -138,9 +138,10 @@ every session state: `position: sticky; top: 0; z-index: 30`, height `--chrome-h
 49px the rail offsets against; the rail is sticky at `calc(var(--chrome-h) + 1px)`.
 
 Contents, left to right: brand mark, show picker, mode badge, now-playing (item, state), connection,
-principal. The show picker and the mode badge open popovers rather than navigating (section 6).
-Below 720px the bar carries only the brand mark, now-playing and connection: the show picker and the
-mode badge are not rendered, and the principal and Sign out move into the rail drawer.
+principal, emergency stop pair. The show picker and the mode badge open popovers rather than
+navigating (section 6). Below 720px the bar carries only the brand mark, now-playing, connection and
+the emergency stop pair: the show picker and the mode badge are not rendered, and the principal and
+Sign out move into the rail drawer.
 
 **The bar must not wrap.** `flex-wrap: nowrap; overflow: hidden`; the now-playing group is
 `flex: 1 1 auto; min-width: 0` and truncates with an ellipsis; everything else is `flex: 0 0 auto`.
@@ -511,11 +512,11 @@ real coordinator, including the traps that cost time.
 
 Do not invent these; state their absence instead. Checked against the code on 2026-09-01.
 
-1. **Installation-wide emergency stop.** The owner's spec is a top-bar control, instant, no
-   confirmation dialog, double-press to arm. It is not mocked, because the coordinator advertises no
-   such capability, and it is held for the chrome bar until the responsive pass. Live Control offers
-   no emergency-stop control today; its "Stop now" helper line says that the control halts this
-   player only, and Resolume blackout is the separate, real, per-instance path.
+1. **Installation-wide emergency stop.** It is not mocked. The owner's ruling is a pair of top-bar
+   buttons on every screen at every width: the first opens an in-app confirm for the level 1 stop,
+   the second opens an in-app popup holding the level 2 stop and the level 3 arm then fire, with the
+   arm and its expiry shown there. The confirm step is the mispress guard. Live Control keeps its own
+   controls for all three levels, and Resolume blackout is the separate, real, per-instance path.
 2. **390px phone pass.** The shell now has narrow-viewport clauses at 1100px and 720px: the rail
    collapses to an openable drawer, the bar drops the show picker and mode badge and hands the
    principal to that drawer, and the shared kit constructs that overflowed the 122px content width available at 390px collapse to
