@@ -302,7 +302,7 @@ export function SettingsConnections() {
                 const rowDirty = loadedRow === undefined || loadedRow.id !== endpoint.id || loadedRow.url !== endpoint.url
                 return (
                   <div key={index} className="sm-panel">
-                    <div className="sm-inline-row">
+                    <div className="sm-inline-row sm-inline-row--end">
                       <label className="sm-field">
                         <span className="sm-field__label">Player id</span>
                         <Input
@@ -393,7 +393,7 @@ export function SettingsConnections() {
                 const rowDirty = loadedRow === undefined || loadedRow.id !== instance.id || loadedRow.url !== instance.url
                 return (
                   <div key={index} className="sm-panel">
-                    <div className="sm-inline-row">
+                    <div className="sm-inline-row sm-inline-row--end">
                       <label className="sm-field">
                         <span className="sm-field__label">Instance id</span>
                         <Input
@@ -523,13 +523,13 @@ export function SettingsConnections() {
               </label>
             </div>
             <div className="sm-stack-3" data-testid="mqtt-hosts">
-              <p className="sm-field__label">Host name overrides</p>
+              <p className="sm-field__label">Players on this feed</p>
               <p className="sm-small sm-muted">
-                Optional. Add a row only when a player's MQTT host name differs from its id.
+                Add one row per player: its id, and the host name FPP publishes under (usually the same).
               </p>
               <div className="sm-panel sm-stack-4">
                 {hosts.map((row, index) => (
-                  <div key={index} className="sm-inline-row">
+                  <div key={index} className="sm-inline-row sm-inline-row--end">
                     <label className="sm-field">
                       <span className="sm-field__label">Host id</span>
                       <Input
@@ -546,7 +546,7 @@ export function SettingsConnections() {
                       <span className="sm-field__label">Host name</span>
                       <Input
                         value={row.hostName}
-                        placeholder="FPP-Barn"
+                        placeholder={row.id !== '' ? row.id : 'Same as the id'}
                         onChange={(e) => {
                           setHosts(patchRow(hosts, index, { hostName: e.target.value }))
                           setMqttDirty(true)
@@ -572,7 +572,7 @@ export function SettingsConnections() {
                   setMqttDirty(true)
                 }}
               >
-                Add a host override
+                Add a player to the feed
               </Button>
             </div>
           </>

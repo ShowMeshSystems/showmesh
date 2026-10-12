@@ -148,6 +148,10 @@ describe('liveCycle', () => {
 })
 
 describe('hostsMapToRows / hostRowsToMap', () => {
+  it('sends the id as the host name when the host name is left blank', () => {
+    expect(hostRowsToMap([{ id: 'barn-player', hostName: ' ' }])).toEqual({ 'barn-player': 'barn-player' })
+  })
+
   it('round-trips an empty map to no rows', () => {
     expect(hostsMapToRows({})).toEqual([])
     expect(hostRowsToMap([])).toEqual({})

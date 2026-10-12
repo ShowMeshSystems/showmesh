@@ -37,7 +37,7 @@ export function hostsMapToRows(hosts: Readonly<Record<string, string>>): MQTTHos
 /** Editable rows back to the `id -> HostName` map the PUT request sends. A later row with a repeated id overwrites an earlier one, same as `Object.fromEntries`. */
 export function hostRowsToMap(rows: readonly MQTTHostRow[]): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const row of rows) out[row.id] = row.hostName
+  for (const row of rows) out[row.id] = row.hostName.trim() === '' ? row.id : row.hostName
   return out
 }
 

@@ -1422,6 +1422,10 @@ a.sm-tile:hover {
   flex-wrap: wrap;
 }
 
+/* Labelled fields in a row: buttons line up with the inputs, not the labels. */
+.sm-inline-row--end { align-items: flex-end; }
+.sm-inline-row--end > .sm-field { grid-template-rows: auto auto; }
+
 /* A field's control plus its adjacent action, sharing one line. */
 .sm-inline-row--fill > .sm-input,
 .sm-inline-row--fill > .sm-select {

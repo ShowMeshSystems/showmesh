@@ -317,12 +317,40 @@ describe('Settings › Connections', () => {
     renderAt('/settings/connections')
 
     await waitFor(() => expect(screen.getByTestId('mqtt-hosts')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('mqtt-hosts')).getByRole('button', { name: 'Add a host override' }))
+    fireEvent.click(within(screen.getByTestId('mqtt-hosts')).getByRole('button', { name: 'Add a player to the feed' }))
     fireEvent.change(await screen.findByLabelText('Host id'), { target: { value: 'barn-player' } })
     fireEvent.change(screen.getByLabelText('Host name'), { target: { value: 'FPP-Barn' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
 
     await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ hosts: { 'barn-player': 'FPP-Barn' } })))
+  })
+
+  it('saves a player row with a blank host name under its id', async () => {
+    const mqttResponse = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'fpp.mqtt',
+        revision: 1,
+        payload: { brokerURL: 'mqtt://10.20.0.5:1883', username: '', topicPrefix: 'showmesh/fpp', hosts: {}, passwordSet: false },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        restartRequired: false,
+        restartRequiredReason: '',
+      })
+    stubs.getFPPMQTTConfig = mqttResponse
+    const putFPPMQTTConfig = vi.fn(() => mqttResponse())
+    stubs.putFPPMQTTConfig = putFPPMQTTConfig
+
+    renderAt('/settings/connections')
+
+    await waitFor(() => expect(screen.getByTestId('mqtt-hosts')).toBeInTheDocument())
+    fireEvent.click(within(screen.getByTestId('mqtt-hosts')).getByRole('button', { name: 'Add a player to the feed' }))
+    fireEvent.change(await screen.findByLabelText('Host id'), { target: { value: 'barn-player' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
+
+    await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ hosts: { 'barn-player': 'barn-player' } })))
   })
 
   it('creates the event feed with no host overrides', async () => {
@@ -358,7 +386,7 @@ describe('Settings › Connections', () => {
     expect(screen.getByLabelText('Host id')).toHaveValue('barn-player')
     expect(screen.getByLabelText('Host name')).toHaveValue('FPP-Barn')
     expect(screen.getByText('Player id', { selector: '.sm-field__label' })).toBeVisible()
-    expect(screen.getByText(/Optional\. Add a row only when a player's MQTT host name differs from its id\./)).toBeInTheDocument()
+    expect(screen.getByText(/Add one row per player: its id, and the host name FPP publishes under/)).toBeInTheDocument()
   })
 
   it('removing a host entry sends the map without it', async () => {
