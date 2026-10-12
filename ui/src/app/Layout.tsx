@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Outlet } from 'react-router-dom'
 import {
   Button,
@@ -198,6 +198,27 @@ function WeatherDelayQuestionShellBanner({
           ? { error: `Could not refresh this question, so it may be out of date. ${readFailure}` }
           : {})}
     />
+  )
+}
+
+/** Keeps its children under the top bar while the page scrolls and tells the rail how tall it is. */
+function StickyBanners({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    const shell = el?.closest<HTMLElement>('.sm-shell')
+    if (el === null || shell === null || shell === undefined || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => shell.style.setProperty('--sticky-banner-h', `${el.offsetHeight}px`))
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      shell.style.removeProperty('--sticky-banner-h')
+    }
+  }, [])
+  return (
+    <div ref={ref} className="sm-sticky-banners">
+      {children}
+    </div>
   )
 }
 
@@ -910,7 +931,9 @@ export function Layout() {
           .filter((instance) => instance.playlistObservationRefused !== null)
           .map((instance) => ({ instanceId: instance.instanceId }))}
       />
-      <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      <StickyBanners>
+        <WeatherDelayShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
+      </StickyBanners>
       <StopHoldShellBanner model={model} authenticated={signIn.kind === 'signed_in'} />
       <ShellBody>
         <Rail>

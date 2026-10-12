@@ -6,6 +6,7 @@ const TABS: readonly { path: string; label: string }[] = [
   { path: 'connections', label: 'Connections' },
   { path: 'delivery', label: 'Content delivery' },
   { path: 'recovery', label: 'Render recovery' },
+  { path: 'weather-delay', label: 'Weather delay' },
   { path: 'appearance', label: 'Appearance' },
   { path: 'audio-defaults', label: 'Audio defaults' },
   { path: 'node-routing', label: 'Node routing' },

@@ -319,6 +319,14 @@
   white-space: nowrap;
 }
 
+/* Holds the weather delay banner under the top bar and the progress bar while
+   the page scrolls. The rail reads its height from --sticky-banner-h. */
+.sm-sticky-banners {
+  position: sticky;
+  top: calc(var(--chrome-h) + 3px);
+  z-index: 28;
+}
+
 /* Full-width, non-dismissible strip shown on every screen while a weather
    delay or cancel-night is active, or while that state cannot be read. */
 .sm-wdbanner {
@@ -438,10 +446,10 @@
   display: flex;
   flex-direction: column;
   position: sticky;
-  top: calc(var(--chrome-h) + 1px);
+  top: calc(var(--chrome-h) + 1px + var(--sticky-banner-h, 0px));
   align-self: start;
   /* The divider runs the height of the page, not the height of the links. */
-  min-height: calc(100vh - var(--chrome-h));
+  min-height: calc(100vh - var(--chrome-h) - var(--sticky-banner-h, 0px));
   padding: 12px 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
