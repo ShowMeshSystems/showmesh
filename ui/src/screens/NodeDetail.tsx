@@ -391,7 +391,6 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
   )
 }
 
-/** The node's copy is a deployable projection; it is never fabricated from capability advertisements. */
 function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
   const { catalog, error, conflictDetail, result, deploying, confirmingOverride, setConfirmingOverride, deploy, deployAnyway, confirmDeployAnyway } = useCueCatalogDeploy(nodeId)
   const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)

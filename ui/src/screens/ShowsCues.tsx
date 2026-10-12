@@ -94,7 +94,16 @@ export function ShowsCues() {
   const model = useModelContext()
   const { state, reload, upsertCue } = useCues(showId)
   const showAudioNodes = useShowAudioNodes(showId)
-  const nodeIds = state.kind === 'loaded' && showAudioNodes.kind === 'loaded' ? showDeclaredNodes({ surfaces: state.surfaces, showAudioNodes: showAudioNodes.audioNodes, cues: state.cues }) : []
+  const installationAudioNodes = useAudioNodes()
+  const nodeIds =
+    state.kind === 'loaded' && showAudioNodes.kind === 'loaded' && installationAudioNodes.kind === 'loaded'
+      ? showDeclaredNodes({
+          surfaces: state.surfaces,
+          showAudioNodes: showAudioNodes.audioNodes,
+          cues: state.cues,
+          defaultNodeId: installationDefaultAudioNode(installationAudioNodes.nodes),
+        })
+      : []
   const catalogDeploy = useShowCatalogDeploy(nodeIds)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -309,6 +318,7 @@ function DeployOutcome({ deploy }: { deploy: CatalogDeploy }) {
             <div key={row.nodeId} className="sm-stack-2">
               <StatusPair tone={DEPLOY_TONE[row.status]} label={`${row.nodeId} · ${DEPLOY_LABEL[row.status]}`} />
               <p className="sm-outcome__detail">{row.reason}</p>
+              {row.overridden.length > 0 && <p className="sm-outcome__detail">Deployed with operator override: {row.overridden.join('; ')}</p>}
             </div>
           ))}
         </div>
@@ -316,7 +326,12 @@ function DeployOutcome({ deploy }: { deploy: CatalogDeploy }) {
       <ConfirmDialog
         open={deploy.confirmingOverride}
         title="Deploy anyway?"
-        detail={<p className="sm-body">{deploy.conflicts.map((r) => `${r.nodeId}: ${r.reason}`).join(' ')}</p>}
+        detail={
+          <>
+            <p className="sm-body">{deploy.conflicts.map((r) => `${r.nodeId}: ${r.reason}`).join(' ')}</p>
+            <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed catalog.</p>
+          </>
+        }
         confirmLabel="Deploy anyway"
         onConfirm={deploy.confirmDeployAnyway}
         onCancel={() => deploy.setConfirmingOverride(false)}

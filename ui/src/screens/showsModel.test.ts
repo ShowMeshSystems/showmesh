@@ -20,6 +20,7 @@ import {
   type CueActivationDraft,
   nodesWithoutAnnouncement,
   audioOnlyNodesWarning,
+  showDeclaredNodes,
 } from './showsModel'
 
 describe('the safety-class derivation tables', () => {
@@ -375,5 +376,23 @@ describe('audioOnlyNodesWarning', () => {
       headline: 'a, b and c will play this cue as show audio, not as an announcement, and stop the audio already playing there.',
       explanation: 'Add them to the announcement nodes to play it over that audio.',
     })
+  })
+})
+
+describe('showDeclaredNodes', () => {
+  const cue = (outputs: Record<string, unknown>) => ({ payload: { outputs } }) as never
+  const base = { surfaces: [], showAudioNodes: [] as string[], defaultNodeId: null as string | null }
+
+  it('includes the installation default node for a cue that names no target and a show with no audio nodes', () => {
+    expect(showDeclaredNodes({ ...base, defaultNodeId: 'node-a', cues: [cue({ audio: { asset: 'a.wav' } })] })).toEqual(['node-a'])
+  })
+
+  it('includes LTC targets and honours a cue exclusion from the show list', () => {
+    const cues = [cue({ audio: { asset: 'a.wav', excludeNodes: ['node-b'] }, ltc: { target: 'node-c' } })]
+    expect(showDeclaredNodes({ ...base, showAudioNodes: ['node-a', 'node-b'], cues })).toEqual(['node-a', 'node-b', 'node-c'])
+  })
+
+  it('names no node when nothing declares one and there is no default', () => {
+    expect(showDeclaredNodes({ ...base, cues: [cue({ audio: { asset: 'a.wav' } })] })).toEqual([])
   })
 })

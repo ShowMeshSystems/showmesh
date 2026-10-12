@@ -1266,6 +1266,38 @@ describe('Shows · Cues tab', () => {
       expect(calls.map((c) => [c[0], c[1]])).toEqual([['node-a', undefined], ['node-b', undefined], ['node-b', true]])
     })
 
+    it('labels a refused outcome Refused, a request error Failed, and a failure with no reason in one line', async () => {
+      stubs.deployNodeCueCatalog = (...args: unknown[]) => {
+        if (args[0] === 'node-a') return Promise.resolve({ outcome: 'refused', revision: 'r1', nodeId: 'node-a' })
+        return Promise.reject(new ApiError('The node is unreachable.', 502, 'https://showmesh.dev/problems/upstream-failure'))
+      }
+      setupDeploy()
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      await waitFor(() => expect(button).toBeEnabled())
+      fireEvent.click(button)
+      const outcome = await screen.findByRole('status', { name: 'Cue catalog deploy outcome' })
+      await waitFor(() => expect(within(outcome).getByText('node-b · Failed')).toBeInTheDocument())
+      expect(within(outcome).getByText('node-a · Refused')).toBeInTheDocument()
+      expect(within(outcome).getByText('The node did not confirm the catalog. Check the node.')).toBeInTheDocument()
+    })
+
+    it('records the accepted conflict on the dialog and on the node after Deploy anyway', async () => {
+      stubs.deployNodeCueCatalog = (...args: unknown[]) => {
+        if (args[0] === 'node-b' && args[1] !== true) return Promise.reject(new ApiError('Two cues claim the same surface.', 409, PROBLEM_TYPE.cueCatalogClaimConflict))
+        const overriddenConditions = args[1] === true ? [{ claim: 'Two cues claim the same surface.' }] : undefined
+        return Promise.resolve({ outcome: 'confirmed', revision: 'r1', nodeId: args[0], overriddenConditions })
+      }
+      setupDeploy()
+      const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })
+      await waitFor(() => expect(button).toBeEnabled())
+      fireEvent.click(button)
+      fireEvent.click(await screen.findByRole('button', { name: 'Deploy anyway' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(within(dialog).getByText('This records you as having accepted the conflict for the deployed catalog.')).toBeInTheDocument()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Deploy anyway' }))
+      expect(await screen.findByText('Deployed with operator override: Two cues claim the same surface.')).toBeInTheDocument()
+    })
+
     it('stays disabled with a reason when this show is not the active show', async () => {
       setupDeploy({ currentRuns: { serverTime: '2026-08-30T21:00:00Z', activeShow: { configured: true, show: 'other-show', generation: 1 }, runs: [] } as never })
       const button = await screen.findByRole('button', { name: 'Deploy cue catalog' })

@@ -667,16 +667,21 @@ export function explicitListExcludeConflictError(explicitList: readonly string[]
   return null
 }
 
-/** Every node a show's surfaces, audio list and cue audio outputs name, in first-seen order. */
+/** Every node the coordinator deploys a show's catalog to, in first-seen order: surfaces, each cue's resolved audio and announcement nodes, and LTC targets. */
 export function showDeclaredNodes(params: {
   surfaces: readonly ShowSurfaceConfigResponse[]
   showAudioNodes: readonly string[]
   cues: readonly ShowCueConfigResponse[]
+  defaultNodeId: string | null
 }): string[] {
+  const resolve = (output: { targets?: string[]; excludeNodes?: string[] } | undefined) =>
+    output === undefined
+      ? []
+      : resolveAudioNodes({ explicitList: output.targets ?? [], showAudioNodes: params.showAudioNodes, excludeNodes: output.excludeNodes ?? [], defaultNodeId: params.defaultNodeId }).nodes
   const nodes = [
     ...params.surfaces.map((s) => s.payload.node),
     ...params.showAudioNodes,
-    ...params.cues.flatMap((c) => [...(c.payload.outputs.audio?.targets ?? []), ...(c.payload.outputs.announcement?.targets ?? [])]),
+    ...params.cues.flatMap((c) => [...resolve(c.payload.outputs.audio), ...resolve(c.payload.outputs.announcement), c.payload.outputs.ltc?.target ?? '']),
   ]
   return [...new Set(nodes.filter((n) => n !== ''))]
 }
