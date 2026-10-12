@@ -50,6 +50,7 @@ import {
   LifecycleCommands,
   Notice,
   Panes,
+  RadioCardList,
   RevisionHistory,
   RuledStrip,
   Section,
@@ -895,12 +896,10 @@ type CueDraft = {
 }
 
 type BackgroundAudioItemDraft = { itemId: string; show: string; sequence: string; target: string }
+type BackgroundAudioMode = 'none' | 'inline' | 'playlist'
 type BackgroundAudioDraft = {
-  enabled: boolean
-  // mediaPlaylist is a loaded reference-form session's own media.playlist
-  // id, carried through unedited: this editor has no inline UI for it yet,
-  // so a save with the inline section left off resubmits this reference
-  // unchanged rather than silently deleting it.
+  // Only the chosen mode is saved; the other mode's fields stay in the draft so switching back loses nothing.
+  mode: BackgroundAudioMode
   mediaPlaylist: string
   items: BackgroundAudioItemDraft[]
   repeat: 'none' | 'item' | 'playlist'
@@ -996,7 +995,7 @@ const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
 const blankBackgroundAudioItem = (show = ''): BackgroundAudioItemDraft => ({ itemId: '', show, sequence: '', target: '' })
 const blankBackgroundAudio = (): BackgroundAudioDraft => ({
-  enabled: false, mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential',
+  mode: 'none', mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential',
   crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '', targets: [], excludeNodes: [],
 })
 
@@ -1031,17 +1030,13 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     announcementPolicy: item.announcementPolicy ?? '', base: item,
   })
   const bg = payload.resting.backgroundAudio
-  // A reference-form session ('mediaPlaylist' in bg) has no inline items for
-  // this editor to show yet; its own mediaPlaylist id is kept on the draft
-  // unedited so an otherwise-unrelated save resubmits it as-is
-  // rather than the inline section's blank state silently deleting it.
   const backgroundAudio: BackgroundAudioDraft =
     bg === undefined
       ? blankBackgroundAudio()
       : 'mediaPlaylist' in bg
-        ? { ...blankBackgroundAudio(), mediaPlaylist: bg.mediaPlaylist, targets: bg.targets ?? [], excludeNodes: readBackgroundAudioExcludeNodes(bg) }
+        ? { ...blankBackgroundAudio(), mode: 'playlist', mediaPlaylist: bg.mediaPlaylist, targets: bg.targets ?? [], excludeNodes: readBackgroundAudioExcludeNodes(bg) }
         : {
-            enabled: true,
+            mode: 'inline',
             mediaPlaylist: '',
             items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
             repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
@@ -1098,7 +1093,7 @@ function buildBackgroundAudio(
   audioAssets: readonly AudioAssetOption[],
   showAudioNodes: readonly string[],
 ): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
-  if (!audio.enabled && audio.mediaPlaylist === '') return { ok: true, value: undefined }
+  if (audio.mode === 'none') return { ok: true, value: undefined }
   const conflict = explicitListExcludeConflictError(audio.targets, audio.excludeNodes)
   if (conflict !== null) return { ok: false, error: conflict }
   if (audio.targets.length === 0) {
@@ -1106,10 +1101,11 @@ function buildBackgroundAudio(
     if (excludeError !== null) return { ok: false, error: excludeError }
   }
   const targetsField = audio.targets.length > 0 ? { targets: audio.targets } : audio.excludeNodes.length > 0 ? { excludeNodes: audio.excludeNodes } : {}
-  if (!audio.enabled) {
+  if (audio.mode === 'playlist') {
+    if (audio.mediaPlaylist === '') return { ok: false, error: 'Pick a media playlist for the background audio, or choose None.' }
     return { ok: true, value: { mediaPlaylist: audio.mediaPlaylist, ...targetsField } }
   }
-  if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or disable it.' }
+  if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or choose None.' }
   const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
   for (const [index, item] of audio.items.entries()) {
     if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
@@ -1474,34 +1470,35 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the show's observed completion; a negative value fires before it." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
           <div className="sm-inspector__group">
             <h4 className="sm-subsection__title">Background audio</h4>
-            <Choice
-              type="checkbox"
-              checked={draft.backgroundAudio.enabled}
-              onChange={(e) => {
-                const enabled = e.target.checked
+            <RadioCardList
+              label="Background audio while resting"
+              value={draft.backgroundAudio.mode}
+              onChange={(value) => {
+                const mode = value as BackgroundAudioMode
                 setDraft((current) => ({
                   ...current,
                   backgroundAudio: {
                     ...current.backgroundAudio,
-                    enabled,
-                    items: enabled && current.backgroundAudio.items.length === 0 ? [blankBackgroundAudioItem(current.show)] : current.backgroundAudio.items,
+                    mode,
+                    items: mode === 'inline' && current.backgroundAudio.items.length === 0 ? [blankBackgroundAudioItem(current.show)] : current.backgroundAudio.items,
                   },
                 }))
               }}
-              label="Enable background audio while resting"
+              options={[
+                { value: 'none', title: 'None' },
+                { value: 'inline', title: 'Inline items' },
+                { value: 'playlist', title: 'Media playlist' },
+              ]}
             />
-            {!draft.backgroundAudio.enabled && (
-              <Field
-                label="Or reference a media playlist"
-                help="An existing media.playlist bed for this show. Its own items, repeat, resume and gain apply; editing that object re-pins the bed without touching this session again."
-              >
+            {draft.backgroundAudio.mode === 'playlist' && (
+              <Field label="Media playlist" help="Its own items, repeat, resume and gain apply.">
                 {(p) => (
                   <Select
                     {...p}
                     value={draft.backgroundAudio.mediaPlaylist}
                     onChange={(e) => updateBackgroundAudio({ mediaPlaylist: e.target.value })}
                   >
-                    <option value="">No background audio</option>
+                    <option value="">Select a media playlist…</option>
                     {mediaPlaylistOptions(mediaPlaylists, draft.backgroundAudio.mediaPlaylist).map((playlist) => (
                       <option key={playlist.id} value={playlist.id}>
                         {playlist.label}
@@ -1511,7 +1508,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 )}
               </Field>
             )}
-            {draft.backgroundAudio.enabled && (
+            {draft.backgroundAudio.mode === 'inline' && (
               <>
                 <div className="sm-night-session-compact-grid">
                   <Field label="Repeat">{(p) => <Select {...p} value={draft.backgroundAudio.repeat} onChange={(e) => updateBackgroundAudio({ repeat: e.target.value as BackgroundAudioDraft['repeat'] })}>{BACKGROUND_AUDIO_REPEATS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
@@ -1546,7 +1543,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 <Button onClick={addBackgroundAudioItem}>Add audio item</Button>
               </>
             )}
-            {(draft.backgroundAudio.enabled || draft.backgroundAudio.mediaPlaylist !== '') && (
+            {draft.backgroundAudio.mode !== 'none' && (
               <AudioNodesResolutionField
                 label="Play on these nodes"
                 ownLabel="this bed"

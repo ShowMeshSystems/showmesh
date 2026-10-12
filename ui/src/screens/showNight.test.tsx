@@ -1651,7 +1651,8 @@ describe('Show Night', () => {
     }
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    fireEvent.change(await screen.findByLabelText('Or reference a media playlist'), { target: { value: 'bench-bed' } })
+    fireEvent.click(await screen.findByRole('radio', { name: 'Media playlist' }))
+    fireEvent.change(await screen.findByLabelText('Media playlist', { selector: 'select' }), { target: { value: 'bench-bed' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
     expect((captured.body?.resting as Record<string, unknown>).backgroundAudio).toEqual({ mediaPlaylist: 'bench-bed' })
@@ -1668,8 +1669,8 @@ describe('Show Night', () => {
     }
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    // The reference control is not even offered while the inline form is enabled.
-    expect(screen.queryByLabelText('Or reference a media playlist')).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Inline items' })).toBeChecked()
+    expect(screen.queryByLabelText('Media playlist', { selector: 'select' })).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Failure text'), { target: { value: 'unrelated edit' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
@@ -1678,7 +1679,7 @@ describe('Show Night', () => {
     expect((backgroundAudio.items as Record<string, unknown>[])[0]).toMatchObject({ itemId: 'bed-1', target: 'audio-01' })
   })
 
-  it('clearing the pick sends neither mediaPlaylist nor items, never a malformed body', async () => {
+  it('choosing None sends neither mediaPlaylist nor items, never a malformed body', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
     stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'bench-bed'))
@@ -1688,12 +1689,71 @@ describe('Show Night', () => {
     }
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const picker = await screen.findByLabelText('Or reference a media playlist')
-    expect(picker).toHaveValue('bench-bed')
-    fireEvent.change(picker, { target: { value: '' } })
+    expect(await screen.findByRole('radio', { name: 'Media playlist' })).toBeChecked()
+    expect(screen.getByLabelText('Media playlist', { selector: 'select' })).toHaveValue('bench-bed')
+    fireEvent.click(screen.getByRole('radio', { name: 'None' }))
+    expect(screen.queryByLabelText('Media playlist', { selector: 'select' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
     expect(captured.body?.resting).not.toHaveProperty('backgroundAudio')
+  })
+
+  it('a session with no background audio loads to None and shows neither control set', async () => {
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(noBackgroundAudioResponse('Winter Ridge'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(await screen.findByRole('radio', { name: 'None' })).toBeChecked()
+    expect(screen.queryByLabelText('Media playlist', { selector: 'select' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Maximum gain (dB)')).not.toBeInTheDocument()
+  })
+
+  it('a playlist session loads to Media playlist and hides the inline controls', async () => {
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'bench-bed'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(await screen.findByRole('radio', { name: 'Media playlist' })).toBeChecked()
+    expect(screen.queryByLabelText('Maximum gain (dB)')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add audio item' })).not.toBeInTheDocument()
+  })
+
+  it('switching from inline to playlist and back keeps the inline items, and saves only the chosen form', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(screen.getByDisplayValue('bed-1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Media playlist' }))
+    expect(screen.queryByDisplayValue('bed-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Maximum gain (dB)')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Inline items' }))
+    expect(screen.getByDisplayValue('bed-1')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Media playlist', { selector: 'select' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Media playlist' }))
+    fireEvent.change(screen.getByLabelText('Media playlist', { selector: 'select' }), { target: { value: 'bench-bed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect((captured.body?.resting as Record<string, unknown>).backgroundAudio).toEqual({ mediaPlaylist: 'bench-bed' })
+  })
+
+  it('Media playlist with no playlist chosen refuses to save', async () => {
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(noBackgroundAudioResponse('Winter Ridge'))
+    const put = vi.fn()
+    stubs.putNightSessionConfig = put
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    fireEvent.click(await screen.findByRole('radio', { name: 'Media playlist' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    expect(await screen.findByText('Pick a media playlist for the background audio, or choose None.')).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
   })
 
   it('keeps a loaded session’s referenced playlist offered and selected even when the current list does not report it', async () => {
@@ -1704,7 +1764,7 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'stale-bed'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const picker = await screen.findByLabelText('Or reference a media playlist')
+    const picker = await screen.findByLabelText('Media playlist', { selector: 'select' })
     expect(picker).toHaveValue('stale-bed')
     expect(within(picker).getByRole('option', { name: 'stale-bed' })).toBeInTheDocument()
   })
@@ -1964,7 +2024,7 @@ describe('Show Night', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
       expect(await screen.findByText(detail)).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
-      fireEvent.click(await screen.findByLabelText('Enable background audio while resting'))
+      fireEvent.click(await screen.findByRole('radio', { name: 'Inline items' }))
       expect(screen.queryByText(detail)).not.toBeInTheDocument()
     })
   })
