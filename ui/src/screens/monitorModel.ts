@@ -7,6 +7,7 @@ import {
   isSubstitutedState,
   SUBSTITUTION_DETAIL_SIGNALS,
 } from '../domain/audioSettingsSubstitution'
+import { unusedSessionIds } from './nodePlaybackModel'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
 
 /** Connection state, in the terms Monitor's own pill labels use. */
@@ -423,6 +424,8 @@ export type SignalRow = {
   evidence: EvidenceState
   state: string
   observed: string
+  /** True for a signal of an audio session that is stopped and no longer used. */
+  unused: boolean
 }
 
 function signalValue(entry: Evidence): string {
@@ -459,6 +462,7 @@ function evidenceRows(
       tone: beyondThreshold ? 'warn' : EVIDENCE_TONE[entry.state],
       state: beyondThreshold ? 'beyond threshold' : withinThreshold ? 'within threshold' : EVIDENCE_LABEL[entry.state],
       observed: signalObserved(entry, nowIso),
+      unused: false,
     }
   })
 }
@@ -474,7 +478,13 @@ export function signalRows(model: Model, nowIso: string | null): SignalRow[] {
     const resource = node.label ?? node.nodeId
     const to = `/monitor/fleet/node/${node.nodeId}`
     rows.push(...evidenceRows(node.render, `node:${node.nodeId}:render`, resource, to, 'node', nowIso))
-    rows.push(...evidenceRows(node.audio, `node:${node.nodeId}:audio`, resource, to, 'node', nowIso))
+    const unused = unusedSessionIds(node.audio)
+    rows.push(
+      ...evidenceRows(node.audio, `node:${node.nodeId}:audio`, resource, to, 'node', nowIso).map((row, index) => {
+        const entry = node.audio[index]
+        return entry !== undefined && entry.resource.kind === 'audio_session' && unused.has(entry.resource.id) ? { ...row, unused: true } : row
+      }),
+    )
     rows.push(...evidenceRows(node.clock, `node:${node.nodeId}:clock`, resource, to, 'node', nowIso))
     rows.push(...evidenceRows(node.fppConnect, `node:${node.nodeId}:fppConnect`, resource, to, 'node', nowIso))
   }

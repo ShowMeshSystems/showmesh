@@ -10,6 +10,7 @@ import (
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 )
 
 // FadeState is a session's retained fade-progress state
@@ -780,9 +781,9 @@ func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.O
 // This is the one revalidation choke point: every path that reaches a
 // successful Load — Prepare, Start, and the advance/restore paths that
 // call this directly — clears any standing fault right here, and a
-// probe or Load failure classifies and records one. A reappearing
-// device or a re-probed asset therefore stays faulted until an actual
-// successful prepare, never resumes silently.
+// probe or Load failure classifies and records one. A stopped session's
+// missing-file fault clears when the file lands; everything else stays
+// faulted until a successful prepare, never resumes silently.
 func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem) (EngineObservation, error) {
 	// ProbeAsset runs under ctx unbounded by boundedEngineCallContext: it
 	// includes hashFile, a full-file sha256 read with no context
@@ -1239,6 +1240,10 @@ type SessionSnapshot struct {
 	NothingLoaded bool
 	ObservedAt    time.Time
 
+	// Unreferenced is true for a stopped session with nothing loaded that
+	// no cue-activation path owns.
+	Unreferenced bool
+
 	State           pkgaudio.State
 	DesiredRevision pkgaudio.Revision
 
@@ -1317,6 +1322,16 @@ type SessionSnapshot struct {
 	Stale bool
 }
 
+func isCueActivationSession(id pkgaudio.SessionID) bool {
+	switch string(id) {
+	case cueactivation.AudioSessionID, cueactivation.BackgroundSessionID,
+		cueactivation.AnnouncementSessionID, cueactivation.PrepareStagingSessionID,
+		cueactivation.ScheduleProbeSessionID:
+		return true
+	}
+	return false
+}
+
 // snapshotLocked builds s's [SessionSnapshot]. Caller holds s.mu. When a
 // handle is loaded this issues one fresh [Engine.Observe] — never the
 // cached position a past command call left behind — so Position and
@@ -1343,6 +1358,7 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		NothingLoaded:    !s.handleLoaded && !stateExpectsLoadedHandle(reportedState),
 		CollectedAt:      s.mgr.now(),
 	}
+	snap.Unreferenced = reportedState == pkgaudio.StateStopped && !s.handleLoaded && !isCueActivationSession(s.id)
 
 	// Gated on m.pendingEngineRestore membership, not on s.state: this
 	// branch is cut independently of the sibling PR that changes what

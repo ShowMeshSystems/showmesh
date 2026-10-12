@@ -45,7 +45,7 @@ func TestRunAssetInventoryPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	select {
@@ -114,7 +114,7 @@ func TestRunAssetInventoryMissingDirectoryReportsIncomplete(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", missing, time.Now, ticks, nil, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", missing, time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	select {
@@ -158,7 +158,7 @@ func TestRunAssetInventoryTriggerPublishesImmediately(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, triggered, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, triggered, nil, discardLogger())
 	}()
 
 	select {
@@ -181,6 +181,31 @@ func TestRunAssetInventoryTriggerPublishesImmediately(t *testing.T) {
 	}
 }
 
+// TestRunAssetInventoryCallsOnEnumeratedAfterEachPublish proves the hook
+// that re-checks idle audio sessions runs once per inventory pass.
+func TestRunAssetInventoryCallsOnEnumeratedAfterEachPublish(t *testing.T) {
+	pub := newFakePublisher()
+	triggered := make(chan struct{}, 1)
+	called := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAssetInventory(ctx, pub, "media-03", t.TempDir(), time.Now, make(chan time.Time), triggered, func(context.Context) { called <- struct{}{} }, discardLogger())
+	}()
+
+	triggered <- struct{}{}
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for onEnumerated")
+	}
+	cancel()
+	<-done
+}
+
 // TestRunAssetInventoryPublishFailureDoesNotStopLaterTicks mirrors
 // heartbeat.go's TestRunHeartbeatPublishFailureDoesNotStopLaterTicks: a
 // transient publish failure on one tick must not wedge the loop.
@@ -196,7 +221,7 @@ func TestRunAssetInventoryPublishFailureDoesNotStopLaterTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -231,7 +256,7 @@ func TestRunAssetInventoryReturnsOnContextDone(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", t.TempDir(), time.Now, ticks, nil, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", t.TempDir(), time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	cancel()
@@ -271,7 +296,7 @@ func TestRunAssetInventoryCachesAcrossTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, discardLogger())
+		runAssetInventory(ctx, pub, "media-03", dir, time.Now, ticks, nil, nil, discardLogger())
 	}()
 
 	sendTick := func() {

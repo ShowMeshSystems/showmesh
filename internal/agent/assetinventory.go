@@ -27,7 +27,7 @@ const assetInventoryPublishTimeout = 5 * time.Second
 //
 // runAssetInventory returns only when ctx is done; a publish failure never
 // causes it to return early, matching runHeartbeat's identical contract.
-func runAssetInventory(ctx context.Context, pub Publisher, nodeID, dir string, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
+func runAssetInventory(ctx context.Context, pub Publisher, nodeID, dir string, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, onEnumerated func(context.Context), logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "assets")
 	if err != nil {
 		// nodeID is validated at config load, matching runHeartbeat's
@@ -47,6 +47,9 @@ func runAssetInventory(ctx context.Context, pub Publisher, nodeID, dir string, n
 				return
 			}
 			publishOneAssetInventory(ctx, pub, topic, nodeID, dir, cache, now, logger)
+			if onEnumerated != nil {
+				onEnumerated(ctx)
+			}
 		case _, ok := <-triggered:
 			if !ok {
 				// Only expected from tests exercising the tick-only path;
@@ -57,6 +60,9 @@ func runAssetInventory(ctx context.Context, pub Publisher, nodeID, dir string, n
 				continue
 			}
 			publishOneAssetInventory(ctx, pub, topic, nodeID, dir, cache, now, logger)
+			if onEnumerated != nil {
+				onEnumerated(ctx)
+			}
 		}
 	}
 }

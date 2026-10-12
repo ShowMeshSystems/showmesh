@@ -1532,6 +1532,10 @@ type AudioSessionReport struct {
 	// the session"; Stale/CollectedAt answer "how old is this evidence".
 	Stale bool `json:"stale"`
 
+	// Unreferenced is true for a stopped session with nothing loaded that
+	// no cue-activation path owns. Omitted when false.
+	Unreferenced bool `json:"unreferenced,omitempty"`
+
 	// CollectedAt is when this session's own fields (State, Fault,
 	// ItemID, Gain, ...) were captured on the node's clock — distinct
 	// from ObservedAt, which is specifically PositionMs's own evidence

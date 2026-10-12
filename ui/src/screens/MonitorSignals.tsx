@@ -20,7 +20,9 @@ export function MonitorSignals() {
   const [kind, setKind] = useState<FleetKind>('all')
 
   const rows = signalRows(model, nowIso)
-  const shown = kind === 'all' ? rows : rows.filter((row) => row.kind === kind)
+  const ofKind = kind === 'all' ? rows : rows.filter((row) => row.kind === kind)
+  const shown = ofKind.filter((row) => !row.unused)
+  const unused = ofKind.filter((row) => row.unused)
 
   return (
     <>
@@ -45,29 +47,42 @@ export function MonitorSignals() {
           />
         ) : (
           <>
-            <TableWrap label="Signals, scrollable">
-              <Table minWidth={520}>
-                <thead>
-                  <tr>
-                    <th scope="col">Resource</th>
-                    <th scope="col">Signal</th>
-                    <th scope="col">Value</th>
-                    <th scope="col">State</th>
-                    <th scope="col">Observed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((row) => (
-                    <SignalTableRow key={row.key} row={row} onOpen={() => navigate(row.resourceTo)} />
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
+            <SignalsTable rows={shown} label="Signals, scrollable" onOpen={(to) => navigate(to)} />
             <p className="sm-section__footnote">{signalSummary(shown)}</p>
           </>
         )}
       </Section>
+
+      {unused.length > 0 && (
+        <Section id="mo-unused-sessions" title="Unused audio sessions">
+          <p className="sm-small sm-muted">Stopped sessions no cue uses.</p>
+          <SignalsTable rows={unused} label="Unused audio session signals, scrollable" onOpen={(to) => navigate(to)} />
+        </Section>
+      )}
     </>
+  )
+}
+
+function SignalsTable({ rows, label, onOpen }: { rows: readonly SignalRow[]; label: string; onOpen: (to: string) => void }) {
+  return (
+    <TableWrap label={label}>
+      <Table minWidth={520}>
+        <thead>
+          <tr>
+            <th scope="col">Resource</th>
+            <th scope="col">Signal</th>
+            <th scope="col">Value</th>
+            <th scope="col">State</th>
+            <th scope="col">Observed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <SignalTableRow key={row.key} row={row} onOpen={() => onOpen(row.resourceTo)} />
+          ))}
+        </tbody>
+      </Table>
+    </TableWrap>
   )
 }
 

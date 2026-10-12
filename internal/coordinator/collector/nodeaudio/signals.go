@@ -316,6 +316,10 @@ const (
 	// underlying session data it describes is not.
 	SignalSessionStale observation.SignalID = "audio_session.stale"
 
+	// SignalSessionUnreferenced is true for a stopped session with nothing
+	// loaded that no cue-activation path owns.
+	SignalSessionUnreferenced observation.SignalID = "audio_session.unreferenced"
+
 	// SignalSessionStartTrigger, SignalSessionTriggerSequenceFilename,
 	// SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs and
 	// SignalSessionPreparedLate are ADR-051 decision 6's own "every start
@@ -361,6 +365,7 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
 	SignalSessionStale,
+	SignalSessionUnreferenced,
 	SignalSessionStartTrigger,
 	SignalSessionTriggerSequenceFilename,
 	SignalSessionTriggerArrivalNs,

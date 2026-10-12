@@ -49,6 +49,18 @@ describe('sourceRoleWord', () => {
 })
 
 describe('nodePlaybackStatus', () => {
+  it('keeps a stopped session nothing uses apart from the sessions in use', () => {
+    const audio = [
+      ...playingSession('bg', 10_000),
+      sessionEv('bg', 'audio_session.unreferenced', { value: false }),
+      sessionEv('old-test', 'audio_session.state', { value: 'stopped' }),
+      sessionEv('old-test', 'audio_session.unreferenced', { value: true }),
+    ]
+    const status = nodePlaybackStatus(nodeWith(audio), NOW_MS)
+    expect(status.sessions.map((row) => row.sessionId)).toEqual(['bg'])
+    expect(status.unusedSessions.map((row) => row.sessionId)).toEqual(['old-test'])
+  })
+
   it('advances a playing session locally by elapsed wall time from its own observedAt', () => {
     const status = nodePlaybackStatus(nodeWith(playingSession('bg', 10_000)), NOW_MS + 5_000)
     expect(status.sessions).toHaveLength(1)
