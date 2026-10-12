@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, getShowActive, getShowActiveRevisions, listConfigObjects, putShowActive } from '../api'
-import { Button, ButtonRow, DefinitionStrip, Field, FieldGrid, PageTitle, RevisionHistory, RuledStrip, Section, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, DefinitionStrip, Drawer, Field, FieldGrid, PageTitle, RevisionHistory, RuledStrip, Section, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -114,6 +114,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<ShowActiveLoadState>({ kind: 'loading' })
   const [selected, setSelected] = useState('')
+  const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActiveConfigResponse>, { kind: 'stale' }> | null>(null)
@@ -149,6 +150,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
         if (outcome.kind === 'saved') {
           setState({ kind: 'loaded', response: outcome.response })
           setSelected(outcome.response.payload.show)
+          setOpen(false)
           return
         }
         if (outcome.kind === 'stale') {
@@ -162,7 +164,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
   }
 
   return (
-    <Section id="sh-active" title="Show activation" aside={<span className="sm-small sm-muted">Which show can affect the running system</span>}>
+    <Section id="sh-active" title="Show activation" aside={<Button onClick={() => setOpen(true)}>Activate a show</Button>}>
       {state.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator which show is active." />
       ) : state.kind === 'failed' ? (
@@ -193,13 +195,20 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
               },
             ]}
           />
-
-          {objects.length === 0 ? (
+        </>
+      )}
+      <Drawer open={open} onClose={() => setOpen(false)} labelledBy="sh-activate-heading" width="content">
+        <div className="sm-inspector">
+          <h3 className="sm-inspector__title" id="sh-activate-heading">Activate a show</h3>
+          <p className="sm-small sm-muted">The active show is the one that can affect the running system.</p>
+          {state.kind !== 'loaded' ? (
+            <RuledStrip absence="unavailable" label="Not read" fact="The active show has not been read yet." />
+          ) : objects.length === 0 ? (
             <RuledStrip absence="empty" label="Nothing to activate" fact="No show is configured yet." />
           ) : (
             <>
               <FieldGrid>
-                <Field label="Activate a show">
+                <Field label="Show to activate">
                   {(props) => (
                     <Select {...props} value={selected} onChange={(e) => setSelected(e.target.value)}>
                       <option value="">Choose a show…</option>
@@ -224,18 +233,18 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
               </ButtonRow>
             </>
           )}
-        </>
-      )}
-      {stale !== null && (
-        <StaleWriteStrip
-          stale={stale}
-          onReload={() => {
-            setStale(null)
-            setAttempt((n) => n + 1)
-          }}
-        />
-      )}
-      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+          {stale !== null && (
+            <StaleWriteStrip
+              stale={stale}
+              onReload={() => {
+                setStale(null)
+                setAttempt((n) => n + 1)
+              }}
+            />
+          )}
+          {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+        </div>
+      </Drawer>
       <RevisionHistory fetch={getShowActiveRevisions} reloadKey={attempt} />
     </Section>
   )

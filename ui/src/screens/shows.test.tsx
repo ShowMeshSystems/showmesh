@@ -211,7 +211,8 @@ describe('Shows · activation', () => {
     stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
     renderShows()
     expect(await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'Hallowed Hollow 2026 (hallowed-hollow-2026)' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    expect(await screen.findByRole('option', { name: 'Hallowed Hollow 2026 (hallowed-hollow-2026)' })).toBeInTheDocument()
   })
 
   it('reports none activated yet, distinct from a read failure, when show.active has never been set', async () => {
@@ -219,6 +220,19 @@ describe('Shows · activation', () => {
     stubs.getShowActive = () => Promise.reject(new ApiError('not found', 404))
     renderShows()
     expect(await screen.findByText(/none - nothing has ever been activated/)).toBeInTheDocument()
+  })
+
+  it('keeps the show dropdown and Activate out of the page until the inspector is opened', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    renderShows({ session: signedIn(['config:write']) })
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    expect(screen.queryByRole('combobox', { name: 'Show to activate' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Activate' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    expect(await screen.findByRole('combobox', { name: 'Show to activate' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Activate' })).toBeDisabled()
   })
 
   it('activates a different show', async () => {
@@ -232,7 +246,8 @@ describe('Shows · activation', () => {
     }
     renderShows({ session: signedIn(['config:write']) })
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Show to activate' }), { target: { value: 'hallowed-hollow-2026' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
     await screen.findByText('hallowed-hollow-2026', { selector: '.sm-data' })
     expect(calls[0]).toEqual({ show: 'hallowed-hollow-2026' })
@@ -254,7 +269,8 @@ describe('Shows · activation', () => {
     stubs.putShowActive = putSpy
     renderShows({ session: signedIn(['config:write']) })
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Show to activate' }), { target: { value: 'hallowed-hollow-2026' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
     expect(screen.getByText(/saved by other-operator/)).toBeInTheDocument()
@@ -289,7 +305,8 @@ describe('Shows · activation', () => {
     renderShows()
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Activate' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    expect(await screen.findByRole('button', { name: 'Activate' })).toBeInTheDocument()
   })
 
   it('keeps Activate disabled with a stated reason when the principal lacks config:write', async () => {
@@ -298,7 +315,8 @@ describe('Shows · activation', () => {
     stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
     renderShows({ session: signedIn(['node:read']) })
     await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
-    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate a show' }))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Show to activate' }), { target: { value: 'hallowed-hollow-2026' } })
     const button = screen.getByRole('button', { name: 'Activate' })
     expect(button).toBeDisabled()
     expect(button).toHaveAttribute('title')
