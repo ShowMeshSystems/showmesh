@@ -51,9 +51,9 @@ func TestTeardownRefusesWhenAbandonedStateChangeNeverDrains(t *testing.T) {
 	}
 
 	// Stand in for a state change abandoned to a timed-out Start: this
-	// count is never decremented, exactly as a real one would not be
+	// count stays raised for the whole test, exactly as a real one would
 	// until its background goroutine actually finished.
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	start := time.Now()
 	teardownErr := b.teardown(context.Background())
@@ -90,7 +90,7 @@ func TestCloseReportsIncompleteWhenATeardownIsDeferred(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branchFor: %v", err)
 	}
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	closeErr := e.Close()
 	if !errors.Is(closeErr, errCloseIncomplete) {
@@ -135,7 +135,7 @@ func TestCloseReportsIncompleteAfterAPriorDeferredRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branchFor: %v", err)
 	}
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	releaseErr := e.Release(context.Background(), handle)
 	if !errors.Is(releaseErr, errTeardownDeferredForRace) {
@@ -185,7 +185,7 @@ func TestRetriedTeardownReportsTheSameDeferralNotAFalseSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branchFor: %v", err)
 	}
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	first := b.teardown(context.Background())
 	if !errors.Is(first, errTeardownDeferredForRace) {
@@ -303,7 +303,7 @@ func TestTeardownBoundedByCallerCtxNotOnlyTeardownTimeout(t *testing.T) {
 	}
 	// A permanently pending state change, standing in for one truly
 	// abandoned: it never drains within this test's lifetime.
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	const callerBudget = 50 * time.Millisecond
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), callerBudget)
@@ -349,7 +349,7 @@ func TestCloseStillAttemptsPipelineNullDespiteADeferredBranch(t *testing.T) {
 	}
 	// A permanently pending state change, standing in for one abandoned
 	// to a timed-out Start: this branch's own teardown will defer.
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 
 	closeErr := e.Close()
 	if !errors.Is(closeErr, errCloseIncomplete) {

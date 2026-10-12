@@ -42,7 +42,7 @@ func TestDeferredTeardownStaysIndexedForBusAttribution(t *testing.T) {
 		t.Fatalf("branchFor: %v", err)
 	}
 
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 	teardownErr := b.teardown(context.Background())
 	if !errors.Is(teardownErr, errTeardownDeferredForRace) {
 		t.Fatalf("teardown = %v, want errTeardownDeferredForRace", teardownErr)
@@ -86,7 +86,7 @@ func TestDeferredTeardownSilencesTheBranch(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 	teardownErr := b.teardown(context.Background())
 	if !errors.Is(teardownErr, errTeardownDeferredForRace) {
 		t.Fatalf("teardown = %v, want errTeardownDeferredForRace", teardownErr)
@@ -135,7 +135,7 @@ func TestDeferredTeardownSilencesTheBranchDespiteALiveFade(t *testing.T) {
 		t.Fatalf("Fade: %v", err)
 	}
 
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 	teardownErr := b.teardown(context.Background())
 	if !errors.Is(teardownErr, errTeardownDeferredForRace) {
 		t.Fatalf("teardown = %v, want errTeardownDeferredForRace", teardownErr)
@@ -183,7 +183,7 @@ func TestDeferredTeardownStaysIndexedForEveryElement(t *testing.T) {
 		t.Fatalf("branchFor: %v", err)
 	}
 
-	b.pendingStateChanges.Add(1)
+	holdStateChangePending(t, b)
 	teardownErr := b.teardown(context.Background())
 	if !errors.Is(teardownErr, errTeardownDeferredForRace) {
 		t.Fatalf("teardown = %v, want errTeardownDeferredForRace", teardownErr)
