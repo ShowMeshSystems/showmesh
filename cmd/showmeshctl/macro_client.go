@@ -228,8 +228,7 @@ type macroRunFollowIdleNotice struct {
 // outcome.
 func printMacroRunFollowIdleNotice(stdout io.Writer, g *globalFlags, cmdLabel, runID string, idleTimeout time.Duration) {
 	msg := fmt.Sprintf(
-		"%s: no update on run %s in %s; this command stopped watching. The run may still be in progress "+
-			"or may already have finished — check with \"showmeshctl run show %s\".",
+		"%s: no update on run %s in %s, so this stopped watching. Check: showmeshctl run show %s",
 		cmdLabel, runID, idleTimeout, runID)
 	if g.output == outputJSON {
 		_ = printJSONCompact(stdout, macroRunFollowIdleNotice{

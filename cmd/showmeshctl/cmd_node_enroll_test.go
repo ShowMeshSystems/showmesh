@@ -62,7 +62,7 @@ func TestNodeEnrollPrintsCodeAndCommand(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{"Code:        ABCD-2345", "Node:        render-01", "(in 15m0s)",
 		"sudo showmesh-install --coordinator http://COORDINATOR-ADDRESS:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + " --code ABCD-2345",
-		"COORDINATOR-ADDRESS is a placeholder", "Set SHOWMESH_PUBLIC_URL on the coordinator, or run this command with --server",
+		"COORDINATOR-ADDRESS is a placeholder", "Set SHOWMESH_PUBLIC_URL on the coordinator, or pass --server",
 		"shown only now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

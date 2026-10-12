@@ -41,10 +41,9 @@ func cmdToken(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 func printTokenUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl token <subcommand> [flags]
 
-Manage one principal's API tokens. Reads require principal:read; issue and revoke require principal:write and
-are audited. A token's plaintext value is rendered exactly once, at issue
-time, and never again -- "token list" shows only its non-secret hint and
-label.
+Manage one principal's API tokens. Reads need principal:read. Issue and
+revoke need principal:write and are audited. A token's value is shown once,
+when issued. "token list" shows only its hint and label.
 
 Revoking the last credential able to reach principal:write (a password on
 another enabled administrator, or another active token) is refused with
@@ -110,7 +109,7 @@ func cmdTokenIssue(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	var label, expires string
 	fs.StringVar(&label, "label", "", "label to help tell this token apart from others in \"token list\"")
 	fs.StringVar(&expires, "expires", "",
-		"optional expiry: an RFC3339 timestamp (e.g. 2027-01-15T00:00:00Z); default: never")
+		"optional expiry as an RFC3339 time, e.g. 2027-01-15T00:00:00Z; default never")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token issue [flags] <principalId>")
 		_, _ = fmt.Fprintln(stderr, "\nIssue a new API token for a principal (requires principal:write). The")
@@ -167,9 +166,9 @@ func cmdTokenIssue(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	if resp.Token.ExpiresAt != nil {
 		_, _ = fmt.Fprintf(stdout, "Expires:     %s\n", resp.Token.ExpiresAt.Format(time.RFC3339))
 	} else {
-		_, _ = fmt.Fprintln(stdout, "Expires:     never. Pass --expires to set one, or use \"token revoke\" to invalidate it early.")
+		_, _ = fmt.Fprintln(stdout, "Expires:     never. Pass --expires to set one, or use \"token revoke\".")
 	}
-	_, _ = fmt.Fprintf(stdout, "\nThis token is displayed exactly once and cannot be retrieved again -- store it now:\n%s\n", resp.Value)
+	_, _ = fmt.Fprintf(stdout, "\nThis token is shown once and cannot be read again. Store it now:\n%s\n", resp.Value)
 	return exitOK
 }
 

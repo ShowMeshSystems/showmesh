@@ -620,7 +620,7 @@ func formatByteSize(n int64) string {
 // cmdResolumeCompositionShow below) — matching cmdConfigGet's identical
 // unset-configuration case, so a caller branching on $? sees the same
 // signal from both configuration surfaces.
-const resolumeCompositionNotUploadedMessage = "no Resolume composition has been uploaded yet; run \"showmeshctl resolume composition upload <path/to/file.avc>\" to add one"
+const resolumeCompositionNotUploadedMessage = "No Resolume composition yet. Run: showmeshctl resolume composition upload <file.avc>"
 
 // cmdResolumeCompositionShow implements
 // "showmeshctl resolume composition show"
@@ -832,9 +832,8 @@ func printAmbiguousClips(w io.Writer, resp resolumeCompositionResponse) {
 		return rows[i].name < rows[j].name
 	})
 
-	_, _ = fmt.Fprintln(w, "\nAMBIGUOUS CLIPS — these cannot be addressed by name at all, not even by adding a")
-	_, _ = fmt.Fprintln(w, `"layer": each one already shares its own with another clip of the same name. Rename`)
-	_, _ = fmt.Fprintln(w, "all but one in each such group, in Resolume, and re-upload to make them addressable.")
+	_, _ = fmt.Fprintln(w, "\nAMBIGUOUS CLIPS: these cannot be addressed by name, even with a \"layer\".")
+	_, _ = fmt.Fprintln(w, "Rename all but one in each group in Resolume, then upload again.")
 	tw := newTabWriter(w)
 	_, _ = fmt.Fprintln(tw, "  ID\tDECK\tLAYER\tNAME")
 	for _, r := range rows {

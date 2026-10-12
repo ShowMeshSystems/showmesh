@@ -135,7 +135,7 @@ func cmdNodeEnroll(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	_, _ = fmt.Fprintf(stdout, "Re-enroll:   %s\n", reenrollText)
 	_, _ = fmt.Fprintf(stdout, "\nRun this on the node:\n  %s\n", nodeInstallCommand(version, coordinatorURL, resp.Code))
 	if loopback {
-		_, _ = fmt.Fprintf(stdout, "\n%s is a placeholder because the coordinator's address here is only reachable from this machine. Set SHOWMESH_PUBLIC_URL on the coordinator, or run this command with --server set to the coordinator's network address.\n", coordinatorPlaceholderHost)
+		_, _ = fmt.Fprintf(stdout, "\n%s is a placeholder. Set SHOWMESH_PUBLIC_URL on the coordinator, or pass --server.\n", coordinatorPlaceholderHost)
 	}
 	_, _ = fmt.Fprintln(stdout, "\nThe code works once and is shown only now.")
 	return exitOK
@@ -221,7 +221,7 @@ func cmdNodeEnrollments(args []string, stdout, stderr io.Writer, clock func() ti
 		return exitOK
 	}
 	if len(resp.Enrollments) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No enrollment codes have been minted. Mint one with showmeshctl node enroll <node-id>.")
+		_, _ = fmt.Fprintln(stdout, "No enrollment codes yet. Mint one with showmeshctl node enroll <node-id>.")
 		return exitOK
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)

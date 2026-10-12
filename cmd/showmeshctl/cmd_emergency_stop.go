@@ -335,9 +335,7 @@ func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergen
 	case result.NoInstancesConfigured:
 		_, _ = fmt.Fprintf(stdout, "%s: no FPP instances are configured\n", result.Level)
 	case len(result.StopOutcomes) == 0:
-		_, _ = fmt.Fprintf(stdout, "%s: WARNING: no stop outcomes were reported and noInstancesConfigured is not set; "+
-			"this coordinator may predate this field, or the response is otherwise malformed. Treating this as a "+
-			"failure to determine whether the stop happened, not as a success.\n", result.Level)
+		_, _ = fmt.Fprintf(stdout, "%s: WARNING: the coordinator reported no stop result. Treat the stop as not confirmed.\n", result.Level)
 	}
 	for _, o := range result.StopOutcomes {
 		kind := o.TargetKind
@@ -357,7 +355,7 @@ func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergen
 		}
 	}
 	if result.FollowUpConfigError != "" {
-		_, _ = fmt.Fprintf(stdout, "follow-up configuration: DEGRADED (the stop still proceeded, no follow-ups were attempted): %s\n", result.FollowUpConfigError)
+		_, _ = fmt.Fprintf(stdout, "follow-up configuration: DEGRADED, so the stop ran with no follow-ups: %s\n", result.FollowUpConfigError)
 	}
 	for _, f := range result.FollowUps {
 		label := f.Label

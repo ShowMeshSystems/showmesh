@@ -91,7 +91,7 @@ func cmdFPPSetBrightnessCeiling(args []string, stdout, stderr io.Writer, clock f
 			instanceID, *resp.Ceiling, resp.Command.IdempotencyKey)
 		return exitOK
 	}
-	_, _ = fmt.Fprintf(stdout, "unconfirmed: %s accepted a ceiling of %d and has not reported it back yet: %s (request %s)\n",
+	_, _ = fmt.Fprintf(stdout, "unconfirmed: %s took a ceiling of %d but has not reported it yet: %s (request %s)\n",
 		instanceID, ceiling, resp.Command.OutcomeReason, resp.Command.IdempotencyKey)
 	return exitCommandUnconfirmed
 }

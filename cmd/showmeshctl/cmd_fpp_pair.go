@@ -65,7 +65,7 @@ func cmdFPPPair(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		}
 		return exitOK
 	}
-	_, _ = fmt.Fprintf(stdout, "waiting: %s is waiting for the plugin to finish pairing with code %s; it expires at %s\n",
+	_, _ = fmt.Fprintf(stdout, "waiting: %s is pairing with code %s, which expires at %s\n",
 		resp.InstanceID, resp.Code, resp.ExpiresAt)
 	return exitOK
 }
@@ -152,7 +152,7 @@ func printFPPPairingState(stdout io.Writer, instanceID string, resp fppPairingSt
 		if resp.ExpiresAt != nil {
 			expires = *resp.ExpiresAt
 		}
-		_, _ = fmt.Fprintf(stdout, "waiting: %s is waiting for the plugin to finish pairing with code %s; it expires at %s\n",
+		_, _ = fmt.Fprintf(stdout, "waiting: %s is pairing with code %s, which expires at %s\n",
 			instanceID, resp.Code, expires)
 	case "paired":
 		pairedAt := ""

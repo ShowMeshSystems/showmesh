@@ -326,7 +326,7 @@ func (c *client) checkAPIVersionHeader(resp *http.Response) error {
 		return nil
 	}
 	return newCLIError(exitVersionIncompatible,
-		"coordinator responded with ShowMesh-API-Version %s, this CLI speaks %s; refusing to render a partial result",
+		"The coordinator speaks API version %s and this CLI speaks %s. Update showmeshctl.",
 		got, clientAPIVersion)
 }
 
@@ -364,8 +364,7 @@ func decodeProblemError(resp *http.Response, body []byte) error {
 		// own "its current revision is N". This only adds the generic
 		// remedy: re-read the object with its matching "get"/"show"
 		// command, then retry the write.
-		msg = fmt.Sprintf("%s (someone else changed this object since it was last read; run the matching "+
-			"\"get\" or \"show\" command to see its current revision, then retry the write)", msg)
+		msg = fmt.Sprintf("%s Someone else changed this since it was read. Run the matching \"get\", then retry.", msg)
 	}
 	if p.Type == problemUnsupportedAPIVersion && len(p.SupportedVersions) > 0 {
 		msg = fmt.Sprintf("%s (this CLI requested version %s; coordinator supports %v)", msg, clientAPIVersion, p.SupportedVersions)

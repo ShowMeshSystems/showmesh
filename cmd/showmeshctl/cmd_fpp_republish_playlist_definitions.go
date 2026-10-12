@@ -23,7 +23,7 @@ func cmdFPPRepublishPlaylistDefinitions(args []string, stdout, stderr io.Writer,
 	fs, g := newFlagSet("showmeshctl fpp republish-playlist-definitions", stderr)
 	var requestID string
 	fs.StringVar(&requestID, "request-id", "",
-		"idempotency key; minted fresh per invocation when omitted. Reuse one to poll whether the resend finished")
+		"idempotency key, new each run when omitted; reuse one to check on a resend")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp republish-playlist-definitions [flags] <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nAsk one FPP host's ShowMesh plugin to resend its playlist definitions (POST")
@@ -94,12 +94,12 @@ func printFPPDefinitionRepublishResult(stdout io.Writer, r fppDefinitionRepublis
 	if !r.Applied {
 		lead = "unchanged (this requestId was already applied): nothing cleared a second time"
 	}
-	_, _ = fmt.Fprintf(stdout, "%s: %s cleared %d definition(s) for resend, %d still held, %d refused terminally and will not be re-sent (request %s)\n",
+	_, _ = fmt.Fprintf(stdout, "%s: %s resends %d definition(s), holds %d, and refused %d for good (request %s)\n",
 		lead, r.InstanceID, r.DefinitionsCleared, r.DefinitionsHeld, r.DefinitionsRefusedTerminally, r.RequestID)
 	if r.SweepPending {
-		_, _ = fmt.Fprintln(stdout, "the resend is owed, not done: no definition has reached the coordinator on account of this request yet.")
+		_, _ = fmt.Fprintln(stdout, "The resend is queued. No definition has reached the coordinator yet.")
 	} else {
-		_, _ = fmt.Fprintln(stdout, "the plugin has finished sending, which is not the same as the coordinator having stored what it sent.")
+		_, _ = fmt.Fprintln(stdout, "The plugin has sent them. Check that the coordinator stored them.")
 	}
 	_, _ = fmt.Fprintln(stdout, "to see what actually arrived, run: showmeshctl fpp playlist-definitions list")
 }

@@ -27,7 +27,7 @@ func cmdFPPStopPlaylistGracefully(args []string, stdout, stderr io.Writer, clock
 	fs, g := newFlagSet("showmeshctl fpp stop-playlist-gracefully", stderr)
 	var afterLoop bool
 	fs.BoolVar(&afterLoop, "after-loop", false,
-		"wait for the current LOOP to finish (not merely the current item) before stopping")
+		"stop after the current loop ends, not just the current item")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp stop-playlist-gracefully [flags] <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nDispatch FPP's own \"Stop Gracefully\" command (POST")

@@ -47,7 +47,7 @@ func TestNightEndSessionHelpNamesEveryDegradedCommand(t *testing.T) {
 	if !strings.Contains(help, "abandons") {
 		t.Errorf("end-session help does not say it abandons the session:\n%s", help)
 	}
-	if !strings.Contains(strings.ToLower(help), "directional") {
+	if !strings.Contains(help, "The first three end the night in order") {
 		t.Errorf("end-session help does not distinguish the directional shutdown commands:\n%s", help)
 	}
 }
@@ -58,7 +58,7 @@ func TestNightDirectionalCommandHelpSaysItSurvivesDegradation(t *testing.T) {
 	for _, sub := range []string{"final-show", "fade-out", "power-down"} {
 		t.Run(sub, func(t *testing.T) {
 			help := nightHelpFor(t, sub)
-			if !strings.Contains(help, "DEGRADED") {
+			if !strings.Contains(help, "Works while the night is degraded") {
 				t.Errorf("%s help does not say it is accepted while degraded:\n%s", sub, help)
 			}
 		})

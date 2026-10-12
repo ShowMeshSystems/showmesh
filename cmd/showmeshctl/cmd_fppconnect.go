@@ -134,7 +134,7 @@ func cmdFPPConnectStatus(args []string, stdout, stderr io.Writer, clock func() t
 		return exitOK
 	}
 	if len(n.FPPConnect) == 0 {
-		_, _ = fmt.Fprintf(stdout, "fppconnect status %s: no fppconnect.configure push has been resolved yet for this node\n", nodeID)
+		_, _ = fmt.Fprintf(stdout, "fppconnect status %s: this node has not been sent upload settings yet\n", nodeID)
 		return exitOK
 	}
 	printFPPConnectStatus(stdout, nodeID, n.FPPConnect)
@@ -263,7 +263,7 @@ func cmdFPPConnectSettingsGet(args []string, stdout, stderr io.Writer, clock fun
 func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fppconnect settings set", stderr)
 	var file string
-	fs.StringVar(&file, "file", "", "path to a JSON file matching configFPPConnectSettingsPayload; reads stdin if not given")
+	fs.StringVar(&file, "file", "", "path to a JSON settings file; reads stdin if not given")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fppconnect settings set [flags]")
@@ -273,7 +273,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 		_, _ = fmt.Fprintln(stderr, "forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision.")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"fppconnect settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"fppconnect settings get --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")

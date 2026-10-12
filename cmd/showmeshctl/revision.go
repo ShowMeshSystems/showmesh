@@ -34,8 +34,7 @@ func registerIfMatchFlags(fs *flag.FlagSet) (revision func() (int64, bool), forc
 	var ifMatchRevision int64
 	var ifMatchSet bool
 	var forceFlag bool
-	fs.Func("if-match", "require this exact revision to be current before writing (an integer >= 1); "+
-		"omit to have a fresh read supply the current revision automatically; disabled by --force",
+	fs.Func("if-match", "require this revision to be current before writing; default reads it first",
 		func(s string) error {
 			v, err := strconv.ParseInt(s, 10, 64)
 			if err != nil || v < 1 {
@@ -44,8 +43,7 @@ func registerIfMatchFlags(fs *flag.FlagSet) (revision func() (int64, bool), forc
 			ifMatchRevision, ifMatchSet = v, true
 			return nil
 		})
-	fs.BoolVar(&forceFlag, "force", false, "skip the concurrent-write check entirely: send no If-Match header, "+
-		"so this write can never be refused because someone else changed the object first")
+	fs.BoolVar(&forceFlag, "force", false, "skip the check that nobody else changed this object first")
 	return func() (int64, bool) { return ifMatchRevision, ifMatchSet },
 		func() bool { return forceFlag }
 }

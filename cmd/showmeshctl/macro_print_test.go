@@ -121,7 +121,7 @@ func TestPrintMacroRunDetailShowsAttributionDegradedWarning(t *testing.T) {
 	degraded.AttributionDegraded = true
 	var buf bytes.Buffer
 	printMacroRunDetail(&buf, degraded)
-	if !strings.Contains(strings.ToUpper(buf.String()), "DEGRADED") {
+	if !strings.Contains(buf.String(), "could not be written to the audit log") {
 		t.Errorf("printMacroRunDetail(attributionDegraded=true) output missing a degraded-attribution warning:\n%s", buf.String())
 	}
 

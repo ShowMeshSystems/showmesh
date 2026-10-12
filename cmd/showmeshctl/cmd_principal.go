@@ -208,8 +208,7 @@ func cmdPrincipalCreate(args []string, stdout, stderr io.Writer, clock func() ti
 	fs.StringVar(&kind, "kind", "", "human or machine (required)")
 	fs.StringVar(&role, "role", "", "viewer, operator, admin, or scheduler (required)")
 	fs.StringVar(&password, "password", "",
-		"password, in plaintext on the command line -- visible in shell history and `ps`; prefer --password-stdin. "+
-			"Empty (the default) creates a machine principal with no password that will only ever use an issued token.")
+		"password on the command line, visible in shell history; prefer --password-stdin")
 	fs.BoolVar(&passwordStdin, "password-stdin", false, "read the password as one line from stdin")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal create -name=<name> -kind=human|machine -role=<role> [flags]")
@@ -233,7 +232,7 @@ func cmdPrincipalCreate(args []string, stdout, stderr io.Writer, clock func() ti
 	}
 
 	resolved, err := resolvePassword(os.Stdin, stderr, password, passwordStdin,
-		fmt.Sprintf("Password for new %s principal %q (leave empty for a machine principal that will only ever use a token): ", kind, name),
+		fmt.Sprintf("Password for new %s principal %q (empty for a token-only machine principal): ", kind, name),
 		false)
 	if err != nil {
 		return reportError(stderr, "principal create", err)
@@ -320,7 +319,7 @@ func cmdPrincipalResetPassword(args []string, stdout, stderr io.Writer, clock fu
 	var password string
 	var passwordStdin bool
 	fs.StringVar(&password, "password", "",
-		"password, in plaintext on the command line -- visible in shell history and `ps`; prefer --password-stdin")
+		"password on the command line, visible in shell history; prefer --password-stdin")
 	fs.BoolVar(&passwordStdin, "password-stdin", false, "read the password as one line from stdin")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal reset-password [flags] <id>")

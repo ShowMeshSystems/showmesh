@@ -64,7 +64,7 @@ func cmdRunShow(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	var pollInterval, idleTimeout time.Duration
 	fs.BoolVar(&follow, "follow", false, "watch the run until it finishes (idle timeout, never a total one)")
 	fs.DurationVar(&pollInterval, "poll-interval", defaultMacroFollowPollInterval, "with --follow: how often to poll the run's state")
-	fs.DurationVar(&idleTimeout, "idle-timeout", defaultMacroFollowIdleTimeout, "with --follow: stop watching after this long with no update (NOT a total run-duration limit)")
+	fs.DurationVar(&idleTimeout, "idle-timeout", defaultMacroFollowIdleTimeout, "with --follow: stop watching after this long with no update")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl run show [flags] <runId>")
 		_, _ = fmt.Fprintln(stderr, "\nShow one macro run (GET /api/v1/macro-runs/{runId}), including every")

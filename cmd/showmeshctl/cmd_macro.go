@@ -210,7 +210,7 @@ func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "steps. Validated before activation: an invalid payload, an unknown action")
 		_, _ = fmt.Fprintln(stderr, "reference, or a fallback-class mismatch is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision.")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"macro show --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"macro show --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is \"macro show --output json\"'s own shape, otherwise a fresh read), refusing")
 		_, _ = fmt.Fprintln(stderr, "with a 409 if the macro changed since it was read.")
@@ -353,7 +353,7 @@ func cmdMacroRun(args []string, stdout, stderr io.Writer, clock func() time.Time
 	var pollInterval, idleTimeout time.Duration
 	fs.BoolVar(&follow, "follow", false, "watch the run until it finishes (idle timeout, never a total one — see below)")
 	fs.DurationVar(&pollInterval, "poll-interval", defaultMacroFollowPollInterval, "with --follow: how often to poll the run's state")
-	fs.DurationVar(&idleTimeout, "idle-timeout", defaultMacroFollowIdleTimeout, "with --follow: stop watching after this long with no update (NOT a total run-duration limit)")
+	fs.DurationVar(&idleTimeout, "idle-timeout", defaultMacroFollowIdleTimeout, "with --follow: stop watching after this long with no update")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl macro run [flags] <macro-id>")
 		_, _ = fmt.Fprintln(stderr, "\nSubmit a macro run (POST /api/v1/macros/{id}/runs, requires show:macro:run).")

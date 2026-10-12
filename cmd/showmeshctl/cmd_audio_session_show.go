@@ -20,10 +20,9 @@ func cmdAudioSessionShow(args []string, stdout, stderr io.Writer, clock func() t
 	fs, g := newFlagSet("showmeshctl audio session show", stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio session show [flags] [<session-id>]")
-		_, _ = fmt.Fprintln(stderr, "\nShow a session's audio evidence (GET /api/v1/observations?resourceKind=audio_session).")
-		_, _ = fmt.Fprintln(stderr, "With no session id, shows every audio session this coordinator holds evidence for,")
-		_, _ = fmt.Fprintln(stderr, "grouped by session id. Open read, no scope required. audio_session observations carry")
-		_, _ = fmt.Fprintln(stderr, "no node field, so there is no --node flag here.")
+		_, _ = fmt.Fprintln(stderr, "\nShow a session's audio status. With no session id, shows every audio")
+		_, _ = fmt.Fprintln(stderr, "session the coordinator knows, grouped by session id. No scope is needed.")
+		_, _ = fmt.Fprintln(stderr, "There is no --node flag.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

@@ -335,7 +335,7 @@ func cmdAssetsList(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	fs, g := newFlagSet("showmeshctl assets list", stderr)
 	var show, node, sequence string
 	fs.StringVar(&show, "show", "", "narrow the list to this show id")
-	fs.StringVar(&node, "node", "", "narrow the list to CURRENT assets targeted at this node (never a show-wide asset)")
+	fs.StringVar(&node, "node", "", "list only current assets targeted at this node")
 	fs.StringVar(&sequence, "sequence", "", "narrow the list to this logical sequence id")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets list [flags]")
@@ -655,7 +655,7 @@ func cmdAssetsUpload(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitOK
 	}
 	if resp.RolledBack {
-		_, _ = fmt.Fprintf(stdout, "ROLLBACK: re-uploaded bytes matched a superseded asset; %s is current again and the asset that superseded it is now superseded.\n\n", resp.Asset.ID)
+		_, _ = fmt.Fprintf(stdout, "ROLLBACK: this upload matches an older asset, so %s is current again.\n\n", resp.Asset.ID)
 	}
 	printAssetDetail(stdout, resp.Asset)
 	return exitOK
@@ -801,8 +801,7 @@ func cmdAssetsFetch(args []string, stdout, stderr io.Writer, clock func() time.T
 	gotHash := "sha256:" + hex.EncodeToString(h.Sum(nil))
 	if gotHash != meta.Asset.ContentHash {
 		return reportError(stderr, "assets fetch", newCLIError(exitAPIError,
-			"downloaded bytes do not match the recorded content hash (got %s, want %s); nothing was written to %s",
-			gotHash, meta.Asset.ContentHash, out))
+			"The download does not match its recorded hash, so nothing was written. Try again: %s", out))
 	}
 
 	if err := os.Rename(tmpPath, out); err != nil {
@@ -827,7 +826,7 @@ func cmdAssetsManifest(args []string, stdout, stderr io.Writer, clock func() tim
 	var requireReady bool
 	fs.StringVar(&node, "node", "", "show only this node's manifest (default: every declared node)")
 	fs.BoolVar(&requireReady, "require-ready", false,
-		"exit 20 if any node is not_ready, or 21 if any node is unknown and none is not_ready; without this flag, always exit 0")
+		"exit 20 if a node is not_ready, else 21 if one is unknown; default exits 0")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets manifest [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nShow what each node should hold for the active show, versus what it")

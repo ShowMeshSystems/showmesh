@@ -41,7 +41,7 @@ func cmdFPPStartPlaylist(args []string, stdout, stderr io.Writer, clock func() t
 	var ifBusy string
 	fs.BoolVar(&repeat, "repeat", false, "loop the playlist after it finishes")
 	fs.StringVar(&ifBusy, "if-busy", fppIfBusyRefuse,
-		"what to do if a DIFFERENT playlist is currently playing: \"refuse\" (default) or \"replace\"")
+		"if a different playlist is playing: \"refuse\" (default) or \"replace\"")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp start-playlist [flags] <instance-id> <playlist-name>")
 		_, _ = fmt.Fprintln(stderr, "\nDispatch FPP's own \"Start Playlist\" command (POST")

@@ -191,7 +191,7 @@ func TestCmdFPPConnectStatusPrintsNeverPushed(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "no fppconnect.configure push has been resolved yet") {
+	if !strings.Contains(stdout.String(), "this node has not been sent upload settings yet") {
 		t.Errorf("output = %q, want a plain never-pushed statement", stdout.String())
 	}
 }

@@ -194,9 +194,7 @@ func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func
 // URL path segment ("gain", "output/mute").
 func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string, acceptsScheduledStart bool) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
-	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries; defaults to this "+
-		"session's current observed revision (GET /api/v1/observations) plus one, or 1 for a session this "+
-		"coordinator has never observed")
+	revision := fs.Uint64("revision", 0, "the revision this command carries; defaults to one more than the last seen")
 	var scheduledAtNs *string
 	if acceptsScheduledStart {
 		scheduledAtNs = fs.String("scheduled-at-ns", "", scheduledAtNsFlagUsage)
@@ -364,10 +362,7 @@ func exitCodeForAudioSessionCommandResult(result audioSessionCommandResult) int 
 // destroy. A named flag lets this program refuse a rounded or malformed
 // instant here, instead of forwarding it and having a node start at the
 // wrong time.
-const scheduledAtNsFlagUsage = "start the session at this instant on the TARGET NODE's own media clock, " +
-	"in nanoseconds, as digits (api/openapi.yaml: AudioSessionStartParams); unset starts on arrival. " +
-	"Never wall time and never a duration. A node whose media clock has already passed the instant " +
-	"refuses the start rather than starting late"
+const scheduledAtNsFlagUsage = "start at this node media clock time, in nanoseconds; unset starts on arrival"
 
 // paramScheduledAtNs mirrors pkg/paramScheduledAtNs -- this
 // program's own independent transcription, matching
@@ -391,8 +386,7 @@ var scheduledAtNsDigits = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 func withScheduledAtNs(params json.RawMessage, raw string) (json.RawMessage, error) {
 	if !scheduledAtNsDigits.MatchString(raw) {
 		return nil, newCLIError(exitUsage,
-			"--scheduled-at-ns must be a non-negative whole number of nanoseconds, written as digits: "+
-				"it is a reading of the target node's media clock, not a duration and not wall time")
+			"--scheduled-at-ns must be whole nanoseconds on the node's media clock, as digits.")
 	}
 	if _, err := strconv.ParseInt(raw, 10, 64); err != nil {
 		return nil, newCLIError(exitUsage, "--scheduled-at-ns does not fit in an int64: %v", err)
@@ -406,7 +400,7 @@ func withScheduledAtNs(params json.RawMessage, raw string) (json.RawMessage, err
 	}
 	if _, present := fields[paramScheduledAtNs]; present {
 		return nil, newCLIError(exitUsage,
-			"--scheduled-at-ns and a %s key in params-json both set the start instant; pass only one", paramScheduledAtNs)
+			"--scheduled-at-ns and %s in params-json both set the start time. Pass only one.", paramScheduledAtNs)
 	}
 	fields[paramScheduledAtNs] = json.RawMessage(raw)
 

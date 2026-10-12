@@ -82,7 +82,7 @@ func TestCmdShowModeGetPrintsAStagedCueActivationPin(t *testing.T) {
 	if !strings.Contains(out, "show-1") || !strings.Contains(out, "generation 2") {
 		t.Errorf("stdout = %q, want it to name the pinned show (show-1) and generation (2)", out)
 	}
-	if !strings.Contains(out, "will NOT reach any node") {
+	if !strings.Contains(out, "reaches no node until the show is restarted") {
 		t.Errorf("stdout = %q, want it to state the concrete operator-facing consequence, not just the word staged", out)
 	}
 }

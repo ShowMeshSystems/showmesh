@@ -242,7 +242,8 @@ func printAudioSettingsUsage(w io.Writer) {
 
 Read or write the coordinator's audio.settings configuration:
 driftIgnoreThresholdMs (default 40, derived from a measured sink whose
-routine skew correction is 20.0 ms), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
+routine skew correction is 20.0 ms), defaultFadeCurve (only "linear"
+ships today), defaultFadeDurationMs,
 defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
 a linear-looking 0.5 here is only half a decibel, not a halving, so enter
 -6.02 if you meant half amplitude),
@@ -346,7 +347,7 @@ func cmdAudioSettingsGet(args []string, stdout, stderr io.Writer, clock func() t
 func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio settings set", stderr)
 	var file string
-	fs.StringVar(&file, "file", "", "path to a JSON file matching configAudioSettingsPayload; reads stdin if not given")
+	fs.StringVar(&file, "file", "", "path to a JSON settings file; reads stdin if not given")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio settings set [flags]")
@@ -356,7 +357,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision.")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"audio settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"audio settings get --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
@@ -663,29 +664,29 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	var programRoute, ltcRoute, programChannels, localClockOverride, role, zone, sinkBackend, pipewireTargetNode string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
-	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
-	fs.StringVar(&programChannels, "program-channels", "", "comma-separated, ordered, distinct 1-based channel indices carrying program audio, e.g. 1,2 (required)")
-	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
-	fs.StringVar(&localClockOverride, "local-clock-override", "", "name this node's local clock explicitly, for two interfaces sharing external word clock; omitted, carried forward from the node's current definition, and derived from --program-route when it has none")
+	fs.StringVar(&ltcRoute, "ltc-route", "", "the output that carries LTC; must equal --program-route (omit for no LTC)")
+	fs.StringVar(&programChannels, "program-channels", "", "program channels in order, 1-based and comma-separated, e.g. 1,2 (required)")
+	fs.IntVar(&ltcChannel, "ltc-channel", 0, "the 1-based LTC channel, not one of --program-channels (omit for no LTC)")
+	fs.StringVar(&localClockOverride, "local-clock-override", "", "name this node's local clock; kept from the saved node when omitted")
 	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone; omitted, defaults to program+ltc")
-	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
-	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink; omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
-	fs.StringVar(&pipewireTargetNode, "pipewire-target-node", "", "the PipeWire node name program audio targets; only accepted with --sink-backend pipewiresink; omitted, carried forward from the node's current definition")
+	fs.StringVar(&zone, "zone", "", "the speaker zone this node drives; only with --role zone")
+	fs.StringVar(&sinkBackend, "sink-backend", "", "alsasink or pipewiresink; kept from the saved node, else alsasink")
+	fs.StringVar(&pipewireTargetNode, "pipewire-target-node", "", "the PipeWire node to play to; only with --sink-backend pipewiresink")
 	var outputLatencyUs int
 	var outputLatencyMethod, outputLatencyMeasuredAt, outputLatencyReference, outputLatencyConfidence, outputLatencyConfiguration string
-	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "calibrated output offset in signed microseconds; required with a measured --output-latency-method")
-	fs.StringVar(&outputLatencyMethod, "output-latency-method", "", "one of unmeasured, loopback, acoustic, declared; required with the other four --output-latency-* flags for a measured method, or given alone as unmeasured to clear a stored calibration")
-	fs.StringVar(&outputLatencyMeasuredAt, "output-latency-measured-at", "", "RFC 3339 timestamp when --output-latency-us was measured; required with a measured method")
+	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "measured output delay in microseconds; needed with a measured method")
+	fs.StringVar(&outputLatencyMethod, "output-latency-method", "", "unmeasured, loopback, acoustic or declared; unmeasured clears a saved delay")
+	fs.StringVar(&outputLatencyMeasuredAt, "output-latency-measured-at", "", "when the delay was measured, as an RFC 3339 time; needed when measured")
 	fs.StringVar(&outputLatencyReference, "output-latency-reference", "", "what --output-latency-us was measured against; required with a measured method")
-	fs.StringVar(&outputLatencyConfidence, "output-latency-confidence", "", "free-text judgment of how much to trust --output-latency-us; required with a measured method")
-	fs.StringVar(&outputLatencyConfiguration, "output-latency-configuration", "", "the buffer/quantum/sample-rate configuration --output-latency-us was measured under; required with a measured method")
+	fs.StringVar(&outputLatencyConfidence, "output-latency-confidence", "", "how far to trust the measured delay; needed with a measured method")
+	fs.StringVar(&outputLatencyConfiguration, "output-latency-configuration", "", "the buffer and sample rate the delay was measured under; needed when measured")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --local-clock-override, --sink-backend,")
-		_, _ = fmt.Fprintln(stderr, "--pipewire-target-node and --output-latency-* are each carried forward from a read of the")
+		_, _ = fmt.Fprintln(stderr, "--pipewire-target-node and --output-latency-* are each kept from the")
 		_, _ = fmt.Fprintln(stderr, "node's current definition when their flags are omitted, so changing a")
 		_, _ = fmt.Fprintln(stderr, "route never resets a PipeWire-routed node back to alsasink or drops a")
 		_, _ = fmt.Fprintln(stderr, "stored output-latency calibration. Every other flag reflects only what")
@@ -712,7 +713,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "\n--force only skips If-Match; it still attempts the same read the")
 		_, _ = fmt.Fprintln(stderr, "carry-forward above needs. If that read also fails, the write proceeds")
 		_, _ = fmt.Fprintln(stderr, "anyway (that is what --force is for), and this command prints a warning")
-		_, _ = fmt.Fprintln(stderr, "naming each of localClockOverride, sinkBackend, pipewireTargetNode, and outputLatency that")
+		_, _ = fmt.Fprintln(stderr, "naming each of those settings that")
 		_, _ = fmt.Fprintln(stderr, "will therefore be reset instead of carried forward.")
 		fs.PrintDefaults()
 	}

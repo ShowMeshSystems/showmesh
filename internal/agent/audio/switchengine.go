@@ -2,7 +2,6 @@ package audio
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,7 +31,12 @@ const SwitchableEngineRebindInProgressReason = "This node is applying new audio 
 // yet" apart from a genuine engine failure — restoreOne does, see
 // restore.go's deferRestoreLocked — check for this with errors.Is rather
 // than matching SwitchableEngineNoBindingReason's text.
-var ErrNoEngineBinding = errors.New(SwitchableEngineNoBindingReason)
+var ErrNoEngineBinding error = &sentenceError{SwitchableEngineNoBindingReason}
+
+// sentenceError is an error whose text is a full sentence an operator reads.
+type sentenceError struct{ text string }
+
+func (e *sentenceError) Error() string { return e.text }
 
 // SwitchableEngine is an [Engine] whose backing implementation can be
 // replaced at runtime, so a [Manager] built once at agent startup can be

@@ -43,9 +43,9 @@ const (
 func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audit", stderr)
 	var order, since, before, limit string
-	fs.StringVar(&order, "order", "", "asc (oldest first, paged with --since) or desc (newest first, paged with --before); default asc")
-	fs.StringVar(&since, "since", "", "with --order asc: return entries with an id greater than this (default: from the beginning of retained history)")
-	fs.StringVar(&before, "before", "", "with --order desc: return entries with an id less than this (default: from the newest retained entry)")
+	fs.StringVar(&order, "order", "", "asc (oldest first, with --since) or desc (newest first, with --before)")
+	fs.StringVar(&since, "since", "", "with --order asc: only entries with an id greater than this")
+	fs.StringVar(&before, "before", "", "with --order desc: only entries with an id less than this")
 	fs.StringVar(&limit, "limit", "", "maximum number of entries to return (default 100, coordinator clamps above 500)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audit [flags]")

@@ -129,7 +129,7 @@ func clockSkewWarning(serverTime, localNow time.Time) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"warning: local clock differs from coordinator serverTime by %s; ages below are computed against serverTime, not the local clock",
+		"warning: this clock differs from the coordinator's by %s; ages use the coordinator's",
 		roundDuration(skew),
 	)
 }

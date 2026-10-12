@@ -111,7 +111,8 @@ Subcommands:
                                 coordinator resolves the surface's
                                 complete assignment (including its current
                                 FSEQ asset for sequence-id, by identity,
-                                never a filename) and refuses outright, naming what
+                                never a filename) and refuses outright, naming
+                                what
                                 could not be resolved, rather than ever
                                 sending a partial one
   clear <node-id> <surface-id>   dispatch render.surface.clear
@@ -201,7 +202,7 @@ func cmdRenderStatus(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	printRenderStatus(stdout, nodeID, n.Render)
 	if !available {
-		_, _ = fmt.Fprintf(stdout, "render status %s: no surface render evidence yet (no surface has been assigned or reported)\n", nodeID)
+		_, _ = fmt.Fprintf(stdout, "render status %s: no surface has been assigned or reported yet\n", nodeID)
 		return exitRenderUnavailable
 	}
 	return exitOK
@@ -459,7 +460,7 @@ func cmdRenderSettingsGet(args []string, stdout, stderr io.Writer, clock func() 
 func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl render settings set", stderr)
 	var file string
-	fs.StringVar(&file, "file", "", "path to a JSON file matching {\"idleOutput\":string,\"restartPolicy\":{...}}; reads stdin if not given")
+	fs.StringVar(&file, "file", "", "path to a JSON file like {\"idleOutput\":...,\"restartPolicy\":{...}}; default stdin")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl render settings set [flags]")
@@ -469,7 +470,7 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 		_, _ = fmt.Fprintln(stderr, "silently defaulted or carried forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision.")
-		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"render settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "Accepts a bare payload or the output of \"render settings get --output json\".")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
@@ -549,7 +550,7 @@ func parseRenderSettingsSetPayload(raw []byte) (configRenderSettingsPayload, err
 	var p configRenderSettingsPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return configRenderSettingsPayload{}, fmt.Errorf(
-			`payload must be a JSON object matching {"idleOutput":string,"restartPolicy":{"initialDelaySeconds":int,"maxDelaySeconds":int,"maxConsecutiveFastFailures":int}}: %w`, err)
+			`payload must be a JSON object like {"idleOutput":...,"restartPolicy":{...}}: %w`, err)
 	}
 	return p, nil
 }

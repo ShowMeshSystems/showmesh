@@ -19,7 +19,7 @@ import (
 func cmdFPPResetObservationSequence(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fpp reset-observation-sequence", stderr)
 	var confirm bool
-	fs.BoolVar(&confirm, "confirm", false, "required: confirms clearing this instance's stored observation and sequence anchor")
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms clearing this player's stored status and sequence position")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp reset-observation-sequence --confirm <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nClear one FPP instance's stored playlist-entry observation and its")

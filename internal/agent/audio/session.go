@@ -1004,7 +1004,7 @@ type ResumePoint struct {
 // one). Caller holds s.mu.
 func (s *Session) applyResumePointLocked(point ResumePoint) error {
 	if s.desired.Playlist == nil || point.Index < 0 || point.Index >= len(s.desired.Playlist.Items) {
-		return fmt.Errorf("resume point names item %q at index %d, but this session has no playlist item there", point.ItemID, point.Index)
+		return &sentenceError{fmt.Sprintf("Item %q is not at position %d of this playlist. Start from the beginning.", point.ItemID, point.Index)}
 	}
 	item := s.desired.Playlist.Items[point.Index]
 	if item.ItemID != point.ItemID {

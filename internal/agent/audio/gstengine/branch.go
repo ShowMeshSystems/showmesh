@@ -932,7 +932,7 @@ func (b *branch) checkStallLocked(state pkgaudio.State, pos time.Duration, now t
 	if now.Sub(b.lastAdvanceAt) < positionStallThreshold {
 		return ""
 	}
-	return fmt.Sprintf("position has not advanced past %s in over %s while playing; the output pipeline may not be presenting audio", pos, positionStallThreshold)
+	return fmt.Sprintf("Audio has been stuck at %s for over %s. Check this node's audio output.", pos, positionStallThreshold)
 }
 
 // fadeArrived reports whether a fade started at fadeStartPos with

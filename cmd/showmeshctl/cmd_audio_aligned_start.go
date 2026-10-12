@@ -58,9 +58,7 @@ type alignedAudioStartResponse struct {
 func cmdAudioSessionAlignedStart(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	const cmdLabel = "audio session aligned-start"
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
-	revision := fs.Uint64("revision", 0, "the desired-state revision every node's command carries; defaults to this "+
-		"session's current observed revision (GET /api/v1/observations) plus one, or 1 for a session this "+
-		"coordinator has never observed")
+	revision := fs.Uint64("revision", 0, "the revision each node's command carries; defaults to one more than the last seen")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s [flags] <session-id> <node-id> [<node-id>...]\n", cmdLabel)
 		fs.PrintDefaults()
@@ -136,12 +134,12 @@ func reportAlignedAudioStart(stdout io.Writer, cmdLabel string, resp alignedAudi
 		s := resp.Selection
 		_, _ = fmt.Fprintf(stdout, "showmeshctl %s: aligned on %s's media clock\n", cmdLabel, s.ClockNodeID)
 		_, _ = fmt.Fprintf(stdout, "  start instant:  %d ns\n", s.ScheduledAtNs)
-		_, _ = fmt.Fprintf(stdout, "  lead:           %d ns (preroll %d ns from %d node(s), delivery bound %d ns, margin %d ns)\n",
+		_, _ = fmt.Fprintf(stdout, "  lead:           %d ns (preroll %d ns of %d node(s), delivery %d ns, margin %d ns)\n",
 			s.LeadNs, s.PrerollNs, s.PrerollReportedBy, s.DeliveryBoundNs, s.MarginNs)
 		if s.ClockErrorBoundKnown {
 			_, _ = fmt.Fprintf(stdout, "  clock bound:    %d ns, included in the lead\n", s.ClockErrorBoundNs)
 		} else {
-			_, _ = fmt.Fprintf(stdout, "  clock bound:    UNKNOWN; the lead carries no allowance for clock uncertainty (unknown is not zero)\n")
+			_, _ = fmt.Fprintf(stdout, "  clock bound:    UNKNOWN, so the lead allows nothing for clock error\n")
 		}
 	} else {
 		_, _ = fmt.Fprintf(stdout, "showmeshctl %s: NOT ALIGNED. %s\n", cmdLabel, resp.UnalignedReason)

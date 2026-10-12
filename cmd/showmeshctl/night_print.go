@@ -58,7 +58,7 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 		} else if len(ba.ExcludeNodes) > 0 {
 			_, _ = fmt.Fprintf(w, "    Targets: the show's audio nodes, excluding %s\n", strings.Join(ba.ExcludeNodes, ", "))
 		} else {
-			_, _ = fmt.Fprintf(w, "    Targets: none: each node plays its registered items, or the show's audio nodes if set\n")
+			_, _ = fmt.Fprintf(w, "    Targets: none, so each node plays its own items or the show's audio nodes\n")
 		}
 	}
 
