@@ -177,29 +177,31 @@ func jsonServer(w http.ResponseWriter, body string) {
 	_, _ = fmt.Fprint(w, body)
 }
 
-// TestFollowMacroRunNeverIdlesOutWhileTheCoordinatorKeepsAnswering is this
-// file's own proof of the central requirement: a run that legitimately
-// keeps saying "still running" is followed for as long as it keeps
-// answering, and stopping is driven by the IDLE window, never by a total
-// duration — "the idle window resets on every ... successful poll." The
-// server here answers successfully on EVERY single poll and idleTimeout is
-// set far shorter than this test's own outer deadline; if a total-duration
-// cap (or an off-by-one in the reset logic) had crept in, this would exit
-// via exitFollowStillWatching well before outerDeadline fires. It must
-// instead keep going until THIS TEST cancels it (mirroring Ctrl+C),
-// exiting exitOK, having polled many times.
-//
-// Break-first-verify (see report): commenting out the
-// `deadline = now.Add(idleTimeout)` reset on a successful poll (i.e.
-// reverting to resetting the deadline only once, at loop entry) makes this
-// test fail fast with exitFollowStillWatching well before outerDeadline,
-// confirming the assertion actually exercises the per-success reset rather
-// than merely "does it eventually return".
+// TestFollowMacroRunNeverIdlesOutWhileTheCoordinatorKeepsAnswering proves
+// that a coordinator which answers every poll never trips the idle timeout.
+// The clock is fake and advances only inside the handler, 30 ms per answered
+// poll against a 50 ms idle window, so a loop that failed to reset its
+// deadline on each success would see 60 ms pass by the second poll and stop.
+// The test cancels the loop (mirroring Ctrl+C) after pollsToServe answers;
+// no real time is asserted.
 func TestFollowMacroRunNeverIdlesOutWhileTheCoordinatorKeepsAnswering(t *testing.T) {
+	const idleTimeout = 50 * time.Millisecond
+	const advancePerPoll = 30 * time.Millisecond
+	const pollsToServe = 20
+
+	var nowNanos int64
+	clock := func() time.Time { return time.Unix(0, atomic.LoadInt64(&nowNanos)) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var pollCount int64
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&pollCount, 1)
+		atomic.AddInt64(&nowNanos, int64(advancePerPoll))
 		jsonServer(w, macroRunFixture("run-1", "running", nil, nil, ""))
+		if atomic.AddInt64(&pollCount, 1) == pollsToServe {
+			cancel()
+		}
 	}))
 	defer ts.Close()
 
@@ -209,31 +211,15 @@ func TestFollowMacroRunNeverIdlesOutWhileTheCoordinatorKeepsAnswering(t *testing
 	}
 	g := &globalFlags{timeout: minMacroClientTimeout, output: outputText}
 
-	const pollInterval = 10 * time.Millisecond
-	const idleTimeout = 50 * time.Millisecond    // deliberately tiny
-	const outerDeadline = 300 * time.Millisecond // several multiples of idleTimeout
-
-	ctx, cancel := context.WithTimeout(context.Background(), outerDeadline)
-	defer cancel()
-
 	var stdout, stderr bytes.Buffer
-	start := time.Now()
-	code := followMacroRun(ctx, c, g, "run show", "run-1", pollInterval, idleTimeout, &stdout, &stderr, time.Now)
-	elapsed := time.Since(start)
+	code := followMacroRun(ctx, c, g, "run show", "run-1", 0, idleTimeout, &stdout, &stderr, clock)
 
 	if code != exitOK {
-		t.Fatalf("exit code = %d, want exitOK (ctx cancellation, mirroring Ctrl+C) — got a different code, which "+
-			"means something ended this loop BEFORE the outer deadline despite the coordinator answering every "+
-			"single poll; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		t.Fatalf("exit code = %d, want exitOK; the loop ended before the test cancelled it even though "+
+			"the coordinator answered every poll; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	// Must have run close to the FULL outer deadline, not stopped early at
-	// (or near) idleTimeout.
-	if elapsed < outerDeadline/2 {
-		t.Errorf("elapsed = %s, want close to the outer deadline %s — an idle timeout this small (%s) must never "+
-			"fire while every poll succeeds", elapsed, outerDeadline, idleTimeout)
-	}
-	if got := atomic.LoadInt64(&pollCount); got < 10 {
-		t.Errorf("pollCount = %d, want at least 10 — the loop must have kept polling for the full outer duration", got)
+	if got := atomic.LoadInt64(&pollCount); got < pollsToServe {
+		t.Errorf("pollCount = %d, want at least %d", got, pollsToServe)
 	}
 }
 
