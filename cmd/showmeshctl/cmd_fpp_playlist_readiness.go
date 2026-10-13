@@ -18,7 +18,7 @@ type fppPlaylistReadinessResponse struct {
 	Ready            bool      `json:"ready"`
 	FailingCondition string    `json:"failingCondition"`
 	Reason           string    `json:"reason"`
-	Warning          string    `json:"warning"`
+	Warnings         []string  `json:"warnings"`
 	ServerTime       time.Time `json:"serverTime"`
 }
 
@@ -56,6 +56,9 @@ func cmdFPPPlaylistReadiness(args []string, stdout, stderr io.Writer, clock func
 		return reportError(stderr, "fpp playlist-readiness", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
+	if resp.Warnings == nil {
+		resp.Warnings = []string{}
+	}
 
 	if g.output == outputJSON {
 		if err := printJSON(stdout, resp); err != nil {
@@ -71,8 +74,11 @@ func cmdFPPPlaylistReadiness(args []string, stdout, stderr io.Writer, clock func
 	if resp.Reason != "" {
 		_, _ = fmt.Fprintf(stdout, "Reason:   %s\n", resp.Reason)
 	}
-	if resp.Warning != "" {
-		_, _ = fmt.Fprintf(stdout, "Warning:  %s\n", resp.Warning)
+	if len(resp.Warnings) > 0 {
+		_, _ = fmt.Fprintln(stdout, "Warnings:")
+		for _, warning := range resp.Warnings {
+			_, _ = fmt.Fprintf(stdout, "  %s\n", warning)
+		}
 	}
 	return exitOK
 }

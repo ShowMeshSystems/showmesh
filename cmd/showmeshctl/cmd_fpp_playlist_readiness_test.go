@@ -60,6 +60,32 @@ func TestCmdFPPPlaylistReadinessNotReady(t *testing.T) {
 	}
 }
 
+func TestCmdFPPPlaylistReadinessPrintsOneWarningPerLine(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","playlistId":"playlist-1","ready":true,
+			"warnings":["Cue bg1 has no FPP sequence, so the coordinator starts its audio.","FPP has MultiSync off."]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"playlist-readiness", "--server", ts.URL, "playlist-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	want := "Warnings:\n  Cue bg1 has no FPP sequence, so the coordinator starts its audio.\n  FPP has MultiSync off.\n"
+	if !strings.HasSuffix(stdout.String(), want) {
+		t.Errorf("stdout = %q, want it to end with %q", stdout.String(), want)
+	}
+
+	stdout.Reset()
+	code = cmdFPP([]string{"playlist-readiness", "--server", ts.URL, "--output", "json", "playlist-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK || !strings.Contains(stdout.String(), `"warnings": [`) || !strings.Contains(stdout.String(), "FPP has MultiSync off.") {
+		t.Errorf("json exit = %d, stdout = %q, want a warnings array carrying each message", code, stdout.String())
+	}
+}
+
 func TestCmdFPPPlaylistReadinessJSONOutput(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

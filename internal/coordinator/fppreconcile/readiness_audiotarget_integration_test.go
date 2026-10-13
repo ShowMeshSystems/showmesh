@@ -212,7 +212,7 @@ func TestPlaylistReadinessUnlockedClockWarnsWithoutFailingWhenAssetsAreHeld(t *t
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true (failing condition %q: %s): an unlocked clock is a warning, not a failure", report.FailingCondition, report.Reason)
 	}
-	if !strings.Contains(report.Warning, "pi") {
-		t.Errorf("Warning = %q, want it to name pi", report.Warning)
+	if !strings.Contains(warningText(report), "pi") {
+		t.Errorf("Warning = %q, want it to name pi", warningText(report))
 	}
 }

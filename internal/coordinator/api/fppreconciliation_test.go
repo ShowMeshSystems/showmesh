@@ -700,8 +700,8 @@ func TestGetFPPPlaylistReadinessReady(t *testing.T) {
 	if ready, _ := body["ready"].(bool); !ready {
 		t.Fatalf("ready = false, want true; body: %v", body)
 	}
-	if warning, _ := body["warning"].(string); warning == "" {
-		t.Fatalf("warning is empty, want the no-observation-yet warning (H2 spec §6: \"the normal afternoon state, not a fault\"); body: %v", body)
+	if warnings, _ := body["warnings"].([]any); len(warnings) != 1 {
+		t.Fatalf("warnings does not hold exactly one item, want the no-observation-yet warning (H2 spec §6: \"the normal afternoon state, not a fault\"); body: %v", body)
 	}
 }
 

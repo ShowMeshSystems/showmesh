@@ -100,7 +100,7 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, "  %s\n", s.Readiness.Reason)
 	}
 	for _, c := range s.Readiness.Checks {
-		_, _ = fmt.Fprintf(w, "  - %s: %s", c.Name, c.State)
+		_, _ = fmt.Fprintf(w, "  - %s: %s", c.Label, c.State)
 		if c.Reason != "" {
 			_, _ = fmt.Fprintf(w, " (%s)", c.Reason)
 		}

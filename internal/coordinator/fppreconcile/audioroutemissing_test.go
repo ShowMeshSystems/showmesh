@@ -38,8 +38,8 @@ func TestPlaylistReadinessWarnsWhenAHeldRouteHasGone(t *testing.T) {
 		t.Fatalf("Ready = %v, failing = %q, want ready: this condition only warns", report.Ready, report.FailingCondition)
 	}
 	want := "Node node-1 no longer reports its program interface usb-interface. Reconnect it or pick another route in Node routing."
-	if !strings.Contains(report.Warning, want) {
-		t.Fatalf("Warning = %q, want it to contain %q", report.Warning, want)
+	if !strings.Contains(warningText(report), want) {
+		t.Fatalf("Warning = %q, want it to contain %q", warningText(report), want)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestPlaylistReadinessSilentWhenTheHeldRouteIsPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if strings.Contains(report.Warning, "no longer reports") {
-		t.Fatalf("Warning = %q, want no missing-interface warning while the route is present", report.Warning)
+	if strings.Contains(warningText(report), "no longer reports") {
+		t.Fatalf("Warning = %q, want no missing-interface warning while the route is present", warningText(report))
 	}
 }

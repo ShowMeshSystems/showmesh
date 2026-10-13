@@ -52,8 +52,8 @@ func TestPlaylistReadinessWarnsOnlyForAMismatchedNodeThePlaylistUses(t *testing.
 	if !r.Ready || r.FailingCondition != "" {
 		t.Fatalf("Ready = %v, FailingCondition = %q: a version mismatch is a warning, never a failure", r.Ready, r.FailingCondition)
 	}
-	if want := "Node node-1 runs 0.1.5. Install 0.2.0 on it to match the coordinator."; r.Warning != want {
-		t.Fatalf("Warning = %q, want %q", r.Warning, want)
+	if want := "Node node-1 runs 0.1.5. Install 0.2.0 on it to match the coordinator."; warningText(r) != want {
+		t.Fatalf("Warning = %q, want %q", warningText(r), want)
 	}
 }
 
@@ -64,8 +64,8 @@ func TestPlaylistReadinessDoesNotWarnForAShowThatIsNotActive(t *testing.T) {
 	putShow(t, st, "show-2", "Show Two")
 	putActiveShow(t, st, "show-2")
 
-	if r := report(); strings.Contains(r.Warning, "Node node-1 runs") {
-		t.Fatalf("Warning = %q, want no version warning for a playlist whose show is not active", r.Warning)
+	if r := report(); strings.Contains(warningText(r), "Node node-1 runs") {
+		t.Fatalf("Warning = %q, want no version warning for a playlist whose show is not active", warningText(r))
 	}
 }
 
@@ -74,7 +74,7 @@ func TestPlaylistReadinessIsSilentWhenEveryNodeMatches(t *testing.T) {
 	report := versionReadyFixture(t, st)
 	putNodeVersion(t, st, "node-1", "v0.2.0")
 
-	if r := report(); !r.Ready || strings.Contains(r.Warning, "Install") {
-		t.Fatalf("Ready = %v, Warning = %q, want ready with no version warning", r.Ready, r.Warning)
+	if r := report(); !r.Ready || strings.Contains(warningText(r), "Install") {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no version warning", r.Ready, warningText(r))
 	}
 }

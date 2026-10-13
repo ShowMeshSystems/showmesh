@@ -86,18 +86,13 @@ type FPPPlaylistEntryReconciliationResponse struct {
 // "observation-hash-mismatch", "node-render-unassigned",
 // "exclusive-claim-conflict", or "node-catalog-stale"
 // (fppreconcile.ReadinessCondition's wire spellings), empty when Ready.
-// Warning is set for a condition that did not fail readiness outright but
-// is still worth surfacing: no observation received at all yet (§6's own
-// "the normal afternoon state, not a fault"), or exclusive-claim-conflict's
-// own inconclusive form. An observation that WAS received but could not
-// establish identity is "evidence-unavailable", a FailingCondition, not a
-// Warning: readiness never reports Ready == true for a check it could not
-// evaluate.
+// Warnings holds one complete message per condition that did not fail
+// readiness but is still worth showing. Always present, empty when none.
 type FPPPlaylistReadinessResponse struct {
-	PlaylistID       string `json:"playlistId"`
-	Ready            bool   `json:"ready"`
-	FailingCondition string `json:"failingCondition,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	Warning          string `json:"warning,omitempty"`
-	ServerTime       string `json:"serverTime"`
+	PlaylistID       string   `json:"playlistId"`
+	Ready            bool     `json:"ready"`
+	FailingCondition string   `json:"failingCondition,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+	Warnings         []string `json:"warnings"`
+	ServerTime       string   `json:"serverTime"`
 }

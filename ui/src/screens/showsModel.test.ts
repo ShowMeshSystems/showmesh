@@ -21,6 +21,8 @@ import {
   nodesWithoutAnnouncement,
   audioOnlyNodesWarning,
   showDeclaredNodes,
+  readinessTone,
+  readyLabel,
 } from './showsModel'
 
 describe('the safety-class derivation tables', () => {
@@ -394,5 +396,14 @@ describe('showDeclaredNodes', () => {
 
   it('names no node when nothing declares one and there is no default', () => {
     expect(showDeclaredNodes({ ...base, cues: [cue({ audio: { asset: 'a.wav' } })] })).toEqual([])
+  })
+})
+
+describe('playlist readiness status', () => {
+  it('counts warnings in the label and turns amber, so green means nothing to read', () => {
+    expect([readyLabel(0), readinessTone(true, 0)]).toEqual(['Ready', 'good'])
+    expect([readyLabel(1), readinessTone(true, 1)]).toEqual(['Ready, 1 warning', 'warn'])
+    expect([readyLabel(4), readinessTone(true, 4)]).toEqual(['Ready, 4 warnings', 'warn'])
+    expect(readinessTone(false, 2)).toBe('bad')
   })
 })
