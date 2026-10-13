@@ -19,6 +19,7 @@ type fppPlaylistReadinessResponse struct {
 	FailingCondition string    `json:"failingCondition"`
 	Reason           string    `json:"reason"`
 	Warnings         []string  `json:"warnings"`
+	Warning          string    `json:"warning,omitempty"`
 	ServerTime       time.Time `json:"serverTime"`
 }
 

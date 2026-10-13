@@ -130,26 +130,29 @@ func TestObserveJSONFindsMessageFieldsAtAnyDepth(t *testing.T) {
 	}
 }
 
-func TestLedgerListsADeprecatedFieldUnderItsOwnHeading(t *testing.T) {
+func TestLedgerKeepsDeprecatedEntriesUnderTheirOwnHeading(t *testing.T) {
 	path := listWith(t, "")
 	l := NewLedger(path)
-	l.Deprecate("checks[].reason")
-	l.Observe("v1.Session checks[].reason", "cue bg1 failed.")
-	l.Observe("v1.Session checks[].reasons", "cue bg1 failed.")
+	l.Deprecate("v1.Old warning")
+	l.Observe("v1.Old warning", "two things; and more")
+	l.Observe("problem conflict in handleStart", "cue bg1 failed.")
 	t.Setenv(UpdateEnv, "1")
 	if code, out := settled(t, l, 0, false); code != 0 {
-		t.Fatalf("code = %d, want 0:\n%s", code, out)
+		t.Fatalf("rewrite code = %d:\n%s", code, out)
 	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	content, _ := os.ReadFile(path)
+	text := string(content)
+	heading := strings.Index(text, "# "+deprecatedHeading)
+	if heading < 0 || !strings.Contains(text[heading:], "v1.Old warning") || strings.Contains(text[:heading], "v1.Old warning") {
+		t.Fatalf("deprecated entries are not under their heading:\n%s", text)
 	}
-	known, deprecated, _ := strings.Cut(string(content), "# "+deprecatedHeading)
-	if !strings.Contains(known, "checks[].reasons") || strings.Contains(known, "checks[].reason\n") || !strings.Contains(deprecated, "capital\tv1.Session checks[].reason\n") {
-		t.Fatalf("list does not keep the deprecated field apart:\n%s", content)
-	}
+
 	t.Setenv(UpdateEnv, "")
-	if code, out := settled(t, l, 0, false); code != 0 {
-		t.Fatalf("a rewritten list does not read back clean: code %d\n%s", code, out)
+	again := NewLedger(path)
+	again.Deprecate("v1.Old warning")
+	again.Observe("v1.Old warning", "two things; and more")
+	again.Observe("problem conflict in handleStart", "cue bg1 failed.")
+	if code, out := settled(t, again, 0, false); code != 0 {
+		t.Fatalf("code = %d, want 0:\n%s", code, out)
 	}
 }

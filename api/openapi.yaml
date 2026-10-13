@@ -19669,6 +19669,12 @@ components:
             each. Empty when there are none.
           items:
             type: string
+        warning:
+          type: string
+          deprecated: true
+          description: >-
+            The items of `warnings` joined by one space. Omitted when there
+            are none. Read `warnings` instead.
         serverTime:
           type: string
           format: date-time

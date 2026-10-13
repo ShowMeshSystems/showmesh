@@ -924,8 +924,7 @@ joined	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 kind-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 quoted-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 
-# deprecated v1 fields
-# Kept because a v1 field is never removed. Each repeats a newer field's text.
+# Deprecated v1 fields kept for the additive-only rule.
 sentences	v1.NightCommandResponse session.readiness.checks[].reason
 sentences	v1.NightSessionResponse session.readiness.checks[].reason
 

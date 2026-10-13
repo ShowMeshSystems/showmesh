@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
@@ -871,5 +873,32 @@ func TestGetFPPPlaylistReadinessNotFoundForUnknownPlaylist(t *testing.T) {
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusNotFound, body)
+	}
+}
+
+func TestFPPPlaylistReadinessResponseKeepsDeprecatedWarning(t *testing.T) {
+	two := fppPlaylistReadinessResponse(fppreconcile.Report{Ready: true, Warnings: []string{"First.", "Second."}}, testNow)
+	raw, err := json.Marshal(two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := decodeMap(t, raw)
+	if got, _ := body["warning"].(string); got != "First. Second." {
+		t.Fatalf("warning = %q, want %q", got, "First. Second.")
+	}
+	if got, _ := body["warnings"].([]any); len(got) != 2 {
+		t.Fatalf("warnings = %v, want two items", got)
+	}
+
+	raw, err = json.Marshal(fppPlaylistReadinessResponse(fppreconcile.Report{Ready: true}, testNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = decodeMap(t, raw)
+	if _, present := body["warning"]; present {
+		t.Fatalf("warning present with no warnings: %v", body)
+	}
+	if got, ok := body["warnings"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("warnings = %v, want an empty list", body["warnings"])
 	}
 }

@@ -21,7 +21,7 @@ const (
 	StaleEnv = "SHOWMESH_COPYCHECK_STALE"
 
 	exemptHeading     = "exempt by ruling"
-	deprecatedHeading = "deprecated v1 fields"
+	deprecatedHeading = "Deprecated v1 fields kept for the additive-only rule."
 )
 
 // MessageFields are the JSON field names whose strings a person reads.
@@ -52,31 +52,23 @@ type Ledger struct {
 	path string
 
 	mu         sync.Mutex
-	deprecated []string
+	deprecated map[string]bool
 	messages   map[string]struct{}
 	seen       map[entry]map[string]struct{}
 }
 
 // NewLedger returns a Ledger whose list lives at path.
 func NewLedger(path string) *Ledger {
-	return &Ledger{path: path, messages: map[string]struct{}{}, seen: map[entry]map[string]struct{}{}}
+	return &Ledger{path: path, deprecated: map[string]bool{}, messages: map[string]struct{}{}, seen: map[entry]map[string]struct{}{}}
 }
 
-// Deprecate marks keys ending in one of suffixes as deprecated fields. They
-// repeat a newer field's text and are listed under their own heading.
-func (l *Ledger) Deprecate(suffixes ...string) {
+// Deprecate lists the keys whose messages belong to a deprecated v1 field.
+func (l *Ledger) Deprecate(keys ...string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.deprecated = append(l.deprecated, suffixes...)
-}
-
-func (l *Ledger) isDeprecated(key string) bool {
-	for _, suffix := range l.deprecated {
-		if strings.HasSuffix(key, suffix) {
-			return true
-		}
+	for _, key := range keys {
+		l.deprecated[key] = true
 	}
-	return false
 }
 
 // Observe checks one produced message. key says where it came from and must
@@ -90,8 +82,7 @@ func (l *Ledger) Observe(key, message string) {
 	defer l.mu.Unlock()
 	l.messages[message] = struct{}{}
 	for _, v := range violations {
-		e := entry{exempt: Exempt(message), rule: v.Rule, key: key}
-		e.deprecated = !e.exempt && l.isDeprecated(key)
+		e := entry{exempt: Exempt(message), deprecated: l.deprecated[key], rule: v.Rule, key: key}
 		if l.seen[e] == nil {
 			l.seen[e] = map[string]struct{}{}
 		}
@@ -225,7 +216,6 @@ func (l *Ledger) render() string {
 	}
 	if len(deprecated) > 0 {
 		b.WriteString("\n# " + deprecatedHeading + "\n")
-		b.WriteString("# Kept because a v1 field is never removed. Each repeats a newer field's text.\n")
 		for _, e := range deprecated {
 			b.WriteString(e.String() + "\n")
 		}
@@ -248,8 +238,6 @@ func (l *Ledger) writeReport(out io.Writer) {
 		section := "known"
 		if e.exempt {
 			section = "exempt"
-		} else if e.deprecated {
-			section = "deprecated"
 		}
 		for _, message := range sortedKeys(l.seen[e]) {
 			fmt.Fprintf(&b, "%s\t%s\t%s\t%q\n", section, e.rule, e.key, message)
