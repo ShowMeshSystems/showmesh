@@ -516,21 +516,17 @@ func (h *handlers) nightLightsRestoreAtEnd(ctx context.Context, now time.Time, r
 // is not yet verified, and a warning must not stop a night from starting.
 func (h *handlers) nightCheckLightsFades(ctx context.Context, p config.NightSessionPayload) []nightReadinessCheck {
 	var checks []nightReadinessCheck
-	ids := nightLightsInstances(p)
-	instances := "instance " + strings.Join(ids, ", ")
-	if len(ids) > 1 {
-		instances = "instances " + strings.Join(ids, ", ")
-	}
-	const unverified = "This has not been checked on a real display yet, so watch the first transition."
+	on := nightNames(nightLightsInstances(p))
+	const unverified = "Watch the first one, because this is not proven on a real display."
 	if p.LightsFadeOutMs != nil {
 		checks = append(checks, nightReadinessCheck{name: "lights:fade-out", health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"The lights fade out over %d seconds, finishing as the resting sequence ends before every show after the first, on FPP %s. %s",
-			nightLightsFadeSeconds(time.Duration(*p.LightsFadeOutMs)*time.Millisecond), instances, unverified)})
+			"The lights on %s fade out over %d seconds before each show after the first. %s",
+			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeOutMs)*time.Millisecond), unverified)})
 	}
 	if p.LightsFadeInMs != nil {
 		checks = append(checks, nightReadinessCheck{name: "lights:fade-in", health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"The lights fade in over %d seconds, starting when resting starts after each show, on FPP %s. %s",
-			nightLightsFadeSeconds(time.Duration(*p.LightsFadeInMs)*time.Millisecond), instances, unverified)})
+			"The lights on %s fade in over %d seconds after each show. %s",
+			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeInMs)*time.Millisecond), unverified)})
 	}
 	if p.LightsFadeOutMs == nil && p.LightsFadeInMs == nil {
 		return checks

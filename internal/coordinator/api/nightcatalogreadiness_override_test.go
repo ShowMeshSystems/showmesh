@@ -52,7 +52,7 @@ func TestNightCheckCatalogCurrent_ConflictedRevisionWithNoOverrideFails(t *testi
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %q, want failed; reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "no recorded operator override covers") {
+	if !strings.Contains(check.reason, "nobody accepted") {
 		t.Fatalf("reason does not explain the uncovered conflict: %s", check.reason)
 	}
 }

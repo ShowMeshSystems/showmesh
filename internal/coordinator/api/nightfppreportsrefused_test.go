@@ -30,7 +30,7 @@ func TestNightCheckFPPPluginReportsRefused_FailsWhenBoundInstanceIsRefused(t *te
 	if check.health != nightHealthFailed() {
 		t.Errorf("health = %q, want failed", check.health)
 	}
-	if check.reason == "" {
+	if len(check.reasons) == 0 {
 		t.Error("reason is empty, want the operator-facing refusal sentence")
 	}
 }

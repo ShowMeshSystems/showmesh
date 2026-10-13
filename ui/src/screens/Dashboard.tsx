@@ -74,7 +74,7 @@ function Verdict({ verdict, action }: { verdict: ReadinessVerdict; action?: Reac
         {verdict.detail !== null && <span className="sm-verdict__detail">{verdict.detail}</span>}
         {verdict.gated === true && (
           <span className="sm-verdict__detail">
-            <code className="sm-data">start-night</code> is withheld until readiness runs again.
+            Start night is withheld until readiness runs again.
           </span>
         )}
         {verdict.action && action !== undefined && <> {action}</>}

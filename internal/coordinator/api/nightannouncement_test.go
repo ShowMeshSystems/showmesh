@@ -465,7 +465,7 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 
 	mustPutAnnouncementCueAction(t, st)
 	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, cues, payload); check.health != nightHealthHealthy() {
-		t.Fatalf("audio-bound announcement: health = %v (%s), want healthy", check.health, check.reason)
+		t.Fatalf("audio-bound announcement: health = %v (%s), want healthy", check.health, nightCheckText(check))
 	}
 
 	// Not bound to audio.session.apply: nothing to declare the policy on,
@@ -475,15 +475,15 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 	fppCue.Name, fppCue.Action = "over-the-tannoy", "over-the-tannoy"
 	check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{fppCue}, payload)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("FPP-bound announcement: health = %v (%s), want failed", check.health, check.reason)
+		t.Fatalf("FPP-bound announcement: health = %v (%s), want failed", check.health, nightCheckText(check))
 	}
-	if !strings.Contains(check.reason, "over-the-tannoy") {
-		t.Fatalf("reason %q does not name the offending cue", check.reason)
+	if !strings.Contains(nightCheckText(check), "over-the-tannoy") {
+		t.Fatalf("reason %q does not name the offending cue", nightCheckText(check))
 	}
 	// Failed with no bed too: it does not play at all, which has nothing
 	// to do with whether there is background audio to duck.
 	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{fppCue}, noBed); check.health != nightHealthFailed() {
-		t.Fatalf("FPP-bound announcement with no background audio: health = %v (%s), want failed", check.health, check.reason)
+		t.Fatalf("FPP-bound announcement with no background audio: health = %v (%s), want failed", check.health, nightCheckText(check))
 	}
 
 	// Operator params contradicting the cue's configured policy.
@@ -499,10 +499,10 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 	contra.Name, contra.Action = "contradicted", "contradicted"
 	check = h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{contra}, payload)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("contradicted policy: health = %v (%s), want failed", check.health, check.reason)
+		t.Fatalf("contradicted policy: health = %v (%s), want failed", check.health, nightCheckText(check))
 	}
-	if !strings.Contains(check.reason, "duck") || !strings.Contains(check.reason, "mix") {
-		t.Fatalf("reason %q does not name both the cue policy and the action's own", check.reason)
+	if !strings.Contains(nightCheckText(check), "duck") || !strings.Contains(nightCheckText(check), "mix") {
+		t.Fatalf("reason %q does not name both the cue policy and the action's own", nightCheckText(check))
 	}
 
 	// A source role that cannot outrank the bed ducks nothing.
@@ -517,11 +517,11 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 	lowRole := announcementCue(&duck)
 	lowRole.Name, lowRole.Action = "too-quiet", "too-quiet"
 	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{lowRole}, payload); check.health != nightHealthFailed() {
-		t.Fatalf("source role that cannot outrank the bed: health = %v (%s), want failed", check.health, check.reason)
+		t.Fatalf("source role that cannot outrank the bed: health = %v (%s), want failed", check.health, nightCheckText(check))
 	}
 	// With no bed there is nothing to outrank, so it is not a failure.
 	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{lowRole}, noBed); check.health != nightHealthHealthy() {
-		t.Fatalf("low source role with no background audio: health = %v (%s), want healthy", check.health, check.reason)
+		t.Fatalf("low source role with no background audio: health = %v (%s), want healthy", check.health, nightCheckText(check))
 	}
 }
 

@@ -73,3 +73,48 @@ func inWords(id string) string {
 	}
 	return strings.ToUpper(words[:1]) + words[1:]
 }
+
+// nightCheckStateLabel is a check's state in the words an operator reads.
+func nightCheckStateLabel(state nightCheckState) string {
+	switch state {
+	case nightHealthHealthy():
+		return "Passed"
+	case nightHealthDegraded():
+		return "Warning"
+	case nightHealthFailed():
+		return "Failed"
+	case nightCheckStateNotVerifiable:
+		return "Cannot be checked"
+	case nightCheckStateNotConfigured:
+		return "Not set up"
+	}
+	return "Unknown"
+}
+
+var nightStateLabels = map[string]string{
+	nightStateInactive:            "Not prepared",
+	nightStatePreparing:           "Prepared",
+	nightStatePreshow:             "Preshow",
+	nightStateTransitionToShow:    "Going to show",
+	nightStateLive:                "Show running",
+	nightStateTransitionToResting: "Going to resting",
+	nightStateRestingIntershow:    "Resting",
+	nightStateEndOfNightResting:   "Resting, end of night",
+	nightStateFadingOut:           "Fading out",
+	nightStateStopped:             "Stopped",
+}
+
+// nightStateLabel is a session state in the words an operator reads.
+func nightStateLabel(state string) string {
+	if label, ok := nightStateLabels[state]; ok {
+		return label
+	}
+	return inWords(state)
+}
+
+var nightOutcomeLabels = map[string]string{
+	"ready":               "Passed",
+	"ready_with_warnings": "Passed with a warning",
+	"not_ready":           "Did not pass",
+	"unknown":             "Could not be determined",
+}

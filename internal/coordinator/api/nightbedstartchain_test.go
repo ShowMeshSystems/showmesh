@@ -361,7 +361,7 @@ func TestNightBedStart_SlowFailedPrepareDoesNotPutTheInstantInThePast(t *testing
 				t.Fatalf("history: %v", err)
 			}
 			latestA, _ := nightBackgroundAudioLatestStepForNode(history, "node-a")
-			if latestA.Step.Kind != nightBGStepStart || latestA.Row.Outcome != nightCueOutcomeConfirmed || !strings.Contains(latestA.Row.OutcomeReason, "bed-aligned start") {
+			if latestA.Step.Kind != nightBGStepStart || latestA.Row.Outcome != nightCueOutcomeConfirmed || !strings.Contains(latestA.Row.OutcomeReason, "timed to match") {
 				t.Fatalf("node-a latest step = %s %s %q, want a confirmed aligned start", latestA.Step.Kind, latestA.Row.Outcome, latestA.Row.OutcomeReason)
 			}
 		})

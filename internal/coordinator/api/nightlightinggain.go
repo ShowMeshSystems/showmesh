@@ -61,6 +61,9 @@ func (h *handlers) writeNightTransitionGain(ctx context.Context, target config.S
 type nightGainResult struct {
 	note   string
 	failed bool
+	// What the write reported. Logged, never shown.
+	applied                  bool
+	ceiling, effectiveOutput int
 }
 
 // nightApplyLightingFade performs fade's gain write for one cue and
@@ -99,18 +102,18 @@ func (h *handlers) nightApplyLightingFade(ctx context.Context, cueName string, t
 	}
 	outcome, err := write(ctx, target, fade, requestID)
 	if err != nil {
+		h.logWarn("night loop: lighting fade could not be written", "cue", cueName, "targetPercent", fade.TargetPercent, "error", err)
 		return nightGainResult{
-			note:   fmt.Sprintf("transition gain write to %d%% over %ds failed: %v", fade.TargetPercent, fade.FadeSeconds, err),
+			note:   fmt.Sprintf("The lights could not be faded to %d%%. Check the brightness on FPP.", fade.TargetPercent),
 			failed: true,
 		}
 	}
-	// Recorded on both paths. applied=false is an idempotent repeat of a
-	// requestId already applied, which is the key working as designed on a
-	// resumed transition; a row that stored nothing there would make the
-	// resume look like it never acted.
-	return nightGainResult{note: fmt.Sprintf(
-		"transition gain to %d%% over %ds: applied=%t, ceiling %d, effective output %d",
-		fade.TargetPercent, fade.FadeSeconds, outcome.Applied, outcome.Ceiling, outcome.EffectiveOutput)}
+	h.logDebug("night loop: lighting fade written", "cue", cueName, "applied", outcome.Applied, "ceiling", outcome.Ceiling, "effectiveOutput", outcome.EffectiveOutput)
+	// Recorded on a repeat too, so a resumed transition shows it acted.
+	return nightGainResult{
+		note:    fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds),
+		applied: outcome.Applied, ceiling: int(outcome.Ceiling), effectiveOutput: int(outcome.EffectiveOutput),
+	}
 }
 
 // nightCueReasonWith appends a gain note to a dispatch's own reason,
@@ -122,7 +125,7 @@ func nightCueReasonWith(reason, note string) string {
 	case reason == "":
 		return note
 	default:
-		return reason + "; " + note
+		return reason + nightReasonNoteSeparator + note
 	}
 }
 
@@ -139,4 +142,18 @@ func nightCueOutcomeWithGainFailure(outcome string) string {
 	default:
 		return outcome
 	}
+}
+
+// nightCueOutcomeWithGain is a resolved cue's outcome and stored reason once
+// its fade is counted. The cue's own failure comes first; the fade's comes
+// first only when the fade is what failed the cue.
+func nightCueOutcomeWithGain(outcome, reason string, gain nightGainResult) (string, string) {
+	if !gain.failed {
+		return outcome, nightCueReasonWith(reason, gain.note)
+	}
+	withGain := nightCueOutcomeWithGainFailure(outcome)
+	if withGain == outcome {
+		return outcome, nightCueReasonWith(reason, gain.note)
+	}
+	return withGain, nightCueReasonWith(gain.note, reason)
 }

@@ -68,7 +68,7 @@ func TestNightBoundaryContradicted_IdleUnderRepeatIsAlwaysAContradiction(t *test
 	if !bad {
 		t.Fatal("a stopped repeating playlist was not treated as a contradiction")
 	}
-	if !strings.Contains(reason, "should still be running") {
+	if !strings.Contains(reason, "should still be playing") {
 		t.Fatalf("reason = %q, want it to say the repeat should still be running", reason)
 	}
 }

@@ -82,6 +82,7 @@ function session(overrides: Partial<NightSessionState> = {}): NightSessionState 
     configObjectId: 'night.session/winter-ridge',
     configRevision: 4,
     state: 'live',
+    stateLabel: 'Show running',
     stateEnteredAt: '2026-08-28T21:02:22Z',
     cycle: 3,
     finalShowRequested: false,
@@ -168,7 +169,7 @@ describe('Show Night', () => {
       'Run of Show',
       'Background Audio Record',
     ])
-    expect(screen.getByRole('button', { name: 'Activate Definition' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Activate definition' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
@@ -193,7 +194,7 @@ describe('Show Night', () => {
       }),
     })
     const notice = screen.getByRole('status')
-    expect(notice).toHaveTextContent('The night is not advancing: FPP player fpp-main is held.')
+    expect(notice).toHaveTextContent('The night is waiting because FPP fpp-main is held.')
     expect(notice).toHaveTextContent(message)
   })
 
@@ -229,7 +230,7 @@ describe('Show Night', () => {
   it('never reads "recorded" as a health verdict', () => {
     const readouts = evidenceReadouts(session(), '2026-08-28T21:07:00Z')
     const power = readouts.find((entry) => entry.key === 'power')
-    expect(power?.label).toBe('Power phase recorded')
+    expect(power?.label).toBe('Power phase')
     expect(power?.tone).not.toBe('good')
   })
 
@@ -237,25 +238,25 @@ describe('Show Night', () => {
     const readouts = evidenceReadouts(session(), '2026-08-28T21:07:00Z')
     const readiness = readouts.find((entry) => entry.key === 'readiness')
     expect(readiness?.tone).toBe('warn')
-    expect(readiness?.fact).toContain('before the last prepare')
-    expect(readiness?.fact).toContain('no longer fresh')
+    expect(readiness?.facts.join(' ')).toContain('before the last prepare')
+    expect(readiness?.facts.join(' ')).toContain('no longer fresh')
   })
 
   it('renders a real word for ready_with_warnings, never the literal string "undefined"', () => {
     const readouts = evidenceReadouts(
-      session({ readiness: { state: 'recorded', reason: '', outcome: 'ready_with_warnings', completedAt: '2026-08-28T16:28:00Z', sameEpoch: true, fresh: true, checks: [] } }),
+      session({ readiness: { state: 'recorded', reason: '', outcome: 'ready_with_warnings', outcomeLabel: 'Passed with a warning', completedAt: '2026-08-28T16:28:00Z', sameEpoch: true, fresh: true, checks: [] } }),
       '2026-08-28T21:07:00Z',
     )
     const readiness = readouts.find((entry) => entry.key === 'readiness')
-    expect(readiness?.fact).not.toContain('undefined')
-    expect(readiness?.fact).toMatch(/warning/i)
+    expect(readiness?.facts.join(' ')).not.toContain('undefined')
+    expect(readiness?.facts.join(' ')).toMatch(/warning/i)
   })
 
   it('says a degraded attribution never clears', () => {
     const readouts = evidenceReadouts(session({ attributionDegraded: true }), '2026-08-28T21:07:00Z')
     const attribution = readouts.find((entry) => entry.key === 'attribution')
     expect(attribution?.tone).toBe('bad')
-    expect(attribution?.fact).toContain('stays for the session')
+    expect(attribution?.facts.join(' ')).toContain('no user recorded')
   })
 
   it('makes the boundary unknown when the observed position is stale', () => {
@@ -360,7 +361,7 @@ describe('Show Night', () => {
     expect(cycleSteps[1]?.detail).toBe('Stopped')
     expect(cycleSteps[1]?.title).toBe('Check the coordinator log for cycle 2.')
     expect(cycleSteps[2]?.status).toBe('now')
-    expect(cycleSteps[2]?.detail).toBe('live')
+    expect(cycleSteps[2]?.detail).toBe('Show running')
   })
 
   it('renders every finished-cycle outcome, including an earlier cycle with no record at all', () => {
@@ -432,9 +433,9 @@ describe('Show Night', () => {
     stubs.dispatchNightCommand = () => Promise.reject(new Error('no route to host'))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
-    expect(await screen.findByText('Refused')).toBeInTheDocument()
+    expect(await screen.findByText('End session refused')).toBeInTheDocument()
     expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
-    expect(screen.getByText(/was refused: no route to host/)).toBeInTheDocument()
+    expect(screen.getByText('no route to host')).toBeInTheDocument()
   })
 
   it('shows an Accepted chip, never a Refused one, when a night command is accepted', async () => {
@@ -442,7 +443,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(await screen.findByText('Accepted')).toBeInTheDocument()
-    expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+    expect(screen.queryByText(/refused/)).not.toBeInTheDocument()
   })
 
   it('renders the three previously missing lifecycle commands, in the contract’s order', () => {
@@ -476,7 +477,7 @@ describe('Show Night', () => {
     stubs.dispatchNightCommand = () => Promise.resolve(commandResponse('end-session', 'idempotent_no_op'))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
-    expect(await screen.findByText('No-op')).toBeInTheDocument()
+    expect(await screen.findByText('No change')).toBeInTheDocument()
     expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
     expect(screen.getByText(/changed nothing/)).toBeInTheDocument()
   })
@@ -498,7 +499,7 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
     const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByLabelText(/Skip the enter-show lead/))
+    fireEvent.click(within(dialog).getByLabelText(/Start the show now, without the lead-in/))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(true)
   })
@@ -581,7 +582,7 @@ describe('Show Night', () => {
     for (let press = 0; press < 2; press += 1) {
       fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
-      await screen.findByText('Refused')
+      await screen.findByText('Prepare site refused')
     }
     expect(calls).toHaveLength(2)
     expect(calls[0]?.[1]).not.toBe(calls[1]?.[1])
@@ -621,8 +622,40 @@ describe('Show Night', () => {
       )
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
-    expect(await screen.findByText('Withheld')).toBeInTheDocument()
+    expect(await screen.findByText(/withheld$/)).toBeInTheDocument()
     expect(screen.getByText('Withheld by interlock projector-cooldown: lamp above 40 °C.')).toBeInTheDocument()
+  })
+
+  it('lists each blocking safety check on its own line, beside the one-line refusal', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(
+        new ApiError('2 safety checks blocked Start night. Fix them, or retry with an override.', 409, PROBLEM_TYPE.nightNotReady, undefined, [
+          { name: 'gate', reason: 'The gate is open.' },
+          { name: 'cooldown', reason: 'The projector is still hot.' },
+        ]),
+      )
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
+    expect(await screen.findByText('Start night withheld')).toBeInTheDocument()
+    expect(screen.getByText('2 safety checks blocked Start night. Fix them, or retry with an override.')).toBeInTheDocument()
+    const blocked = screen.getByRole('list', { name: 'Safety checks that blocked this' })
+    expect(within(blocked).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'gate · The gate is open.',
+      'cooldown · The projector is still hot.',
+    ])
+  })
+
+  it('shows what the coordinator said about an accepted command on its own line', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.resolve({
+        ...commandResponse('end-session', 'applied'),
+        command: { command: 'end-session', outcome: 'applied', reason: 'Prepare site is done, and FPP was stopped.', attributionDegraded: false },
+      } as never)
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(await screen.findByText('End session was accepted.')).toBeInTheDocument()
+    expect(screen.getByText('Prepare site is done, and FPP was stopped.')).toBeInTheDocument()
   })
 
   it('distinguishes night-state-rejected from night-not-ready', async () => {
@@ -631,9 +664,9 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start night' }))
-    expect(await screen.findByText('Refused')).toBeInTheDocument()
-    expect(screen.getByText(/is not valid from the session's current state/)).toBeInTheDocument()
-    expect(screen.queryByText('Withheld')).not.toBeInTheDocument()
+    expect(await screen.findByText(/refused$/)).toBeInTheDocument()
+    expect(screen.getByText('start-night is not valid while live.')).toBeInTheDocument()
+    expect(screen.queryByText(/withheld$/)).not.toBeInTheDocument()
   })
 
   it('offers the end-session/prepare-site recovery recipe on night-ambiguous', async () => {
@@ -641,8 +674,9 @@ describe('Show Night', () => {
       Promise.reject(new ApiError('This session is degraded.', 409, PROBLEM_TYPE.nightAmbiguous))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Fade out night' }))
-    expect(await screen.findByText('Degraded')).toBeInTheDocument()
-    expect(screen.getByText(/Recover with end-session, then prepare-site\./)).toBeInTheDocument()
+    expect(await screen.findByText(/refused$/)).toBeInTheDocument()
+    expect(screen.getByText('This session is degraded.')).toBeInTheDocument()
+    expect(screen.queryByText(/end-session|prepare-site/)).not.toBeInTheDocument()
   })
 
   it('reports the audit-unavailable 503 as not dispatched, not as a failure', async () => {
@@ -653,9 +687,9 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Prepare site' }))
-    expect(await screen.findByText('Not dispatched')).toBeInTheDocument()
-    expect(screen.getByText(/was not sent/)).toBeInTheDocument()
-    expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+    expect(await screen.findByText(/not sent$/)).toBeInTheDocument()
+    expect(screen.getByText('The audit store could not be written.')).toBeInTheDocument()
+    expect(screen.queryByText(/refused$/)).not.toBeInTheDocument()
   })
 
   it('offers an override retry only after night-not-ready, and only with night:override', async () => {
@@ -663,7 +697,7 @@ describe('Show Night', () => {
       Promise.reject(new ApiError('Withheld by interlock projector-cooldown.', 409, PROBLEM_TYPE.nightNotReady))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
-    await screen.findByText('Withheld')
+    await screen.findByText(/withheld$/)
     expect(screen.queryByLabelText('Safety check')).not.toBeInTheDocument()
     expect(screen.getByText(/does not include "night:override"/)).toBeInTheDocument()
   })
@@ -680,16 +714,16 @@ describe('Show Night', () => {
       session: { ...allowedSessionBase, scopes: ['night:command', 'night:override'] } as never,
     })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
-    await screen.findByText('Withheld')
+    await screen.findByText(/withheld$/)
     const ruleInput = screen.getByLabelText('Safety check')
     fireEvent.change(ruleInput, { target: { value: 'projector-cooldown' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Retry power-down-presentation with override' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Power down presentation with override' }))
     expect(await screen.findByText('A reason is required to override a safety check.')).toBeInTheDocument()
     expect(calls).toBe(1)
 
     const reasonInput = screen.getByLabelText('Reason')
     fireEvent.change(reasonInput, { target: { value: 'Lamp confirmed cool by operator.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Retry power-down-presentation with override' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Power down presentation with override' }))
     expect(await screen.findByText('Accepted')).toBeInTheDocument()
     expect(calls).toBe(2)
   })
@@ -748,22 +782,24 @@ describe('Show Night', () => {
           sameEpoch: true,
           fresh: true,
           checks: [
-            { name: 'interlock:power-on:projector-cooldown', label: 'Safety check projector-cooldown for Power on', state: 'healthy', reason: 'Lamp below threshold.' },
-            { name: 'interlock:power-on:garage-link', label: 'Safety check garage-link for Power on', state: 'failed', reason: 'No route to host.' },
-            { name: 'audio-node:reachable', label: 'Audio node reachable', state: 'not_verifiable', reason: 'No audio node is configured to verify.' },
-            { name: 'resolume:composition', label: 'Resolume composition', state: 'not_configured', reason: 'No composition is configured for this show.' },
+            { name: 'interlock:power-on:projector-cooldown', label: 'Safety check projector-cooldown for Power on', state: 'healthy', stateLabel: 'Passed', reasons: [], reason: '' },
+            { name: 'interlock:power-on:garage-link', label: 'Safety check garage-link for Power on', state: 'failed', stateLabel: 'Failed', reasons: ['The garage link did not answer.', 'This blocks Power on.'], reason: 'The garage link did not answer. This blocks Power on.' },
+            { name: 'audio-node:reachable', label: 'Audio node reachable', state: 'not_verifiable', stateLabel: 'Cannot be checked', reasons: ['No audio node is configured to verify.'], reason: 'No audio node is configured to verify.' },
+            { name: 'resolume:composition', label: 'Resolume composition', state: 'not_configured', stateLabel: 'Not set up', reasons: [], reason: '' },
           ],
         },
       }),
     })
-    expect(screen.getByText('Safety check projector-cooldown for Power on · healthy')).toBeInTheDocument()
-    expect(screen.getByText('Lamp below threshold.')).toBeInTheDocument()
-    expect(screen.getByText('Safety check garage-link for Power on · failed')).toBeInTheDocument()
-    expect(screen.getByText('No route to host.')).toBeInTheDocument()
-    expect(screen.getByText('Audio node reachable · not verifiable')).toBeInTheDocument()
+    expect(screen.getByText('Safety check projector-cooldown for Power on · Passed')).toBeInTheDocument()
+    const failed = screen.getByRole('list', { name: 'Safety check garage-link for Power on · Failed' })
+    expect(within(failed).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'The garage link did not answer.',
+      'This blocks Power on.',
+    ])
+    expect(screen.getByText('Audio node reachable · Cannot be checked')).toBeInTheDocument()
     expect(screen.getByText('No audio node is configured to verify.')).toBeInTheDocument()
-    expect(screen.getByText('Resolume composition · not configured')).toBeInTheDocument()
-    expect(screen.getByText('No composition is configured for this show.')).toBeInTheDocument()
+    expect(screen.getByText('Resolume composition · Not set up')).toBeInTheDocument()
+    expect(screen.queryByText('No reason was recorded for this check.')).not.toBeInTheDocument()
     expect(screen.queryByText(/interlock:power-on/)).not.toBeInTheDocument()
   })
 
@@ -843,7 +879,7 @@ describe('Show Night', () => {
       }),
     })
     expect(screen.getByText('audio-02')).toBeInTheDocument()
-    expect(screen.getByText('Not playing the background music')).toBeInTheDocument()
+    expect(screen.getByText('Not playing background audio')).toBeInTheDocument()
     expect(screen.getByText(/no longer holding the background music/)).toBeInTheDocument()
   })
 
@@ -853,7 +889,7 @@ describe('Show Night', () => {
         backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, nodesNotPlaying: [], steps: [] },
       }),
     })
-    expect(screen.queryByText('Not playing the background music')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not playing background audio')).not.toBeInTheDocument()
   })
 
   it('renders background audio steps with their sequence, cue, kind, and state', () => {
@@ -895,12 +931,12 @@ describe('Show Night', () => {
         },
       }),
     })
-    expect(screen.getByText('background')).toBeInTheDocument()
+    expect(screen.getByText('Background')).toBeInTheDocument()
     expect(screen.getByText('duck-bed')).toBeInTheDocument()
-    expect(screen.getByText('gain')).toBeInTheDocument()
-    expect(screen.getByText('announcement')).toBeInTheDocument()
+    expect(screen.getByText('Gain')).toBeInTheDocument()
+    expect(screen.getByText('Announcement')).toBeInTheDocument()
     expect(screen.getByText('welcome-back')).toBeInTheDocument()
-    expect(screen.getByText('announcementStart')).toBeInTheDocument()
+    expect(screen.getByText('Announcement start')).toBeInTheDocument()
     expect(screen.getByText('No announcement asset configured.')).toBeInTheDocument()
     expect(screen.getAllByText('audio-01')).toHaveLength(2)
   })
@@ -972,7 +1008,7 @@ describe('Show Night', () => {
         },
       }),
     })
-    expect(screen.getByText('announcementApply')).toBeInTheDocument()
+    expect(screen.getByText('Announcement apply')).toBeInTheDocument()
   })
 
   it('renders the pinned background-audio ceiling distinctly from the audio.settings config value', () => {
@@ -981,7 +1017,7 @@ describe('Show Night', () => {
         backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [], nodesNotPlaying: [] },
       }),
     })
-    expect(screen.getByText(/Ceiling for this session: -18 dB, fixed when it started/)).toBeInTheDocument()
+    expect(screen.getByText('Volume ceiling: -18 dB, fixed when the night started.')).toBeInTheDocument()
   })
 
   it('says so honestly when the pinned ceiling is null because nothing is configured', () => {
@@ -990,7 +1026,7 @@ describe('Show Night', () => {
         backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [], nodesNotPlaying: [] },
       }),
     })
-    expect(screen.getByText(/Pinned ceiling: none\. No background audio is configured on the pinned revision\./)).toBeInTheDocument()
+    expect(screen.getByText('No background audio is configured on the pinned revision.')).toBeInTheDocument()
   })
 
   it('lists the planned background audio in order before the bed has started', () => {
@@ -1087,15 +1123,15 @@ describe('Show Night', () => {
         updatedAt: '2026-08-28T21:07:00Z',
       }),
     })
-    expect(screen.getByText('night.session/winter-ridge at version 4.')).toBeInTheDocument()
-    expect(screen.getByText('winter-ridge-2026 is ready and committed for this session.')).toBeInTheDocument()
-    expect(screen.getByText(/^Admission closed \d/)).toBeInTheDocument()
+    expect(screen.getByText('night.session/winter-ridge, version 4.')).toBeInTheDocument()
+    expect(screen.getByText('The show for this cycle has started. It is winter-ridge-2026.')).toBeInTheDocument()
+    expect(screen.getByText(/^No more shows start tonight\. This was set at \d/)).toBeInTheDocument()
     expect(screen.getByText('Session last updated')).toBeInTheDocument()
   })
 
   it('reports no show armed honestly when armedShowId is empty', () => {
     renderScreen({ nightSession: session({ armedShowId: '', showCommitted: false }) })
-    expect(screen.getByText('No show is ready for this session.')).toBeInTheDocument()
+    expect(screen.getByText('No show is ready to start.')).toBeInTheDocument()
   })
 
   it('reads the night session activation pointer and lists definitions to activate', async () => {
@@ -1110,7 +1146,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
   })
@@ -1126,7 +1162,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText(/Active version/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
@@ -1136,7 +1172,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => new Promise(() => {})
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
@@ -1145,7 +1181,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
@@ -1166,7 +1202,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -1191,7 +1227,7 @@ describe('Show Night', () => {
         objects: [{ id: 'winter-ridge-backup', label: 'Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -1207,15 +1243,15 @@ describe('Show Night', () => {
       return Promise.resolve(activeConfigResponse('', { revision: 4 }))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
-    const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the pointer')
+    const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the active definition')
     const clearButton = screen.getByRole('button', { name: 'Clear active definition' })
     expect(clearButton).toBeDisabled()
     fireEvent.change(confirmInput, { target: { value: 'winter-ridge-2026' } })
     expect(clearButton).not.toBeDisabled()
     fireEvent.click(clearButton)
-    expect(await screen.findByText('none - the pointer is cleared')).toBeInTheDocument()
+    expect(await screen.findByText('None. No definition is active.')).toBeInTheDocument()
     expect(calls[0]).toEqual({ session: '' })
   })
 
@@ -1852,7 +1888,7 @@ describe('Show Night', () => {
       renderDefinitions({ session: configWriteSession })
       await openWinterRidgeDefinition()
       await screen.findByText('Plays on no node (installation default).')
-      fireEvent.click(screen.getByRole('button', { name: 'Set specific nodes for this bed' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Set specific nodes for this background audio' }))
       const group = await screen.findByRole('group', { name: 'Play on these nodes' })
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-01' }))
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))
@@ -2135,8 +2171,8 @@ describe('ShowNight stop hold', () => {
       return Promise.resolve(commandResponse('resume-show'))
     }
     renderScreen({ nightSession: session({ stopHold: hold }), session: nightCommandSession })
-    expect(screen.getByText('Stopped')).toBeInTheDocument()
-    expect(screen.getByText(/Resume starts the show playlist/)).toBeInTheDocument()
+    expect(screen.getByText('Stopped by bench')).toBeInTheDocument()
+    expect(screen.getByText('Resume starts the show from its first song.')).toBeInTheDocument()
     const resume = screen.getByRole('button', { name: 'Resume' })
     expect(resume).toBeEnabled()
     fireEvent.click(resume)

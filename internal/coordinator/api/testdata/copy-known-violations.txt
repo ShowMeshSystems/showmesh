@@ -296,8 +296,6 @@ quoted-name	problem invalid-parameter in handleListShowPlaylists
 capital	problem invalid-parameter in handleListShows
 kind-name	problem invalid-parameter in handleListShows
 quoted-name	problem invalid-parameter in handleListShows
-capital	problem invalid-parameter in handleNightCommand
-quoted-name	problem invalid-parameter in handleNightCommand
 capital	problem invalid-parameter in handleNode
 full-stop	problem invalid-parameter in handleNode
 joined	problem invalid-parameter in handleNode
@@ -427,14 +425,6 @@ quoted-name	problem invalid-parameter in writeEnrollmentError
 capital	problem method-not-allowed in WriteHeader
 full-stop	problem method-not-allowed in WriteHeader
 joined	problem method-not-allowed in WriteHeader
-joined	problem night-ambiguous in handleNightCommand
-length	problem night-ambiguous in handleNightCommand
-sentences	problem night-ambiguous in handleNightCommand
-capital	problem night-not-ready in handleNightCommand
-full-stop	problem night-not-ready in handleNightCommand
-go-error	problem night-not-ready in handleNightCommand
-joined	problem night-not-ready in handleNightCommand
-quoted-name	problem night-not-ready in handleNightCommand
 joined	problem node-enrollment-unavailable in writeEnrollmentError
 capital	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
 full-stop	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
@@ -514,16 +504,8 @@ full-stop	problem resource-not-found in handleGetMacroRun
 quoted-name	problem resource-not-found in handleGetMacroRun
 kind-name	problem resource-not-found in handleGetMediaPlaylist
 quoted-name	problem resource-not-found in handleGetMediaPlaylist
-capital	problem resource-not-found in handleGetNightLifecycleByID
-full-stop	problem resource-not-found in handleGetNightLifecycleByID
-quoted-name	problem resource-not-found in handleGetNightLifecycleByID
 kind-name	problem resource-not-found in handleGetNightSessionActive
 quoted-name	problem resource-not-found in handleGetNightSessionActive
-capital	problem resource-not-found in handleGetNightSessionRevision
-full-stop	problem resource-not-found in handleGetNightSessionRevision
-kind-name	problem resource-not-found in handleGetNightSessionRevision
-quoted-name	problem resource-not-found in handleGetNightSessionRevision
-vocabulary	problem resource-not-found in handleGetNightSessionRevision
 capital	problem resource-not-found in handleGetNodeCueCatalog
 full-stop	problem resource-not-found in handleGetNodeCueCatalog
 quoted-name	problem resource-not-found in handleGetNodeCueCatalog
@@ -824,56 +806,12 @@ full-stop	v1.MacroRunResponse run.steps[].command.reason
 joined	v1.MacroRunResponse run.steps[].command.reason
 capital	v1.MacroRunResponse run.steps[].outcomeReason
 full-stop	v1.MacroRunResponse run.steps[].outcomeReason
-quoted-name	v1.NightCommandResponse command.reason
-capital	v1.NightCommandResponse session.boundary.reason
-full-stop	v1.NightCommandResponse session.boundary.reason
-joined	v1.NightCommandResponse session.boundary.reason
 capital	v1.NightCommandResponse session.cues.cues[].reason
 full-stop	v1.NightCommandResponse session.cues.cues[].reason
-joined	v1.NightCommandResponse session.cues.cues[].reason
 kind-name	v1.NightCommandResponse session.cues.cues[].reason
-capital	v1.NightCommandResponse session.degradedReason
-full-stop	v1.NightCommandResponse session.degradedReason
-capital	v1.NightCommandResponse session.powerPhase.reason
-full-stop	v1.NightCommandResponse session.powerPhase.reason
-capital	v1.NightCommandResponse session.readiness.checks[].reason
-full-stop	v1.NightCommandResponse session.readiness.checks[].reason
-go-error	v1.NightCommandResponse session.readiness.checks[].reason
-joined	v1.NightCommandResponse session.readiness.checks[].reason
-kind-name	v1.NightCommandResponse session.readiness.checks[].reason
-length	v1.NightCommandResponse session.readiness.checks[].reason
-quoted-name	v1.NightCommandResponse session.readiness.checks[].reason
-vocabulary	v1.NightCommandResponse session.readiness.checks[].reason
-capital	v1.NightCommandResponse session.readiness.reason
-full-stop	v1.NightCommandResponse session.readiness.reason
-capital	v1.NightCommandResponse session.transition.reason
-full-stop	v1.NightCommandResponse session.transition.reason
-joined	v1.NightCommandResponse session.transition.reason
-capital	v1.NightSessionResponse session.backgroundAudio.reason
-full-stop	v1.NightSessionResponse session.backgroundAudio.reason
-capital	v1.NightSessionResponse session.boundary.reason
-full-stop	v1.NightSessionResponse session.boundary.reason
 capital	v1.NightSessionResponse session.cues.cues[].reason
 full-stop	v1.NightSessionResponse session.cues.cues[].reason
 vocabulary	v1.NightSessionResponse session.cues.cues[].reason
-capital	v1.NightSessionResponse session.cues.reason
-full-stop	v1.NightSessionResponse session.cues.reason
-capital	v1.NightSessionResponse session.powerPhase.reason
-full-stop	v1.NightSessionResponse session.powerPhase.reason
-capital	v1.NightSessionResponse session.readiness.checks[].reason
-full-stop	v1.NightSessionResponse session.readiness.checks[].reason
-joined	v1.NightSessionResponse session.readiness.checks[].reason
-kind-name	v1.NightSessionResponse session.readiness.checks[].reason
-quoted-name	v1.NightSessionResponse session.readiness.checks[].reason
-vocabulary	v1.NightSessionResponse session.readiness.checks[].reason
-capital	v1.NightSessionResponse session.readiness.reason
-full-stop	v1.NightSessionResponse session.readiness.reason
-go-error	v1.NightSessionResponse session.readiness.reason
-joined	v1.NightSessionResponse session.readiness.reason
-vocabulary	v1.NightSessionResponse session.readiness.reason
-capital	v1.NightSessionResponse session.transition.reason
-full-stop	v1.NightSessionResponse session.transition.reason
-joined	v1.NightSessionResponse session.transition.reason
 capital	v1.NodeAssetManifestResponse manifest.reason
 full-stop	v1.NodeAssetManifestResponse manifest.reason
 go-error	v1.NodeAssetManifestResponse manifest.reason
@@ -985,6 +923,10 @@ go-error	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 joined	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 kind-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 quoted-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+
+# Deprecated v1 fields kept for the additive-only rule.
+sentences	v1.NightCommandResponse session.readiness.checks[].reason
+sentences	v1.NightSessionResponse session.readiness.checks[].reason
 
 # exempt by ruling
 # Config validation errors of the form "<fieldPath> must ...".

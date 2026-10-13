@@ -358,6 +358,9 @@ func decodeProblemError(resp *http.Response, body []byte) error {
 	if p.Detail != "" {
 		msg = fmt.Sprintf("%s: %s", p.Title, p.Detail)
 	}
+	for _, check := range p.BlockedChecks {
+		msg = fmt.Sprintf("%s\n  %s: %s", msg, check.Name, check.Reason)
+	}
 	if p.Type == problemConfigRevisionPreconditionFailed {
 		// p.Detail (surfaced above, verbatim, not reparsed) already names
 		// the object's current revision: configRevisionConflictProblem's

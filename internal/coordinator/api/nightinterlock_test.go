@@ -124,7 +124,7 @@ func TestEvaluateNightInterlockRule_ClosedBehaviorMatrix(t *testing.T) {
 func TestEvaluateNightInterlockRule_FailsClosedOnUnrecognizedOnUnavailable(t *testing.T) {
 	rule := config.NightInterlockRule{
 		Posture: config.NightInterlockPostureBlock, OnUnavailable: "garbage",
-		OverridePolicy: config.NightInterlockOverridePolicyAuthorizedOperator, FailureText: "f",
+		OverridePolicy: config.NightInterlockOverridePolicyAuthorizedOperator, FailureText: "The check did not pass.",
 	}
 	got := evaluateNightInterlockRule(rule, nightInterlockConditionUnavailable)
 	if !got.Withhold {
@@ -178,7 +178,7 @@ func TestNightConditionFromHealthRoundTrip(t *testing.T) {
 func blockRule(name, phase string) config.NightInterlockRule {
 	return config.NightInterlockRule{
 		Name: name, Phase: phase, Posture: config.NightInterlockPostureBlock,
-		Signal: "s", FailureText: "blocked", OnUnavailable: config.NightInterlockOnUnavailableBlock,
+		Signal: "s", FailureText: "The gate is blocked.", OnUnavailable: config.NightInterlockOnUnavailableBlock,
 		OverridePolicy: config.NightInterlockOverridePolicyAuthorizedOperator,
 	}
 }

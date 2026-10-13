@@ -6280,6 +6280,8 @@ export interface components {
             supportedVersions?: number[];
             /** @description The macro run this problem is about. Present on the three macro-run conflicts and on nothing else: the in-flight run that refused an overlapping submission, or the existing run an idempotency key already belongs to. It is a field rather than something a client digs out of detail, because a 409 whose whole purpose is to point at a run is useless to a client that cannot link to it, and matching a substring of this server's English is how the Operator UI once told two different 409s apart. Additive and omitted when empty. */
             conflictingRunId?: string;
+            /** @description The safety checks behind a "night-not-ready" refusal, one per item. `detail` stays one line and never lists them. Omitted when no safety check refused the command. */
+            blockedChecks?: components["schemas"]["NightBlockedCheck"][];
         };
         /** @description The payload of the first event on every SSE connection. */
         StreamStart: {
@@ -7627,11 +7629,11 @@ export interface components {
             source: "api";
         };
         /**
-         * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed.
+         * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reasons` say what needs attention, one message per item. A healthy result on one check is never evidence any other check passed.
          *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
-         *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reason`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
-         *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), naming the reason in `reason`. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
+         *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reasons`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
+         *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), one item of `reasons` per FPP. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
          */
         NightReadinessCheck: {
             name: string;
@@ -7642,6 +7644,21 @@ export interface components {
              * @enum {string}
              */
             state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable" | "not_configured";
+            /** @description `state` in the words an operator reads, such as "Passed" or "Cannot be checked". */
+            stateLabel: string;
+            /** @description One operator message per item, at most two short sentences each. A healthy check has none. A check about several cues or nodes has one item for each. Items are never joined into one string. */
+            reasons: string[];
+            /**
+             * @deprecated
+             * @description Deprecated. Read `reasons`. This is the items of `reasons` joined by one space, and the empty string when there are none. It stays because a v1 field is never removed.
+             */
+            reason: string;
+        };
+        /** @description One safety check that refused a night command. */
+        NightBlockedCheck: {
+            /** @description The safety check's name, which an override names. */
+            name: string;
+            /** @description One operator message, at most two short sentences. */
             reason: string;
         };
         /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. `ready_with_warnings` answers "can the night start" with yes: it names a real, non-blocking condition a worst check reported as degraded, distinct from `ready` so it is not silently invisible and distinct from `not_ready` so a client does not mistake it for a refusal. */
@@ -7652,6 +7669,8 @@ export interface components {
             reason: string;
             /** @enum {string} */
             outcome?: "ready" | "ready_with_warnings" | "not_ready" | "unknown";
+            /** @description `outcome` in the words an operator reads, such as "Passed with a warning". Present whenever `outcome` is. */
+            outcomeLabel?: string;
             epochId?: string;
             /** Format: date-time */
             completedAt?: string;
@@ -7785,6 +7804,8 @@ export interface components {
              * @enum {string}
              */
             state: "inactive" | "preparing" | "preshow" | "transition-to-show" | "live" | "transition-to-resting" | "resting-intershow" | "end-of-night-resting" | "fading-out" | "stopped";
+            /** @description `state` in the words an operator reads, such as "Show running". */
+            stateLabel: string;
             /** Format: date-time */
             stateEnteredAt: string;
             cycle: number;

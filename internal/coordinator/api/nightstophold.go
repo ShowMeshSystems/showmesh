@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +19,7 @@ const (
 	nightStopHoldReason          = "The show was stopped with Stop."
 	nightStopHoldCycleReason     = "The operator stopped the show before it finished."
 	nightResumeShowNoHoldDetail  = "The show is not stopped, so there is nothing to resume."
-	nightResumeShowPreshowDetail = "The night has not started yet. Press Start Night to start the show."
+	nightResumeShowPreshowDetail = "The night has not started yet. Run Start night to start the show."
 )
 
 // nightStopHoldStands reports whether rec carries a hold that still
@@ -89,7 +88,7 @@ func (h *handlers) nightEmergencyStopHold(ctx context.Context, now time.Time, is
 	})
 	if err != nil {
 		h.logWarn("emergency stop: could not hold the night session; the stop still proceeded", "error", err)
-		return v1.EmergencyStopNightSessionOutcome{Present: out.Present, SessionID: out.SessionID, Error: "hold step failed: " + err.Error()}, nil
+		return v1.EmergencyStopNightSessionOutcome{Present: out.Present, SessionID: out.SessionID, Error: "The night session could not be held, so it may start another show. Run End session."}, nil
 	}
 	return out, closeNext
 }
@@ -126,7 +125,7 @@ func (h *handlers) nightResumeShowTx(ctx context.Context, tx *store.Tx, now time
 		return nightCommandOutcome{}, &p, nil
 	}
 	if current.Degraded {
-		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
+		p := nightAmbiguousProblem(nightDegradedDetail(current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
@@ -135,13 +134,13 @@ func (h *handlers) nightResumeShowTx(ctx context.Context, tx *store.Tx, now time
 		return nightCommandOutcome{}, &p, nil
 	case nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
 	case nightStateEndOfNightResting:
-		p := nightStateRejectedProblem("The last show of the night has already played, so there is no show to resume. Fade out the night or end the session.")
+		p := nightStateRejectedProblem("The last show of the night has played, so there is no show to resume. Run Fade out night or End session.")
 		return nightCommandOutcome{}, &p, nil
 	case nightStateFadingOut:
-		p := nightStateRejectedProblem("The night is shutting down, so there is no show to resume. End the session to finish.")
+		p := nightStateRejectedProblem("The night is shutting down, so there is no show to resume. Run End session to finish.")
 		return nightCommandOutcome{}, &p, nil
 	default:
-		p := nightNotReadyProblem("The night has not started yet, so there is no show to resume. Start the pre-show first.")
+		p := nightNotReadyProblem("The night has not started yet, so there is no show to resume. Run Start preshow first.")
 		return nightCommandOutcome{}, &p, nil
 	}
 	if _, err := h.getPinnedNightSessionPayloadTx(ctx, tx, *current); err != nil {
@@ -157,6 +156,6 @@ func (h *handlers) nightResumeShowTx(ctx context.Context, tx *store.Tx, now time
 	next.ContentAnchorJSON = ""
 	lastTick := now
 	next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &lastTick, LastTickAt: &lastTick,
-		Reason: fmt.Sprintf("The show starts again from the top after Stop, expected at %s.", now.Format(time.RFC3339))})
+		Reason: "The show starts again from the top after Stop."})
 	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
 }

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -314,7 +313,7 @@ func (h *handlers) handleGetNightSessionRevision(w http.ResponseWriter, r *http.
 
 	rev, err := h.deps.Config.GetConfigRevision(r.Context(), kind, id, revNum)
 	if errors.Is(err, store.ErrConfigRevisionNotFound) {
-		writeProblem(w, h.logger, now, resourceNotFoundProblem(fmt.Sprintf("no revision %d of night.session %q", revNum, id)))
+		writeProblem(w, h.logger, now, resourceNotFoundProblem("That version of the night definition does not exist. Pick another version."))
 		return
 	}
 	if err != nil {

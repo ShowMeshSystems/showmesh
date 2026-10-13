@@ -45,10 +45,13 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 	one := func(state nightCheckState, reason string) []nightReadinessCheck {
 		return []nightReadinessCheck{{name: nightParticipationCheckPrefix, health: state, reason: reason}}
 	}
+	unreadable := func(reason string, err error) []nightReadinessCheck {
+		return []nightReadinessCheck{{name: nightParticipationCheckPrefix, health: nightHealthUnknown(), reason: reason, cause: err}}
+	}
 
 	active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
 	if activeErr != nil {
-		return one(nightHealthUnknown(), "could not resolve the active show: "+activeErr.Error())
+		return unreadable(nightActiveShowUnreadReason, activeErr)
 	}
 	if !active.Configured || active.ShowID != show {
 		// Identical to nightCheckCatalogCurrent's own guard, for the
@@ -56,20 +59,21 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 		// active authorizes nothing tonight, and evaluating it would
 		// report a finding about a show this coordinator is not running.
 		return one(nightCheckStateNotConfigured, fmt.Sprintf(
-			"show.active does not currently name this session's own show %q; instance participation cannot be evaluated until it does", show))
+			"Show %s is not the active show, so its FPP and Resolume were not checked. Activate the show.", show))
 	}
 	selection := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	if selection.unknownReason != "" {
-		return one(nightHealthUnknown(), selection.unknownReason)
+		h.logWarn("night readiness: the active show's FPP and Resolume selection could not be read", "show", show, "reason", selection.unknownReason)
+		return one(nightHealthUnknown(), "The coordinator could not read which FPP and Resolume the active show uses. Run readiness again.")
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)
 	if err != nil {
-		return one(nightHealthUnknown(), "could not list configured FPP instances: "+err.Error())
+		return unreadable("The coordinator could not read its FPP list. Run readiness again.", err)
 	}
 	resolumeViews, err := h.deps.Resolume.ListInstances(ctx)
 	if err != nil {
-		return one(nightHealthUnknown(), "could not list configured Resolume instances: "+err.Error())
+		return unreadable("The coordinator could not read its Resolume list. Run readiness again.", err)
 	}
 
 	var checks []nightReadinessCheck
@@ -80,7 +84,7 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 			continue
 		}
 		health := deriveInstanceHealth(ResolveObservations(fv.Observations), now)
-		checks = append(checks, nightParticipationHealthCheck("fpp", fv.InstanceID, health))
+		checks = append(checks, nightParticipationHealthCheck("fpp", "FPP", fv.InstanceID, health))
 	}
 	configuredResolume := make(map[string]bool, len(resolumeViews))
 	for _, rv := range resolumeViews {
@@ -89,7 +93,7 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 			continue
 		}
 		health := deriveResolumeHealth(ResolveObservations(rv.Observations), now)
-		checks = append(checks, nightParticipationHealthCheck("resolume", rv.InstanceID, health))
+		checks = append(checks, nightParticipationHealthCheck("resolume", "Resolume", rv.InstanceID, health))
 	}
 
 	// A selected id with no configured instance behind it is the loudest
@@ -108,14 +112,19 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 // nightParticipationHealthCheck states one participating instance's health
 // as a readiness check, reusing the SAME derived health GET /fpp and GET
 // /resolume/instances report rather than re-deriving it a second way.
-func nightParticipationHealthCheck(kind, instanceID string, health observation.Health) nightReadinessCheck {
+func nightParticipationHealthCheck(kind, label, instanceID string, health observation.Health) nightReadinessCheck {
 	name := nightParticipationCheckPrefix + ":" + kind + ":" + instanceID
-	if health == observation.HealthHealthy {
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(),
-			reason: fmt.Sprintf("%s instance %q takes part in the active show and is healthy", kind, instanceID)}
+	problem := "has not reported how it is doing. Check that it is on."
+	switch health {
+	case observation.HealthHealthy:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy()}
+	case observation.HealthDegraded:
+		problem = "reports a problem. Check it before the show."
+	case observation.HealthFailed:
+		problem = "is not working. Check it before the show."
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health),
-		reason: fmt.Sprintf("%s instance %q takes part in the active show and its health is %q", kind, instanceID, health)}
+		reason: fmt.Sprintf("%s %s is in the active show and %s", label, instanceID, problem)}
 }
 
 // nightParticipationAbsentChecks produces one failing check per selected
@@ -133,7 +142,7 @@ func nightParticipationAbsentChecks(kind, label string, ids []string, configured
 		checks = append(checks, nightReadinessCheck{
 			name:   nightParticipationCheckPrefix + ":" + kind + ":" + id,
 			health: nightHealthFailed(),
-			reason: fmt.Sprintf("the active show selects %s instance %q as taking part, but no such instance is configured on this coordinator", label, id),
+			reason: fmt.Sprintf("The active show uses %s %s, which is not set up here. Add it, or remove it from the show.", label, id),
 		})
 	}
 	return checks

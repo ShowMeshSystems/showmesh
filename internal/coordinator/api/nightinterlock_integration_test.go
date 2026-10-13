@@ -57,7 +57,7 @@ func nightSessionBodyWithCooldownInterlock(phase, onUnavailable string) string {
 				"phase": "` + phase + `",
 				"posture": "block",
 				"signal": "cooldown-check",
-				"failureText": "enclosure has not confirmed a safe cooldown",
+				"failureText": "The enclosure has not confirmed a safe cooldown.",
 				"onUnavailable": "` + onUnavailable + `",
 				"overridePolicy": "authorized-operator"
 			}
@@ -145,7 +145,7 @@ func TestInterlockBlocksStartNightWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("start-night status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 }
@@ -188,7 +188,7 @@ func TestInterlockFreshReadinessRerunOnStaleStartNightReportsTheFreshFailure(t *
 	if strings.Contains(problem.Detail, "past the configured maximum age") {
 		t.Fatalf("start-night reported the staleness message instead of the fresh re-run's own failure: %q", problem.Detail)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the rule the FRESH re-run withheld: %+v", problem)
 	}
 }
@@ -502,7 +502,7 @@ func TestNightCommandSurvivesServerWriteTimeout(t *testing.T) {
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem: %v\nbody: %s", err, body)
 	}
-	if !strings.Contains(problem.Detail, "the source for this check is unavailable") {
+	if !strings.Contains(nightBlockedText(problem), "did not answer") {
 		t.Fatalf("problem.Detail = %q, want it to name the interlock's own real \"source is unavailable\" reason, not a generic transport error", problem.Detail)
 	}
 }

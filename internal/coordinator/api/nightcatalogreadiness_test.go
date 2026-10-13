@@ -125,11 +125,11 @@ func TestNightCheckCatalogCurrent_FailsNamingBothRevisions(t *testing.T) {
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %q, want failed; reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, required) {
+	if !strings.Contains(check.reason, "does not have the active show's cue list") {
 		t.Fatalf("reason does not name the required revision %q: %s", required, check.reason)
 	}
-	if !strings.Contains(check.reason, staleRevision) {
-		t.Fatalf("reason does not name the acknowledged revision %q: %s", staleRevision, check.reason)
+	if strings.Contains(check.reason, staleRevision) || strings.Contains(check.reason, required) {
+		t.Fatalf("reason shows a cue list hash to the operator: %s", check.reason)
 	}
 }
 
@@ -172,10 +172,10 @@ func TestNightCheckCatalogCurrent_HeldDeployReportsDegradedWithHoldReason(t *tes
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "The deploy waits because") {
+	if !strings.Contains(check.reason, "when the node finishes its cue") {
 		t.Fatalf("reason does not explain the hold: %s", check.reason)
 	}
-	if strings.Contains(check.reason, "waits until the node is seen idle") {
+	if strings.Contains(check.reason, "once the node is seen idle") {
 		t.Fatalf("a genuinely playing run must not be reported as uncertain evidence: %s", check.reason)
 	}
 }
@@ -200,7 +200,7 @@ func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsDegradedWi
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "waits until the node is seen idle") {
+	if !strings.Contains(check.reason, "once the node is seen idle") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
 	}
 }
@@ -226,7 +226,7 @@ func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsDegradedWithUn
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed): stale evidence must hold, not be read as confirmed idle; reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "waits until the node is seen idle") {
+	if !strings.Contains(check.reason, "once the node is seen idle") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
 	}
 }

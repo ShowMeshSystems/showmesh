@@ -61,6 +61,8 @@ type nightAssetFSEQDurationResult struct {
 	DurationMS int64
 	Filename   string
 	Reason     string
+	// Cause is the error behind Reason. It is logged, never shown.
+	Cause error
 }
 
 // nightResolveFSEQDuration is rule 1's own arithmetic:
@@ -72,18 +74,18 @@ type nightAssetFSEQDurationResult struct {
 func nightResolveFSEQDuration(ctx context.Context, deps Dependencies, lister nightAssetLister, show string, ref config.NightSessionAssetRef) nightAssetFSEQDurationResult {
 	rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, ref.Sequence, ref.Target)
 	if err != nil {
-		return nightAssetFSEQDurationResult{Reason: "failed to look up the pinned asset: " + err.Error()}
+		return nightAssetFSEQDurationResult{Cause: err, Reason: "The coordinator could not look up the resting sequence file. Check the coordinator log."}
 	}
 	if !ok {
-		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("no current asset for show %q sequence %q target %q", show, ref.Sequence, ref.Target)}
+		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("No sequence file is uploaded for %s on %s. Upload it.", ref.Sequence, ref.Target)}
 	}
 	if rec.MediaType != "fseq" {
-		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("the pinned asset's media type is %q, not \"fseq\"", rec.MediaType)}
+		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("The file for resting sequence %s is not a sequence file. Upload a sequence file.", ref.Sequence)}
 	}
 
 	f, cleanup, err := nightOpenFSEQAsset(ctx, deps, rec)
 	if err != nil {
-		return nightAssetFSEQDurationResult{Reason: "failed to open the pinned FSEQ asset: " + err.Error()}
+		return nightAssetFSEQDurationResult{Cause: err, Reason: "The resting sequence file could not be read. Upload it again."}
 	}
 	defer cleanup()
 
@@ -91,11 +93,11 @@ func nightResolveFSEQDuration(ctx context.Context, deps Dependencies, lister nig
 	stepTimeMS := f.StepTimeMS()
 	switch {
 	case frameCount == 0 && stepTimeMS == 0:
-		return nightAssetFSEQDurationResult{Reason: "the FSEQ has both a zero frame count and a zero step time; it carries no usable duration", Filename: rec.RuntimeFilename}
+		return nightAssetFSEQDurationResult{Reason: "The resting sequence file has no frames and no frame rate. Export it again.", Filename: rec.RuntimeFilename}
 	case frameCount == 0:
-		return nightAssetFSEQDurationResult{Reason: "the FSEQ has a zero frame count (an empty sequence)", Filename: rec.RuntimeFilename}
+		return nightAssetFSEQDurationResult{Reason: "The resting sequence file has no frames, so it has no length. Export it again.", Filename: rec.RuntimeFilename}
 	case stepTimeMS == 0:
-		return nightAssetFSEQDurationResult{Reason: "the FSEQ has a zero step time (unset frame rate)", Filename: rec.RuntimeFilename}
+		return nightAssetFSEQDurationResult{Reason: "The resting sequence file has no frame rate, so it has no length. Export it again.", Filename: rec.RuntimeFilename}
 	}
 	durationMS := int64(frameCount) * int64(stepTimeMS)
 	return nightAssetFSEQDurationResult{DurationMS: durationMS, Filename: rec.RuntimeFilename}
@@ -216,26 +218,23 @@ func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, p
 	name := namePrefix + ":playlist-shape:" + playlistName
 	def, err := nightReadPlaylistDefinition(ctx, endpoint, playlistName)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not read the definition of playlist %q: %s", playlistName, err.Error())}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(nightPlaylistUnreadReason, playlistName)}
 	}
 	switch {
 	case singleItem && len(def.MainPlaylist) != 1:
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("playlist %q must hold exactly one mainPlaylist item, because the show boundary is derived from that item's own length; found %d", playlistName, len(def.MainPlaylist))}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Playlist %s must hold exactly one sequence, and it holds %d. Edit the playlist in FPP.", playlistName, len(def.MainPlaylist))}
 	case len(def.MainPlaylist) == 0:
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("playlist %q has no items", playlistName)}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(nightPlaylistEmptyReason, playlistName)}
 	}
 	for i, item := range def.MainPlaylist {
 		if item.Type != "sequence" || item.MediaName != "" {
-			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("item %d of playlist %q carries an FPP audio association (type %q, mediaName %q); a resting playlist must be FSEQ-only", i, playlistName, item.Type, item.MediaName)}
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Item %d of playlist %s is not a sequence with no audio. Fix it in FPP.", i+1, playlistName)}
 		}
 		if item.SequenceName == "" {
-			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("item %d of playlist %q names no sequence", i, playlistName)}
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("Item %d of playlist %s names no sequence. Fix it in FPP.", i+1, playlistName)}
 		}
 	}
-	if singleItem {
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "exactly one FSEQ-only item, naming a sequence"}
-	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d FSEQ-only item(s), each naming a sequence", len(def.MainPlaylist))}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
 
 // nightCheckRestingAssetExactVariant reports whether the exact deployed
@@ -246,7 +245,7 @@ func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, p
 func nightCheckRestingAssetExactVariant(namePrefix, playlistName string) nightReadinessCheck {
 	return nightReadinessCheck{
 		name: namePrefix + ":asset-exact-variant:" + playlistName, health: nightCheckStateNotVerifiable,
-		reason: "FPP reports only a filename, so the coordinator cannot confirm it holds this exact file.",
+		reason: "FPP reports only a file name, so the coordinator cannot confirm it holds this exact file.",
 	}
 }
 
@@ -263,13 +262,12 @@ func nightCheckShowPlaylistPresent(ctx context.Context, endpoint, playlistName s
 	name := "show:playlist-present:" + playlistName
 	def, err := nightReadPlaylistDefinition(ctx, endpoint, playlistName)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not read the show playlist definition: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(nightPlaylistUnreadReason, playlistName)}
 	}
 	if len(def.MainPlaylist) == 0 {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: "the show playlist has no items"}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(nightPlaylistEmptyReason, playlistName)}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(),
-		reason: "The playlist exists and has items. Whether FPP is busy is checked when the night starts."}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
 
 // nightCheckRestingAssetDuration is §6.1/§13's duration/cue-offset bullet:
@@ -282,16 +280,16 @@ func nightCheckRestingAssetDuration(ctx context.Context, deps Dependencies, list
 	name := "resting:asset-duration"
 	res := nightResolveFSEQDuration(ctx, deps, lister, show, ref)
 	if res.Reason != "" {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: res.Reason}
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: res.Reason, cause: res.Cause}
 	}
 	for _, off := range cueOffsetsMs {
 		if off < 0 && int64(-off) > res.DurationMS {
 			return nightReadinessCheck{name: name, health: nightHealthFailed(),
-				reason: fmt.Sprintf("a configured cue offset of %dms starts before the resting timeline begins (duration %dms)", off, res.DurationMS)}
+				reason: fmt.Sprintf("A cue is set to run %s before the show, but the resting sequence is only %s long. Shorten the offset.",
+					nightSecondsWords(int64(-off)), nightSecondsWords(res.DurationMS))}
 		}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(),
-		reason: fmt.Sprintf("resolved duration %dms from %q", res.DurationMS, res.Filename)}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
 
 func nightHealthHealthy() nightCheckState  { return nightCheckState(observation.HealthHealthy) }

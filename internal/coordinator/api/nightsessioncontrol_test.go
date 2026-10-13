@@ -253,7 +253,7 @@ func TestInvariant1_FadeOutThenPowerDown_NeverDowngrades(t *testing.T) {
 	if out.Session.PowerPhase.State != v1.NightEvidenceUnknown {
 		t.Fatalf("powerPhase.state while still fading out = %q, want unknown", out.Session.PowerPhase.State)
 	}
-	if !strings.Contains(out.Session.PowerPhase.Reason, "deferred") {
+	if !strings.Contains(out.Session.PowerPhase.Reason, "waits") {
 		t.Fatalf("powerPhase.reason = %q, want it to say the phase is deferred", out.Session.PowerPhase.Reason)
 	}
 }
@@ -701,11 +701,11 @@ func TestFinding5_StoreErrorReadingReadinessIsNotReportedAsNotFound(t *testing.T
 	if got.Session.Readiness.State != v1.NightEvidenceUnknown {
 		t.Fatalf("readiness.state with a store error = %q, want unknown", got.Session.Readiness.State)
 	}
-	if strings.Contains(got.Session.Readiness.Reason, "no readiness result recorded") {
+	if strings.Contains(got.Session.Readiness.Reason, "has not run") {
 		t.Fatalf("readiness.reason on a STORE ERROR claims \"no readiness result recorded\", which was never established; reason: %q", got.Session.Readiness.Reason)
 	}
-	if !strings.Contains(got.Session.Readiness.Reason, injectedErr.Error()) {
-		t.Fatalf("readiness.reason = %q, want it to name the actual store error", got.Session.Readiness.Reason)
+	if strings.Contains(got.Session.Readiness.Reason, injectedErr.Error()) || !strings.Contains(got.Session.Readiness.Reason, "could not read") {
+		t.Fatalf("readiness.reason = %q, want one plain line saying the result could not be read, without the store error", got.Session.Readiness.Reason)
 	}
 }
 
@@ -732,7 +732,7 @@ func TestFinding5_CorruptChecksJSONStatesTheDecodeFailure(t *testing.T) {
 	if len(got.Session.Readiness.Checks) != 0 {
 		t.Fatalf("readiness.checks with a corrupt payload = %v, want empty", got.Session.Readiness.Checks)
 	}
-	if got.Session.Readiness.Reason == "" || !strings.Contains(got.Session.Readiness.Reason, "decoded") {
+	if got.Session.Readiness.Reason == "" || !strings.Contains(got.Session.Readiness.Reason, "could not be read") {
 		t.Fatalf("readiness.reason with a corrupt checks payload = %q, want it to state the decode failure rather than silently rendering zero checks as fine", got.Session.Readiness.Reason)
 	}
 }
@@ -752,7 +752,7 @@ func TestFinding6_DeferredPowerDownStatesItWasRequested(t *testing.T) {
 	if strings.Contains(out.Session.PowerPhase.Reason, "has not been requested") {
 		t.Fatalf("powerPhase.reason = %q, contradicts shutdownIntent=power-down: it WAS requested, just deferred", out.Session.PowerPhase.Reason)
 	}
-	if !strings.Contains(out.Session.PowerPhase.Reason, "deferred") && !strings.Contains(out.Session.PowerPhase.Reason, "pending") {
+	if !strings.Contains(out.Session.PowerPhase.Reason, "waits") {
 		t.Fatalf("powerPhase.reason = %q, want it to say the request is pending/deferred", out.Session.PowerPhase.Reason)
 	}
 	_ = st

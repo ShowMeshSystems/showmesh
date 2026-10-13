@@ -1,7 +1,27 @@
-import type { Model, NightBackgroundAudio, NightCue, NightCycleOutcome, NightReadiness, NightReadinessCheck, NightSessionState } from '../api'
+import type { Model, NightBackgroundAudio, NightCue, NightCycleOutcome, NightReadinessCheck, NightSessionState } from '../api'
 import type { Tone } from '../kit'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
-import { findSignal, transportState } from './liveControlModel'
+import { NIGHT_LIFECYCLE_GROUPS, findSignal, transportState } from './liveControlModel'
+
+/** A night command in its button's own words, such as Start night. */
+export function nightCommandLabel(command: string): string {
+  for (const group of NIGHT_LIFECYCLE_GROUPS) {
+    const found = group.commands.find(([id]) => id === command)
+    if (found !== undefined) return found[1]
+  }
+  if (command === 'resume-show') return 'Resume'
+  return inWords(command)
+}
+
+/** A raw id such as end-of-night as words: End of night. */
+export function inWords(id: string): string {
+  const words = id
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[-_:]+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return words === '' ? '' : words.charAt(0).toUpperCase() + words.slice(1)
+}
 
 /** The lifecycle states the controller reports, in the order it moves through them. */
 const CYCLE_STEPS: readonly { state: NightSessionState['state']; label: string }[] = [
@@ -103,7 +123,7 @@ export function nightRail(session: NightSessionState): RailStep[] {
       cycleSteps.push({
         key: `cycle-${cycle}`,
         label: `Cycle ${cycle}`,
-        detail: session.state,
+        detail: session.stateLabel,
         status: 'now',
       })
     } else {
@@ -122,7 +142,7 @@ export function nightRail(session: NightSessionState): RailStep[] {
     {
       key: 'more',
       label: 'More cycles',
-      detail: session.admissionClosed ? 'admission closed' : 'while admission open',
+      detail: session.admissionClosed ? 'no more shows tonight' : 'while more shows can start',
       status: session.admissionClosed ? 'ahead' : 'ahead',
     },
     {
@@ -135,7 +155,7 @@ export function nightRail(session: NightSessionState): RailStep[] {
     },
   ]
   if (session.shutdownIntent !== '') {
-    rail.push({ key: 'shutdown', label: 'Shutdown', detail: session.shutdownIntent, status: 'now' })
+    rail.push({ key: 'shutdown', label: 'Shutdown', detail: inWords(session.shutdownIntent), status: 'now' })
   }
   return rail
 }
@@ -150,33 +170,21 @@ export type NextTransition =
  */
 export function nextTransition(model: Model): NextTransition {
   const instance = model.fpp[0]
-  if (instance === undefined) return { known: false, reason: 'No FPP instance is reporting a position.' }
+  if (instance === undefined) return { known: false, reason: 'No FPP is reporting a position.' }
   // fpp.position.seconds is FPP's seconds_played, not a duration, so
   // remaining is read directly rather than derived from it.
   const remaining = findSignal(instance.observations, 'fpp.position.remaining.seconds')
   if (remaining === undefined || typeof remaining.value !== 'number') {
-    return { known: false, reason: 'The playhead position has not been observed.' }
+    return { known: false, reason: 'FPP has not reported a position yet.' }
   }
   if (remaining.state !== 'current') {
-    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the next transition time is unknown.` }
+    return { known: false, reason: 'The position FPP reported is out of date, so the next transition time is unknown.' }
   }
   return { known: true, remainingSeconds: Math.max(0, remaining.value), source: instance.instanceId }
 }
 
-/**
- * The outcome enum reads as a verdict in a sentence, not as a bare word.
- * Keyed by the generated outcome union (not `Record<string, string>`) so
- * the next widening of that union is a compile error here, not a rendered
- * "undefined" on this screen.
- */
-const READINESS_WORD: Record<NonNullable<NightReadiness['outcome']>, string> = {
-  ready: 'Passed',
-  ready_with_warnings: 'Passed, with a warning',
-  not_ready: 'Did not pass',
-  unknown: 'Could not be determined',
-}
-
-export type EvidenceReadout = { key: string; label: string; tone: Tone; fact: string }
+/** Each fact is one message and renders on its own line. */
+export type EvidenceReadout = { key: string; label: string; tone: Tone; facts: string[] }
 
 /**
  * `not_verifiable` is structurally incapable of ever reporting anything
@@ -193,7 +201,7 @@ const READINESS_CHECK_TONE: Record<NightReadinessCheck['state'], Tone> = {
   not_configured: 'pending',
 }
 
-export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; fact: string }
+export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; facts: readonly string[] }
 
 /**
  * Every check `run-readiness` recorded, including its own `interlock:<phase>:<name>`
@@ -203,9 +211,9 @@ export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; fa
 export function readinessChecks(checks: readonly NightReadinessCheck[]): ReadinessCheckReadout[] {
   return checks.map((check, index) => ({
     key: `${check.name}:${index}`,
-    label: `${check.label} · ${check.state.replace('_', ' ')}`,
+    label: `${check.label} · ${check.stateLabel}`,
     tone: READINESS_CHECK_TONE[check.state] ?? 'unknown',
-    fact: check.reason !== '' ? check.reason : 'No reason was recorded for this check.',
+    facts: check.reasons,
   }))
 }
 
@@ -218,12 +226,12 @@ export function readinessChecks(checks: readonly NightReadinessCheck[]): Readine
  */
 export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
   if (audio.pinnedMaxGainDb === undefined) {
-    return 'This session has not reported a pinned volume ceiling yet.'
+    return 'The volume ceiling for this night is not reported yet.'
   }
   if (audio.pinnedMaxGainDb === null) {
-    return audio.reason !== '' ? `Pinned ceiling: none. ${audio.reason}` : 'This session pinned no background-audio ceiling.'
+    return audio.reason !== '' ? audio.reason : 'This night has no volume ceiling for background audio.'
   }
-  return `Ceiling for this session: ${audio.pinnedMaxGainDb} dB, fixed when it started.`
+  return `Volume ceiling: ${audio.pinnedMaxGainDb} dB, fixed when the night started.`
 }
 
 /**
@@ -238,8 +246,15 @@ const PHASE_TONE: Record<string, Tone> = {
   not_available: 'unknown',
 }
 
+const PHASE_STATE_WORDS: Record<string, string> = {
+  recorded: '',
+  unknown: ' unknown',
+  not_configured: ' not set up',
+  not_available: ' unavailable',
+}
+
 function phaseLabel(name: string, state: string): string {
-  return `${name} ${state.replace('_', ' ')}`
+  return `${name}${PHASE_STATE_WORDS[state] ?? ' unknown'}`
 }
 
 /** Anything not observed says so, and none of these readouts is inferred. */
@@ -250,8 +265,8 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
     readiness.state !== 'recorded'
       ? readiness.reason !== ''
         ? readiness.reason
-        : 'No readiness result has been recorded.'
-      : `${READINESS_WORD[readiness.outcome ?? 'unknown']} at ${formatClock(readiness.completedAt ?? null) ?? 'an unrecorded time'}` +
+        : READINESS_NOT_RUN
+      : `${readiness.outcomeLabel ?? 'Could not be determined'} at ${formatClock(readiness.completedAt ?? null) ?? 'an unrecorded time'}` +
         `${readinessAge === null ? '' : `, ${formatDuration(readinessAge)} ago`}` +
         `${readiness.sameEpoch ? ', since the last prepare' : ', before the last prepare'}` +
         `${readiness.fresh ? '' : ', no longer fresh'}.`
@@ -263,24 +278,22 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       : [
           {
             key: 'stopHold',
-            label: 'Stopped',
+            label: hold.principal === undefined || hold.principal === '' ? 'Stopped' : `Stopped by ${hold.principal}`,
             tone: 'bad' as const,
-            fact: `${hold.reason} Resume starts the show playlist from its first song.${
-              hold.principal === undefined || hold.principal === '' ? '' : ` Stopped by ${hold.principal}.`
-            }`,
+            facts: [hold.reason, 'Resume starts the show from its first song.'],
           },
         ]),
     {
       key: 'transition',
       label: phaseLabel('Transition', session.transition.state),
       tone: PHASE_TONE[session.transition.state] ?? 'unknown',
-      fact: session.transition.reason !== '' ? session.transition.reason : 'Nothing recorded for this transition.',
+      facts: [session.transition.reason !== '' ? session.transition.reason : 'Nothing is recorded for this transition.'],
     },
     {
       key: 'power',
       label: phaseLabel('Power phase', session.powerPhase.state),
       tone: PHASE_TONE[session.powerPhase.state] ?? 'unknown',
-      fact: session.powerPhase.reason !== '' ? session.powerPhase.reason : 'Nothing recorded for the power phase.',
+      facts: [session.powerPhase.reason !== '' ? session.powerPhase.reason : 'Nothing is recorded for the power phase.'],
     },
     {
       key: 'readiness',
@@ -291,68 +304,75 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
           : readiness.outcome === 'ready' && readiness.fresh && readiness.sameEpoch
             ? 'good'
             : 'warn',
-      fact: readinessFact,
+      facts: [readinessFact],
     },
     {
       key: 'audio',
       label: phaseLabel('Background audio', session.backgroundAudio.state),
       tone: PHASE_TONE[session.backgroundAudio.state] ?? 'unknown',
-      fact:
+      facts: [
         session.backgroundAudio.state !== 'recorded'
           ? session.backgroundAudio.reason !== ''
             ? session.backgroundAudio.reason
-            : 'Nothing recorded for background audio.'
+            : 'Nothing is recorded for background audio.'
           : `${session.backgroundAudio.steps.length} ${session.backgroundAudio.steps.length === 1 ? 'step' : 'steps'} this cycle.`,
+      ],
     },
     {
       key: 'attribution',
-      label: session.attributionDegraded ? 'Attribution degraded' : 'Attribution complete',
+      label: session.attributionDegraded ? 'User not recorded' : 'Users recorded',
       tone: session.attributionDegraded ? 'bad' : 'good',
-      fact: session.attributionDegraded
-        ? 'A step ran with no user recorded. This stays for the session.'
-        : 'Every dispatch this session has an authorizing user recorded.',
+      facts: [
+        session.attributionDegraded
+          ? 'A step ran with no user recorded. Check the coordinator log.'
+          : 'Every command this night has a user recorded.',
+      ],
     },
     {
       key: 'authorization',
       label: 'Last command',
       tone: session.authorization.state === 'recorded' ? 'pending' : 'unknown',
-      fact:
+      facts: [
         session.authorization.state === 'recorded'
-          ? `${session.authorization.command ?? 'a command'} by ${session.authorization.principalName ?? 'an unknown user'}, recorded ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
+          ? `${session.authorization.command === undefined ? 'A command' : nightCommandLabel(session.authorization.command)} by ${session.authorization.principalName ?? 'an unknown user'}, ${formatClock(session.authorization.recordedAt) ?? 'at an unrecorded time'}.`
           : session.authorization.reason !== undefined && session.authorization.reason !== ''
             ? session.authorization.reason
-            : 'No authorizing command has been recorded for this session.',
+            : 'No command is on record for this night.',
+      ],
     },
     {
       key: 'definition',
       label: 'Definition',
       tone: 'pending',
-      fact: `${session.configObjectId} at version ${session.configRevision}.`,
+      facts: [`${session.configObjectId}, version ${session.configRevision}.`],
     },
     {
       key: 'armed-show',
-      label: session.armedShowId === '' ? 'No show ready' : session.showCommitted ? 'Show committed' : 'Show ready',
+      label: session.armedShowId === '' ? 'No show ready' : session.showCommitted ? 'Show started' : 'Show ready',
       tone: session.armedShowId === '' ? 'unknown' : session.showCommitted ? 'good' : 'pending',
-      fact:
+      facts: [
         session.armedShowId === ''
-          ? 'No show is ready for this session.'
+          ? 'No show is ready to start.'
           : session.showCommitted
-            ? `${session.armedShowId} is ready and committed for this session.`
-            : `${session.armedShowId} is ready but not yet committed.`,
+            ? `The show for this cycle has started. It is ${session.armedShowId}.`
+            : `The show for this cycle is ready and has not started yet. It is ${session.armedShowId}.`,
+      ],
     },
     {
       key: 'admission',
-      label: session.admissionClosed ? 'Admission closed' : 'Admission open',
+      label: session.admissionClosed ? 'No more shows' : 'More shows can start',
       tone: session.admissionClosed ? 'pending' : 'good',
-      fact: session.admissionClosed
-        ? `Admission closed ${formatClock(session.admissionClosedAt) ?? 'at an unrecorded time'}.`
-        : 'Admission is open.',
+      facts: [
+        session.admissionClosed
+          ? `No more shows start tonight. This was set at ${formatClock(session.admissionClosedAt) ?? 'an unrecorded time'}.`
+          : 'More shows can still start tonight.',
+      ],
     },
     {
       key: 'updated',
       label: 'Session last updated',
       tone: 'pending',
-      fact: `${formatClock(session.updatedAt) ?? 'an unrecorded time'}.`,
+      facts: [`${formatClock(session.updatedAt) ?? 'An unrecorded time'}.`],
     },
   ]
 }
@@ -376,6 +396,24 @@ const CUE_PHASE: Record<NightCue['phase'], string> = {
   fadeOut: 'Fade out',
 }
 
+/** A step's outcome or state in words. An unlisted value still reads as words. */
+const STEP_STATE_WORDS: Record<string, string> = {
+  confirmed: 'Confirmed',
+  unconfirmed: 'Not confirmed',
+  unconfirmable: 'Cannot confirm',
+  failed: 'Failed',
+  refused: 'Refused',
+  ambiguous: 'Unclear',
+  not_dispatched: 'Waiting',
+  pending: 'Waiting',
+  dispatched: 'Sent',
+  resolved: 'Done',
+}
+
+function stepStateWords(value: string): string {
+  return STEP_STATE_WORDS[value] ?? inWords(value)
+}
+
 const OUTCOME_TONE: Record<string, Tone> = {
   confirmed: 'good',
   unconfirmed: 'warn',
@@ -393,14 +431,14 @@ export function runOfShow(session: NightSessionState): RunStep[] {
     const outcome = cue.outcome
     return {
       key: `${cue.name}:${index}`,
-      when: cue.dispatchedAt === null ? 'Waiting' : (formatClock(cue.dispatchedAt) ?? 'dispatched'),
+      when: cue.dispatchedAt === null ? 'Waiting' : (formatClock(cue.dispatchedAt) ?? 'Sent'),
       name: cue.name,
-      detail: cue.actionRevision === null ? cue.role : `${cue.role} · version ${cue.actionRevision}`,
+      detail: cue.actionRevision === null ? inWords(cue.role) : `${inWords(cue.role)} · version ${cue.actionRevision}`,
       phase: CUE_PHASE[cue.phase],
-      target: cue.role,
+      target: inWords(cue.role),
       action: cue.action,
       tone: outcome === undefined ? (cue.state === 'not_dispatched' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
-      state: outcome ?? (cue.state === 'not_dispatched' ? 'Waiting' : cue.state.replace('_', ' ')),
+      state: stepStateWords(outcome ?? cue.state),
       resolved: cue.resolvedAt === null ? (cue.reason ?? null) : formatClock(cue.resolvedAt),
     }
   })
@@ -425,14 +463,14 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
     const outcome = step.outcome
     return {
       key: `${step.cueName}:${step.kind}:${step.nodeId}:${index}`,
-      when: step.dispatchedAt === null ? 'Waiting' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
-      sequence: step.sequence,
+      when: step.dispatchedAt === null ? 'Waiting' : (formatClock(step.dispatchedAt) ?? 'Sent'),
+      sequence: inWords(step.sequence),
       cueName: step.cueName,
       nodeId: step.nodeId,
-      kind: step.kind,
+      kind: inWords(step.kind),
       detail: `version ${step.actionRevision}`,
       tone: outcome === undefined ? (step.state === 'pending' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
-      state: outcome ?? step.state.replace('_', ' '),
+      state: stepStateWords(outcome ?? step.state),
       resolved: step.resolvedAt === null ? (step.reason ?? null) : formatClock(step.resolvedAt),
     }
   })
@@ -456,7 +494,7 @@ export type PlannedBackgroundAudio =
 export function plannedBackgroundAudio(audio: NightBackgroundAudio): PlannedBackgroundAudio {
   const plan = audio.plan
   if (plan.state !== 'recorded') {
-    return { kind: 'unavailable', fact: plan.reason !== '' ? plan.reason : 'The planned background audio could not be read.' }
+    return { kind: 'unavailable', fact: plan.reason !== '' ? plan.reason : 'The planned background audio could not be read. Reload the page.' }
   }
   if (!plan.configured) {
     return { kind: 'not_configured', fact: 'No background audio. Add it in the night definition.' }
@@ -485,4 +523,25 @@ export function nowPlaying(model: Model) {
   const run = model.currentRuns?.runs.find((entry) => entry.runner === 'fpp')
   const state = instance === undefined ? null : transportState(instance)
   return { instance, run, state }
+}
+
+/** The run-of-show strip's label when the cue record is not a list of cues. */
+export const CUES_STATE_LABEL: Record<string, string> = {
+  unknown: 'Unknown',
+  not_configured: 'Not set up',
+  not_available: 'Unavailable',
+}
+
+/** The one wording for readiness that has not run since the site was prepared. */
+export const READINESS_NOT_RUN = 'Readiness has not run since the site was prepared. Run readiness.'
+
+/** The one wording for a degraded night that reported no reason. */
+export const DEGRADED_WITHOUT_REASON = 'The night stopped advancing. Run End session, then Prepare site.'
+
+/** What a night command did, as separate messages. The UI never joins them. */
+export type NightCommandOutcome = {
+  tone: Tone
+  label: string
+  lines: string[]
+  blocked: readonly { name: string; reason: string }[]
 }

@@ -890,6 +890,17 @@ type Problem struct {
 	// the one piece of data all three share. Additive under ADR-020, and
 	// omitted rather than sent empty, so no existing client sees a change.
 	ConflictingRunID string `json:"conflictingRunId,omitempty"`
+
+	// BlockedChecks lists the safety checks behind a night command refusal,
+	// one per item. Empty on every other problem.
+	BlockedChecks []NightBlockedCheck `json:"blockedChecks,omitempty"`
+}
+
+// NightBlockedCheck is one safety check that refused a night command.
+// Name is what an override names. Reason is one operator message.
+type NightBlockedCheck struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // StreamStart is the payload of the first event on every SSE connection,

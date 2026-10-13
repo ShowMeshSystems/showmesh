@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +22,7 @@ func (h *handlers) nightStopFPPAtPrepareSite(ctx context.Context, now time.Time,
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
 		h.logWarn("night prepare-site: could not read the session to find its FPP instances", "sessionId", rec.ID, "error", err)
-		return "Prepare site is done, but FPP was not stopped because its instances could not be looked up. Stop FPP by hand."
+		return "Prepare site is done, but the coordinator could not tell which FPP to stop. Stop FPP by hand."
 	}
 	var instances []string
 	for _, id := range []string{payload.Resting.FPPInstanceID, payload.ShowPlaylist.FPPInstanceID} {
@@ -32,7 +31,7 @@ func (h *handlers) nightStopFPPAtPrepareSite(ctx context.Context, now time.Time,
 		}
 	}
 	if len(instances) == 0 {
-		return "Prepare site is done, but this night names no FPP instance, so nothing was stopped."
+		return "Prepare site is done. This night names no FPP, so nothing was stopped."
 	}
 
 	attempt := idempotencyKey
@@ -50,26 +49,24 @@ func (h *handlers) nightStopFPPAtPrepareSite(ctx context.Context, now time.Time,
 	}
 	wg.Wait()
 
-	var stopped, failed []string
-	for i, r := range results {
-		if r == "" {
-			stopped = append(stopped, instances[i])
-		} else {
-			failed = append(failed, r)
+	var failed, facts []string
+	for i, fact := range results {
+		if fact != "" {
+			failed = append(failed, instances[i])
+			facts = append(facts, fact)
 		}
 	}
-	var parts []string
-	if len(stopped) > 0 {
-		parts = append(parts, fmt.Sprintf("Stopped what FPP was playing on %s.", strings.Join(stopped, " and ")))
+	switch len(failed) {
+	case 0:
+		return "Prepare site is done, and FPP was stopped."
+	case 1:
+		return facts[0] + " " + nightStopByHandAction
 	}
-	if len(failed) > 0 {
-		parts = append(parts, strings.Join(failed, " "), "Check FPP and stop it by hand if it is still playing.")
-	}
-	return strings.Join(parts, " ")
+	return fmt.Sprintf("FPP %s were not confirmed stopped. Stop them by hand if they are still playing.", nightNames(failed))
 }
 
 // nightStopOneFPP returns "" when the instance was confirmed idle, and
-// otherwise the sentence naming why it was not.
+// otherwise the one fact naming why it was not.
 func (h *handlers) nightStopOneFPP(ctx context.Context, now time.Time, issuer identity.AuditEntry, rec store.NightSessionRecord, id, attempt string) string {
 	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
 		InstanceID:     id,
@@ -84,15 +81,16 @@ func (h *handlers) nightStopOneFPP(ctx context.Context, now time.Time, issuer id
 	switch {
 	case err != nil:
 		h.logWarn("night prepare-site: FPP stop could not be dispatched", "sessionId", rec.ID, "instanceId", id, "error", err)
-		return fmt.Sprintf("FPP %q was not asked to stop because the coordinator hit an internal error.", id)
+		return fmt.Sprintf("FPP %s was not asked to stop because of a coordinator error.", id)
 	case problem != nil:
-		return fmt.Sprintf("FPP %q was not asked to stop: %s", id, strings.TrimSuffix(strings.TrimSpace(problem.Detail), ".")+".")
+		h.logWarn("night prepare-site: the FPP stop was not sent", "sessionId", rec.ID, "instanceId", id, "reason", problem.Detail)
+		return fmt.Sprintf("The coordinator did not ask FPP %s to stop.", id)
 	case outcome.DispatchFailed && outcome.FPPStatusCode != 0:
-		return fmt.Sprintf("FPP %q refused the stop.", id)
+		return fmt.Sprintf("FPP %s refused the stop.", id)
 	case outcome.DispatchFailed:
-		return fmt.Sprintf("FPP %q could not be reached, so it was not stopped.", id)
+		return fmt.Sprintf(nightStopNotReachedFact, id)
 	case outcome.Outcome != "confirmed":
-		return fmt.Sprintf("FPP %q was told to stop but has not reported that it is idle.", id)
+		return fmt.Sprintf(nightStopNotConfirmedFact, id)
 	}
 	return ""
 }

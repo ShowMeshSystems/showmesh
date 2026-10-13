@@ -97,7 +97,7 @@ func TestNightResolveFSEQDuration_ZeroFrameCount(t *testing.T) {
 	if res.Reason == "" {
 		t.Fatal("expected a failure reason")
 	}
-	if !nightContainsAll(res.Reason, "frame count") {
+	if !nightContainsAll(res.Reason, "no frames") {
 		t.Fatalf("reason %q does not name the frame count as the cause", res.Reason)
 	}
 }
@@ -112,7 +112,7 @@ func TestNightResolveFSEQDuration_ZeroStepTime(t *testing.T) {
 	if res.DurationMS != 0 {
 		t.Fatalf("DurationMS = %d, want 0", res.DurationMS)
 	}
-	if !nightContainsAll(res.Reason, "step time") {
+	if !nightContainsAll(res.Reason, "no frame rate") {
 		t.Fatalf("reason %q does not name the step time as the cause", res.Reason)
 	}
 }
@@ -124,7 +124,7 @@ func TestNightResolveFSEQDuration_BothZero(t *testing.T) {
 	lister.recs = []store.AssetRecord{putFSEQAsset(t, backend, "s", "seq", "node-1", raw)}
 
 	res := nightResolveFSEQDuration(context.Background(), deps, lister, "s", config.NightSessionAssetRef{Sequence: "seq", Target: "node-1"})
-	if !nightContainsAll(res.Reason, "frame count", "step time") {
+	if !nightContainsAll(res.Reason, "no frames", "no frame rate") {
 		t.Fatalf("reason %q does not name BOTH causes", res.Reason)
 	}
 }

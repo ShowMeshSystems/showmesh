@@ -173,8 +173,8 @@ func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *test
 			}
 		},
 		"interlocks": [
-			{"name": "cooldown", "phase": "prepare-site", "posture": "block", "signal": "cooldown-check", "failureText": "not cool", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
-			{"name": "cooldown-watch", "phase": "run-readiness", "posture": "observe", "signal": "cooldown-check", "failureText": "not cool"},
+			{"name": "cooldown", "phase": "prepare-site", "posture": "block", "signal": "cooldown-check", "failureText": "The lamp is not cool.", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+			{"name": "cooldown-watch", "phase": "run-readiness", "posture": "observe", "signal": "cooldown-check", "failureText": "The lamp is not cool."},
 			{"name": "cooldown-off", "phase": "enter-resting", "posture": "disabled"}
 		]
 	}`

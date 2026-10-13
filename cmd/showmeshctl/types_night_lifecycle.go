@@ -7,21 +7,25 @@ import "time"
 // standing rule).
 
 type nightReadinessCheckWire struct {
-	Name   string `json:"name"`
-	Label  string `json:"label"`
-	State  string `json:"state"`
+	Name       string   `json:"name"`
+	Label      string   `json:"label"`
+	State      string   `json:"state"`
+	StateLabel string   `json:"stateLabel"`
+	Reasons    []string `json:"reasons"`
+	// Reason is the deprecated joined form. Printing reads Reasons.
 	Reason string `json:"reason"`
 }
 
 type nightReadinessWire struct {
-	State       string                    `json:"state"`
-	Reason      string                    `json:"reason"`
-	Outcome     string                    `json:"outcome,omitempty"`
-	EpochID     string                    `json:"epochId,omitempty"`
-	CompletedAt string                    `json:"completedAt,omitempty"`
-	SameEpoch   bool                      `json:"sameEpoch"`
-	Fresh       bool                      `json:"fresh"`
-	Checks      []nightReadinessCheckWire `json:"checks"`
+	State        string                    `json:"state"`
+	Reason       string                    `json:"reason"`
+	Outcome      string                    `json:"outcome,omitempty"`
+	OutcomeLabel string                    `json:"outcomeLabel,omitempty"`
+	EpochID      string                    `json:"epochId,omitempty"`
+	CompletedAt  string                    `json:"completedAt,omitempty"`
+	SameEpoch    bool                      `json:"sameEpoch"`
+	Fresh        bool                      `json:"fresh"`
+	Checks       []nightReadinessCheckWire `json:"checks"`
 }
 
 type nightPhaseEvidenceWire struct {
@@ -139,6 +143,7 @@ type nightSessionStateWire struct {
 	ConfigRevision int64  `json:"configRevision"`
 
 	State          string `json:"state"`
+	StateLabel     string `json:"stateLabel"`
 	StateEnteredAt string `json:"stateEnteredAt"`
 	Cycle          int64  `json:"cycle"`
 

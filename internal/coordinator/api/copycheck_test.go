@@ -17,7 +17,11 @@ var copyLedger = copycheck.NewLedger("testdata/copy-known-violations.txt")
 
 func init() {
 	responseObserver = observeResponseCopy
-	copyLedger.Deprecate("v1.FPPPlaylistReadinessResponse warning")
+	copyLedger.Deprecate(
+		"v1.FPPPlaylistReadinessResponse warning",
+		"v1.NightCommandResponse session.readiness.checks[].reason",
+		"v1.NightSessionResponse session.readiness.checks[].reason",
+	)
 }
 
 // A Problem's detail is keyed by its type and the function that wrote it. Any

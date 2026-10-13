@@ -36,7 +36,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAStopFPPConfirmedIdle(t *testing.T) {
 	if cmds := f.sentCommands(); len(cmds) != 1 || cmds[0] != "Stop Now" {
 		t.Fatalf("commands sent to FPP = %v, want exactly one %q", cmds, "Stop Now")
 	}
-	if want := `Stopped what FPP was playing on player-01.`; got != want {
+	if want := "Prepare site is done, and FPP was stopped."; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
@@ -47,15 +47,15 @@ func TestNightStopFPPAtPrepareSite_ReportsAStopFPPDoesNotConfirm(t *testing.T) {
 
 	got := f.h.nightStopFPPAtPrepareSite(context.Background(), now, identity.AuditEntry{PrincipalID: "op"}, "key-1", mustGetCurrentSession(t, f.store))
 
-	if !strings.Contains(got, "was told to stop but has not reported that it is idle") || !strings.Contains(got, "stop it by hand") {
+	if !strings.Contains(got, "was told to stop but has not reported that it is idle") || !strings.Contains(got, "Stop it by hand") {
 		t.Fatalf("result = %q, want an unconfirmed-stop report with the action to take", got)
 	}
-	if strings.Contains(got, "Stopped what FPP was playing") {
+	if strings.Contains(got, "FPP was stopped") {
 		t.Fatalf("result = %q claims a stop with no idle evidence", got)
 	}
 }
 
-const nightStopByHand = " Check FPP and stop it by hand if it is still playing."
+const nightStopByHand = " Stop it by hand if it is still playing."
 
 func stopWithEndpoint(t *testing.T, f *nightShutdownFixture, views []FPPInstanceView) string {
 	t.Helper()
@@ -74,7 +74,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAStopFPPRefused(t *testing.T) {
 
 	got := stopWithEndpoint(t, f, []FPPInstanceView{{InstanceID: "player-01", Endpoint: refusing.URL}})
 
-	if want := `FPP "player-01" refused the stop.` + nightStopByHand; got != want {
+	if want := "FPP player-01 refused the stop." + nightStopByHand; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
@@ -88,7 +88,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAnUnreachableFPP(t *testing.T) {
 
 	got := stopWithEndpoint(t, f, []FPPInstanceView{{InstanceID: "player-01", Endpoint: endpoint}})
 
-	if want := `FPP "player-01" could not be reached, so it was not stopped.` + nightStopByHand; got != want {
+	if want := "The stop did not reach FPP player-01." + nightStopByHand; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
@@ -99,7 +99,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAnInstanceTheCoordinatorCannotAskAs_No
 
 	got := stopWithEndpoint(t, f, nil)
 
-	if want := `FPP "player-01" was not asked to stop: no FPP instance with id "player-01" is configured.` + nightStopByHand; got != want {
+	if want := "The coordinator did not ask FPP player-01 to stop." + nightStopByHand; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
@@ -119,7 +119,7 @@ func TestNightStopFPPAtPrepareSite_StopsTheNightsInstancesTogether(t *testing.T)
 	if cmds := f.sentCommands(); len(cmds) != 2 {
 		t.Fatalf("commands sent to FPP = %v, want one stop per instance", cmds)
 	}
-	if !strings.Contains(got, `FPP "player-01" was told to stop`) || !strings.Contains(got, `FPP "player-02" was told to stop`) {
+	if !strings.Contains(got, "FPP player-01 and player-02 were not confirmed stopped") {
 		t.Fatalf("result = %q, want both instances reported", got)
 	}
 	if elapsed >= 750*time.Millisecond {
@@ -207,7 +207,7 @@ func TestNightPrepareSite_StopFppPlayback_StopsFPPThroughTheHandler(t *testing.T
 	if cmds := f.sent(); len(cmds) != 1 || cmds[0] != "Stop Now" {
 		t.Fatalf("commands sent to FPP = %v, want exactly one %q", cmds, "Stop Now")
 	}
-	if want := "Stopped what FPP was playing on player-01."; resp.Command.Reason != want {
+	if want := "Prepare site is done, and FPP was stopped."; resp.Command.Reason != want {
 		t.Fatalf("reason = %q, want %q", resp.Command.Reason, want)
 	}
 }
@@ -220,7 +220,7 @@ func TestNightPrepareSite_StopFppPlayback_SlowStopIsReportedAndPrepareSiteIsDone
 	if resp.Command.Outcome != "applied" || resp.Session.State != nightStatePreparing {
 		t.Fatalf("outcome = %q, session state = %q, want applied and preparing", resp.Command.Outcome, resp.Session.State)
 	}
-	if want := `FPP "player-01" was told to stop but has not reported that it is idle.` + nightStopByHand; resp.Command.Reason != want {
+	if want := "FPP player-01 was told to stop but has not reported that it is idle." + nightStopByHand; resp.Command.Reason != want {
 		t.Fatalf("reason = %q, want %q", resp.Command.Reason, want)
 	}
 }

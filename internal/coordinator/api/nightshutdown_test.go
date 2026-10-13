@@ -187,7 +187,7 @@ func TestNightFadingOut_AmbiguousStopDegradesAndNeverReportsStopped(t *testing.T
 	if !got.Degraded {
 		t.Fatalf("session is not degraded after an unconfirmed stop past its deadline: %+v", got)
 	}
-	if !strings.Contains(got.DegradedReason, "was not seen idle") {
+	if !strings.Contains(got.DegradedReason, "has not reported that it is idle") {
 		t.Fatalf("degradedReason = %q, want it to state the stop was not confirmed", got.DegradedReason)
 	}
 }
@@ -212,7 +212,7 @@ func TestNightFadingOut_PreWireRefusalRetriesOnALaterTick(t *testing.T) {
 	if !anchor.DispatchedAt.IsZero() {
 		t.Fatalf("DispatchedAt = %v for a stop that never reached the wire, want zero", anchor.DispatchedAt)
 	}
-	if !strings.Contains(anchor.Source, "refused before it reached FPP") {
+	if !strings.Contains(anchor.Source, "not-configured") {
 		t.Fatalf("anchor.Source = %q, want the pre-wire refusal reason", anchor.Source)
 	}
 	if got.State != nightStateFadingOut {

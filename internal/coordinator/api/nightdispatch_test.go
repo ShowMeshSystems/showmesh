@@ -140,7 +140,7 @@ func TestNightEnsureAnchor_PermanentRefusalIsTerminalAndVisible(t *testing.T) {
 	if !anchor.RefusalTerminal {
 		t.Fatalf("a missing FPP instance was classified as retryable: %+v", anchor)
 	}
-	if !strings.Contains(anchor.Source, "refused") {
+	if !strings.Contains(anchor.Source, "missing-instance") {
 		t.Fatalf("anchor.Source = %q, want a stated refusal", anchor.Source)
 	}
 
@@ -291,7 +291,7 @@ func TestNightBarrierSatisfied_MissingRowHonoursOnFailureAfterTheDeadline(t *tes
 			if row.State != nightCueStateResolved || row.Outcome != nightCueOutcomeFailed {
 				t.Fatalf("recorded row state/outcome = %q/%q, want resolved/failed", row.State, row.Outcome)
 			}
-			if !tc.wantOK && !strings.Contains(reason, "onFailure is abort") {
+			if !tc.wantOK && !strings.Contains(reason, "set to stop the show start") {
 				t.Fatalf("blocked reason = %q, want it to name the abort policy", reason)
 			}
 		})

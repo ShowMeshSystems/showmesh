@@ -2,6 +2,7 @@ import type { FPPInstance, Model, Node, NightSessionState, ResolumeInstance } fr
 import type { Tone } from '../kit'
 import { countSignals, signalGroups, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
+import { DEGRADED_WITHOUT_REASON, READINESS_NOT_RUN } from './showNightModel'
 
 /**
  * The union of NodeShowParticipation's and InstanceShowParticipation's state
@@ -232,8 +233,8 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
     return {
       tone: 'unknown',
       state: 'Readiness unknown',
-      fact: 'No readiness result has been recorded for this session.',
-      detail: readiness.reason !== '' ? readiness.reason : 'Unknown is never a pass. Start night is withheld.',
+      fact: readiness.reason !== '' ? readiness.reason : READINESS_NOT_RUN,
+      detail: null,
       action: true,
     }
   }
@@ -263,7 +264,7 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
     }
   }
   const why: string[] = []
-  if (!willStart) why.push(`the last run reported ${readiness.outcome}`)
+  if (!willStart) why.push(`it ${(readiness.outcomeLabel ?? 'Could not be determined').toLowerCase()}`)
   if (!readiness.sameEpoch) why.push('it ran before the site was last prepared')
   if (!readiness.fresh) why.push('it is no longer fresh')
   return {
@@ -285,7 +286,7 @@ export function showInProgress(session: NightSessionState | null): ReadinessVerd
       tone: 'warn',
       state: 'Degraded',
       fact: 'The show is running with something missing.',
-      detail: session.degradedReason ?? 'The controller reported degraded without a reason.',
+      detail: session.degradedReason ?? DEGRADED_WITHOUT_REASON,
       action: false,
     }
   }
@@ -294,15 +295,15 @@ export function showInProgress(session: NightSessionState | null): ReadinessVerd
       tone: 'good',
       state: 'Running',
       fact: 'The show in progress has every output it needs.',
-      detail: `Cycle ${session.cycle} · ${session.state}`,
+      detail: `Cycle ${session.cycle} · ${session.stateLabel}`,
       action: false,
     }
   }
   return {
     tone: 'unknown',
-    state: session.state,
+    state: session.stateLabel,
     fact: 'No show is in progress.',
-    detail: `The night session has been ${session.state} since ${formatClock(session.stateEnteredAt) ?? 'an unrecorded time'}.`,
+    detail: `${session.stateLabel} since ${formatClock(session.stateEnteredAt) ?? 'an unrecorded time'}.`,
     action: false,
   }
 }

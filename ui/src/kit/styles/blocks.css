@@ -954,6 +954,9 @@ a.sm-tile:hover {
 }
 
 .sm-readout__checks .sm-status {
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 

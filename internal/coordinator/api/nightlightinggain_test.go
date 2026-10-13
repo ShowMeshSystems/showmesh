@@ -171,13 +171,8 @@ func TestNightLightingCueGainOrdering(t *testing.T) {
 			if len(ids) != 1 || ids[0] != wantKey {
 				t.Fatalf("gain requestId = %v, want [%q]", ids, wantKey)
 			}
-			if !strings.Contains(row.OutcomeReason, "transition gain") {
+			if !strings.Contains(row.OutcomeReason, "The lights are fading") {
 				t.Errorf("outbox reason %q does not record the gain outcome", row.OutcomeReason)
-			}
-			if !strings.Contains(row.OutcomeReason, "applied=true") ||
-				!strings.Contains(row.OutcomeReason, "ceiling 80") ||
-				!strings.Contains(row.OutcomeReason, "effective output 40") {
-				t.Errorf("outbox reason %q does not carry applied/ceiling/effectiveOutput", row.OutcomeReason)
 			}
 		})
 	}
@@ -201,10 +196,8 @@ func TestNightLightingCueGainRecordsIdempotentRepeat(t *testing.T) {
 	if row.Outcome != nightCueOutcomeConfirmed {
 		t.Errorf("outcome = %q, want %q: an idempotent repeat is a success", row.Outcome, nightCueOutcomeConfirmed)
 	}
-	for _, want := range []string{"applied=false", "ceiling 70", "effective output 0"} {
-		if !strings.Contains(row.OutcomeReason, want) {
-			t.Errorf("outbox reason %q does not contain %q", row.OutcomeReason, want)
-		}
+	if !strings.Contains(row.OutcomeReason, "The lights are fading to 0%") {
+		t.Errorf("outbox reason %q does not record the repeated fade", row.OutcomeReason)
 	}
 }
 
@@ -227,7 +220,7 @@ func TestNightLightingCueGainFailureSurfaces(t *testing.T) {
 	if row.Outcome != nightCueOutcomeFailed {
 		t.Errorf("outcome = %q, want %q", row.Outcome, nightCueOutcomeFailed)
 	}
-	if !strings.Contains(row.OutcomeReason, "fpp plugin unreachable") {
+	if !strings.Contains(row.OutcomeReason, "could not be faded") {
 		t.Errorf("outbox reason %q does not name the gain failure", row.OutcomeReason)
 	}
 }
@@ -271,4 +264,42 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// The numbers a fade write reports stay on its result, where the log line
+// reads them, on a first write and on an idempotent repeat.
+func TestNightApplyLightingFadeKeepsAppliedCeilingAndEffectiveOutput(t *testing.T) {
+	target := config.ShowActionTarget{Integration: config.ShowActionIntegrationFPP, InstanceID: "player-01"}
+	fade := nightLightingFade{TargetPercent: 50, FadeSeconds: 3}
+	for _, want := range []fppcommand.TransitionGainOutcome{
+		{Applied: true, Ceiling: 80, EffectiveOutput: 40},
+		{Applied: false, Ceiling: 70, EffectiveOutput: 0},
+	} {
+		rig := newNightGainRig(t, nil)
+		rig.h.nightGainWriter = func(context.Context, config.ShowActionTarget, nightLightingFade, string) (fppcommand.TransitionGainOutcome, error) {
+			return want, nil
+		}
+		got := rig.h.nightApplyLightingFade(context.Background(), "dim", target, fade, "request-1")
+		if got.failed || got.applied != want.Applied || got.ceiling != int(want.Ceiling) || got.effectiveOutput != int(want.EffectiveOutput) {
+			t.Errorf("gain result = %+v, want applied %t, ceiling %d, effective output %d", got, want.Applied, want.Ceiling, want.EffectiveOutput)
+		}
+		if got.note != "The lights are fading to 50% over 3 seconds." {
+			t.Errorf("note = %q", got.note)
+		}
+	}
+}
+
+// A cue that itself failed says so first, even when its fade also failed.
+func TestNightCueOwnFailureComesBeforeTheFadeFailure(t *testing.T) {
+	gain := nightGainResult{failed: true, note: "The lights could not be faded to 0%. Check the brightness on FPP."}
+	for _, tc := range []struct{ outcome, wantOutcome, wantShown string }{
+		{nightCueOutcomeRefused, nightCueOutcomeRefused, "The cue was refused."},
+		{nightCueOutcomeFailed, nightCueOutcomeFailed, "The cue was refused."},
+		{nightCueOutcomeConfirmed, nightCueOutcomeFailed, gain.note},
+	} {
+		outcome, reason := nightCueOutcomeWithGain(tc.outcome, "The cue was refused.", gain)
+		if outcome != tc.wantOutcome || nightOperatorReason(reason) != tc.wantShown {
+			t.Errorf("cue outcome %s: got %s showing %q, want %s showing %q", tc.outcome, outcome, nightOperatorReason(reason), tc.wantOutcome, tc.wantShown)
+		}
+	}
 }

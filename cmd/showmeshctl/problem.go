@@ -12,6 +12,13 @@ type problem struct {
 	Status            int    `json:"status"`
 	Detail            string `json:"detail"`
 	SupportedVersions []int  `json:"supportedVersions,omitempty"`
+	// BlockedChecks lists the safety checks behind a night refusal.
+	BlockedChecks []problemBlockedCheck `json:"blockedChecks,omitempty"`
+}
+
+type problemBlockedCheck struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // Problem type URIs named in contract §6.6, matched by exact string, not
