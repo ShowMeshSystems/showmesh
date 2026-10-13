@@ -132,12 +132,16 @@ func (h *handlers) handleGetFPPPlaylistReadiness(w http.ResponseWriter, r *http.
 		return
 	}
 
+	warnings := report.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
 	jsonWrite(w, v1.FPPPlaylistReadinessResponse{
 		PlaylistID:       report.PlaylistID,
 		Ready:            report.Ready,
 		FailingCondition: string(report.FailingCondition),
 		Reason:           report.Reason,
-		Warning:          report.Warning,
+		Warnings:         warnings,
 		ServerTime:       formatTime(now),
 	})
 }

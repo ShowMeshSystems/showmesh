@@ -58,7 +58,7 @@ func TestAudioTargetReadinessRefusesTwoLTCEmitters(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestAudioTargetReadinessRefusesUnboundTarget(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi"}},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -104,14 +104,14 @@ func TestAudioTargetReadinessRefusesUnresolvableUntargetedOutput(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
 	if cond != ReadinessAudioTargetUnresolved {
 		t.Fatalf("condition = %q, want %q", cond, ReadinessAudioTargetUnresolved)
 	}
-	if !strings.Contains(reason, "outputs.audio") {
+	if !strings.Contains(reason, "its audio") {
 		t.Errorf("reason = %q, want it to name which output", reason)
 	}
 }
@@ -129,7 +129,7 @@ func TestAudioTargetReadinessPassesTheReferenceInstallation(t *testing.T) {
 		LTC:   &config.ShowCueLTCOutput{},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestAudioTargetReadinessExplicitEmptyTargetsResolvesToProgramLTCNode(t *tes
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{}},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestAudioTargetReadinessIgnoresACueWithNoAudioOutputs(t *testing.T) {
 		Render: &config.ShowCueRenderOutput{Sequence: "seq"},
 	})
 
-	cond, _, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, _, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestAudioTargetReadinessWarnsWhenMultiNodeTargetsExcludeProgramLTC(t *testi
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi", "zone"}},
 	})
 
-	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, _, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestAudioTargetReadinessNoWarningWhenMultiNodeTargetsIncludeProgramLTC(t *t
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
 	})
 
-	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestAudioTargetReadinessWarnsWhenAudioAndAnnouncementTogetherExcludeProgram
 		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"b"}},
 	})
 
-	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, _, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestAudioTargetReadinessNoWarningWhenAudioAndAnnouncementTogetherIncludePro
 		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"c"}},
 	})
 
-	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC(t *testing
 		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"b"}},
 	})
 
-	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, _, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC(t *testing
 	if !strings.Contains(warning, "cue-1") || !strings.Contains(warning, "no node has the program+LTC role") {
 		t.Errorf("warning = %q, want it to name the cue and say no node holds the program+ltc role", warning)
 	}
-	if strings.Contains(warning, "do not include the node with the program+LTC role") {
+	if strings.Contains(warning, "but not on the node") {
 		t.Errorf("warning = %q, want it distinct from the excludes-the-program+ltc-node wording: there is no such node to exclude", warning)
 	}
 }
@@ -333,7 +333,7 @@ func TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode(t *testing.T)
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestAudioTargetReadinessChecksEveryListedTarget(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -384,14 +384,14 @@ func TestAudioTargetReadinessUntargetedCueResolvesToShowAudioNodes(t *testing.T)
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, warning, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
 	if cond != "" {
 		t.Fatalf("condition = %q (%s), want ready", cond, reason)
 	}
-	if strings.Contains(warning, "audio node list") {
+	if strings.Contains(warning, "names no audio nodes") {
 		t.Errorf("warning = %q, want no audio-nodes-defaulted warning: the show has its own audioNodes list", warning)
 	}
 }
@@ -409,7 +409,7 @@ func TestAudioTargetReadinessExcludeNodesNarrowsShowAudioNodes(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a", ExcludeNodes: []string{"pi"}},
 	})
 
-	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := joinedAudioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}

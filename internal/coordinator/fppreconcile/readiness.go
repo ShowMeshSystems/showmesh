@@ -222,7 +222,7 @@ const (
 	// start from the fallback in decision 4"). Unlike every other
 	// condition above, this one is deliberately never a FailingCondition
 	// — see [cueMultisyncTriggerReadiness]'s own doc comment for why it
-	// only ever contributes to Report.Warning.
+	// only ever contributes to Report.Warnings.
 	ReadinessCueMultisyncTriggerMissing ReadinessCondition = "cue-multisync-trigger-missing"
 
 	// ReadinessAudioNodesDefaulted (ADR-049 decision 10): the show has no
@@ -286,19 +286,10 @@ type Report struct {
 	// Reason explains FailingCondition. Empty when Ready and there is no
 	// warning either.
 	Reason string
-	// Warning is set when a condition did not fail readiness outright but
-	// is still worth surfacing to an operator: either the
-	// observation-hash-mismatch check's non-fatal form (no comparable
-	// observation exists yet — section 6's own "the normal afternoon
-	// state, not a fault" case), or exclusive-claim-conflict's own
-	// undecodable-cue case (see [exclusiveClaimReadiness]'s own doc
-	// comment) — a stored show.cue elsewhere in the store could not be
-	// decoded, so this condition could not be verified one way or the
-	// other. Both can be present at once, joined by "; " rather than one
-	// overwriting the other. Never set alongside FailingCondition ==
-	// ReadinessObservationHashMismatch: that combination is the
-	// hard-failure form of the observation check, not its warning form.
-	Warning string
+	// Warnings holds one complete operator message per condition that did
+	// not fail readiness but is still worth showing. Never nil, and never
+	// joined into one string.
+	Warnings []string
 }
 
 // PlaylistReadiness computes TRACK-H-H2-SPEC.md section 6 for one
@@ -327,9 +318,9 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if p.Runner != config.ShowPlaylistRunnerFPP || p.FPP == nil {
 		return Report{}, fmt.Errorf("fppreconcile: playlist readiness requires an fpp-runner playlist with an fpp binding, got runner %q", p.Runner)
 	}
-	report := Report{PlaylistID: playlistID, Ready: true}
+	report := Report{PlaylistID: playlistID, Ready: true, Warnings: []string{}}
 	if len(p.Entries) == 0 {
-		report.Warning = "No songs are bound to cues, so this playlist runs no cues. Bind a song in the playlist."
+		report.Warnings = append(report.Warnings, "No songs are bound to cues, so this playlist runs no cues. Bind a song in the playlist.")
 	}
 
 	// Condition 1: a definition is stored for (instanceUuid, playlistHash).
@@ -337,7 +328,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if errors.Is(err, store.ErrFPPPlaylistDefinitionNotFound) {
 		report.Ready = false
 		report.FailingCondition = ReadinessDefinitionMissing
-		report.Reason = fmt.Sprintf("no playlist definition is stored for instance %q hash %q", p.FPP.InstanceUUID, p.FPP.PlaylistHash)
+		report.Reason = "The coordinator has no copy of this FPP playlist. Import it again."
 		return report, nil
 	}
 	if err != nil {
@@ -396,9 +387,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if newest != nil {
 		report.Ready = false
 		report.FailingCondition = ReadinessDefinitionSuperseded
-		report.Reason = fmt.Sprintf(
-			"The FPP playlist changed since import. Instance %q playlist %q is now %s (%s); the import used %s (%s). Import it again.",
-			p.FPP.InstanceUUID, p.FPP.PlaylistName, newest.PlaylistHash, newest.CapturedAt.Format(time.RFC3339), p.FPP.PlaylistHash, defRec.CapturedAt.Format(time.RFC3339))
+		report.Reason = playlistChangedReason
 		return report, nil
 	}
 
@@ -427,19 +416,19 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		if !ok {
 			report.Ready = false
 			report.FailingCondition = ReadinessEntryNotInDefinition
-			report.Reason = fmt.Sprintf("entry %q (section %q position %d) has no matching entry in the stored definition", entry.ID, entry.FPP.Section, entry.FPP.Position)
+			report.Reason = fmt.Sprintf("The FPP playlist no longer has item %d. Import it again.", entry.FPP.Position+1)
 			return report, nil
 		}
 		if entry.FPP.ExpectedSequenceFilename != "" && entry.FPP.ExpectedSequenceFilename != def.SequenceName {
 			report.Ready = false
 			report.FailingCondition = ReadinessEntryFilenameMismatch
-			report.Reason = fmt.Sprintf("Entry %q expects sequence file %q, but the stored playlist has %q there.", entry.ID, entry.FPP.ExpectedSequenceFilename, def.SequenceName)
+			report.Reason = filenameMismatchReason(entry.FPP.Position, "sequence", entry.FPP.ExpectedSequenceFilename, def.SequenceName)
 			return report, nil
 		}
 		if entry.FPP.ExpectedMediaFilename != "" && entry.FPP.ExpectedMediaFilename != def.MediaName {
 			report.Ready = false
 			report.FailingCondition = ReadinessEntryFilenameMismatch
-			report.Reason = fmt.Sprintf("Entry %q expects media file %q, but the stored playlist has %q there.", entry.ID, entry.FPP.ExpectedMediaFilename, def.MediaName)
+			report.Reason = filenameMismatchReason(entry.FPP.Position, "media", entry.FPP.ExpectedMediaFilename, def.MediaName)
 			return report, nil
 		}
 	}
@@ -479,18 +468,18 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-		report.Warning = appendWarning(report.Warning, "No report has arrived from this instance yet. This is normal before its first report.")
+		report.Warnings = append(report.Warnings, "FPP has not reported what it is playing yet. This is normal before its first report.")
 	case err != nil:
 		return Report{}, fmt.Errorf("fppreconcile: get latest observation: %w", err)
 	case obs.Unavailable != "":
 		report.Ready = false
 		report.FailingCondition = ReadinessEvidenceUnavailable
-		report.Reason = fmt.Sprintf("The latest report from this instance could not be identified (%s), so its playlist cannot be compared.", obs.Unavailable)
+		report.Reason = "FPP's latest report did not name a playlist, so this one cannot be compared. Check again once FPP reports."
 		return report, nil
 	case obs.PlaylistHash != p.FPP.PlaylistHash:
 		report.Ready = false
 		report.FailingCondition = ReadinessObservationHashMismatch
-		report.Reason = fmt.Sprintf("The FPP playlist changed since import: it is now %s, not %s. Import it again.", obs.PlaylistHash, p.FPP.PlaylistHash)
+		report.Reason = playlistChangedReason
 		return report, nil
 	}
 
@@ -516,15 +505,15 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 
 	// Condition 8: no two Cues this Show's Playlists could
 	// concurrently run hold a colliding H0.5 exclusive claim.
-	if cond, reason, warning, err := exclusiveClaimReadiness(ctx, st, logger, p); err != nil {
+	if cond, reason, warnings, err := exclusiveClaimReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
 		report.Ready = false
 		report.FailingCondition = cond
 		report.Reason = reason
 		return report, nil
-	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+	} else {
+		report.Warnings = append(report.Warnings, warnings...)
 	}
 
 	// Condition 9: every node participating in this Show's catalog has
@@ -543,15 +532,15 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// that can receive them (ADR-045 decisions 1 and 2). The warning is
 	// ADR-049 decision 5's own: a multi-node Cue whose targets exclude the
 	// program+ltc node can never start aligned.
-	if cond, reason, warning, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
+	if cond, reason, warnings, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
 		report.Ready = false
 		report.FailingCondition = cond
 		report.Reason = reason
 		return report, nil
-	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+	} else {
+		report.Warnings = append(report.Warnings, warnings...)
 	}
 
 	// Condition 11: every node that must render or play one of this Show's
@@ -574,10 +563,10 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// failure (see [audioTargetClockReadiness]'s own doc comment): it runs
 	// after condition 11 so an asset failure is always reported on its own
 	// terms, never silently replaced by a warning.
-	if warning, err := audioTargetClockReadiness(ctx, st, logger, clock, time.Now(), p); err != nil {
+	if warnings, err := audioTargetClockReadiness(ctx, st, logger, clock, time.Now(), p); err != nil {
 		return Report{}, err
-	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+	} else {
+		report.Warnings = append(report.Warnings, warnings...)
 	}
 
 	// Condition 13 (ADR-051 decision 2): a referenced Cue declares
@@ -587,7 +576,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if warning, err := cueMultisyncTriggerReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+		report.Warnings = append(report.Warnings, warning)
 	}
 
 	// Condition 14 (ADR-051 decision 4): the bound FPP instance has
@@ -596,7 +585,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if warning, err := fppMultisyncDisabledReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+		report.Warnings = append(report.Warnings, warning)
 	}
 
 	// Condition 15 (ADR-051 decision 4): a target audio node is absent
@@ -605,7 +594,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if warning, err := audioNodeNotMultisyncRemoteReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+		report.Warnings = append(report.Warnings, warning)
 	}
 
 	// Condition 16 (ADR-052 decision 4): an audio.node sends LTC out a
@@ -615,40 +604,49 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	if warning, err := audioLTCSeparateLocalClockReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+		report.Warnings = append(report.Warnings, warning)
 	}
 
-	// Condition 17: one warning per node this playlist uses that runs a version
-	// the coordinator's compatibility rule does not accept. Never a failure.
+	// Condition 17: one warning per version, naming the nodes this playlist uses
+	// that run it, when the compatibility rule does not accept it. Never a failure.
 	warnings, err := versionMismatchReadiness(ctx, st, p)
 	if err != nil {
 		return Report{}, err
 	}
-	for _, warning := range warnings {
-		report.Warning = appendWarning(report.Warning, warning)
-	}
+	report.Warnings = append(report.Warnings, warnings...)
 
 	// Condition 18: a node that can send timecode has none configured.
 	// Never a failure. See [audioLTCCapableUnconfiguredReadiness].
-	if warning, err := audioLTCCapableUnconfiguredReadiness(ctx, st, p); err != nil {
+	if warnings, err := audioLTCCapableUnconfiguredReadiness(ctx, st, p); err != nil {
 		return Report{}, err
-	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+	} else {
+		report.Warnings = append(report.Warnings, warnings...)
 	}
 
 	// Condition 19: a node reports its stored program or LTC interface as
 	// gone. Never a failure. See [audioRouteMissingReadiness].
-	if warning, err := audioRouteMissingReadiness(ctx, st, p); err != nil {
+	if warnings, err := audioRouteMissingReadiness(ctx, st, p); err != nil {
 		return Report{}, err
-	} else if warning != "" {
-		report.Warning = appendWarning(report.Warning, warning)
+	} else {
+		report.Warnings = append(report.Warnings, warnings...)
 	}
 
 	return report, nil
 }
 
-// versionMismatchReadiness returns [ReadinessVersionMismatch]'s warnings, in
-// node id order, for the nodes one of p's cues has an output on. Like the
+// playlistChangedReason is the one wording for an FPP playlist edited after import.
+const playlistChangedReason = "The FPP playlist changed since import. Import it again."
+
+// filenameMismatchReason names the file an item was imported with and the one FPP has now.
+func filenameMismatchReason(position int, kind, want, got string) string {
+	if got == "" {
+		return fmt.Sprintf("Item %d was imported with %s file %s, but FPP now has none there. Import it again.", position+1, kind, want)
+	}
+	return fmt.Sprintf("Item %d was imported with %s file %s, but FPP now has %s. Import it again.", position+1, kind, want, got)
+}
+
+// versionMismatchReadiness returns [ReadinessVersionMismatch]'s warnings, one
+// per version, for the nodes one of p's cues has an output on. Like the
 // other catalog conditions it reports nothing unless p's show is the active one.
 func versionMismatchReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) ([]string, error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
@@ -667,13 +665,12 @@ func versionMismatchReadiness(ctx context.Context, st *store.Store, p config.Sho
 		return nil, fmt.Errorf("fppreconcile: list nodes: %w", err)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
-	var warnings []string
+	var mismatched []versions.NodeVersion
 	for _, n := range nodes {
 		if n.Hello == nil {
 			continue
 		}
-		w := versions.NodeWarning(n.NodeID, n.Hello.AgentVersion, version.Version)
-		if w == "" {
+		if versions.NodeWarning(n.NodeID, n.Hello.AgentVersion, version.Version) == "" {
 			continue
 		}
 		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
@@ -683,23 +680,12 @@ func versionMismatchReadiness(ctx context.Context, st *store.Store, p config.Sho
 		for _, e := range catalog.Entries {
 			o := e.Outputs
 			if playlistCues[e.CueID] && (o.Render != nil || o.Audio != nil || o.LTC != nil || o.Announcement != nil) {
-				warnings = append(warnings, w)
+				mismatched = append(mismatched, versions.NodeVersion{NodeID: n.NodeID, Version: n.Hello.AgentVersion})
 				break
 			}
 		}
 	}
-	return warnings, nil
-}
-
-// appendWarning combines two independently-produced Report.Warning texts
-// (the observation check's and [exclusiveClaimReadiness]'s undecodable-cue
-// case can both fire on the same report) without either silently
-// overwriting the other.
-func appendWarning(existing, add string) string {
-	if existing == "" {
-		return add
-	}
-	return existing + "; " + add
+	return versions.NodeWarnings(mismatched, version.Version), nil
 }
 
 // nodeRenderAssignmentReadiness implements condition 7 (see
@@ -915,13 +901,9 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 
 	if hasEvidence && found.Absence == "" {
 		if state := found.StateAt(now); state != observation.StateCurrent {
-			detail := string(state)
-			if found.ObservedAt != nil {
-				detail = fmt.Sprintf("%s, last observed at %s", detail, found.ObservedAt.Format(time.RFC3339))
-			}
 			return false, fmt.Sprintf(
-				"Node %q's reading for surface %q is %s, not current, so it is not counted as confirmed.",
-				nodeID, surfaceID, detail), nil
+				"Node %s has not reported surface %s recently, so its assignment is not confirmed. Check the node.",
+				nodeID, surfaceID), nil
 		}
 		return true, "", nil
 	}
@@ -934,11 +916,11 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 	info := livenessOrUnknown(liveness, nodeID)
 	if info.liveness == inventory.LivenessOnline {
 		return false, fmt.Sprintf(
-			"Node %q has nothing assigned to surface %q, which this show's cues use. Assign the surface.", nodeID, surfaceID), nil
+			"Node %s has nothing assigned to surface %s, which this show's cues use. Assign the surface.", nodeID, surfaceID), nil
 	}
 	return false, fmt.Sprintf(
-		"Node %q's assignment for surface %q cannot be confirmed: the node is not currently reporting (%s).",
-		nodeID, surfaceID, info.reason), nil
+		"Node %s is not reporting, so its assignment for surface %s cannot be confirmed. Check the node.",
+		nodeID, surfaceID), nil
 }
 
 // alwaysTrueForReadiness satisfies [config.DecodeShowSurfacePayload]'s
@@ -994,11 +976,11 @@ func alwaysTrueForReadiness(string) bool { return true }
 // so it neither asserts a conflict nor silently claims there is none. Any
 // OTHER error from ResolveCueCatalog (a genuine store failure, for
 // instance) still fails this condition hard, exactly as before.
-func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (cond ReadinessCondition, reason string, warning string, err error) {
+func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (cond ReadinessCondition, reason string, warnings []string, err error) {
 	active := assetsync.ActiveShow{Configured: true, ShowID: p.Show}
 	nodes, err := st.ListNodeDeclarations(ctx)
 	if err != nil {
-		return "", "", "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+		return "", "", nil, fmt.Errorf("fppreconcile: list node declarations: %w", err)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
@@ -1008,11 +990,10 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 	// a real override's stored revision. Resolved once, outside the loop.
 	realActive, realActiveErr := assetsync.ResolveActiveShow(ctx, st)
 	if realActiveErr != nil {
-		return "", "", "", fmt.Errorf("fppreconcile: resolve active show: %w", realActiveErr)
+		return "", "", nil, fmt.Errorf("fppreconcile: resolve active show: %w", realActiveErr)
 	}
 	realActiveMatches := realActive.Configured && realActive.ShowID == p.Show
 
-	var warnings []string
 	for _, n := range nodes {
 		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
 		if err != nil {
@@ -1020,9 +1001,9 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 				if logger != nil {
 					logger.Warn("fppreconcile: exclusive-claim-conflict could not be fully evaluated; a stored show.cue could not be decoded", "cueId", cueID, "error", err)
 				}
-				return "", "", fmt.Sprintf("Cue %q's settings could not be read, so a conflict with another cue could not be checked.", cueID), nil
+				return "", "", []string{fmt.Sprintf("Cue %s's settings could not be read, so a clash with another cue could not be checked. Save the cue again.", cueID)}, nil
 			}
-			return "", "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+			return "", "", nil, fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
 		if len(catalog.Conflicts) == 0 {
 			continue
@@ -1033,23 +1014,20 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 		if realActiveMatches {
 			realCatalog, err := assetsync.ResolveCueCatalog(ctx, st, realActive, n.NodeID)
 			if err != nil {
-				return "", "", "", fmt.Errorf("fppreconcile: resolve real cue catalog for node %q: %w", n.NodeID, err)
+				return "", "", nil, fmt.Errorf("fppreconcile: resolve real cue catalog for node %q: %w", n.NodeID, err)
 			}
 			covered, overrideRec, overrideErr := CueCatalogOverrideStatus(ctx, st, n.NodeID, realCatalog)
 			if overrideErr != nil {
-				return "", "", "", overrideErr
+				return "", "", nil, overrideErr
 			}
 			if covered {
 				warnings = append(warnings, CueCatalogOverrideWarning(n.NodeID, realCatalog, overrideRec))
 				continue
 			}
 		}
-		return ReadinessExclusiveClaimConflict, catalog.Conflicts[0].Detail(), "", nil
+		return ReadinessExclusiveClaimConflict, conflictReason(catalog.Conflicts[0]), nil, nil
 	}
-	if len(warnings) > 0 {
-		return "", "", strings.Join(warnings, "; "), nil
-	}
-	return "", "", "", nil
+	return "", "", warnings, nil
 }
 
 // undecodableCueID recognizes the one, stable error text
@@ -1127,14 +1105,13 @@ func nodeCatalogReadiness(ctx context.Context, st *store.Store, p config.ShowPla
 		if !catalogHasAnyOutput(catalog) {
 			continue
 		}
-		status, ackRevision, _, err := NodeCatalogAckStatus(ctx, st, n.NodeID, catalog.Revision)
+		status, _, _, err := NodeCatalogAckStatus(ctx, st, n.NodeID, catalog.Revision)
 		if err != nil {
 			return "", "", fmt.Errorf("fppreconcile: resolve node catalog ack status for %q: %w", n.NodeID, err)
 		}
 		if status != v1.CueCatalogStatusCurrent {
 			return ReadinessNodeCatalogStale, fmt.Sprintf(
-				"Node %q has not confirmed the active show's Cue list %q (status %s, node reports %q).",
-				n.NodeID, catalog.Revision, status, ackRevision), nil
+				"Node %s has not confirmed the current cue list. Deploy the cue list to it.", n.NodeID), nil
 		}
 	}
 	return "", "", nil
@@ -1204,8 +1181,7 @@ func cueMultisyncTriggerReadiness(ctx context.Context, st *store.Store, p config
 		for _, e := range catalog.Entries {
 			if e.Outputs.Audio != nil && len(e.Triggers) == 0 {
 				return fmt.Sprintf(
-					"Cue %q: no FPP sequence file starts this cue, so the coordinator starts its audio.",
-					e.CueID), nil
+					"Cue %s has no FPP sequence, so the coordinator starts its audio.", e.CueID), nil
 			}
 		}
 	}
@@ -1221,20 +1197,22 @@ func cueMultisyncTriggerReadiness(ctx context.Context, st *store.Store, p config
 // still needs a readiness answer for the rest of the Playlist. Because
 // that demotion swallows the actual decode error, it is logged at warn
 // level, naming the cue id, so the corruption is not otherwise invisible.
+const cueUnreadableReason = "Cue %s's settings could not be read. Save the cue again."
+
 func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, playlistShow string) (ReadinessCondition, string, error) {
 	obj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, cueID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q does not exist", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf("Cue %s no longer exists. Bind this song to another cue.", cueID), nil
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("fppreconcile: get cue %q: %w", cueID, err)
 	}
 	if obj.CurrentRevision == 0 {
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q has never been activated", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf("Cue %s has no saved settings. Save the cue, then check again.", cueID), nil
 	}
 	rev, err := st.GetConfigRevision(ctx, config.ShowCueConfigKind, cueID, obj.CurrentRevision)
 	if errors.Is(err, store.ErrConfigRevisionNotFound) {
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q's current configuration could not be read", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf(cueUnreadableReason, cueID), nil
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("fppreconcile: get cue %q revision %d: %w", cueID, obj.CurrentRevision, err)
@@ -1244,10 +1222,10 @@ func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, 
 		if logger != nil {
 			logger.Warn("fppreconcile: stored cue revision could not be decoded; reporting cue-not-ready", "cueId", cueID, "error", err)
 		}
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q's stored configuration could not be read", cueID), nil
+		return ReadinessCueNotReady, fmt.Sprintf(cueUnreadableReason, cueID), nil
 	}
 	if cuePayload.Show != playlistShow {
-		return ReadinessCueNotReady, fmt.Sprintf("cue %q belongs to show %q, not this playlist's own show %q", cueID, cuePayload.Show, playlistShow), nil
+		return ReadinessCueNotReady, fmt.Sprintf("Cue %s belongs to another show. Bind this song to a cue from this show.", cueID), nil
 	}
 	return "", "", nil
 }
@@ -1308,9 +1286,7 @@ func fppMultisyncDisabledReadiness(ctx context.Context, st *store.Store, p confi
 	if !ok || enabled {
 		return "", nil
 	}
-	return fmt.Sprintf(
-		"FPP instance %q has MultiSync off, so the coordinator starts every cue's audio. Turn MultiSync on for tighter sync.",
-		p.FPP.InstanceUUID), nil
+	return "FPP has MultiSync off, so the coordinator starts every cue's audio. Turn MultiSync on for tighter sync.", nil
 }
 
 // audioNodeNotMultisyncRemoteReadiness implements condition 15 (see
@@ -1373,12 +1349,21 @@ func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, 
 		if remotes[n.NodeID] {
 			continue
 		}
+		var cues []string
 		for _, e := range catalog.Entries {
 			if e.Outputs.Audio != nil {
-				return fmt.Sprintf(
-					"Cue %q targets node %q, which FPP %q does not list as a MultiSync remote, so the coordinator starts its audio.",
-					e.CueID, n.NodeID, p.FPP.InstanceUUID), nil
+				cues = append(cues, e.CueID)
 			}
+		}
+		switch len(cues) {
+		case 0:
+		case 1:
+			return fmt.Sprintf(
+				"FPP does not list node %s as a MultiSync remote, so the coordinator starts cue %s's audio there.",
+				n.NodeID, cues[0]), nil
+		default:
+			return fmt.Sprintf(
+				"FPP does not list node %s as a MultiSync remote, so the coordinator starts audio there.", n.NodeID), nil
 		}
 	}
 	return "", nil
@@ -1448,25 +1433,25 @@ func audioLTCSeparateLocalClockReadiness(ctx context.Context, st *store.Store, p
 // [audioLTCSeparateLocalClockReadiness]. A node whose Hello advertises an
 // LTC-capable route and whose audio.node names no LTC channel runs without
 // timecode it could have produced; omitting the LTC fields stays valid.
-func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) ([]string, error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+		return nil, fmt.Errorf("fppreconcile: resolve active show: %w", err)
 	}
 	if !active.Configured || active.ShowID != p.Show {
-		return "", nil
+		return nil, nil
 	}
 	nodes, err := st.ListNodeDeclarations(ctx)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+		return nil, fmt.Errorf("fppreconcile: list node declarations: %w", err)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
-	warning := ""
+	var warnings []string
 	for _, n := range nodes {
 		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
 		if err != nil {
-			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+			return nil, fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
 		carriesAudio := false
 		for _, e := range catalog.Entries {
@@ -1480,7 +1465,7 @@ func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, 
 		}
 		payload, ok, err := activeAudioNodePayload(ctx, st, n.NodeID)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !ok || payload.LTCChannel != 0 || payload.LTCRoute != "" {
 			continue
@@ -1490,14 +1475,14 @@ func audioLTCCapableUnconfiguredReadiness(ctx context.Context, st *store.Store, 
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
+			return nil, fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
 		}
 		if rec.Hello != nil && advertisesLTCRoute(rec.Hello.Capabilities, payload.ProgramRoute) {
-			warning = appendWarning(warning, fmt.Sprintf(
+			warnings = append(warnings, fmt.Sprintf(
 				"Node %s can send timecode but none is configured. Add an LTC channel in Node routing if this node should.", n.NodeID))
 		}
 	}
-	return warning, nil
+	return warnings, nil
 }
 
 // advertisesLTCRoute reports whether caps carries an audio.output.ltc
@@ -1560,33 +1545,33 @@ func audioNodeLocalClockWarning(nodeID string, p config.AudioNodePayload) string
 		return ""
 	}
 	return fmt.Sprintf(
-		"Node %q sends LTC out %s and program audio out %s with no shared clock named, so timecode drifts. Put LTC on the program interface.",
-		nodeID, ltc, program)
+		"Node %s sends LTC and program audio out different interfaces, so timecode drifts. Put LTC on the program interface.",
+		nodeID)
 }
 
 // audioRouteMissingReadiness is condition 19, scoped like
 // [audioLTCSeparateLocalClockReadiness]. The node's own capability
 // advertisement lists a held route it has stopped finding; a node that has
 // not advertised, or advertises no such route, says nothing here.
-func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) ([]string, error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+		return nil, fmt.Errorf("fppreconcile: resolve active show: %w", err)
 	}
 	if !active.Configured || active.ShowID != p.Show {
-		return "", nil
+		return nil, nil
 	}
 	nodes, err := st.ListNodeDeclarations(ctx)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+		return nil, fmt.Errorf("fppreconcile: list node declarations: %w", err)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
-	warning := ""
+	var warnings []string
 	for _, n := range nodes {
 		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
 		if err != nil {
-			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+			return nil, fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
 		carriesAudio := false
 		for _, e := range catalog.Entries {
@@ -1600,7 +1585,7 @@ func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.S
 		}
 		payload, ok, err := activeAudioNodePayload(ctx, st, n.NodeID)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !ok {
 			continue
@@ -1610,24 +1595,24 @@ func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.S
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
+			return nil, fmt.Errorf("fppreconcile: read node %q: %w", n.NodeID, err)
 		}
 		if rec.Hello == nil {
 			continue
 		}
 		gone := goneRoutes(rec.Hello.Capabilities)
 		if gone[payload.ProgramRoute] {
-			warning = appendWarning(warning, fmt.Sprintf(
+			warnings = append(warnings, fmt.Sprintf(
 				"Node %s no longer reports its program interface %s. Reconnect it or pick another route in Node routing.",
 				n.NodeID, config.AudioNodeRouteInterface(payload.ProgramRoute)))
 		}
 		if payload.LTCRoute != "" && payload.LTCRoute != payload.ProgramRoute && gone[payload.LTCRoute] {
-			warning = appendWarning(warning, fmt.Sprintf(
+			warnings = append(warnings, fmt.Sprintf(
 				"Node %s no longer reports its LTC interface %s. Reconnect it or pick another route in Node routing.",
 				n.NodeID, config.AudioNodeRouteInterface(payload.LTCRoute)))
 		}
 	}
-	return warning, nil
+	return warnings, nil
 }
 
 // goneRoutes is the set of routes caps lists under audio.output.local's

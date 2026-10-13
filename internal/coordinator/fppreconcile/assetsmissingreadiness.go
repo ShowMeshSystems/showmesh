@@ -81,8 +81,8 @@ func assetsMissingReadiness(ctx context.Context, st *store.Store, p config.ShowP
 		sort.Slice(missing, func(i, j int) bool { return missing[i].SequenceID < missing[j].SequenceID })
 		m := missing[0]
 		return ReadinessAssetsMissing, fmt.Sprintf(
-			"node %q is missing asset %q for sequence %q (content hash %s), which this show's cues resolve to it for",
-			n.NodeID, m.Filename, m.SequenceID, m.ContentHash), nil
+			"Node %s does not have the file %s yet. Wait for it to sync, or check the node.",
+			n.NodeID, m.Filename), nil
 	}
 	return "", "", nil
 }

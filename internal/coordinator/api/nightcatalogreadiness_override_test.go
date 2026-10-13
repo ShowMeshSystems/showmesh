@@ -83,11 +83,11 @@ func TestNightCheckCatalogCurrent_OverriddenConflictDegradesInsteadOfFailing(t *
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
-	if !strings.Contains(check.reason, "operator override") {
-		t.Fatalf("reason does not name the operator override: %s", check.reason)
+	if !strings.Contains(check.reason, "1 cue pair") || !strings.Contains(check.reason, "Accepted by") {
+		t.Fatalf("reason does not count the accepted cue pair and say who accepted it: %s", check.reason)
 	}
-	if !strings.Contains(check.reason, "cue-a") || !strings.Contains(check.reason, "cue-b") {
-		t.Fatalf("reason does not name both overridden cues: %s", check.reason)
+	if strings.Contains(check.reason, "; ") || strings.Contains(check.reason, required) {
+		t.Fatalf("reason joins messages or carries the cue list version: %s", check.reason)
 	}
 }
 

@@ -52,7 +52,7 @@ func TestAudioTargetClockReadinessLockedIsSilent(t *testing.T) {
 		"pi": {clockStateObservation(t, "pi", clockLockedValue, now, 45*time.Second)},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAudioTargetClockReadinessSingleNodeCueIsNeverChecked(t *testing.T) {
 	now := time.Now()
 	clock := fakeClockLister{"m4": {clockStateObservation(t, "m4", "unsynchronized", now, 45*time.Second)}}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestAudioTargetClockReadinessUnlockedWarnsNamingNode(t *testing.T) {
 		"pi": {clockStateObservation(t, "pi", "unsynchronized", now, 45*time.Second)},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
@@ -142,14 +142,14 @@ func TestAudioTargetClockReadinessNoEvidenceWarnsDistinctly(t *testing.T) {
 		// pi has never published a clock report.
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
-	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "clock state has never been reported") {
-		t.Errorf("warning = %q, want it to name pi and say its clock state has never been reported", warning)
+	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "has not reported its clock yet") {
+		t.Errorf("warning = %q, want it to name pi and say it has not reported its clock yet", warning)
 	}
-	if strings.Contains(warning, "stale") {
+	if strings.Contains(warning, "recently") {
 		t.Errorf("warning = %q, want it distinct from the stale-evidence case", warning)
 	}
 }
@@ -176,14 +176,14 @@ func TestAudioTargetClockReadinessStaleEvidenceWarnsDistinctly(t *testing.T) {
 		"pi": {clockStateObservation(t, "pi", clockLockedValue, observedAt, 45*time.Second)},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
-	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "stale") {
+	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "recently") {
 		t.Errorf("warning = %q, want it to name pi and say its clock evidence is stale", warning)
 	}
-	if strings.Contains(warning, "clock state has never been reported") {
+	if strings.Contains(warning, "has not reported its clock yet") {
 		t.Errorf("warning = %q, want it distinct from the no-evidence case", warning)
 	}
 }
@@ -210,14 +210,14 @@ func TestAudioTargetClockReadinessOfflineNodeWarnsDistinctly(t *testing.T) {
 		"pi": {clockStateObservation(t, "pi", clockLockedValue, now, 45*time.Second)},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
-	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "not currently reporting") {
+	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "is not reporting") {
 		t.Errorf("warning = %q, want it to name pi and say it is not currently reporting", warning)
 	}
-	if strings.Contains(warning, "stale") || strings.Contains(warning, "clock state has never been reported") {
+	if strings.Contains(warning, "recently") || strings.Contains(warning, "has not reported its clock yet") {
 		t.Errorf("warning = %q, want it distinct from the stale/no-evidence cases", warning)
 	}
 }
@@ -258,7 +258,7 @@ func TestAudioTargetClockReadinessCollectsEveryOffendingNodeAcrossCues(t *testin
 		},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, p)
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, p)
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestAudioTargetClockReadinessIgnoresLTCOutput(t *testing.T) {
 		"pi": {clockStateObservation(t, "pi", "unsynchronized", now, 45*time.Second)},
 	}
 
-	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
+	warning, err := joinedClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}

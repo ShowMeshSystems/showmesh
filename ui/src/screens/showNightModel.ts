@@ -203,7 +203,7 @@ export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; fa
 export function readinessChecks(checks: readonly NightReadinessCheck[]): ReadinessCheckReadout[] {
   return checks.map((check, index) => ({
     key: `${check.name}:${index}`,
-    label: `${check.name} · ${check.state.replace('_', ' ')}`,
+    label: `${check.label} · ${check.state.replace('_', ' ')}`,
     tone: READINESS_CHECK_TONE[check.state] ?? 'unknown',
     fact: check.reason !== '' ? check.reason : 'No reason was recorded for this check.',
   }))

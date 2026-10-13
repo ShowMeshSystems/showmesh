@@ -52,8 +52,8 @@ func TestPlaylistReadinessNodeCatalogStale(t *testing.T) {
 	if report.FailingCondition != ReadinessNodeCatalogStale {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeCatalogStale)
 	}
-	if !containsAll(report.Reason, "node-1", "catalog-unacknowledged") {
-		t.Fatalf("Reason = %q, want it to name node-1 and its catalog-unacknowledged status", report.Reason)
+	if !containsAll(report.Reason, "node-1", "has not confirmed") {
+		t.Fatalf("Reason = %q, want it to name node-1 and say it has not confirmed the cue list", report.Reason)
 	}
 }
 
@@ -88,8 +88,8 @@ func TestPlaylistReadinessNodeCatalogStaleWrongAcknowledgedRevision(t *testing.T
 	if report.FailingCondition != ReadinessNodeCatalogStale {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeCatalogStale)
 	}
-	if !containsAll(report.Reason, "node-1", "catalog-stale", "stale-revision-from-a-prior-edit") {
-		t.Fatalf("Reason = %q, want it to name node-1, catalog-stale, and its stale acknowledged revision", report.Reason)
+	if !containsAll(report.Reason, "node-1", "has not confirmed") {
+		t.Fatalf("Reason = %q, want it to name node-1 and say it has not confirmed the cue list", report.Reason)
 	}
 }
 
@@ -298,8 +298,8 @@ func TestPlaylistReadinessExclusiveClaimConflictOverriddenWarnsInsteadOfFailing(
 	if !report.Ready {
 		t.Fatalf("Ready = false (FailingCondition %q: %s), want true: an overridden conflict must warn, not fail", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "node-1", "operator override", "cue-1", "cue-2", "the program audio output on node-1") {
-		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the shared output", report.Warning)
+	if !containsAll(warningText(report), "Node node-1 has 1 cue pair", "program audio output", "Accepted by") {
+		t.Fatalf("Warning = %q, want it to name node-1, count the accepted pair and name the shared output", warningText(report))
 	}
 }
 
@@ -444,8 +444,8 @@ func TestPlaylistReadinessUndecodableCueDoesNotFailUnrelatedPlaylist(t *testing.
 	if report.FailingCondition == ReadinessExclusiveClaimConflict {
 		t.Fatalf("FailingCondition = %q, want anything but a false-positive conflict report: a corrupted cue proves nothing about a real collision", report.FailingCondition)
 	}
-	if !containsAll(report.Warning, "cue-corrupt", "could not be read") {
-		t.Fatalf("Warning = %q, want it to name the offending cue cue-corrupt and explain it could not be read", report.Warning)
+	if !containsAll(warningText(report), "cue-corrupt", "could not be read") {
+		t.Fatalf("Warning = %q, want it to name the offending cue cue-corrupt and explain it could not be read", warningText(report))
 	}
 
 	logged := logBuf.String()
@@ -652,8 +652,8 @@ func TestPlaylistReadinessCueMultisyncTriggerMissingWarns(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: a missing MultiSync trigger is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "cue-1", "no FPP sequence file starts this cue") {
-		t.Fatalf("Warning = %q, want it to name cue-1 and explain that no trigger starts it", report.Warning)
+	if !containsAll(warningText(report), "cue-1", "no FPP sequence") {
+		t.Fatalf("Warning = %q, want it to name cue-1 and explain that no trigger starts it", warningText(report))
 	}
 }
 
@@ -758,8 +758,8 @@ func TestPlaylistReadinessFPPMultisyncDisabledWarns(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: a disabled FPP instance is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "inst-1", "has MultiSync off") {
-		t.Fatalf("Warning = %q, want it to name inst-1 and that MultiSync is turned off", report.Warning)
+	if !containsAll(warningText(report), "MultiSync off") {
+		t.Fatalf("Warning = %q, want it to say MultiSync is off", warningText(report))
 	}
 }
 
@@ -776,8 +776,8 @@ func TestPlaylistReadinessFPPMultisyncEnabledNoWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if !report.Ready || report.Warning != "" {
-		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when MultiSync is enabled and node-1 is a known remote", report.Ready, report.Warning)
+	if !report.Ready || warningText(report) != "" {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when MultiSync is enabled and node-1 is a known remote", report.Ready, warningText(report))
 	}
 }
 
@@ -799,8 +799,8 @@ func TestPlaylistReadinessAudioNodeNotMultisyncRemoteWarns(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: a node missing from the MultiSync systems list is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "cue-1", "node-1", "inst-1", "does not list as a MultiSync remote") {
-		t.Fatalf("Warning = %q, want it to name cue-1, node-1 and inst-1", report.Warning)
+	if !containsAll(warningText(report), "cue-1", "node-1", "MultiSync remote") {
+		t.Fatalf("Warning = %q, want it to name cue-1 and node-1", warningText(report))
 	}
 }
 
@@ -818,7 +818,33 @@ func TestPlaylistReadinessAudioNodeNotMultisyncRemoteNoEvidenceNoWarning(t *test
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if !report.Ready || report.Warning != "" {
-		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when no systems-list evidence has ever been collected", report.Ready, report.Warning)
+	if !report.Ready || warningText(report) != "" {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when no systems-list evidence has ever been collected", report.Ready, warningText(report))
+	}
+}
+
+// TestPlaylistReadinessMultisyncRemoteWarningNamesNoCueForSeveral: a node FPP
+// does not list is reported once, and names a cue only when it carries one.
+func TestPlaylistReadinessMultisyncRemoteWarningNamesNoCueForSeveral(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putCueWithAudio(t, st, "cue-2", "show-1")
+	putPlaylist(t, st, "playlist-2", config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Second", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Second", PlaylistHash: hash64("a2")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-2", Cue: "cue-2", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, true)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncSystemHostnames, "some-other-host")
+
+	warning, err := audioNodeNotMultisyncRemoteReadiness(context.Background(), st, p)
+	if err != nil {
+		t.Fatalf("audioNodeNotMultisyncRemoteReadiness: %v", err)
+	}
+	if !containsAll(warning, "node-1", "MultiSync remote") || strings.Contains(warning, "cue-") {
+		t.Fatalf("warning = %q, want node-1 named once and no cue named for two cues", warning)
 	}
 }

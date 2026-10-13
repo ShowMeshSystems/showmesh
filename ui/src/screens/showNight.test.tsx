@@ -748,22 +748,23 @@ describe('Show Night', () => {
           sameEpoch: true,
           fresh: true,
           checks: [
-            { name: 'interlock:power-on:projector-cooldown', state: 'healthy', reason: 'Lamp below threshold.' },
-            { name: 'interlock:power-on:garage-link', state: 'failed', reason: 'No route to host.' },
-            { name: 'audio-node:reachable', state: 'not_verifiable', reason: 'No audio node is configured to verify.' },
-            { name: 'resolume:composition', state: 'not_configured', reason: 'No composition is configured for this show.' },
+            { name: 'interlock:power-on:projector-cooldown', label: 'Safety check projector-cooldown for Power on', state: 'healthy', reason: 'Lamp below threshold.' },
+            { name: 'interlock:power-on:garage-link', label: 'Safety check garage-link for Power on', state: 'failed', reason: 'No route to host.' },
+            { name: 'audio-node:reachable', label: 'Audio node reachable', state: 'not_verifiable', reason: 'No audio node is configured to verify.' },
+            { name: 'resolume:composition', label: 'Resolume composition', state: 'not_configured', reason: 'No composition is configured for this show.' },
           ],
         },
       }),
     })
-    expect(screen.getByText('interlock:power-on:projector-cooldown · healthy')).toBeInTheDocument()
+    expect(screen.getByText('Safety check projector-cooldown for Power on · healthy')).toBeInTheDocument()
     expect(screen.getByText('Lamp below threshold.')).toBeInTheDocument()
-    expect(screen.getByText('interlock:power-on:garage-link · failed')).toBeInTheDocument()
+    expect(screen.getByText('Safety check garage-link for Power on · failed')).toBeInTheDocument()
     expect(screen.getByText('No route to host.')).toBeInTheDocument()
-    expect(screen.getByText('audio-node:reachable · not verifiable')).toBeInTheDocument()
+    expect(screen.getByText('Audio node reachable · not verifiable')).toBeInTheDocument()
     expect(screen.getByText('No audio node is configured to verify.')).toBeInTheDocument()
-    expect(screen.getByText('resolume:composition · not configured')).toBeInTheDocument()
+    expect(screen.getByText('Resolume composition · not configured')).toBeInTheDocument()
     expect(screen.getByText('No composition is configured for this show.')).toBeInTheDocument()
+    expect(screen.queryByText(/interlock:power-on/)).not.toBeInTheDocument()
   })
 
   it('says so honestly when readiness recorded no individual checks', () => {

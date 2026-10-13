@@ -333,7 +333,7 @@ describe('Shows · Playlists tab', () => {
     stubs.getFPPPlaylistDefinitionEntries = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', instanceUuid: 'uuid-1', playlistHash: 'a'.repeat(64), entries: [] })
     stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: [] })
     stubs.getFPPPlaylistReadiness = (playlistId: string) =>
-      Promise.resolve({ playlistId, ready: false, failingCondition: 'entry-not-in-definition', reason: 'Entry Main·3 is not in the stored definition.', serverTime: '2026-08-30T21:00:00Z' })
+      Promise.resolve({ playlistId, ready: false, failingCondition: 'entry-not-in-definition', reason: 'Entry Main·3 is not in the stored definition.', warnings: [], serverTime: '2026-08-30T21:00:00Z' })
 
     renderWorkspace()
     await openPlaylistRow('Main Show')
@@ -342,6 +342,34 @@ describe('Shows · Playlists tab', () => {
     within(heading.parentElement as HTMLElement).getByRole('button', { name: 'Check readiness' }).click()
     await waitFor(() => expect(screen.getByText('entry not in definition')).toBeInTheDocument())
     expect(screen.getByText('Entry Main·3 is not in the stored definition.')).toBeInTheDocument()
+  })
+
+  it('lists each readiness warning on its own line under an amber count, never under a plain Ready', async () => {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'show.playlist'
+        ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [summary()] })
+        : contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    stubs.getShowPlaylist = (id: string) =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.playlist', id, revision: 1, payload: fppPlaylist(), updatedAt: '2026-08-30T18:22:00Z', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api' })
+    stubs.getFPPPlaylistDefinitionEntries = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', instanceUuid: 'uuid-1', playlistHash: 'a'.repeat(64), entries: [] })
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', definitions: [] })
+    stubs.getFPPPlaylistReadiness = (playlistId: string) =>
+      Promise.resolve({ playlistId, ready: true, warnings: ['Cue bg1 has no FPP sequence, so the coordinator starts its audio.', 'Node pi-audio-01 has 2 cue pairs sharing its program audio output. Accepted by admin.'], serverTime: '2026-08-30T21:00:00Z' })
+
+    renderWorkspace()
+    await openPlaylistRow('Main Show')
+    await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: 'Playlist readiness' })).toBeInTheDocument())
+    const heading = screen.getByRole('heading', { level: 3, name: 'Playlist readiness' })
+    within(heading.parentElement as HTMLElement).getByRole('button', { name: 'Check readiness' }).click()
+    await waitFor(() => expect(screen.getByText('Ready, 2 warnings')).toBeInTheDocument())
+    expect(screen.getByText('Ready, 2 warnings').closest('.sm-status')).toHaveClass('sm-status--warn')
+    const items = within(screen.getByRole('list', { name: 'Readiness warnings' })).getAllByRole('listitem')
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Cue bg1 has no FPP sequence, so the coordinator starts its audio.',
+      'Node pi-audio-01 has 2 cue pairs sharing its program audio output. Accepted by admin.',
+    ])
   })
 
   it('renders a showmesh-audio playlist’s entries with cue names, and marks entry length as not reported', async () => {
