@@ -22,11 +22,6 @@ screens/LiveControl.tsx	rev	1
 screens/Monitor.tsx	reconciliation	1
 screens/NodeDetail.tsx	dispatched	1
 screens/ResolumeControl.tsx	dispatch	6
-screens/ShowNight.tsx	armed	1
-screens/ShowNight.tsx	dispatched	1
-screens/ShowNight.tsx	posture	1
-screens/ShowNight.tsx	provenance	2
-screens/ShowNight.tsx	revision	1
 screens/Shows.tsx	rev	1
 screens/ShowsAutomation.tsx	dispatched	2
 screens/ShowsAutomation.tsx	payload	1
@@ -34,5 +29,3 @@ screens/ShowsAutomation.tsx	revision	2
 screens/ShowsWorkspace.tsx	principal	1
 screens/liveControlModel.ts	dispatch	1
 screens/liveControlModel.ts	dispatched	3
-screens/showNightModel.ts	dispatch	1
-screens/showNightModel.ts	pinned	3

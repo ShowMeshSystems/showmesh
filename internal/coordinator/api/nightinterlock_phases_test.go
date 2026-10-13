@@ -50,7 +50,7 @@ func nightBlockInterlockJSON(name, phase string) string {
 		"phase": "` + phase + `",
 		"posture": "block",
 		"signal": "cooldown-check",
-		"failureText": "enclosure has not confirmed a safe cooldown",
+		"failureText": "The enclosure has not confirmed a safe cooldown.",
 		"onUnavailable": "block",
 		"overridePolicy": "authorized-operator"
 	}`
@@ -62,7 +62,7 @@ func nightObserveInterlockJSON(name, phase string) string {
 		"phase": "` + phase + `",
 		"posture": "observe",
 		"signal": "cooldown-check",
-		"failureText": "enclosure has not confirmed a safe cooldown"
+		"failureText": "The enclosure has not confirmed a safe cooldown."
 	}`
 }
 
@@ -265,7 +265,7 @@ func TestInterlockOtherPhaseDoesNotBlockStartPreshow(t *testing.T) {
 func TestInterlockStartPreshowUngatedWithNoReadinessRun(t *testing.T) {
 	api, _, opToken, _, _ := setupNightInterlockRawFixture(t, `{
 		"name": "cooldown", "phase": "start-preshow", "posture": "block",
-		"signal": "cooldown-check", "failureText": "f",
+		"signal": "cooldown-check", "failureText": "The check did not pass.",
 		"onUnavailable": "allow", "overridePolicy": "none"
 	}`)
 	mustNightCommand(t, api, opToken, "prepare-site")
@@ -456,7 +456,7 @@ func TestConfigRejectsOverridePolicyNoneOnShutdownPhases(t *testing.T) {
 
 			body := nightSessionBodyWithRawInterlock(`{
 				"name": "cooldown", "phase": "` + phase + `", "posture": "block",
-				"signal": "cooldown-check", "failureText": "f",
+				"signal": "cooldown-check", "failureText": "The check did not pass.",
 				"onUnavailable": "block", "overridePolicy": "none"
 			}`)
 			req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + adminToken})
@@ -479,7 +479,7 @@ func TestConfigAcceptsOverridePolicyAuthorizedOperatorOnShutdownPhases(t *testin
 		t.Run(phase, func(t *testing.T) {
 			setupNightInterlockRawFixture(t, `{
 				"name": "cooldown", "phase": "`+phase+`", "posture": "block",
-				"signal": "cooldown-check", "failureText": "f",
+				"signal": "cooldown-check", "failureText": "The check did not pass.",
 				"onUnavailable": "block", "overridePolicy": "authorized-operator"
 			}`)
 		})
@@ -507,10 +507,10 @@ func TestConfigAcceptsOverridePolicyAuthorizedOperatorOnShutdownPhases(t *testin
 //     the SITE safe, not merely the session record.
 func TestSafeSitePathExistsWithBothShutdownPhasesBlockedByEveryCombination(t *testing.T) {
 	rules := `
-		{"name": "fade-block-block", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
-		{"name": "fade-block-allow", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "allow", "overridePolicy": "authorized-operator"},
-		{"name": "power-block-block", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
-		{"name": "power-block-allow", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "allow", "overridePolicy": "authorized-operator"}
+		{"name": "fade-block-block", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "The check did not pass.", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+		{"name": "fade-block-allow", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "The check did not pass.", "onUnavailable": "allow", "overridePolicy": "authorized-operator"},
+		{"name": "power-block-block", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "The check did not pass.", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+		{"name": "power-block-allow", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "The check did not pass.", "onUnavailable": "allow", "overridePolicy": "authorized-operator"}
 	`
 	api, brokers, opToken, adminToken, obs := setupNightInterlockRawFixture(t, rules)
 	mustNightCommand(t, api, opToken, "prepare-site")

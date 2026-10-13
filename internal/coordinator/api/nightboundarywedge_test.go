@@ -489,7 +489,7 @@ func TestNightTick_DegradedSessionDispatchesNothingOnAFreshAction(t *testing.T) 
 	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
 	rec.Degraded = true
-	rec.DegradedReason = "test: forced degraded to prove the top-level guard blocks background audio too"
+	rec.DegradedReason = "The night was degraded for this test."
 	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
 		t.Fatalf("seed degraded session: %v", err)
 	}

@@ -57,7 +57,7 @@ func nightSessionBodyWithCooldownInterlock(phase, onUnavailable string) string {
 				"phase": "` + phase + `",
 				"posture": "block",
 				"signal": "cooldown-check",
-				"failureText": "enclosure has not confirmed a safe cooldown",
+				"failureText": "The enclosure has not confirmed a safe cooldown.",
 				"onUnavailable": "` + onUnavailable + `",
 				"overridePolicy": "authorized-operator"
 			}

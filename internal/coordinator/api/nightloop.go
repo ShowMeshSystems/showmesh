@@ -1299,9 +1299,18 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		terminal := false
 		if problem != nil {
 			cause = problem.Detail
-			reason = fmt.Sprintf("FPP %s could not be told to start playlist %s yet. Trying again.", instanceID, playlist)
-			if terminal = nightRefusalIsTerminal(problem); terminal {
+			terminal = nightRefusalIsTerminal(problem)
+			switch {
+			case terminal:
 				reason = fmt.Sprintf("Playlist %s cannot be started on FPP %s. Check the night definition.", playlist, instanceID)
+			case problem.Type == ProblemTypeFPPStartPlaylistBusy:
+				playing := nightObservePlayback(ctx, h.deps.Observations, instanceID, time.Time{}, now).Playlist
+				reason = fmt.Sprintf("FPP %s is playing %s, so playlist %s was not started. Trying again.", instanceID, playing, playlist)
+				if playing == "" {
+					reason = fmt.Sprintf("FPP %s is busy, so playlist %s was not started. Trying again.", instanceID, playlist)
+				}
+			default:
+				reason = fmt.Sprintf("FPP %s is not reporting, so playlist %s was not started. Trying again.", instanceID, playlist)
 			}
 		}
 		// The only line this window gets: every tick this dispatch spends

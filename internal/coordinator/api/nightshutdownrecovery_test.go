@@ -22,7 +22,7 @@ func TestNightFadingOut_DegradedSessionStillIssuesTheStop(t *testing.T) {
 	now := time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC)
 	rec := fadingOutSession(now, "fade-out")
 	rec.Degraded = true
-	rec.DegradedReason = "coordinator restarted mid-transition"
+	rec.DegradedReason = "The coordinator restarted mid-change."
 	f := newNightShutdownFixture(t, &now, nightShutdownPayload(), rec)
 
 	f.h.nightTick(context.Background(), now)
@@ -54,7 +54,7 @@ func TestNightTick_DegradedSessionAdvancesNothingButFadingOut(t *testing.T) {
 	rec.State = nightStatePreshow
 	rec.AdmissionClosed = false
 	rec.Degraded = true
-	rec.DegradedReason = "ambiguous evidence"
+	rec.DegradedReason = "The night stopped advancing."
 	f := newNightShutdownFixture(t, &now, nightShutdownPayload(), rec)
 
 	f.h.nightTick(context.Background(), now)
