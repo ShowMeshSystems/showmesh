@@ -20,7 +20,8 @@ const (
 	// StaleEnv, when set to fail, makes a listed line a full run no longer produces fail the run.
 	StaleEnv = "SHOWMESH_COPYCHECK_STALE"
 
-	exemptHeading = "exempt by ruling"
+	exemptHeading     = "exempt by ruling"
+	deprecatedHeading = "Deprecated v1 fields kept for the additive-only rule."
 )
 
 // MessageFields are the JSON field names whose strings a person reads.
@@ -37,9 +38,10 @@ var fieldPathMust = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*([.\[][^ ]*)? must `)
 func Exempt(message string) bool { return fieldPathMust.MatchString(message) }
 
 type entry struct {
-	exempt bool
-	rule   string
-	key    string
+	exempt     bool
+	deprecated bool
+	rule       string
+	key        string
 }
 
 func (e entry) String() string { return e.rule + "\t" + e.key }
@@ -49,14 +51,24 @@ func (e entry) String() string { return e.rule + "\t" + e.key }
 type Ledger struct {
 	path string
 
-	mu       sync.Mutex
-	messages map[string]struct{}
-	seen     map[entry]map[string]struct{}
+	mu         sync.Mutex
+	deprecated map[string]bool
+	messages   map[string]struct{}
+	seen       map[entry]map[string]struct{}
 }
 
 // NewLedger returns a Ledger whose list lives at path.
 func NewLedger(path string) *Ledger {
-	return &Ledger{path: path, messages: map[string]struct{}{}, seen: map[entry]map[string]struct{}{}}
+	return &Ledger{path: path, deprecated: map[string]bool{}, messages: map[string]struct{}{}, seen: map[entry]map[string]struct{}{}}
+}
+
+// Deprecate lists the keys whose messages belong to a deprecated v1 field.
+func (l *Ledger) Deprecate(keys ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, key := range keys {
+		l.deprecated[key] = true
+	}
 }
 
 // Observe checks one produced message. key says where it came from and must
@@ -70,7 +82,7 @@ func (l *Ledger) Observe(key, message string) {
 	defer l.mu.Unlock()
 	l.messages[message] = struct{}{}
 	for _, v := range violations {
-		e := entry{exempt: Exempt(message), rule: v.Rule, key: key}
+		e := entry{exempt: Exempt(message), deprecated: l.deprecated[key], rule: v.Rule, key: key}
 		if l.seen[e] == nil {
 			l.seen[e] = map[string]struct{}{}
 		}
@@ -191,13 +203,22 @@ func (l *Ledger) render() string {
 	b.WriteString("# One line per rule and source, tab separated. A violation that is not here\n")
 	b.WriteString("# fails the tests. A line a full run no longer produces is only reported;\n")
 	b.WriteString("# rerun the whole package with " + UpdateEnv + "=1 to drop it.\n")
-	var exempt []entry
+	var exempt, deprecated []entry
 	for _, e := range sortedEntries(l.seen) {
-		if e.exempt {
+		switch {
+		case e.exempt:
 			exempt = append(exempt, e)
-			continue
+		case e.deprecated:
+			deprecated = append(deprecated, e)
+		default:
+			b.WriteString(e.String() + "\n")
 		}
-		b.WriteString(e.String() + "\n")
+	}
+	if len(deprecated) > 0 {
+		b.WriteString("\n# " + deprecatedHeading + "\n")
+		for _, e := range deprecated {
+			b.WriteString(e.String() + "\n")
+		}
 	}
 	b.WriteString("\n# " + exemptHeading + "\n")
 	b.WriteString("# Config validation errors of the form \"<fieldPath> must ...\".\n")
@@ -238,10 +259,13 @@ func readList(path string) (map[entry]bool, error) {
 	}
 
 	listed := map[entry]bool{}
-	exempt := false
+	exempt, deprecated := false, false
 	for _, line := range strings.Split(string(content), "\n") {
-		if strings.TrimSpace(strings.TrimPrefix(line, "#")) == exemptHeading {
-			exempt = true
+		switch strings.TrimSpace(strings.TrimPrefix(line, "#")) {
+		case exemptHeading:
+			exempt, deprecated = true, false
+		case deprecatedHeading:
+			exempt, deprecated = false, true
 		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -250,7 +274,7 @@ func readList(path string) (map[entry]bool, error) {
 		if !ok {
 			return nil, fmt.Errorf("line %q is not rule, tab, key", line)
 		}
-		listed[entry{exempt: exempt, rule: rule, key: key}] = true
+		listed[entry{exempt: exempt, deprecated: deprecated, rule: rule, key: key}] = true
 	}
 	return listed, nil
 }
@@ -280,6 +304,9 @@ func sortedEntries[V any](set map[entry]V) []entry {
 		a, b := entries[i], entries[j]
 		if a.exempt != b.exempt {
 			return !a.exempt
+		}
+		if a.deprecated != b.deprecated {
+			return !a.deprecated
 		}
 		if a.key != b.key {
 			return a.key < b.key

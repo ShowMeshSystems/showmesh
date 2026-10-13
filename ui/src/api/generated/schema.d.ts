@@ -6938,6 +6938,11 @@ export interface components {
             reason?: string;
             /** @description One operator message per item, at most two short sentences each. Empty when there are none. */
             warnings: string[];
+            /**
+             * @deprecated
+             * @description The items of `warnings` joined by one space. Omitted when there are none. Read `warnings` instead.
+             */
+            warning?: string;
             /** Format: date-time */
             serverTime: string;
         };

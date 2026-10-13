@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -132,18 +133,7 @@ func (h *handlers) handleGetFPPPlaylistReadiness(w http.ResponseWriter, r *http.
 		return
 	}
 
-	warnings := report.Warnings
-	if warnings == nil {
-		warnings = []string{}
-	}
-	jsonWrite(w, v1.FPPPlaylistReadinessResponse{
-		PlaylistID:       report.PlaylistID,
-		Ready:            report.Ready,
-		FailingCondition: string(report.FailingCondition),
-		Reason:           report.Reason,
-		Warnings:         warnings,
-		ServerTime:       formatTime(now),
-	})
+	jsonWrite(w, fppPlaylistReadinessResponse(report, now))
 }
 
 // fppEvidenceBrokenReconciliation is the collapsed, one-word-per-run
@@ -203,5 +193,21 @@ func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, evidenceBroke
 		OperatorInstruction: operatorInstruction,
 
 		ServerTime: formatTime(now),
+	}
+}
+
+func fppPlaylistReadinessResponse(report fppreconcile.Report, now time.Time) v1.FPPPlaylistReadinessResponse {
+	warnings := report.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return v1.FPPPlaylistReadinessResponse{
+		PlaylistID:       report.PlaylistID,
+		Ready:            report.Ready,
+		FailingCondition: string(report.FailingCondition),
+		Reason:           report.Reason,
+		Warnings:         warnings,
+		Warning:          strings.Join(warnings, " "),
+		ServerTime:       formatTime(now),
 	}
 }

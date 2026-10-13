@@ -94,5 +94,7 @@ type FPPPlaylistReadinessResponse struct {
 	FailingCondition string   `json:"failingCondition,omitempty"`
 	Reason           string   `json:"reason,omitempty"`
 	Warnings         []string `json:"warnings"`
-	ServerTime       string   `json:"serverTime"`
+	// Warning is Warnings joined by one space. Deprecated: read Warnings.
+	Warning    string `json:"warning,omitempty"`
+	ServerTime string `json:"serverTime"`
 }
