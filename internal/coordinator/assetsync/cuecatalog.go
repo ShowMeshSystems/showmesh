@@ -249,11 +249,28 @@ type CatalogConflict struct {
 	Claim config.ShowCueClaim
 }
 
-// Detail renders c for an operator-visible refusal: TRACK-H-cues-and-playlists.md
-// section H5 build item 2's ruling requires naming both Cue ids and the
-// exact [config.ShowCueClaim.String] value, never only a log line.
+// Detail renders c for an operator-visible refusal, naming both Cue ids and
+// the shared resource in plain words; the raw claim key is kept by the
+// override record and its API response, not by this string.
 func (c CatalogConflict) Detail() string {
-	return fmt.Sprintf("Cues %q and %q both claim %q.", c.CueA, c.CueB, c.Claim.String())
+	return fmt.Sprintf("Cues %q and %q both use %s", c.CueA, c.CueB, claimInWords(c.Claim))
+}
+
+// claimInWords names a claim's resource without the route or node internals
+// an operator cannot act on; the audio route's device string stays out.
+func claimInWords(claim config.ShowCueClaim) string {
+	switch claim.Kind {
+	case config.ShowCueClaimKindProgramAudioRoute:
+		return fmt.Sprintf("the program audio output on %s", claim.Node)
+	case config.ShowCueClaimKindRenderSurface:
+		return fmt.Sprintf("the render surface %q", claim.Resource)
+	case config.ShowCueClaimKindLTCOutput:
+		return fmt.Sprintf("the LTC output on %s", claim.Node)
+	case config.ShowCueClaimKindAnnouncementSession:
+		return fmt.Sprintf("announcements on %s", claim.Node)
+	default:
+		return claim.String()
+	}
 }
 
 // resolveCueOutputs projects payload's declared outputs onto

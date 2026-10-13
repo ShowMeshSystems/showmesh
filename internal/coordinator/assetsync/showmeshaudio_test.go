@@ -236,9 +236,9 @@ func TestCueCatalogRefusesTwoCuesHoldingTheSameExclusiveClaim(t *testing.T) {
 	if !strings.Contains(msg, "cue-a") || !strings.Contains(msg, "cue-b") {
 		t.Fatalf("conflict detail %q does not name both cue ids", msg)
 	}
-	wantClaim := "program-audio-route:audio-01:usb-interface"
-	if !strings.Contains(msg, wantClaim) {
-		t.Fatalf("conflict detail %q does not contain the exact claim string %q", msg, wantClaim)
+	wantClaim := "the program audio output on audio-01"
+	if !strings.Contains(msg, wantClaim) || strings.Contains(msg, "usb-interface") {
+		t.Fatalf("conflict detail %q should name %q and not the route's device string", msg, wantClaim)
 	}
 	// The reported pair must be deterministic, never dependent on
 	// st.ListConfigObjects' own iteration order: CatalogConflict.CueA is

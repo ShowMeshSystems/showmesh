@@ -229,8 +229,8 @@ func TestPlaylistReadinessExclusiveClaimConflict(t *testing.T) {
 	if report.FailingCondition != ReadinessExclusiveClaimConflict {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessExclusiveClaimConflict)
 	}
-	if !containsAll(report.Reason, "cue-1", "cue-2", "program-audio-route:node-1:usb-interface") {
-		t.Fatalf("Reason = %q, want it to name both cues and the exact claim string", report.Reason)
+	if !containsAll(report.Reason, "cue-1", "cue-2", "the program audio output on node-1") {
+		t.Fatalf("Reason = %q, want it to name both cues and the shared output", report.Reason)
 	}
 }
 
@@ -298,8 +298,8 @@ func TestPlaylistReadinessExclusiveClaimConflictOverriddenWarnsInsteadOfFailing(
 	if !report.Ready {
 		t.Fatalf("Ready = false (FailingCondition %q: %s), want true: an overridden conflict must warn, not fail", report.FailingCondition, report.Reason)
 	}
-	if !containsAll(report.Warning, "node-1", "operator override", "cue-1", "cue-2", "program-audio-route:node-1:usb-interface") {
-		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the exact claim", report.Warning)
+	if !containsAll(report.Warning, "node-1", "operator override", "cue-1", "cue-2", "the program audio output on node-1") {
+		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the shared output", report.Warning)
 	}
 }
 
