@@ -669,7 +669,7 @@ export function Specimen() {
             title="Deploy anyway?"
             detail={
               <>
-                <p className="sm-body">Cues &ldquo;cue-a&rdquo; and &ldquo;cue-b&rdquo; both hold the exclusive claim &ldquo;program-audio-route:media-garage:usb-interface&rdquo;.</p>
+                <p className="sm-body">Cues &ldquo;cue-a&rdquo; and &ldquo;cue-b&rdquo; both use the program audio output on media-garage.</p>
                 <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed version.</p>
               </>
             }

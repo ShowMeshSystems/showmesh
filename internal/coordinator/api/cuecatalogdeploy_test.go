@@ -851,8 +851,8 @@ func TestCueCatalogDeployRefusesOnClaimConflict(t *testing.T) {
 	if !strings.Contains(string(body), "cue-a") || !strings.Contains(string(body), "cue-b") {
 		t.Fatalf("refusal body %q does not name both cue ids", body)
 	}
-	if !strings.Contains(string(body), "program-audio-route") {
-		t.Fatalf("refusal body %q does not name the exact claim kind", body)
+	if !strings.Contains(string(body), "program audio output on audio-01") {
+		t.Fatalf("refusal body %q does not say which output the cues share", body)
 	}
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 (a conflicting catalog must never be dispatched)", pub.count())
