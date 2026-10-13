@@ -413,7 +413,7 @@ func nightBedPeerPlaybackPoint(audio NodeAudioLister, now time.Time, sessionID s
 
 // nightBedStartPointRefusedReason is the recorded reason for the one
 // retry a refused playback point gets.
-const nightBedStartPointRefusedReason = "The position read from another speaker was refused, so the music starts from its first track here."
+const nightBedStartPointRefusedReason = "The position read from another node was refused, so the background audio starts from its first track here."
 
 // nightBedJoinPoint is where a node joining a running bed should begin:
 // the position a node still PLAYING the bed reports, or, when the bed is
@@ -537,7 +537,7 @@ func nightBedStartPointWasRefused(step nightBackgroundAudioStep, row store.Night
 // nightBedRejoinOperatorReasonNote is the rejoin apply row's own
 // operator-facing note: fact first, then what happens next, with none of
 // this controller's own vocabulary in it.
-const nightBedRejoinOperatorReasonNote = "This speaker lost the background music, so it is being given the music again."
+const nightBedRejoinOperatorReasonNote = "This node lost the background audio, so it is being given it again."
 
 // nightGiveNodeTheBedNow is the one "give this node the background music
 // now" path: a fresh apply under a new revision, dispatched through the
@@ -629,7 +629,7 @@ func nightBedPointOrNil(point nightBedPlaybackPoint, has bool) *nightBedPlayback
 // The item's own id is this controller's internal handle for a playlist
 // entry, not a track name an operator would recognise, so it is not shown.
 func nightBedStartPointNote(point nightBedPlaybackPoint) string {
-	return fmt.Sprintf("This speaker joined about %d seconds into the track playing on %s, so it may be slightly behind.",
+	return fmt.Sprintf("This node joined about %d seconds into the track playing on %s, so it may be slightly behind.",
 		point.PositionMs/1000, point.FromNodeID)
 }
 
@@ -721,20 +721,20 @@ func nightBedNotPlayingReason(audio NodeAudioLister, now time.Time, nodeID strin
 	reading := facts.Reading
 	switch {
 	case !nightBedNodeReportsAudioSince(audio, now, nightBedFence{}, nodeID):
-		return "This speaker is not reporting its audio. Check that the node is on and connected."
+		return "This node is not reporting its audio. Check that the node is on and connected."
 	case reading.Stale:
-		return "This speaker was too busy to report this time. It reports again shortly."
+		return "This node was too busy to report this time. It reports again shortly."
 	case facts.TouchedOutsideLedger:
-		return "The music on this speaker was changed outside this night. Use the speaker's own controls to play it."
+		return "Background audio on this node was changed outside this night. Use the node's own controls to play it."
 	case facts.RejoinAlreadyFailed:
-		return "This speaker was given the music again and did not start. Check the speaker."
+		return "This node was given background audio again and did not start. Check the node."
 	case !reading.Present:
-		return "This speaker lost the music this night started. It is given the music again on the next check."
+		return "This node lost the background audio this night started. It is given it again on the next check."
 	case nightBedReportedStateIsLost(reading.State):
-		return "The music stopped on this speaker. It is started again on the next check."
+		return "Background audio stopped on this node. It is started again on the next check."
 	case reading.State == string(pkgaudio.StatePaused):
-		return "The music is paused on this speaker. It starts again when the speakers are brought back together."
+		return "Background audio is paused on this node. It starts again when the nodes are brought back together."
 	default:
-		return "This speaker is not playing the music, and that is left as is. Check the speaker if it stays off."
+		return "This node is not playing background audio, and that is left as is. Check the node if it stays off."
 	}
 }

@@ -74,13 +74,13 @@ type nightAssetFSEQDurationResult struct {
 func nightResolveFSEQDuration(ctx context.Context, deps Dependencies, lister nightAssetLister, show string, ref config.NightSessionAssetRef) nightAssetFSEQDurationResult {
 	rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, ref.Sequence, ref.Target)
 	if err != nil {
-		return nightAssetFSEQDurationResult{Cause: err, Reason: "ShowMesh could not look up the resting sequence file. Run readiness again."}
+		return nightAssetFSEQDurationResult{Cause: err, Reason: "The coordinator could not look up the resting sequence file. Check the coordinator log."}
 	}
 	if !ok {
 		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("No sequence file is uploaded for %s on %s. Upload it.", ref.Sequence, ref.Target)}
 	}
 	if rec.MediaType != "fseq" {
-		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("The file for resting sequence %s is not a sequence file. Upload an FSEQ file.", ref.Sequence)}
+		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("The file for resting sequence %s is not a sequence file. Upload a sequence file.", ref.Sequence)}
 	}
 
 	f, cleanup, err := nightOpenFSEQAsset(ctx, deps, rec)
@@ -245,7 +245,7 @@ func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, p
 func nightCheckRestingAssetExactVariant(namePrefix, playlistName string) nightReadinessCheck {
 	return nightReadinessCheck{
 		name: namePrefix + ":asset-exact-variant:" + playlistName, health: nightCheckStateNotVerifiable,
-		reason: "FPP reports only a file name, so ShowMesh cannot confirm it holds this exact file.",
+		reason: "FPP reports only a file name, so the coordinator cannot confirm it holds this exact file.",
 	}
 }
 

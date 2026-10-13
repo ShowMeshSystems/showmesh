@@ -33,6 +33,9 @@ type NightReadinessCheck struct {
 	StateLabel string `json:"stateLabel"`
 	// Reasons is one message per item. A healthy check has none.
 	Reasons []string `json:"reasons"`
+	// Reason is Reasons joined by a space. Deprecated: read Reasons. It
+	// stays because a v1 field is never removed.
+	Reason string `json:"reason"`
 }
 
 // NightReadiness is the current session's most recent run-readiness

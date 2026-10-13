@@ -553,7 +553,7 @@ func (h *handlers) persistAnnouncementPrepareOutcome(ctx context.Context, rec st
 		}
 		row.State = nightCueStateResolved
 		row.Outcome = nightCueOutcomeFailed
-		h.logWarn("night loop: announcement: prepare was not sent", "error", out.err)
+		h.logWarn("night loop: announcement: prepare was not sent", "sessionId", rec.ID, "cycle", rec.Cycle, "phase", phase, "cue", cueName, "error", out.err)
 		row.OutcomeReason = "The announcement could not be prepared, so it was not sent. Check the coordinator log."
 		row.ResolvedAt = &resolvedAt
 		return h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row)

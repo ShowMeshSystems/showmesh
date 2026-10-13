@@ -21671,7 +21671,7 @@ components:
         wiped state directory), one item of `reasons` per FPP. Cleared by
         the referenced instance's next accepted report or by
         DELETE .../playlist-entry-observations/{instanceUuid}.
-      required: [name, label, state, stateLabel, reasons]
+      required: [name, label, state, stateLabel, reasons, reason]
       properties:
         name:
           type: string
@@ -21705,6 +21705,13 @@ components:
             string.
           items:
             type: string
+        reason:
+          type: string
+          deprecated: true
+          description: >-
+            Deprecated. Read `reasons`. This is the items of `reasons`
+            joined by one space, and the empty string when there are none.
+            It stays because a v1 field is never removed.
     NightBlockedCheck:
       type: object
       description: One safety check that refused a night command.

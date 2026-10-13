@@ -80,7 +80,7 @@ func (h *handlers) nightCheckCatalogCurrent(ctx context.Context, now time.Time, 
 	nodes, err := h.deps.AssetManifests.ListNodeDeclarations(ctx)
 	if err != nil {
 		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightHealthUnknown(), cause: err,
-			reason: "ShowMesh could not read the list of nodes. Run readiness again."}}
+			reason: "The coordinator could not read the list of nodes. Run readiness again."}}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
@@ -101,7 +101,7 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 	name := nightCatalogCurrentCheckPrefix + ":" + nodeID
 	unreadable := func(err error) nightReadinessCheck {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
-			reason: fmt.Sprintf("ShowMesh could not read the cue list for node %s. Run readiness again.", nodeID)}
+			reason: fmt.Sprintf("The coordinator could not read the cue list for node %s. Run readiness again.", nodeID)}
 	}
 
 	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)

@@ -464,7 +464,7 @@ func nightRunAudioCommandLedgerHistory(history []nightBackgroundAudioHistoryRow,
 // dispatch: fact then action, no internals vocabulary, per this
 // repository's operator copy rule. The detailed cause stays in the WARN log
 // and the returned error.
-const nightLedgerRefusalOperatorReason = "A newer command had already reached this speaker, so this step was skipped. Run the action again if the audio did not play."
+const nightLedgerRefusalOperatorReason = "A newer command had already reached this node, so this step was skipped. Run the action again if the audio did not play."
 
 // nightPersistLedgerRefusal commits phase/cueName straight to resolved,
 // outcome refused: this coordinator's own acceptance ledger, not the node,
@@ -1891,7 +1891,7 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 			continue
 		}
 		if !state.RefusedAt.IsZero() && h.nightEndSessionClearNodeReportsSessionGone(now, state.RefusedAt, nodeID, sessionID) {
-			state.ConfirmedAt, state.Source = now, "This speaker is no longer playing the night's audio."
+			state.ConfirmedAt, state.Source = now, "This node is no longer playing the night's audio."
 			anchor.EndSessionClears[nodeID] = state
 			changed = true
 			continue
@@ -1955,7 +1955,7 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 	})
 	if err != nil {
 		h.logWarn("night loop: end-session clear retry: dispatch failed", "sessionId", sessionID, "nodeId", nodeID, "error", err)
-		return failed("The clear was not sent to this speaker. Trying again.")
+		return failed("The clear was not sent to this node. Trying again.")
 	}
 	if problem != nil {
 		h.logWarn("night loop: end-session clear retry: refused", "sessionId", sessionID, "nodeId", nodeID, "reason", problem.Detail)
@@ -1968,7 +1968,7 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 		state.RefusedAt = now
 	}
 	h.logWarn("night loop: end-session clear retry: did not confirm", "sessionId", sessionID, "nodeId", nodeID, "outcome", result.Outcome, "reason", result.Reason)
-	return failed("This speaker did not confirm the clear. Trying again.")
+	return failed("This node did not confirm the clear. Trying again.")
 }
 
 // nightEndSessionClearNodeReportsSessionGone reports whether nodeID sent a
@@ -2327,7 +2327,7 @@ func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, r
 	settings, err := h.alignedStartSettings(ctx)
 	if err != nil {
 		h.logWarn("night loop: background audio: the audio settings could not be read", "error", err)
-		return nightBedScheduleResult{UnalignedReason: "The audio settings could not be read, so the speakers start on their own."}
+		return nightBedScheduleResult{UnalignedReason: "The audio settings could not be read, so the nodes start on their own."}
 	}
 	probeIssuer := cueActivationIssuer{PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName, Form: issuer.Form, CredentialID: issuer.CredentialID}
 
@@ -2367,7 +2367,7 @@ func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, r
 // round's instant, if any, is already past, so it starts or resumes on
 // arrival rather than reusing a stale scheduledAtNs.
 func nightBedLateUnalignedReason(verb string) string {
-	return fmt.Sprintf("This speaker joined after the others, so its %s is on its own.", verb)
+	return fmt.Sprintf("This node joined after the others, so its %s is on its own.", verb)
 }
 
 // nightStartMultiNodeBackgroundAudio is the shared start gate: bounded
@@ -2427,7 +2427,7 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 
 // nightBedMissedInstantUnalignedReason is the recorded reason for the one
 // retry a start that arrived after its instant gets.
-const nightBedMissedInstantUnalignedReason = "This speaker got its start after the shared start time, so the music starts on its own here."
+const nightBedMissedInstantUnalignedReason = "This node got its start after the shared start time, so the background audio starts on its own here."
 
 // nightBedStartMissedTheInstant reports whether the node refused row's start
 // because the instant it named had already passed there.
@@ -2437,7 +2437,7 @@ func nightBedStartMissedTheInstant(row store.NightCueOutboxRecord) bool {
 
 // nightBedNotLoadedUnalignedReason is the reason a node that did not
 // confirm loading the bed starts on arrival instead of at the shared instant.
-const nightBedNotLoadedUnalignedReason = "This speaker did not finish loading in time, so it starts on its own."
+const nightBedNotLoadedUnalignedReason = "This node did not finish loading in time, so it starts on its own."
 
 // nightBedPreparedNode is one node's audio.session.prepare of the bed's own
 // session: its evidence, how long it took, and the revision it used.
@@ -2497,14 +2497,14 @@ func (h *handlers) nightPrepareBedAndSchedule(ctx context.Context, now time.Time
 	settings, err := h.alignedStartSettings(ctx)
 	if err != nil {
 		h.logWarn("night loop: background audio: the audio settings could not be read", "error", err)
-		return nightBedScheduleResult{UnalignedReason: "The audio settings could not be read, so the speakers start on their own."}
+		return nightBedScheduleResult{UnalignedReason: "The audio settings could not be read, so the nodes start on their own."}
 	}
 
 	// Without a clock holder among them nothing can be aligned, so the
 	// nodes start on arrival as before and no prepare is sent.
 	if _, has, err := h.nightBedProgramLTCNode(ctx, ready); err != nil {
 		h.logWarn("night loop: background audio: the timecode node could not be found", "error", err)
-		return nightBedScheduleResult{UnalignedReason: "ShowMesh could not tell which node holds the timecode, so the speakers start on their own."}
+		return nightBedScheduleResult{UnalignedReason: "The coordinator could not tell which node holds the timecode, so the nodes start on their own."}
 	} else if !has {
 		_, selErr := audiosched.Select([]audiosched.Readiness{{NodeID: ready[0]}}, 0, 0)
 		return nightBedScheduleResult{UnalignedReason: audiosched.DescribeUnscheduled(selErr)}
@@ -2633,12 +2633,12 @@ func (h *handlers) nightBackgroundAudioStartScheduled(ctx context.Context, now t
 // [NightBackgroundAudioStep.Reason] field with no new API surface.
 func nightBedScheduleNote(verb string, sched nightBedScheduleResult) string {
 	if sched.Aligned {
-		return fmt.Sprintf("This %s is timed to match the other speakers.", verb)
+		return fmt.Sprintf("This %s is timed to match the other nodes.", verb)
 	}
 	if sched.UnalignedReason != "" {
 		return sched.UnalignedReason
 	}
-	return fmt.Sprintf("This %s is not timed with the other speakers.", verb)
+	return fmt.Sprintf("This %s is not timed with the other nodes.", verb)
 }
 
 // nightBedBookmark is the program+ltc node's own decoded pause bookmark
@@ -2761,10 +2761,10 @@ func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now 
 	}
 
 	if !programLTCReady || !bookmark.Known {
-		reason := "The timecode node did not report where it paused, so the speakers resume on their own."
+		reason := "The timecode node did not report where it paused, so the nodes resume on their own."
 		switch {
 		case !hasProgramLTC:
-			reason = "No node playing the music holds the timecode, so the speakers resume on their own."
+			reason = "No node playing background audio holds the timecode, so the nodes resume on their own."
 		case !programLTCReady:
 			reason = nightBedTimecodeNotReadyReason
 		}

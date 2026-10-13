@@ -954,7 +954,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_FailsWhenHeldUnderWrongFilen
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %v, reason = %q, want failed (node-b holds asset-1's bytes under the wrong filename)", check.health, nightCheckText(check))
 	}
-	if !reasonMentionsAll(nightCheckText(check), "node-b", "bg-1", "wrong name") {
+	if !reasonMentionsAll(nightCheckText(check), "node-b", "bg-1", "asset-1.mp3", "content.mp3") {
 		t.Fatalf("reason = %q, want it to name node-b, the item, the expected filename, and the filename node-b actually holds", nightCheckText(check))
 	}
 }

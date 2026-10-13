@@ -54,7 +54,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 
 	instanceID := nightShutdownStopInstance(payload)
 	if instanceID == "" {
-		h.nightDegradeSession(ctx, now, rec, "This night names no FPP to stop, so it cannot fade out. "+nightRecoverAction)
+		h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightDegradedNoFPPToStopFact))
 		return
 	}
 
@@ -80,9 +80,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 		return
 	}
 	if !rec.Degraded {
-		h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-			"FPP %s was told to stop but was not seen idle, so the show may still be running. Stop it by hand.",
-			anchor.FPPInstanceID))
+		h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightStopNotConfirmedFact, anchor.FPPInstanceID))
 	}
 	// Degrading records what happened; it does not end the attempt. The
 	// display is still running, so the stop is re-armed for another try
@@ -91,7 +89,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	next.DispatchedAt = time.Time{}
 	next.AttemptedAt = now
 	next.Attempts = anchor.Attempts + 1
-	next.Source = "FPP did not confirm the stop. Trying again."
+	next.Source = fmt.Sprintf(nightStopNotConfirmedFact, anchor.FPPInstanceID) + " " + nightTryingAgain
 	h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
 }
 
@@ -178,7 +176,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 		// answered non-2xx. Outcome alone cannot say that, which is what
 		// DispatchFailed exists for.
 		h.logWarn("night loop: shutdown stop did not reach FPP", "sessionId", rec.ID, "instanceId", instanceID, "reason", outcome.OutcomeReason)
-		notSent("The stop did not reach FPP. Trying again.")
+		notSent(fmt.Sprintf(nightStopNotReachedFact, instanceID) + " " + nightTryingAgain)
 		return
 	}
 

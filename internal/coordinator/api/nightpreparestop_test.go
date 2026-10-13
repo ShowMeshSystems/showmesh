@@ -88,7 +88,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAnUnreachableFPP(t *testing.T) {
 
 	got := stopWithEndpoint(t, f, []FPPInstanceView{{InstanceID: "player-01", Endpoint: endpoint}})
 
-	if want := "FPP player-01 could not be reached, so it was not stopped." + nightStopByHand; got != want {
+	if want := "The stop did not reach FPP player-01." + nightStopByHand; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
@@ -99,7 +99,7 @@ func TestNightStopFPPAtPrepareSite_ReportsAnInstanceTheCoordinatorCannotAskAs_No
 
 	got := stopWithEndpoint(t, f, nil)
 
-	if want := "ShowMesh did not ask FPP player-01 to stop." + nightStopByHand; got != want {
+	if want := "The coordinator did not ask FPP player-01 to stop." + nightStopByHand; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
 }

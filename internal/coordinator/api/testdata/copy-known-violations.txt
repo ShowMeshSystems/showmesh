@@ -809,8 +809,6 @@ full-stop	v1.MacroRunResponse run.steps[].outcomeReason
 capital	v1.NightCommandResponse session.cues.cues[].reason
 full-stop	v1.NightCommandResponse session.cues.cues[].reason
 kind-name	v1.NightCommandResponse session.cues.cues[].reason
-capital	v1.NightCommandResponse session.degradedReason
-full-stop	v1.NightCommandResponse session.degradedReason
 capital	v1.NightSessionResponse session.cues.cues[].reason
 full-stop	v1.NightSessionResponse session.cues.cues[].reason
 vocabulary	v1.NightSessionResponse session.cues.cues[].reason
@@ -925,6 +923,11 @@ go-error	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 joined	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 kind-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 quoted-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+
+# deprecated v1 fields
+# Kept because a v1 field is never removed. Each repeats a newer field's text.
+sentences	v1.NightCommandResponse session.readiness.checks[].reason
+sentences	v1.NightSessionResponse session.readiness.checks[].reason
 
 # exempt by ruling
 # Config validation errors of the form "<fieldPath> must ...".

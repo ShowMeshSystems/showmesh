@@ -129,3 +129,27 @@ func TestObserveJSONFindsMessageFieldsAtAnyDepth(t *testing.T) {
 		t.Errorf("a field that is not a message was checked:\n%s", out)
 	}
 }
+
+func TestLedgerListsADeprecatedFieldUnderItsOwnHeading(t *testing.T) {
+	path := listWith(t, "")
+	l := NewLedger(path)
+	l.Deprecate("checks[].reason")
+	l.Observe("v1.Session checks[].reason", "cue bg1 failed.")
+	l.Observe("v1.Session checks[].reasons", "cue bg1 failed.")
+	t.Setenv(UpdateEnv, "1")
+	if code, out := settled(t, l, 0, false); code != 0 {
+		t.Fatalf("code = %d, want 0:\n%s", code, out)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, deprecated, _ := strings.Cut(string(content), "# "+deprecatedHeading)
+	if !strings.Contains(known, "checks[].reasons") || strings.Contains(known, "checks[].reason\n") || !strings.Contains(deprecated, "capital\tv1.Session checks[].reason\n") {
+		t.Fatalf("list does not keep the deprecated field apart:\n%s", content)
+	}
+	t.Setenv(UpdateEnv, "")
+	if code, out := settled(t, l, 0, false); code != 0 {
+		t.Fatalf("a rewritten list does not read back clean: code %d\n%s", code, out)
+	}
+}

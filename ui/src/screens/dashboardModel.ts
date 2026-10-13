@@ -2,7 +2,7 @@ import type { FPPInstance, Model, Node, NightSessionState, ResolumeInstance } fr
 import type { Tone } from '../kit'
 import { countSignals, signalGroups, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
-import { DEGRADED_WITHOUT_REASON } from './showNightModel'
+import { DEGRADED_WITHOUT_REASON, READINESS_NOT_RUN } from './showNightModel'
 
 /**
  * The union of NodeShowParticipation's and InstanceShowParticipation's state
@@ -233,8 +233,8 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
     return {
       tone: 'unknown',
       state: 'Readiness unknown',
-      fact: 'No readiness result has been recorded for this session.',
-      detail: readiness.reason !== '' ? readiness.reason : 'Start night is withheld until readiness runs.',
+      fact: readiness.reason !== '' ? readiness.reason : READINESS_NOT_RUN,
+      detail: null,
       action: true,
     }
   }

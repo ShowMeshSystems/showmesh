@@ -128,6 +128,8 @@ type nightCueDispatchResult struct {
 	resolved     bool // true when outcome is final and should be persisted as nightCueStateResolved.
 	outcome      string
 	reason       string
+	// cause is the error behind a fixed reason. The caller logs it.
+	cause error
 
 	// resolvedAt is when the answer reached this coordinator and
 	// nodeRespondedAt is when the node published it, on the node's clock.
@@ -180,8 +182,7 @@ func (h *handlers) nightDispatchCueFPP(ctx context.Context, now time.Time, issue
 		// A plain error always precedes dispatchFPPCommand's own
 		// command-row insert, so nothing reached FPP: resolved failed,
 		// never left dispatched for a later tick to find and misread.
-		h.logWarn("night loop: a cue was not sent", "error", err)
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason, cause: err}
 	}
 	if problem != nil {
 		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeRefused, reason: problem.Detail}
@@ -239,8 +240,7 @@ func (h *handlers) nightDispatchCueResolume(ctx context.Context, now time.Time, 
 	if err != nil {
 		// Dispatch's own error contract is a dependency failure that
 		// provably sent nothing: resolved failed, never left dispatched.
-		h.logWarn("night loop: a cue was not sent", "error", err)
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason, cause: err}
 	}
 	var outcome string
 	switch res.Outcome {
@@ -333,8 +333,7 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 			// own markUndispatched path): resolved failed is correct here,
 			// mirroring nightDispatchCueFPP's identical treatment for an
 			// error that provably sent nothing.
-			h.logWarn("night loop: a cue was not sent", "error", err)
-			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
+			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason, cause: err}
 		}
 		// Any OTHER error from executeAudioSessionDispatch arrives AFTER
 		// its own markDispatched call (audiodispatch.go's own await-result

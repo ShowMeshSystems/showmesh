@@ -832,7 +832,7 @@ func TestNightAdvanceLive_PastDeadlineStillPlayingWarnsAndDegradesWithoutTransit
 	if !got.Degraded {
 		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
 	}
-	if !strings.Contains(got.DegradedReason, "still playing") {
+	if !strings.Contains(got.DegradedReason, "has not reported idle") {
 		t.Fatalf("degraded reason = %q, want it to name the unmet condition (status not idle)", got.DegradedReason)
 	}
 }
@@ -862,7 +862,7 @@ func TestNightAdvanceLive_PastDeadlinePlaylistStillNamedWarnsAndDegradesWithoutT
 	if !got.Degraded {
 		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
 	}
-	if !strings.Contains(got.DegradedReason, "without clearing its playlist") {
+	if !strings.Contains(got.DegradedReason, "has not reported an empty playlist") {
 		t.Fatalf("degraded reason = %q, want it to name the unmet condition (playlist still named)", got.DegradedReason)
 	}
 }

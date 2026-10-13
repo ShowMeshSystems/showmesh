@@ -15,7 +15,10 @@ import (
 // testdata/copy-known-violations.txt. TestMain settles it.
 var copyLedger = copycheck.NewLedger("testdata/copy-known-violations.txt")
 
-func init() { responseObserver = observeResponseCopy }
+func init() {
+	responseObserver = observeResponseCopy
+	copyLedger.Deprecate("session.readiness.checks[].reason")
+}
 
 // A Problem's detail is keyed by its type and the function that wrote it. Any
 // other body is keyed by its Go type and the path of the field.

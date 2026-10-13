@@ -7643,6 +7643,11 @@ export interface components {
             stateLabel: string;
             /** @description One operator message per item, at most two short sentences each. A healthy check has none. A check about several cues or nodes has one item for each. Items are never joined into one string. */
             reasons: string[];
+            /**
+             * @deprecated
+             * @description Deprecated. Read `reasons`. This is the items of `reasons` joined by one space, and the empty string when there are none. It stays because a v1 field is never removed.
+             */
+            reason: string;
         };
         /** @description One safety check that refused a night command. */
         NightBlockedCheck: {

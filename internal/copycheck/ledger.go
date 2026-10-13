@@ -20,7 +20,8 @@ const (
 	// StaleEnv, when set to fail, makes a listed line a full run no longer produces fail the run.
 	StaleEnv = "SHOWMESH_COPYCHECK_STALE"
 
-	exemptHeading = "exempt by ruling"
+	exemptHeading     = "exempt by ruling"
+	deprecatedHeading = "deprecated v1 fields"
 )
 
 // MessageFields are the JSON field names whose strings a person reads.
@@ -37,9 +38,10 @@ var fieldPathMust = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*([.\[][^ ]*)? must `)
 func Exempt(message string) bool { return fieldPathMust.MatchString(message) }
 
 type entry struct {
-	exempt bool
-	rule   string
-	key    string
+	exempt     bool
+	deprecated bool
+	rule       string
+	key        string
 }
 
 func (e entry) String() string { return e.rule + "\t" + e.key }
@@ -49,14 +51,32 @@ func (e entry) String() string { return e.rule + "\t" + e.key }
 type Ledger struct {
 	path string
 
-	mu       sync.Mutex
-	messages map[string]struct{}
-	seen     map[entry]map[string]struct{}
+	mu         sync.Mutex
+	deprecated []string
+	messages   map[string]struct{}
+	seen       map[entry]map[string]struct{}
 }
 
 // NewLedger returns a Ledger whose list lives at path.
 func NewLedger(path string) *Ledger {
 	return &Ledger{path: path, messages: map[string]struct{}{}, seen: map[entry]map[string]struct{}{}}
+}
+
+// Deprecate marks keys ending in one of suffixes as deprecated fields. They
+// repeat a newer field's text and are listed under their own heading.
+func (l *Ledger) Deprecate(suffixes ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.deprecated = append(l.deprecated, suffixes...)
+}
+
+func (l *Ledger) isDeprecated(key string) bool {
+	for _, suffix := range l.deprecated {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Observe checks one produced message. key says where it came from and must
@@ -71,6 +91,7 @@ func (l *Ledger) Observe(key, message string) {
 	l.messages[message] = struct{}{}
 	for _, v := range violations {
 		e := entry{exempt: Exempt(message), rule: v.Rule, key: key}
+		e.deprecated = !e.exempt && l.isDeprecated(key)
 		if l.seen[e] == nil {
 			l.seen[e] = map[string]struct{}{}
 		}
@@ -191,13 +212,23 @@ func (l *Ledger) render() string {
 	b.WriteString("# One line per rule and source, tab separated. A violation that is not here\n")
 	b.WriteString("# fails the tests. A line a full run no longer produces is only reported;\n")
 	b.WriteString("# rerun the whole package with " + UpdateEnv + "=1 to drop it.\n")
-	var exempt []entry
+	var exempt, deprecated []entry
 	for _, e := range sortedEntries(l.seen) {
-		if e.exempt {
+		switch {
+		case e.exempt:
 			exempt = append(exempt, e)
-			continue
+		case e.deprecated:
+			deprecated = append(deprecated, e)
+		default:
+			b.WriteString(e.String() + "\n")
 		}
-		b.WriteString(e.String() + "\n")
+	}
+	if len(deprecated) > 0 {
+		b.WriteString("\n# " + deprecatedHeading + "\n")
+		b.WriteString("# Kept because a v1 field is never removed. Each repeats a newer field's text.\n")
+		for _, e := range deprecated {
+			b.WriteString(e.String() + "\n")
+		}
 	}
 	b.WriteString("\n# " + exemptHeading + "\n")
 	b.WriteString("# Config validation errors of the form \"<fieldPath> must ...\".\n")
@@ -217,6 +248,8 @@ func (l *Ledger) writeReport(out io.Writer) {
 		section := "known"
 		if e.exempt {
 			section = "exempt"
+		} else if e.deprecated {
+			section = "deprecated"
 		}
 		for _, message := range sortedKeys(l.seen[e]) {
 			fmt.Fprintf(&b, "%s\t%s\t%s\t%q\n", section, e.rule, e.key, message)
@@ -238,10 +271,13 @@ func readList(path string) (map[entry]bool, error) {
 	}
 
 	listed := map[entry]bool{}
-	exempt := false
+	exempt, deprecated := false, false
 	for _, line := range strings.Split(string(content), "\n") {
-		if strings.TrimSpace(strings.TrimPrefix(line, "#")) == exemptHeading {
-			exempt = true
+		switch strings.TrimSpace(strings.TrimPrefix(line, "#")) {
+		case exemptHeading:
+			exempt, deprecated = true, false
+		case deprecatedHeading:
+			exempt, deprecated = false, true
 		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -250,7 +286,7 @@ func readList(path string) (map[entry]bool, error) {
 		if !ok {
 			return nil, fmt.Errorf("line %q is not rule, tab, key", line)
 		}
-		listed[entry{exempt: exempt, rule: rule, key: key}] = true
+		listed[entry{exempt: exempt, deprecated: deprecated, rule: rule, key: key}] = true
 	}
 	return listed, nil
 }
@@ -280,6 +316,9 @@ func sortedEntries[V any](set map[entry]V) []entry {
 		a, b := entries[i], entries[j]
 		if a.exempt != b.exempt {
 			return !a.exempt
+		}
+		if a.deprecated != b.deprecated {
+			return !a.deprecated
 		}
 		if a.key != b.key {
 			return a.key < b.key

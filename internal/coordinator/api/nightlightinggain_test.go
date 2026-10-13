@@ -265,3 +265,41 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// The numbers a fade write reports stay on its result, where the log line
+// reads them, on a first write and on an idempotent repeat.
+func TestNightApplyLightingFadeKeepsAppliedCeilingAndEffectiveOutput(t *testing.T) {
+	target := config.ShowActionTarget{Integration: config.ShowActionIntegrationFPP, InstanceID: "player-01"}
+	fade := nightLightingFade{TargetPercent: 50, FadeSeconds: 3}
+	for _, want := range []fppcommand.TransitionGainOutcome{
+		{Applied: true, Ceiling: 80, EffectiveOutput: 40},
+		{Applied: false, Ceiling: 70, EffectiveOutput: 0},
+	} {
+		rig := newNightGainRig(t, nil)
+		rig.h.nightGainWriter = func(context.Context, config.ShowActionTarget, nightLightingFade, string) (fppcommand.TransitionGainOutcome, error) {
+			return want, nil
+		}
+		got := rig.h.nightApplyLightingFade(context.Background(), "dim", target, fade, "request-1")
+		if got.failed || got.applied != want.Applied || got.ceiling != int(want.Ceiling) || got.effectiveOutput != int(want.EffectiveOutput) {
+			t.Errorf("gain result = %+v, want applied %t, ceiling %d, effective output %d", got, want.Applied, want.Ceiling, want.EffectiveOutput)
+		}
+		if got.note != "The lights are fading to 50% over 3 seconds." {
+			t.Errorf("note = %q", got.note)
+		}
+	}
+}
+
+// A cue that itself failed says so first, even when its fade also failed.
+func TestNightCueOwnFailureComesBeforeTheFadeFailure(t *testing.T) {
+	gain := nightGainResult{failed: true, note: "The lights could not be faded to 0%. Check the brightness on FPP."}
+	for _, tc := range []struct{ outcome, wantOutcome, wantShown string }{
+		{nightCueOutcomeRefused, nightCueOutcomeRefused, "The cue was refused."},
+		{nightCueOutcomeFailed, nightCueOutcomeFailed, "The cue was refused."},
+		{nightCueOutcomeConfirmed, nightCueOutcomeFailed, gain.note},
+	} {
+		outcome, reason := nightCueOutcomeWithGain(tc.outcome, "The cue was refused.", gain)
+		if outcome != tc.wantOutcome || nightOperatorReason(reason) != tc.wantShown {
+			t.Errorf("cue outcome %s: got %s showing %q, want %s showing %q", tc.outcome, outcome, nightOperatorReason(reason), tc.wantOutcome, tc.wantShown)
+		}
+	}
+}

@@ -131,14 +131,14 @@ func TestNightPowerOff_AfterActionsRunsPrerequisitesInOrderThenPowerOffLast(t *t
 		t.Fatalf("resolume calls once the delay has elapsed = %d, want 2 (power-off dispatched last)", got)
 	}
 	if last, ok := f.res.lastCall(); !ok || last.action != "blackout" {
-		t.Fatalf("last resolume call = %+v, want the power-off action dispatched last", last)
+		t.Fatalf("last resolume call = %+v, want the power down action dispatched last", last)
 	}
 	final := mustGetCurrentSession(t, f.st)
 	if final.PowerPhase == nightPowerPhaseConfiguredNotDispatched {
 		t.Fatalf("PowerPhase never resolved to a terminal outcome")
 	}
-	if !strings.Contains(final.PowerPhase, "Power-off was sent") {
-		t.Fatalf("PowerPhase = %q, want it to record that the power-off action was sent", final.PowerPhase)
+	if !strings.Contains(final.PowerPhase, "Power down was sent") {
+		t.Fatalf("PowerPhase = %q, want it to record that the power down action was sent", final.PowerPhase)
 	}
 
 	// A further tick after the sequence has resolved must never redispatch.
@@ -184,7 +184,7 @@ func TestNightPowerOff_PrerequisiteNeverConfirmingLeavesPowerOnAndNamesTheStep(t
 	if !strings.Contains(strings.ToLower(final.PowerPhase), "power was not removed") {
 		t.Fatalf("PowerPhase = %q, want it to state power was not removed", final.PowerPhase)
 	}
-	if !strings.Contains(final.PowerPhase, "Run the power-off action by hand") {
+	if !strings.Contains(final.PowerPhase, "Run the power down action by hand") {
 		t.Fatalf("PowerPhase = %q, want it to name a recovery that actually exists", final.PowerPhase)
 	}
 	if got := mapNightPowerPhase(final); got.State != v1.NightEvidenceRecorded {
@@ -238,10 +238,10 @@ func TestNightPowerOff_CrashRecoveryDoesNotRepeatACompletedPrerequisite(t *testi
 	now = now.Add(5 * time.Second)
 	freshH.nightAdvancePowerOff(context.Background(), now, mustGetCurrentSession(t, f.st))
 	if got := freshRes.callCount(); got != 1 {
-		t.Fatalf("resolume calls made by the post-recovery process = %d, want exactly 1 (only the power-off action)", got)
+		t.Fatalf("resolume calls made by the post-recovery process = %d, want exactly 1 (only the power down action)", got)
 	}
 	if last, ok := freshRes.lastCall(); !ok || last.action != "blackout" {
-		t.Fatalf("last resolume call after recovery = %+v, want the power-off action", last)
+		t.Fatalf("last resolume call after recovery = %+v, want the power down action", last)
 	}
 	final := mustGetCurrentSession(t, f.st)
 	if final.PowerPhase == nightPowerPhaseConfiguredNotDispatched {

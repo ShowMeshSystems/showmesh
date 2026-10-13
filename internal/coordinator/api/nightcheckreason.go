@@ -62,8 +62,8 @@ func nightUnique(messages []string) []string {
 
 // One wording each for conditions several checks report.
 const (
-	nightActiveShowUnreadReason = "ShowMesh could not read which show is active. Run readiness again."
-	nightPlaylistUnreadReason   = "ShowMesh could not read playlist %s from FPP. Check that FPP is on, then run readiness again."
+	nightActiveShowUnreadReason = "The coordinator could not read which show is active. Run readiness again."
+	nightPlaylistUnreadReason   = "The coordinator could not read playlist %s from FPP. Check that FPP is on, then run readiness again."
 	nightPlaylistEmptyReason    = "Playlist %s has no items. Add a sequence to it in FPP."
 	nightNoFPPForPlaylistReason = "No FPP is set up to read playlist %s from. Check the night definition."
 )
@@ -97,7 +97,7 @@ func (c nightStoredCheck) wire() v1.NightReadinessCheck {
 	check := nightReadinessCheck{name: c.Name, health: nightCheckState(c.State), reason: c.Reason, reasons: c.Reasons}
 	return v1.NightReadinessCheck{
 		Name: c.Name, Label: nightCheckLabel(c.Name), State: c.State,
-		StateLabel: nightCheckStateLabel(check.health), Reasons: check.messages(),
+		StateLabel: nightCheckStateLabel(check.health), Reasons: check.messages(), Reason: strings.Join(check.messages(), " "),
 	}
 }
 
@@ -106,7 +106,6 @@ const (
 	nightNoShowStartReason      = "No show start is scheduled right now."
 	nightShowStartSetReason     = "The next show start is scheduled."
 	nightShowStartUnknownReason = "The next show start is not known."
-	nightRecoverAction          = "Run End session, then Prepare site."
 )
 
 const (
@@ -131,6 +130,6 @@ func nightOperatorReason(stored string) string {
 }
 
 const (
-	nightBedTimecodeNotReadyReason = "The timecode node was not ready in time, so the speakers start on their own."
-	nightBedNoSharedStartReason    = "No shared start time could be picked, so the speakers start on their own."
+	nightBedTimecodeNotReadyReason = "The timecode node was not ready in time, so the nodes start on their own."
+	nightBedNoSharedStartReason    = "No shared start time could be picked, so the nodes start on their own."
 )

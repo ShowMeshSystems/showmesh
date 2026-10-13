@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -90,15 +91,6 @@ const (
 	nightOutcomeApplied        = "applied"
 	nightOutcomeIdempotentNoOp = "idempotent_no_op"
 )
-
-// nightDegradedDetail is what a degraded session tells an operator. Every
-// degraded reason is written as a whole message, so it is passed through.
-func nightDegradedDetail(reason string) string {
-	if reason == "" {
-		return "The night session stopped advancing. " + nightRecoverAction
-	}
-	return reason
-}
 
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
 // "roll back, no error occurred - a *v1.Problem describes the refusal",
@@ -1065,7 +1057,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		readiness, err := tx.GetLatestNightReadiness(ctx, current.ID)
 		if err != nil {
 			if err == store.ErrNightReadinessNotFound {
-				p := nightNotReadyProblem("Readiness has not run for this night. Run readiness, then Start night.")
+				p := nightNotReadyProblem(nightReadinessNotRunReason)
 				return nightCommandOutcome{}, &p, nil
 			}
 			return nightCommandOutcome{}, nil, err
@@ -1636,6 +1628,11 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 	}
 
 	checks, outcome := h.nightComputeReadinessChecks(ctx, now, payload, interlockChecks)
+	for _, c := range checks {
+		if c.cause != nil {
+			h.logWarn("night readiness: a check could not finish", "sessionId", current.ID, "check", c.name, "error", c.cause)
+		}
+	}
 	checksJSON, err := json.Marshal(nightEncodeChecks(checks))
 	if err != nil {
 		return nightCommandOutcome{}, nil, fmt.Errorf("api: encode night readiness checks: %w", err)
@@ -1781,11 +1778,6 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, h.nightCheckAnnouncementAssets(ctx, allCues, payload))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
-	for _, c := range checks {
-		if c.cause != nil {
-			h.logWarn("night readiness: a check could not finish", "check", c.name, "error", c.cause)
-		}
-	}
 	return checks, nightOutcomeFromChecks(checks)
 }
 
@@ -1839,7 +1831,7 @@ func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 	for _, c := range checks {
 		out = append(out, v1.NightReadinessCheck{
 			Name: c.name, Label: nightCheckLabel(c.name), State: string(c.health),
-			StateLabel: nightCheckStateLabel(c.health), Reasons: c.messages(),
+			StateLabel: nightCheckStateLabel(c.health), Reasons: c.messages(), Reason: strings.Join(c.messages(), " "),
 		})
 	}
 	return out
@@ -1860,7 +1852,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	name := "fpp:" + instanceID + ":reachable"
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
-			reason: "ShowMesh could not read whether FPP is reachable. Run readiness again."}
+			reason: "The coordinator could not read whether FPP is reachable. Run readiness again."}
 	}
 	if len(obs) == 0 {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "FPP has not reported whether it is reachable. Check that it is on."}
@@ -1875,7 +1867,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	if health != observation.HealthHealthy {
 		reason = "FPP is not reachable. Check that it is on and on the network."
 		if obs[0].StateAt(now) != observation.StateCurrent {
-			reason = "ShowMesh has no current report from FPP. Check that it is on and on the network."
+			reason = "The coordinator has no current report from FPP. Check that it is on and on the network."
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
@@ -1888,7 +1880,7 @@ func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instan
 	const name = "fpp-plugin-reports-refused"
 	views, err := h.deps.FPP.ListInstances(ctx)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: "ShowMesh could not read its FPP list. Run readiness again."}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: "The coordinator could not read its FPP list. Run readiness again."}
 	}
 	var reasons []string
 	for _, v := range views {
@@ -1996,9 +1988,12 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 		FinalShowRequested: rec.FinalShowRequested, FinalShowRequestedAt: formatTimePtr(rec.FinalShowRequestedAt),
 		AdmissionClosed: rec.AdmissionClosed, AdmissionClosedAt: formatTimePtr(rec.AdmissionClosedAt),
 		ShutdownIntent: rec.ShutdownIntent, ArmedShowID: rec.ArmedShowID, ShowCommitted: rec.ShowCommitted,
-		Degraded: rec.Degraded, DegradedReason: rec.DegradedReason, AttributionDegraded: rec.AttributionDegraded,
+		Degraded: rec.Degraded, AttributionDegraded: rec.AttributionDegraded,
 		Transition: mapNightTransition(rec),
 		Boundary:   mapNightBoundary(rec),
+	}
+	if rec.Degraded {
+		out.DegradedReason = nightDegradedDetail(rec.DegradedReason)
 	}
 	if !rec.UpdatedAt.IsZero() {
 		out.UpdatedAt = formatTime(rec.UpdatedAt)
@@ -2361,14 +2356,14 @@ func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down has not been requested."}
 	case "not_configured":
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "This night has no power-off step."}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "This night has no power down step."}
 	case nightPowerPhaseConfiguredNotDispatched:
 		// nightpoweroff.go's own removal-policy runtime is running: this
 		// value is overwritten with a final, terminal outcome (the default
 		// case below) once it succeeds or a step stops it.
 		return v1.NightPhaseEvidence{
 			State:  v1.NightEvidenceUnknown,
-			Reason: "The power-off sequence is running. Power is not confirmed off yet.",
+			Reason: "Power down is running. Power is not confirmed off yet.",
 		}
 	default:
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: rec.PowerPhase}
@@ -2388,13 +2383,13 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 	readiness, err := deps.NightSessions.GetLatestNightReadiness(ctx, rec.ID)
 	if errors.Is(err, store.ErrNightReadinessNotFound) {
 		empty.State = v1.NightEvidenceUnknown
-		empty.Reason = "Readiness has not run since the site was prepared. Run readiness."
+		empty.Reason = nightReadinessNotRunReason
 		return empty
 	}
 	if err != nil {
 		empty.State = v1.NightEvidenceUnknown
 		slog.Default().Warn("night readiness: the result could not be read", "session", rec.ID, "error", err)
-		empty.Reason = "ShowMesh could not read the readiness result. Reload the page."
+		empty.Reason = "The coordinator could not read the readiness result. Reload the page."
 		return empty
 	}
 	var stored []nightStoredCheck
@@ -2514,15 +2509,15 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 	switch rec.State {
 	case nightStateLive:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeShow,
-			"The coordinator restarted and cannot tell if the show is still playing.")
+			nightDegradedRestartShowFact)
 	case nightStateRestingIntershow:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingOneShot,
-			"The coordinator restarted and cannot tell if the resting sequence is still playing.")
+			nightDegradedRestartRestingFact)
 	case nightStateEndOfNightResting:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingRepeat,
-			"The coordinator restarted and cannot tell if the end of night playlist is still playing.")
+			nightDegradedRestartEndNightFact)
 	case nightStateTransitionToShow, nightStateTransitionToResting:
-		return "The coordinator restarted mid-change and cannot tell what is safe to resume. " + nightRecoverAction
+		return nightDegradedReason(nightDegradedRestartMidFact)
 	}
 	return ""
 }
@@ -2534,7 +2529,7 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, subject string) string {
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
 	if !has || anchor.Purpose != purpose {
-		return subject + " " + nightRecoverAction
+		return nightDegradedReason("%s", subject)
 	}
 	if anchor.ObservedAt.IsZero() {
 		// Dispatched but never confirmed before the restart: the loop's own
@@ -2544,12 +2539,12 @@ func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.T
 
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 	if !obs.Current {
-		return subject + " " + nightRecoverAction
+		return nightDegradedReason("%s", subject)
 	}
 
 	if bad, reason := nightBoundaryContradicted(anchor, obs, now); bad {
 		h.logWarn("night session reconciliation: playback does not match the saved session", "sessionId", rec.ID, "reason", reason)
-		return "The coordinator restarted and FPP is not playing what the night expects. " + nightRecoverAction
+		return nightDegradedReason(nightDegradedRestartMismatchFact)
 	}
 	return ""
 }
@@ -2603,7 +2598,7 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 		}
 		row.State = nightCueStateAmbiguous
 		row.Outcome = nightCueOutcomeAmbiguous
-		row.OutcomeReason = "The coordinator restarted while this cue was running. " + nightRecoverAction
+		row.OutcomeReason = nightCueStrandedReason
 		resolvedAt := now
 		row.ResolvedAt = &resolvedAt
 		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {

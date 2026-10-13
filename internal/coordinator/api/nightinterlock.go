@@ -117,7 +117,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 	// Unreachable given the closed posture enum nightsitecontrol.go
 	// already validated; answered rather than left to a zero-value
 	// nightInterlockDecision that would silently never withhold.
-	return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "This safety check has a setting ShowMesh does not know. Edit the night definition."}
+	return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "This safety check has a setting the coordinator does not know. Edit the night definition."}
 }
 
 // nightConditionFromHealth is [classifyMQTTActionResult]'s own inverse,
@@ -165,7 +165,7 @@ func (h *handlers) nightEvaluateInterlockRuleLive(ctx context.Context, rule conf
 			// withholds.
 			Withhold: rule.Posture == config.NightInterlockPostureBlock && rule.OnUnavailable != config.NightInterlockOnUnavailableAllow,
 			Health:   nightHealthUnknown(),
-			Reason:   "ShowMesh could not read the action for this safety check. Run readiness again.",
+			Reason:   "The coordinator could not read the action for this safety check. Run readiness again.",
 		}
 	}
 	res := DispatchMQTTAction(ctx, h.deps.MQTTBrokers, action.Target, h.now)

@@ -22,7 +22,7 @@ func (h *handlers) nightStopFPPAtPrepareSite(ctx context.Context, now time.Time,
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
 		h.logWarn("night prepare-site: could not read the session to find its FPP instances", "sessionId", rec.ID, "error", err)
-		return "Prepare site is done, but ShowMesh could not tell which FPP to stop. Stop FPP by hand."
+		return "Prepare site is done, but the coordinator could not tell which FPP to stop. Stop FPP by hand."
 	}
 	var instances []string
 	for _, id := range []string{payload.Resting.FPPInstanceID, payload.ShowPlaylist.FPPInstanceID} {
@@ -60,7 +60,7 @@ func (h *handlers) nightStopFPPAtPrepareSite(ctx context.Context, now time.Time,
 	case 0:
 		return "Prepare site is done, and FPP was stopped."
 	case 1:
-		return facts[0] + " Stop it by hand if it is still playing."
+		return facts[0] + " " + nightStopByHandAction
 	}
 	return fmt.Sprintf("FPP %s were not confirmed stopped. Stop them by hand if they are still playing.", nightNames(failed))
 }
@@ -84,13 +84,13 @@ func (h *handlers) nightStopOneFPP(ctx context.Context, now time.Time, issuer id
 		return fmt.Sprintf("FPP %s was not asked to stop because of a coordinator error.", id)
 	case problem != nil:
 		h.logWarn("night prepare-site: the FPP stop was not sent", "sessionId", rec.ID, "instanceId", id, "reason", problem.Detail)
-		return fmt.Sprintf("ShowMesh did not ask FPP %s to stop.", id)
+		return fmt.Sprintf("The coordinator did not ask FPP %s to stop.", id)
 	case outcome.DispatchFailed && outcome.FPPStatusCode != 0:
 		return fmt.Sprintf("FPP %s refused the stop.", id)
 	case outcome.DispatchFailed:
-		return fmt.Sprintf("FPP %s could not be reached, so it was not stopped.", id)
+		return fmt.Sprintf(nightStopNotReachedFact, id)
 	case outcome.Outcome != "confirmed":
-		return fmt.Sprintf("FPP %s was told to stop but has not reported that it is idle.", id)
+		return fmt.Sprintf(nightStopNotConfirmedFact, id)
 	}
 	return ""
 }

@@ -560,6 +560,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 				// here for the ObservedAt.IsZero() check above to ever find
 				// non-zero), so the classification never actually reaches the
 				// retry gate below.
+				h.nightLogSequenceFileCause(rec, res)
 				h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason, Kind: nightBoundaryKindUnresolvedAsset})
 				return
 			}
@@ -623,9 +624,9 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 			h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateUnknown, Reason: reason})
 			return
 		}
-		reason := "The next show start was lost and cannot be worked out again. " + nightRecoverAction
+		reason := nightDegradedReason(nightDegradedTimingLostFact)
 		if nightBoundaryRetryEligible(persisted) {
-			reason = fmt.Sprintf("The next show start could not be worked out after %d tries. %s", nightDerivationInvalidRetryLimit, nightRecoverAction)
+			reason = nightDegradedReason(nightDegradedTimingRetriesFact, nightDerivationInvalidRetryLimit)
 		}
 		h.nightDegradeSession(ctx, now, rec, reason)
 		return
@@ -639,7 +640,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		// waits for playback that is gone, so this would otherwise hold
 		// silently for the rest of the night.
 		if obsNow.Status == fppStatusValueIdle {
-			h.nightDegradeSession(ctx, now, rec, "FPP stopped the resting sequence early and nothing is playing. "+nightRecoverAction)
+			h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightDegradedRestingStoppedFact))
 		}
 		return
 	}
@@ -758,7 +759,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 					if obsNow.Status == fppStatusValueIdle {
 						cur.Degraded = true
-						cur.DegradedReason = "FPP stopped the resting sequence as the show was about to start. " + nightRecoverAction
+						cur.DegradedReason = nightDegradedReason(nightDegradedRestingAtStartFact)
 					}
 					return cur
 				})
@@ -772,7 +773,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// entry time (that reproduced the collapse-to-zero defect).
 	b, ok := decodeNightBoundary(rec.BoundaryJSON)
 	if !ok || b.ExpectedAt == nil {
-		h.nightDegradeSession(ctx, now, rec, "The show start time was lost on the way to the show. "+nightRecoverAction)
+		h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightDegradedStartTimeLostFact))
 		return
 	}
 	boundaryE := *b.ExpectedAt
@@ -1036,11 +1037,11 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	var unmet string
 	switch {
 	case !obs.Current:
-		unmet = fmt.Sprintf("FPP %s stopped reporting during the show, so its end was not confirmed.", anchor.FPPInstanceID)
+		unmet = nightDegradedShowNoReportFact
 	case obs.Status != fppStatusValueIdle:
-		unmet = fmt.Sprintf("FPP %s is still playing long after the show should have ended.", anchor.FPPInstanceID)
+		unmet = nightDegradedShowNotIdleFact
 	case !obs.PlaylistCurrent, obs.Playlist != "":
-		unmet = fmt.Sprintf("FPP %s went idle without clearing its playlist, so the show's end was not confirmed.", anchor.FPPInstanceID)
+		unmet = nightDegradedShowPlaylistFact
 	}
 	if unmet != "" {
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
@@ -1048,7 +1049,9 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 				"FPP stopped reporting the show before it was confirmed finished."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
 				h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
 			}
-			h.nightDegradeSession(ctx, now, rec, unmet+" "+nightRecoverAction)
+			h.logWarn("night loop: the show's end was not confirmed", "sessionId", rec.ID, "cycle", rec.Cycle, "instanceId", anchor.FPPInstanceID,
+				"current", obs.Current, "status", obs.Status, "playlistCurrent", obs.PlaylistCurrent, "playlist", obs.Playlist)
+			h.nightDegradeSession(ctx, now, rec, nightDegradedReason(unmet, anchor.FPPInstanceID))
 		}
 		return
 	}
@@ -1184,6 +1187,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 
 	res := nightResolveFSEQDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset)
 	if res.Reason != "" {
+		h.nightLogSequenceFileCause(rec, res)
 		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason})
 		return
 	}
@@ -1235,9 +1239,7 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 			}
 		}
 		if nightStartUnconfirmed(cur, now) {
-			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"FPP %s did not report playlist %s playing within a minute. Run End session to close the night now.",
-				instanceID, playlist))
+			h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightDegradedStartUnconfirmFact, instanceID, playlist))
 		}
 		return cur, false, false
 	}
@@ -1250,8 +1252,7 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		case cur.RefusalTerminal:
 			return cur, false, false
 		case now.Sub(cur.FirstAttemptAt) >= nightDispatchRetryWindow:
-			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"Playlist %s could not be started on FPP %s. %s", playlist, instanceID, nightRecoverAction))
+			h.nightDegradeSession(ctx, now, rec, nightDegradedReason(nightDegradedStartFailedFact, playlist, instanceID))
 			return cur, false, false
 		case now.Sub(cur.AttemptedAt) < nightDispatchRetryBackoff:
 			return cur, false, false
@@ -1384,4 +1385,12 @@ func nightFillAnchorFromObservation(ctx context.Context, lister ObservationListe
 	anchor.PositionMS, anchor.PositionMSKnown = obs.PositionMS, obs.PositionMSCurrent
 	anchor.RepeatMode = obs.RepeatMode
 	return true
+}
+
+// nightLogSequenceFileCause logs the error behind a resting sequence file
+// message. The message itself never carries it.
+func (h *handlers) nightLogSequenceFileCause(rec store.NightSessionRecord, res nightAssetFSEQDurationResult) {
+	if res.Cause != nil {
+		h.logWarn("night loop: the resting sequence file could not be used", "sessionId", rec.ID, "cycle", rec.Cycle, "file", res.Filename, "error", res.Cause)
+	}
 }

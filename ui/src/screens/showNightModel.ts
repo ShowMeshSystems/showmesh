@@ -142,7 +142,7 @@ export function nightRail(session: NightSessionState): RailStep[] {
     {
       key: 'more',
       label: 'More cycles',
-      detail: session.admissionClosed ? 'admission closed' : 'while admission is open',
+      detail: session.admissionClosed ? 'no more shows tonight' : 'while more shows can start',
       status: session.admissionClosed ? 'ahead' : 'ahead',
     },
     {
@@ -265,7 +265,7 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
     readiness.state !== 'recorded'
       ? readiness.reason !== ''
         ? readiness.reason
-        : 'No readiness result has been recorded.'
+        : READINESS_NOT_RUN
       : `${readiness.outcomeLabel ?? 'Could not be determined'} at ${formatClock(readiness.completedAt ?? null) ?? 'an unrecorded time'}` +
         `${readinessAge === null ? '' : `, ${formatDuration(readinessAge)} ago`}` +
         `${readiness.sameEpoch ? ', since the last prepare' : ', before the last prepare'}` +
@@ -354,18 +354,18 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
         session.armedShowId === ''
           ? 'No show is ready to start.'
           : session.showCommitted
-            ? 'The show for this cycle has started.'
-            : 'The show for this cycle is ready and has not started yet.',
+            ? `The show for this cycle has started. It is ${session.armedShowId}.`
+            : `The show for this cycle is ready and has not started yet. It is ${session.armedShowId}.`,
       ],
     },
     {
       key: 'admission',
-      label: session.admissionClosed ? 'Admission closed' : 'Admission open',
+      label: session.admissionClosed ? 'No more shows' : 'More shows can start',
       tone: session.admissionClosed ? 'pending' : 'good',
       facts: [
         session.admissionClosed
-          ? `Admission closed ${formatClock(session.admissionClosedAt) ?? 'at an unrecorded time'}.`
-          : 'Admission is open.',
+          ? `No more shows start tonight. This was set at ${formatClock(session.admissionClosedAt) ?? 'an unrecorded time'}.`
+          : 'More shows can still start tonight.',
       ],
     },
     {
@@ -531,6 +531,9 @@ export const CUES_STATE_LABEL: Record<string, string> = {
   not_configured: 'Not set up',
   not_available: 'Unavailable',
 }
+
+/** The one wording for readiness that has not run since the site was prepared. */
+export const READINESS_NOT_RUN = 'Readiness has not run since the site was prepared. Run readiness.'
 
 /** The one wording for a degraded night that reported no reason. */
 export const DEGRADED_WITHOUT_REASON = 'The night stopped advancing. Run End session, then Prepare site.'

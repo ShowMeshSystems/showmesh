@@ -203,7 +203,7 @@ describe('Shows workspace shell', () => {
 
     await screen.findByText('No definitions')
     fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
-    const showInstance = (await screen.findAllByRole('combobox', { name: 'FPP instance' }))[0]!
+    const showInstance = (await screen.findAllByRole('combobox', { name: 'FPP' }))[0]!
     expect(within(showInstance).getByRole('option', { name: 'barn-player' })).toBeInTheDocument()
     fireEvent.change(showInstance, { target: { value: 'barn-player' } })
     expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()

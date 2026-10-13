@@ -316,7 +316,7 @@ export function ShowNight() {
   const bgAudioSection = (
       <Section id="sn-bg-audio" title="Background Audio Record" aside={<span className="sm-small sm-muted">This cycle</span>}>
         {session.backgroundAudio.nodesNotPlaying.map((node) => (
-          <RuledStrip key={node.nodeId} absence="stale" label={node.nodeId} fact="Not playing the background music" detail={node.reason} />
+          <RuledStrip key={node.nodeId} absence="stale" label={node.nodeId} fact="Not playing background audio" detail={node.reason} />
         ))}
         <h3 id="sn-bg-plan" className="sm-subsection__title">Planned</h3>
         {bgPlan.kind === 'configured' ? (
@@ -408,11 +408,11 @@ export function ShowNight() {
     <>
       <div className="sm-page__head">
         <div>
-          <p className="sm-eyebrow">Show Night · <span className="sm-data">{session.id}</span></p>
+          <p className="sm-eyebrow">Show Night</p>
           <h1 className="sm-page__title">Cycle {session.cycle} of the night</h1>
         </div>
         <ButtonRow>
-          <Button onClick={() => setActivationOpen(true)}>Activate Definition</Button>
+          <Button onClick={() => setActivationOpen(true)}>Activate definition</Button>
           {session.armedShowId !== '' ? (
             <Link className="sm-btn" to={`/shows/${encodeURIComponent(session.armedShowId)}/night-session`}>Edit definition</Link>
           ) : (
@@ -579,7 +579,7 @@ export function ShowNight() {
                     <Field
                       label="Safety check"
                       help="The safety check's name, as listed above."
-                      error={overrideInvalid && overrideRule.trim() === '' ? 'Name the rule to override.' : undefined}
+                      error={overrideInvalid && overrideRule.trim() === '' ? 'Name the safety check to override.' : undefined}
                     >
                       {(props) => <Input {...props} value={overrideRule} onChange={(e) => setOverrideRule(e.target.value)} />}
                     </Field>
@@ -1001,6 +1001,7 @@ const OPTION_LABEL: Record<string, string> = {
   restart: 'Restart from the first item',
   sequential: 'One after another',
   'authorized-operator': 'A user allowed to override',
+  'operator-declared': 'User declared',
 }
 
 function optionLabel(value: string): string {
@@ -1165,7 +1166,7 @@ function buildSiteControl(sc: SiteControlDraft): { ok: true; value: SiteControlW
     built.presentationPowerOn = { action: sc.powerOnAction.trim(), powerDomain: sc.powerOnDomain, domainProvenance: sc.powerOnProvenance }
   }
   if (sc.powerOffEnabled) {
-    if (sc.powerOffAction.trim() === '') return { ok: false, error: 'Presentation power-off needs an action.' }
+    if (sc.powerOffAction.trim() === '') return { ok: false, error: 'Presentation power down needs an action.' }
     if (sc.removalPolicy === 'immediate' && !sc.immediateSafeAttestation) {
       return { ok: false, error: 'Immediate removal needs the safe-to-remove box ticked.' }
     }
@@ -1228,8 +1229,8 @@ function definitionPayload(
   showAudioNodes: readonly string[],
 ): ConfigNightSessionWrite | { error: string } {
   const required: readonly [string, string][] = [
-    ['Definition id', draft.id], ['Show', draft.show], ['Label', draft.label], ['Show playlist FPP instance', draft.showFpp], ['Show playlist', draft.showPlaylist],
-    ['Resting FPP instance', draft.restingFpp], ['Resting playlist', draft.restingPlaylist], ['Resting timeline show', draft.timelineShow], ['Resting timeline sequence', draft.timelineSequence], ['Resting timeline target', draft.timelineTarget],
+    ['Definition id', draft.id], ['Show', draft.show], ['Label', draft.label], ['Show playlist FPP', draft.showFpp], ['Show playlist', draft.showPlaylist],
+    ['Resting FPP', draft.restingFpp], ['Resting playlist', draft.restingPlaylist], ['Resting timeline show', draft.timelineShow], ['Resting timeline sequence', draft.timelineSequence], ['Resting timeline target', draft.timelineTarget],
   ]
   const missing = required.find(([, value]) => value.trim() === '')
   if (missing !== undefined) return { error: `${missing[0]} is required.` }
@@ -1478,8 +1479,8 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <p className="sm-eyebrow sm-eyebrow--accent">{loaded === null ? 'Draft · new definition' : `Editing · version ${loaded.revision}`}</p>
           <h3 className="sm-inspector__title" id="sn-definition-inspector-heading">{loaded === null ? 'New night session' : draft.label}</h3>
           <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
-          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
-          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="The length of this file sets how long the resting cycle runs.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resting target">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a target…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="The length of this file sets how long the resting cycle runs.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resting target">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a target…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v} value={v}>{optionLabel(v)}</option>)}</Select>}</Field></div>
           <TransitionStepEditor title="Enter show" offsetHelp="Milliseconds from the end of the resting sequence. Negative is before." steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the end of the show. Negative is before." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
@@ -1527,7 +1528,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               <>
                 <div className="sm-night-session-compact-grid">
                   <Field label="Repeat">{(p) => <Select {...p} value={draft.backgroundAudio.repeat} onChange={(e) => updateBackgroundAudio({ repeat: e.target.value as BackgroundAudioDraft['repeat'] })}>{BACKGROUND_AUDIO_REPEATS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
-                  <Field label="Resume" help="How the bed resumes after a show returns to resting.">{(p) => <Select {...p} value={draft.backgroundAudio.resume} onChange={(e) => updateBackgroundAudio({ resume: e.target.value as BackgroundAudioDraft['resume'] })}>{BACKGROUND_AUDIO_RESUMES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                  <Field label="Resume" help="How background audio resumes after a show returns to resting.">{(p) => <Select {...p} value={draft.backgroundAudio.resume} onChange={(e) => updateBackgroundAudio({ resume: e.target.value as BackgroundAudioDraft['resume'] })}>{BACKGROUND_AUDIO_RESUMES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
                   <Field label="Between items">{(p) => <Select {...p} value={draft.backgroundAudio.itemTransition} onChange={(e) => updateBackgroundAudio({ itemTransition: e.target.value as BackgroundAudioDraft['itemTransition'] })}>{BACKGROUND_AUDIO_TRANSITIONS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
                   {draft.backgroundAudio.itemTransition === 'crossfade' && (
                     <Field label="Crossfade (ms)" help="Required when item transition is crossfade.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.crossfadeMs} onChange={(e) => updateBackgroundAudio({ crossfadeMs: e.target.value })} />}</Field>
@@ -1561,7 +1562,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             {draft.backgroundAudio.mode !== 'none' && (
               <AudioNodesResolutionField
                 label="Play on these nodes"
-                ownLabel="this bed"
+                ownLabel="this background audio"
                 explicitValue={draft.backgroundAudio.targets}
                 onExplicitChange={(targets) => updateBackgroundAudio({ targets })}
                 excludeValue={draft.backgroundAudio.excludeNodes}
@@ -1578,18 +1579,18 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               {(p) => <Input {...p} value={draft.siteControl.requestThermalProfile} onChange={(e) => updateSiteControl({ requestThermalProfile: e.target.value })} />}
             </Field>
             <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power-on</h4></div>
-            <Choice type="checkbox" checked={draft.siteControl.powerOnEnabled} onChange={(e) => updateSiteControl({ powerOnEnabled: e.target.checked })} label="Configure a presentation power-on binding" />
+            <Choice type="checkbox" checked={draft.siteControl.powerOnEnabled} onChange={(e) => updateSiteControl({ powerOnEnabled: e.target.checked })} label="Set a presentation power on action" />
             {draft.siteControl.powerOnEnabled && (
               <div className="sm-night-session-compact-grid">
                 <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOnAction} onChange={(e) => updateSiteControl({ powerOnAction: e.target.value })} />}</Field>
                 <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOnDomain} onChange={(e) => updateSiteControl({ powerOnDomain: e.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
-                <Field label="Power kind set by" help="Only Operator declared is accepted here.">
+                <Field label="Power kind set by" help="Only User declared is accepted here.">
                   {(p) => <Select {...p} value={draft.siteControl.powerOnProvenance} onChange={(e) => updateSiteControl({ powerOnProvenance: e.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
                 </Field>
               </div>
             )}
-            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power-off</h4></div>
-            <Choice type="checkbox" checked={draft.siteControl.powerOffEnabled} onChange={(e) => updateSiteControl({ powerOffEnabled: e.target.checked })} label="Configure a presentation power-off binding" />
+            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power down</h4></div>
+            <Choice type="checkbox" checked={draft.siteControl.powerOffEnabled} onChange={(e) => updateSiteControl({ powerOffEnabled: e.target.checked })} label="Set a presentation power down action" />
             {draft.siteControl.powerOffEnabled && (
               <>
                 <div className="sm-night-session-compact-grid">

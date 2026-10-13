@@ -63,16 +63,17 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 	}
 	selection := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	if selection.unknownReason != "" {
-		return one(nightHealthUnknown(), "ShowMesh could not read which FPP and Resolume the active show uses. Run readiness again.")
+		h.logWarn("night readiness: the active show's FPP and Resolume selection could not be read", "show", show, "reason", selection.unknownReason)
+		return one(nightHealthUnknown(), "The coordinator could not read which FPP and Resolume the active show uses. Run readiness again.")
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)
 	if err != nil {
-		return unreadable("ShowMesh could not read its FPP list. Run readiness again.", err)
+		return unreadable("The coordinator could not read its FPP list. Run readiness again.", err)
 	}
 	resolumeViews, err := h.deps.Resolume.ListInstances(ctx)
 	if err != nil {
-		return unreadable("ShowMesh could not read its Resolume list. Run readiness again.", err)
+		return unreadable("The coordinator could not read its Resolume list. Run readiness again.", err)
 	}
 
 	var checks []nightReadinessCheck

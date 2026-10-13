@@ -169,7 +169,7 @@ describe('Show Night', () => {
       'Run of Show',
       'Background Audio Record',
     ])
-    expect(screen.getByRole('button', { name: 'Activate Definition' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Activate definition' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
@@ -782,10 +782,10 @@ describe('Show Night', () => {
           sameEpoch: true,
           fresh: true,
           checks: [
-            { name: 'interlock:power-on:projector-cooldown', label: 'Safety check projector-cooldown for Power on', state: 'healthy', stateLabel: 'Passed', reasons: [] },
-            { name: 'interlock:power-on:garage-link', label: 'Safety check garage-link for Power on', state: 'failed', stateLabel: 'Failed', reasons: ['The garage link did not answer.', 'This blocks Power on.'] },
-            { name: 'audio-node:reachable', label: 'Audio node reachable', state: 'not_verifiable', stateLabel: 'Cannot be checked', reasons: ['No audio node is configured to verify.'] },
-            { name: 'resolume:composition', label: 'Resolume composition', state: 'not_configured', stateLabel: 'Not set up', reasons: [] },
+            { name: 'interlock:power-on:projector-cooldown', label: 'Safety check projector-cooldown for Power on', state: 'healthy', stateLabel: 'Passed', reasons: [], reason: '' },
+            { name: 'interlock:power-on:garage-link', label: 'Safety check garage-link for Power on', state: 'failed', stateLabel: 'Failed', reasons: ['The garage link did not answer.', 'This blocks Power on.'], reason: 'The garage link did not answer. This blocks Power on.' },
+            { name: 'audio-node:reachable', label: 'Audio node reachable', state: 'not_verifiable', stateLabel: 'Cannot be checked', reasons: ['No audio node is configured to verify.'], reason: 'No audio node is configured to verify.' },
+            { name: 'resolume:composition', label: 'Resolume composition', state: 'not_configured', stateLabel: 'Not set up', reasons: [], reason: '' },
           ],
         },
       }),
@@ -879,7 +879,7 @@ describe('Show Night', () => {
       }),
     })
     expect(screen.getByText('audio-02')).toBeInTheDocument()
-    expect(screen.getByText('Not playing the background music')).toBeInTheDocument()
+    expect(screen.getByText('Not playing background audio')).toBeInTheDocument()
     expect(screen.getByText(/no longer holding the background music/)).toBeInTheDocument()
   })
 
@@ -889,7 +889,7 @@ describe('Show Night', () => {
         backgroundAudio: { plan: NO_AUDIO_PLAN, state: 'recorded', reason: '', pinnedMaxGainDb: -18, nodesNotPlaying: [], steps: [] },
       }),
     })
-    expect(screen.queryByText('Not playing the background music')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not playing background audio')).not.toBeInTheDocument()
   })
 
   it('renders background audio steps with their sequence, cue, kind, and state', () => {
@@ -1124,8 +1124,8 @@ describe('Show Night', () => {
       }),
     })
     expect(screen.getByText('night.session/winter-ridge, version 4.')).toBeInTheDocument()
-    expect(screen.getByText('The show for this cycle has started.')).toBeInTheDocument()
-    expect(screen.getByText(/^Admission closed \d/)).toBeInTheDocument()
+    expect(screen.getByText('The show for this cycle has started. It is winter-ridge-2026.')).toBeInTheDocument()
+    expect(screen.getByText(/^No more shows start tonight\. This was set at \d/)).toBeInTheDocument()
     expect(screen.getByText('Session last updated')).toBeInTheDocument()
   })
 
@@ -1146,7 +1146,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
   })
@@ -1162,7 +1162,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText(/Active version/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
@@ -1172,7 +1172,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => new Promise(() => {})
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     expect(screen.queryByText('History could not be read.')).not.toBeInTheDocument()
   })
@@ -1181,7 +1181,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
     renderScreen({ nightSession: session() })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     expect(await screen.findByText('History could not be read.')).toBeInTheDocument()
   })
 
@@ -1202,7 +1202,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -1227,7 +1227,7 @@ describe('Show Night', () => {
         objects: [{ id: 'winter-ridge-backup', label: 'Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -1243,7 +1243,7 @@ describe('Show Night', () => {
       return Promise.resolve(activeConfigResponse('', { revision: 4 }))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate definition' }))
     await screen.findByText('winter-ridge-2026')
     const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the active definition')
     const clearButton = screen.getByRole('button', { name: 'Clear active definition' })
@@ -1888,7 +1888,7 @@ describe('Show Night', () => {
       renderDefinitions({ session: configWriteSession })
       await openWinterRidgeDefinition()
       await screen.findByText('Plays on no node (installation default).')
-      fireEvent.click(screen.getByRole('button', { name: 'Set specific nodes for this bed' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Set specific nodes for this background audio' }))
       const group = await screen.findByRole('group', { name: 'Play on these nodes' })
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-01' }))
       fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))

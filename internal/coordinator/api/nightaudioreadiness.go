@@ -72,9 +72,12 @@ const (
 // failure.
 func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	name := "resting:background-audio-assets"
-	if _, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.Items); err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), cause: err,
-			reason: "A background audio file is missing or is not audio. Upload it or pick another file."}
+	for _, item := range ba.Items {
+		if _, err := h.nightBuildBackgroundPlaylistItems(ctx, show, []config.NightSessionBackgroundAudioItem{item}); err != nil {
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), cause: err, reason: fmt.Sprintf(
+				"The background audio file for %s on node %s is missing or is not audio. Upload it or pick another.",
+				item.Asset.Sequence, item.Asset.Target)}
+		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
@@ -143,7 +146,7 @@ func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, 
 	confirms, evidence, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, t)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(
-			"ShowMesh could not read what node %s supports. Run readiness again.", nodeID)}
+			"The coordinator could not read what node %s supports. Run readiness again.", nodeID)}
 	}
 	if t == pkgaudio.ItemTransitionSequential {
 		return nightReadinessCheck{name: name, health: nightHealthHealthy()}
@@ -269,7 +272,7 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 	evidence, err := audioNodeCapabilitySet(ctx, h.deps.Nodes, now, nodeID)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(
-			"ShowMesh could not read what node %s supports. Run readiness again.", nodeID)}
+			"The coordinator could not read what node %s supports. Run readiness again.", nodeID)}
 	}
 	// A node that never published makes no claim, so this is not a failure.
 	if evidence.NeverPublished {
@@ -382,7 +385,7 @@ func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Contex
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
 	unreadable := func(nodeID string, err error) nightReadinessCheck {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(
-			"ShowMesh could not read which files node %s holds. Run readiness again.", nodeID)}
+			"The coordinator could not read which files node %s holds. Run readiness again.", nodeID)}
 	}
 
 	var missing []string
@@ -418,13 +421,15 @@ func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Contex
 			if nodeUnknown || nightInventoryHoldsUnderFilename(inventory, rec.ContentHash, rec.RuntimeFilename) {
 				continue
 			}
-			if nightInventoryFilenameForHash(inventory, rec.ContentHash) == "" {
+			actual := nightInventoryFilenameForHash(inventory, rec.ContentHash)
+			if actual == "" {
 				missing = append(missing, fmt.Sprintf(
 					"Node %s does not have the audio file for %s yet. Resync the node's files.", nodeID, item.Asset.Sequence))
 				continue
 			}
 			missing = append(missing, fmt.Sprintf(
-				"Node %s holds the audio file for %s under the wrong name. Resync the node's files.", nodeID, item.Asset.Sequence))
+				"Node %s holds the audio file for %s as %s, not %s. Resync the node's files.",
+				nodeID, item.Asset.Sequence, actual, rec.RuntimeFilename))
 		}
 	}
 	switch {
@@ -504,7 +509,7 @@ func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Co
 		holds, err := h.nodeHoldsMediaClock(ctx, nodeID)
 		if err != nil {
 			return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(
-				"ShowMesh could not read the audio settings for node %s. Run readiness again.", nodeID)}
+				"The coordinator could not read the audio settings for node %s. Run readiness again.", nodeID)}
 		}
 		if holds {
 			return nightReadinessCheck{name: name, health: nightHealthHealthy()}
@@ -531,7 +536,7 @@ func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []conf
 		action, _, err := nightResolveShowAction(ctx, h.deps.Config, cue.Action)
 		if err != nil {
 			causes = append(causes, err)
-			unverifiable = append(unverifiable, fmt.Sprintf("ShowMesh could not read the action for cue %s. Run readiness again.", cue.Name))
+			unverifiable = append(unverifiable, fmt.Sprintf("The coordinator could not read the action for cue %s. Run readiness again.", cue.Name))
 			continue
 		}
 		if !nightAnnouncementTargetDeclarable(action.Target) {
@@ -554,7 +559,7 @@ func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []conf
 		missing, cerr := assetsync.AnnouncementNodesWithoutCopy(ctx, h.deps.AssetManifests, payload.Show, action.Target.AudioNodeIDs, assetsync.AnnouncementMedia(media))
 		if cerr != nil {
 			causes = append(causes, cerr)
-			unverifiable = append(unverifiable, fmt.Sprintf("ShowMesh could not check the audio file for cue %s. Run readiness again.", cue.Name))
+			unverifiable = append(unverifiable, fmt.Sprintf("The coordinator could not check the audio file for cue %s. Run readiness again.", cue.Name))
 			continue
 		}
 		if len(missing) > 0 {
@@ -611,7 +616,7 @@ func (h *handlers) nightCheckAnnouncementPolicyEnforceable(ctx context.Context, 
 		action, _, err := nightResolveShowAction(ctx, h.deps.Config, cue.Action)
 		if err != nil {
 			return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
-				reason: fmt.Sprintf("ShowMesh could not read the action for cue %s. Run readiness again.", cue.Name)}
+				reason: fmt.Sprintf("The coordinator could not read the action for cue %s. Run readiness again.", cue.Name)}
 		}
 		if !nightAnnouncementTargetDeclarable(action.Target) {
 			notApply = append(notApply, fmt.Sprintf("Cue %s is not set to play audio, so it will not play. Use an audio action.", cue.Name))
@@ -622,7 +627,7 @@ func (h *handlers) nightCheckAnnouncementPolicyEnforceable(ctx context.Context, 
 		}
 		if declared, ok := action.Target.Params["sourceRole"].(string); ok && declared != "" {
 			if !pkgaudio.OutranksForMixing(pkgaudio.SourceRole(declared), pkgaudio.SourceRoleBackground) {
-				cannotOutrank = append(cannotOutrank, fmt.Sprintf("Cue %s cannot lower the background music, so the music plays over it. Fix its action.", cue.Name))
+				cannotOutrank = append(cannotOutrank, fmt.Sprintf("Cue %s cannot lower the background audio, so the audio plays over it. Fix its action.", cue.Name))
 			}
 		}
 	}
@@ -648,7 +653,7 @@ func (h *handlers) nightCheckAudioAlignment(ctx context.Context, now time.Time) 
 	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
 	if err != nil {
 		return []nightReadinessCheck{{name: "audio:alignment", health: nightHealthUnknown(), cause: err,
-			reason: "ShowMesh could not read the list of audio nodes. Run readiness again."}}
+			reason: "The coordinator could not read the list of audio nodes. Run readiness again."}}
 	}
 	var checks []nightReadinessCheck
 	for _, obj := range objs {

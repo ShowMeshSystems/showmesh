@@ -151,6 +151,10 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 	}
 
 	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, dispatchRevision)
+	if result.cause != nil {
+		h.logWarn("night loop: a cue was not sent", "sessionId", rec.ID, "cycle", rec.Cycle, "phase", phase, "cue", cueName,
+			"integration", target.Integration, "instanceId", target.InstanceID, "nodeIds", target.AudioNodeIDs, "error", result.cause)
+	}
 
 	if fade != nil && !fade.BeforeAction {
 		gain = h.nightApplyLightingFade(ctx, cueName, target, *fade, idemKey)
@@ -180,12 +184,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		return row, nil
 	}
 	row.State = nightCueStateResolved
-	row.Outcome = result.outcome
-	row.OutcomeReason = nightCueReasonWith(result.reason, gain.note)
-	if gain.failed {
-		row.Outcome = nightCueOutcomeWithGainFailure(result.outcome)
-		row.OutcomeReason = nightCueReasonWith(gain.note, result.reason)
-	}
+	row.Outcome, row.OutcomeReason = nightCueOutcomeWithGain(result.outcome, result.reason, gain)
 	resolvedAt := now
 	if result.resolvedAt != nil {
 		resolvedAt = *result.resolvedAt
@@ -232,7 +231,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			// terminal, ambiguous, until an operator resolves it.
 			row.State = nightCueStateAmbiguous
 			row.Outcome = nightCueOutcomeAmbiguous
-			row.OutcomeReason = "This cue was sent but its result was never recorded. " + nightRecoverAction
+			row.OutcomeReason = nightCueStrandedReason
 			resolvedAt := now
 			row.ResolvedAt = &resolvedAt
 			if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
@@ -498,7 +497,7 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 	ok, reason, err := h.nightBarrierSatisfied(ctx, now, referenceE, rec, phase, cues)
 	if err != nil {
 		h.logWarn("night loop: failed to evaluate the cues the show waits for", "sessionId", rec.ID, "error", err)
-		return false, "ShowMesh could not check the cues the show waits for. Check the coordinator log."
+		return false, "The coordinator could not check the cues the show waits for. Check the coordinator log."
 	}
 	return ok, reason
 }

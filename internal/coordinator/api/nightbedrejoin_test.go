@@ -181,7 +181,7 @@ func TestNightBedRejoin_NodeThatLostTheBedIsGivenItAgainAtThePeerPosition(t *tes
 			rejoinStart = row.Row
 		}
 	}
-	if !strings.Contains(rejoinApply.OutcomeReason, "lost the background music") {
+	if !strings.Contains(rejoinApply.OutcomeReason, "lost the background audio") {
 		t.Fatalf("node-b rejoin apply reason = %q, want it to state that the speaker lost the background music", rejoinApply.OutcomeReason)
 	}
 	if !strings.Contains(rejoinStart.OutcomeReason, "node-a") {
@@ -416,7 +416,7 @@ func TestNightBedNodesNotPlaying_NamesTheAbsentNodeAndClearsWhenItIsBack(t *test
 	if len(got) != 1 || got[0].NodeID != "node-b" {
 		t.Fatalf("nodesNotPlaying = %+v, want exactly node-b", got)
 	}
-	if !strings.Contains(got[0].Reason, "lost the music") {
+	if !strings.Contains(got[0].Reason, "lost the background audio") {
 		t.Fatalf("node-b reason = %q, want it to state that the speaker is no longer holding the background music", got[0].Reason)
 	}
 

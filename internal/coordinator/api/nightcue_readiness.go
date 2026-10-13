@@ -29,7 +29,7 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 	action, _, err := nightResolveShowAction(ctx, h.deps.Config, first.Action)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
-			reason: fmt.Sprintf("ShowMesh could not read the action for cue %s. Run readiness again.", first.Name)}
+			reason: fmt.Sprintf("The coordinator could not read the action for cue %s. Run readiness again.", first.Name)}
 	}
 	if !nightCueAllowedAsFirstOutwardCue(action) {
 		reason := fmt.Sprintf("Cue %s runs first when the show starts, and its action does not say if it is safe to repeat. Set that on the action.", first.Name)

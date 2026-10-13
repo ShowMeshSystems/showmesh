@@ -61,6 +61,9 @@ func (h *handlers) writeNightTransitionGain(ctx context.Context, target config.S
 type nightGainResult struct {
 	note   string
 	failed bool
+	// What the write reported. Logged, never shown.
+	applied                  bool
+	ceiling, effectiveOutput int
 }
 
 // nightApplyLightingFade performs fade's gain write for one cue and
@@ -107,7 +110,10 @@ func (h *handlers) nightApplyLightingFade(ctx context.Context, cueName string, t
 	}
 	h.logDebug("night loop: lighting fade written", "cue", cueName, "applied", outcome.Applied, "ceiling", outcome.Ceiling, "effectiveOutput", outcome.EffectiveOutput)
 	// Recorded on a repeat too, so a resumed transition shows it acted.
-	return nightGainResult{note: fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds)}
+	return nightGainResult{
+		note:    fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds),
+		applied: outcome.Applied, ceiling: int(outcome.Ceiling), effectiveOutput: int(outcome.EffectiveOutput),
+	}
 }
 
 // nightCueReasonWith appends a gain note to a dispatch's own reason,
@@ -136,4 +142,18 @@ func nightCueOutcomeWithGainFailure(outcome string) string {
 	default:
 		return outcome
 	}
+}
+
+// nightCueOutcomeWithGain is a resolved cue's outcome and stored reason once
+// its fade is counted. The cue's own failure comes first; the fade's comes
+// first only when the fade is what failed the cue.
+func nightCueOutcomeWithGain(outcome, reason string, gain nightGainResult) (string, string) {
+	if !gain.failed {
+		return outcome, nightCueReasonWith(reason, gain.note)
+	}
+	withGain := nightCueOutcomeWithGainFailure(outcome)
+	if withGain == outcome {
+		return outcome, nightCueReasonWith(reason, gain.note)
+	}
+	return withGain, nightCueReasonWith(gain.note, reason)
 }
