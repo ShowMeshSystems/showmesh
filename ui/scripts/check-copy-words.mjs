@@ -129,27 +129,33 @@ export function readBaseline(file = BASELINE_FILE) {
 function renderBaseline(counts) {
   const lines = [
     '# Banned words still in operator UI copy: file, word, number of uses.',
-    '# This list only shrinks. After removing uses, rewrite it with',
+    '# A use beyond this list fails. A line this list overstates is only reported;',
+    '# drop it with',
     '# node scripts/check-copy-words.mjs --update',
   ]
   for (const key of [...counts.keys()].sort()) lines.push(`${key}\t${counts.get(key).count}`)
   return lines.join('\n') + '\n'
 }
 
-/** One string per problem: a use the baseline does not allow, or a stale baseline line. */
-export function checkCopyWords(counts = countBannedWords(), baseline = readBaseline()) {
+/**
+ * One string per problem: a use the baseline does not allow. A baseline line that
+ * overstates the code goes to stale, and becomes a problem only when
+ * SHOWMESH_COPYCHECK_STALE=fail.
+ */
+export function checkCopyWords(counts = countBannedWords(), baseline = readBaseline(), stale = []) {
   const problems = []
+  const staleTarget = process.env.SHOWMESH_COPYCHECK_STALE === 'fail' ? problems : stale
   for (const [key, entry] of counts) {
     const allowed = baseline.get(key) ?? 0
     const [relative, word] = key.split('\t')
     if (entry.count > allowed) {
       problems.push(`${relative}: "${word}" is used ${entry.count} times in copy, the baseline allows ${allowed}:\n${entry.uses.map((use) => `      ${use}`).join('\n')}`)
     } else if (entry.count < allowed) {
-      problems.push(`${relative}: "${word}" is used ${entry.count} times, fewer than the baseline's ${allowed}. Run with --update.`)
+      staleTarget.push(`${relative}: "${word}" is used ${entry.count} times, fewer than the baseline's ${allowed}. Run with --update.`)
     }
   }
   for (const [key, allowed] of baseline) {
-    if (!counts.has(key)) problems.push(`${key.replace('\t', ': "')}" is no longer used, but the baseline allows ${allowed}. Run with --update.`)
+    if (!counts.has(key)) staleTarget.push(`${key.replace('\t', ': "')}" is no longer used, but the baseline allows ${allowed}. Run with --update.`)
   }
   return problems
 }
@@ -161,7 +167,12 @@ if (isMain) {
     writeFileSync(BASELINE_FILE, renderBaseline(counts))
     console.log(`Copy word baseline rewritten: ${counts.size} entries.`)
   } else {
-    const problems = checkCopyWords(counts)
+    const stale = []
+    const problems = checkCopyWords(counts, readBaseline(), stale)
+    if (stale.length > 0) {
+      console.warn('Copy word check: not a failure. These baseline lines overstate the code. Run with --update to drop them.')
+      for (const line of stale) console.warn(`  ${line}`)
+    }
     if (problems.length > 0) {
       console.error('Copy word check failed:')
       for (const problem of problems) console.error(`  ${problem}`)

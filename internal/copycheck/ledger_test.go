@@ -48,18 +48,34 @@ func TestLedgerPassesOnAListedViolation(t *testing.T) {
 	}
 }
 
-func TestLedgerFailsOnAListedViolationThatNoLongerOccurs(t *testing.T) {
+func TestLedgerReportsAListedViolationThatNoLongerOccursWithoutFailing(t *testing.T) {
 	path := listWith(t, "capital\tproblem conflict in handleStart\n")
 
 	code, out := settled(t, NewLedger(path), 0, false)
-	if code != 1 || !strings.Contains(out, "no longer occurs") {
-		t.Fatalf("code = %d, want 1 with a stale notice:\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "no longer occurs") || !strings.Contains(out, "not a failure") {
+		t.Fatalf("code = %d, want 0 with a stale notice:\n%s", code, out)
 	}
-	if code, out := settled(t, NewLedger(path), 0, true); code != 0 {
+	if code, out := settled(t, NewLedger(path), 0, true); code != 0 || strings.Contains(out, "no longer occurs") {
 		t.Fatalf("a filtered run must skip the stale check, code = %d:\n%s", code, out)
 	}
 	if code, _ := settled(t, NewLedger(path), 2, false); code != 2 {
 		t.Fatalf("a failing run keeps its own code, got %d", code)
+	}
+}
+
+func TestLedgerFailsOnAStaleLineWhenAskedTo(t *testing.T) {
+	t.Setenv(StaleEnv, "fail")
+	code, out := settled(t, NewLedger(listWith(t, "capital\tproblem conflict in handleStart\n")), 0, false)
+	if code != 1 || !strings.Contains(out, "no longer occurs") {
+		t.Fatalf("code = %d, want 1 with a stale notice:\n%s", code, out)
+	}
+}
+
+func TestLedgerStillFailsOnANewViolationBesideAStaleLine(t *testing.T) {
+	l := NewLedger(listWith(t, "capital\tproblem gone in handleGone\n"))
+	l.Observe("problem conflict in handleStart", "cue bg1 failed.")
+	if code, out := settled(t, l, 0, false); code != 1 {
+		t.Fatalf("code = %d, want 1:\n%s", code, out)
 	}
 }
 

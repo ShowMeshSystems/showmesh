@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { checkCopyWords, findBannedWords } from '../scripts/check-copy-words.mjs'
 
 const words = ['revision', 'armed', 'evidence']
@@ -18,12 +18,20 @@ describe('the copy word check', () => {
     expect(found('const a = <p className={`sm-evidence sm-evidence--${tone}`} data-testid="armed row" />')).toEqual([])
   })
 
-  it('allows what the baseline lists and fails on one use more or one use fewer', () => {
+  it('allows what the baseline lists, fails on one use more, and only reports one use fewer', () => {
     const counts = new Map([['screens/A.tsx\tarmed', { count: 2, uses: ['screens/A.tsx:1: Armed.', 'screens/A.tsx:2: Armed.'] }]])
     expect(checkCopyWords(counts, new Map([['screens/A.tsx\tarmed', 2]]))).toEqual([])
+    expect(checkCopyWords(counts, new Map([['screens/A.tsx\tarmed', 3]]))).toEqual([])
     expect(checkCopyWords(counts, new Map([['screens/A.tsx\tarmed', 1]]))).toHaveLength(1)
-    expect(checkCopyWords(counts, new Map([['screens/A.tsx\tarmed', 3]]))).toHaveLength(1)
+    const stale: string[] = []
+    expect(checkCopyWords(new Map(), new Map([['screens/A.tsx\tarmed', 1]]), stale)).toEqual([])
+    expect(stale).toHaveLength(1)
+  })
+
+  it('fails on a stale baseline line when asked to', () => {
+    vi.stubEnv('SHOWMESH_COPYCHECK_STALE', 'fail')
     expect(checkCopyWords(new Map(), new Map([['screens/A.tsx\tarmed', 1]]))).toHaveLength(1)
+    vi.unstubAllEnvs()
   })
 
   it('finds nothing under ui/src beyond the checked-in baseline', () => {

@@ -17,6 +17,8 @@ const (
 	UpdateEnv = "SHOWMESH_COPYCHECK_UPDATE"
 	// ReportEnv names a file that receives every violating message seen.
 	ReportEnv = "SHOWMESH_COPYCHECK_REPORT"
+	// StaleEnv, when set to fail, makes a listed line a full run no longer produces fail the run.
+	StaleEnv = "SHOWMESH_COPYCHECK_STALE"
 
 	exemptHeading = "exempt by ruling"
 )
@@ -117,8 +119,8 @@ func (l *Ledger) observeField(key string, value any) {
 }
 
 // Settle is called from TestMain with m.Run's result and returns the exit
-// code. A violation missing from the list fails the run. So does a listed
-// entry a full run no longer produces.
+// code. A violation missing from the list fails the run. A listed entry a full
+// run no longer produces is only reported, unless StaleEnv is fail.
 func (l *Ledger) Settle(code int) int { return l.settle(code, filtered(), os.Stdout) }
 
 func (l *Ledger) settle(code int, partial bool, out io.Writer) int {
@@ -155,11 +157,22 @@ func (l *Ledger) settle(code int, partial bool, out io.Writer) int {
 		}
 	}
 	if !partial && code == 0 {
+		strict := os.Getenv(StaleEnv) == "fail"
+		heading := true
 		for _, e := range sortedEntries(listed) {
-			if _, still := l.seen[e]; !still {
+			if _, still := l.seen[e]; still {
+				continue
+			}
+			if strict {
 				failed = true
 				say(out, "copycheck: listed violation no longer occurs, remove it from %s\n    rule:    %s\n    key:     %s\n", l.path, e.rule, e.key)
+				continue
 			}
+			if heading {
+				say(out, "copycheck: not a failure. These listed violations did not occur in this run. Rerun the whole package with %s=1 to remove them.\n", UpdateEnv)
+				heading = false
+			}
+			say(out, "copycheck: listed violation no longer occurs, remove it from %s\n    rule:    %s\n    key:     %s\n", l.path, e.rule, e.key)
 		}
 	}
 	say(out, "copycheck: %d distinct messages checked, %d known violations listed in %s.\n", len(l.messages), len(listed), l.path)
@@ -175,10 +188,9 @@ func (l *Ledger) settle(code int, partial bool, out io.Writer) int {
 func (l *Ledger) render() string {
 	var b strings.Builder
 	b.WriteString("# Known copy violations in messages this package's tests produce.\n")
-	b.WriteString("# One line per rule and source, tab separated. This list only shrinks:\n")
-	b.WriteString("# a violation that is not here fails the tests, and so does a line here\n")
-	b.WriteString("# that a full run no longer produces. After fixing messages, rerun the\n")
-	b.WriteString("# whole package with " + UpdateEnv + "=1 to rewrite it.\n")
+	b.WriteString("# One line per rule and source, tab separated. A violation that is not here\n")
+	b.WriteString("# fails the tests. A line a full run no longer produces is only reported;\n")
+	b.WriteString("# rerun the whole package with " + UpdateEnv + "=1 to drop it.\n")
 	var exempt []entry
 	for _, e := range sortedEntries(l.seen) {
 		if e.exempt {

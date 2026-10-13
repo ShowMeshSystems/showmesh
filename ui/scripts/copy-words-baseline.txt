@@ -1,5 +1,6 @@
 # Banned words still in operator UI copy: file, word, number of uses.
-# This list only shrinks. After removing uses, rewrite it with
+# A use beyond this list fails. A line this list overstates is only reported;
+# drop it with
 # node scripts/check-copy-words.mjs --update
 api/uuid.ts	idempotency	1
 app/EmergencyStopChrome.tsx	armed	1
