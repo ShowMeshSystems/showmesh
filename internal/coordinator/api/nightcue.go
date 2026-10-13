@@ -162,7 +162,7 @@ func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, is
 		return nightCueDispatchResult{
 			dispatched: false, resolved: true,
 			outcome: nightCueOutcomeFailed,
-			reason:  fmt.Sprintf("unrecognized show.action integration %q", target.Integration),
+			reason:  "This cue's action uses an integration this coordinator does not know. Update the coordinator.",
 		}
 	}
 }
@@ -180,7 +180,8 @@ func (h *handlers) nightDispatchCueFPP(ctx context.Context, now time.Time, issue
 		// A plain error always precedes dispatchFPPCommand's own
 		// command-row insert, so nothing reached FPP: resolved failed,
 		// never left dispatched for a later tick to find and misread.
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
+		h.logWarn("night loop: a cue was not sent", "error", err)
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
 	}
 	if problem != nil {
 		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeRefused, reason: problem.Detail}
@@ -222,9 +223,6 @@ func (h *handlers) nightDispatchCueMQTT(ctx context.Context, now time.Time, targ
 		outcome = nightCueOutcomeFailed
 	}
 	reason := res.OutcomeReason
-	if res.OutcomeState != "" {
-		reason = res.OutcomeState + ": " + reason
-	}
 	dispatchedAt := now
 	var at *time.Time
 	if res.PublishAttempted {
@@ -241,7 +239,8 @@ func (h *handlers) nightDispatchCueResolume(ctx context.Context, now time.Time, 
 	if err != nil {
 		// Dispatch's own error contract is a dependency failure that
 		// provably sent nothing: resolved failed, never left dispatched.
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
+		h.logWarn("night loop: a cue was not sent", "error", err)
+		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
 	}
 	var outcome string
 	switch res.Outcome {
@@ -334,7 +333,8 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 			// own markUndispatched path): resolved failed is correct here,
 			// mirroring nightDispatchCueFPP's identical treatment for an
 			// error that provably sent nothing.
-			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue was not sent: " + err.Error()}
+			h.logWarn("night loop: a cue was not sent", "error", err)
+			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: nightCueNotSentReason}
 		}
 		// Any OTHER error from executeAudioSessionDispatch arrives AFTER
 		// its own markDispatched call (audiodispatch.go's own await-result

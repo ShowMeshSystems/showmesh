@@ -54,7 +54,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 
 	instanceID := nightShutdownStopInstance(payload)
 	if instanceID == "" {
-		h.nightDegradeSession(ctx, now, rec, "fading out: this night.session revision names no FPP instance to stop; end-session and prepare-site again to recover")
+		h.nightDegradeSession(ctx, now, rec, "This night names no FPP to stop, so it cannot fade out. "+nightRecoverAction)
 		return
 	}
 
@@ -81,8 +81,8 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	}
 	if !rec.Degraded {
 		h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-			"Fading out: FPP %q was told to stop but was not seen idle within %s. The show may still be running.",
-			anchor.FPPInstanceID, nightShutdownStopConfirmDeadline))
+			"FPP %s was told to stop but was not seen idle, so the show may still be running. Stop it by hand.",
+			anchor.FPPInstanceID))
 	}
 	// Degrading records what happened; it does not end the attempt. The
 	// display is still running, so the stop is re-armed for another try
@@ -91,7 +91,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	next.DispatchedAt = time.Time{}
 	next.AttemptedAt = now
 	next.Attempts = anchor.Attempts + 1
-	next.Source = "the previous stop was not confirmed; retrying"
+	next.Source = "FPP did not confirm the stop. Trying again."
 	h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
 }
 
@@ -167,16 +167,18 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 	switch {
 	case err != nil:
 		h.logWarn("night loop: shutdown stop dispatch failed", "sessionId", rec.ID, "instanceId", instanceID, "error", err)
-		notSent("the stop was not sent: " + err.Error())
+		notSent("The stop was not sent to FPP. Trying again.")
 		return
 	case problem != nil:
-		notSent("the stop was refused before it reached FPP: " + problem.Detail)
+		h.logWarn("night loop: shutdown stop was held back", "sessionId", rec.ID, "instanceId", instanceID, "reason", problem.Detail)
+		notSent(fmt.Sprintf("FPP %s could not be told to stop yet. Trying again.", instanceID))
 		return
 	case outcome.DispatchFailed:
 		// FPP did not accept the request: the host is unreachable or
 		// answered non-2xx. Outcome alone cannot say that, which is what
 		// DispatchFailed exists for.
-		notSent("the stop did not reach FPP: " + outcome.OutcomeReason)
+		h.logWarn("night loop: shutdown stop did not reach FPP", "sessionId", rec.ID, "instanceId", instanceID, "reason", outcome.OutcomeReason)
+		notSent("The stop did not reach FPP. Trying again.")
 		return
 	}
 

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -163,10 +162,8 @@ func TestNightAdvanceRestingIntershow_EarlyIdleDegradesRatherThanWaitingForever(
 	if !got.Degraded {
 		t.Fatal("resting playback stopped early and the session held silently; nothing would ever re-arm it")
 	}
-	// The recovery action now lives once in nightDegradedGuidance's own
-	// template, not repeated inside the stored reason itself.
-	guidance := fmt.Sprintf(nightDegradedGuidance, got.DegradedReason)
-	if !strings.Contains(guidance, "End Session") {
+	guidance := nightDegradedDetail(got.DegradedReason)
+	if !strings.Contains(guidance, "End session") {
 		t.Fatalf("guidance = %q, want it to name the recovery action", guidance)
 	}
 	if b, _ := decodeNightBoundary(got.BoundaryJSON); b.State != nightBoundaryStateInvalid {

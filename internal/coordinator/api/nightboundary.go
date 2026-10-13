@@ -204,15 +204,15 @@ func decodeNightBoundary(raw string) (nightBoundary, bool) {
 // function trusts DurationMS is already that resolved, checked value).
 func deriveNightBoundary(a nightContentAnchor) nightBoundary {
 	if a.ObservedAt.IsZero() || a.DispatchedAt.IsZero() {
-		return nightBoundary{State: nightBoundaryStateUnknown, Reason: "no playback has been observed since this was sent"}
+		return nightBoundary{State: nightBoundaryStateUnknown, Reason: "FPP has not reported playing since it was told to start."}
 	}
 	if a.ObservedAt.Before(a.DispatchedAt) {
 		// Rule 2: evidence that predates dispatch can never anchor a
 		// boundary, no matter how plausible it looks.
-		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "the only playback reading was collected before this playback was sent"}
+		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "The only report from FPP is older than the start command. Waiting for a new one."}
 	}
 	if a.DurationMS <= 0 {
-		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "the resting FSEQ's duration is not usable (readiness must have already rejected it)"}
+		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "The resting sequence file has no usable length. Run readiness to see why."}
 	}
 
 	// Millisecond-precision position is preferred when the anchoring
@@ -222,15 +222,15 @@ func deriveNightBoundary(a nightContentAnchor) nightBoundary {
 	var reason string
 	if a.PositionMSKnown {
 		positionMS = a.PositionMS
-		reason = "derived from millisecond-precision position (fpp.position.elapsed.ms)"
+		reason = "The next show start is timed from the position FPP reported."
 	} else {
 		positionMS = a.PositionSeconds * 1000
-		reason = "derived from whole-second position; fpp.position.elapsed.ms was not available at the anchoring observation"
+		reason = "The next show start is timed from the position FPP reported, to the nearest second."
 	}
 
 	remainingMS := a.DurationMS - positionMS
 	if remainingMS < 0 {
-		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "observed position is already past the asset's own duration"}
+		return nightBoundary{State: nightBoundaryStateInvalid, Reason: "FPP reports a position past the end of the resting sequence. Check the resting sequence file."}
 	}
 	expected := a.ObservedAt.Add(time.Duration(remainingMS) * time.Millisecond)
 	return nightBoundary{State: nightBoundaryStateArmed, Reason: reason, ExpectedAt: &expected}
@@ -411,30 +411,30 @@ func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObser
 		// F0's own "Needs real hardware" list: pause was not exercised,
 		// and the deadline arithmetic (rule 3) cannot be assumed to still
 		// hold while paused. Invalidate rather than guess.
-		return true, "playback is paused, so the expected timing no longer applies"
+		return true, "FPP is paused, so the next show start is no longer known."
 	case fppStatusValueUnknown:
-		return true, "FPP status is unknown, so the expected timing can't be confirmed"
+		return true, "FPP is not reporting its status, so the next show start is not known."
 	}
 	if obs.Item != "" && anchor.Item != "" && obs.Item != anchor.Item {
-		return true, "a different item is now playing than expected"
+		return true, "FPP is playing a different item than the night started."
 	}
 	if obs.Playlist != "" && anchor.Playlist != "" && obs.Playlist != anchor.Playlist {
-		return true, "a different playlist is now playing than expected"
+		return true, "FPP is playing a different playlist than the night started."
 	}
 	if anchor.Purpose == nightAnchorPurposeRestingOneShot && obs.RepeatCurrent && obs.RepeatMode {
-		return true, "FPP reports repeat mode active for a one-shot resting item"
+		return true, "FPP has repeat turned on for the resting sequence, which should play once."
 	}
 	// Prefer millisecond-precision position when both sides have it;
 	// whole-second position is the fallback, matching deriveNightBoundary's
 	// own preference.
 	if anchor.PositionMSKnown && obs.PositionMSCurrent {
 		if obs.PositionMS < anchor.PositionMS {
-			return true, "observed position moved backward; the item appears to have restarted or looped"
+			return true, "The resting sequence restarted or looped on FPP."
 		}
 	} else if obs.PositionCurrent && obs.PositionSeconds < anchor.PositionSeconds {
 		// F0 §5: for a one-shot item, decreasing elapsed time between two
 		// polls is the only signal a loop restarted — never expected here.
-		return true, "observed position moved backward; the item appears to have restarted or looped"
+		return true, "The resting sequence restarted or looped on FPP."
 	}
 	return false, ""
 }
@@ -458,7 +458,7 @@ func nightStoppedPlaybackContradicts(anchor nightContentAnchor, now time.Time) (
 		// nightAdvanceLive owns, never a contradicted boundary.
 		return false, ""
 	case nightAnchorPurposeRestingRepeat:
-		return true, "FPP is idle, but the repeating resting playlist this session started should still be running"
+		return true, "FPP is idle, but the end of night playlist should still be playing."
 	}
 
 	b := deriveNightBoundary(anchor)
@@ -466,9 +466,8 @@ func nightStoppedPlaybackContradicts(anchor nightContentAnchor, now time.Time) (
 		return false, ""
 	}
 	if now.Before(b.ExpectedAt.Add(-nightBoundaryCompletionTolerance)) {
-		return true, fmt.Sprintf(
-			"FPP went idle %s before playback was expected to end, so it appears to have stopped early",
-			b.ExpectedAt.Sub(now).Round(time.Second))
+		return true, fmt.Sprintf("FPP stopped %s before the resting sequence was due to end.",
+			nightSecondsWords(b.ExpectedAt.Sub(now).Round(time.Second).Milliseconds()))
 	}
 	return false, ""
 }
@@ -502,22 +501,22 @@ func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	if hasAnchor && anchor.ObservedAt.IsZero() {
 		reason := anchor.Source
 		if reason == "" {
-			reason = "playback was sent but is not yet confirmed"
+			reason = "FPP was told to play and has not confirmed it yet."
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: reason}
 	}
 	if !hasAnchor && !hasBoundary {
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "no show transition is set for the current state"}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightNoShowStartReason}
 	}
 	switch {
 	case hasBoundary && boundary.State == nightBoundaryStateArmed && boundary.ExpectedAt != nil:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: nightBoundaryReasonOrFallback(boundary, "show transition set for "+boundary.ExpectedAt.Format(time.RFC3339))}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: nightBoundaryReasonOrFallback(boundary, nightShowStartSetReason)}
 	case hasBoundary && boundary.State == nightBoundaryStateInvalid:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "show transition cancelled: " + nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "The next show start was cancelled.")}
 	case hasBoundary:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightBoundaryReasonOrFallback(boundary, nightShowStartUnknownReason)}
 	default:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: "playback confirmed; this purpose has no show transition"}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: "FPP confirmed it is playing. No show start is scheduled from here."}
 	}
 }
 
@@ -526,28 +525,28 @@ func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 // with no boundary at all reports "none" here, never "armed".
 func mapNightBoundary(rec store.NightSessionRecord) v1.NightBoundary {
 	if rec.BoundaryJSON == "" {
-		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: "no show transition is set for the current state"}
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: nightNoShowStartReason}
 	}
 	boundary, ok := decodeNightBoundary(rec.BoundaryJSON)
 	if !ok {
-		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: "the saved show transition could not be read"}
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: "The saved show start time could not be read."}
 	}
 	switch boundary.State {
 	case nightBoundaryStateArmed:
 		if boundary.ExpectedAt == nil {
-			return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+			return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, nightShowStartUnknownReason)}
 		}
 		return v1.NightBoundary{
 			State:      v1.NightBoundaryArmed,
 			ExpectedAt: formatTimePtr(boundary.ExpectedAt),
-			Reason:     nightBoundaryReasonOrFallback(boundary, "show transition set for "+boundary.ExpectedAt.Format(time.RFC3339)),
+			Reason:     nightBoundaryReasonOrFallback(boundary, nightShowStartSetReason),
 		}
 	case nightBoundaryStateInvalid:
-		return v1.NightBoundary{State: v1.NightBoundaryInvalid, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		return v1.NightBoundary{State: v1.NightBoundaryInvalid, Reason: nightBoundaryReasonOrFallback(boundary, nightShowStartUnknownReason)}
 	case nightBoundaryStateNone:
-		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: nightBoundaryReasonOrFallback(boundary, "this purpose has no show transition")}
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: nightBoundaryReasonOrFallback(boundary, nightNoShowStartReason)}
 	default:
-		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, nightShowStartUnknownReason)}
 	}
 }
 

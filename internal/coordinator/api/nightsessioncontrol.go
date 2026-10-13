@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,15 +91,14 @@ const (
 	nightOutcomeIdempotentNoOp = "idempotent_no_op"
 )
 
-// nightDegradedGuidance is what a degraded session tells an operator, and
-// it names every command that still works: refusing one of those would be
-// a successful conversation that fires no fallback, which is worse than
-// this coordinator being switched off. A configured "block" interlock can
-// still separately refuse fade-out-night or power-down-presentation
-// (Track F seam F6) even though the session's own Degraded flag never
-// does; end-session is untouched by any interlock and is always the
-// unconditional way to reach stopped.
-const nightDegradedGuidance = "Night session degraded: %s. Run End Session, then Prepare Site to recover."
+// nightDegradedDetail is what a degraded session tells an operator. Every
+// degraded reason is written as a whole message, so it is passed through.
+func nightDegradedDetail(reason string) string {
+	if reason == "" {
+		return "The night session stopped advancing. " + nightRecoverAction
+	}
+	return reason
+}
 
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
 // "roll back, no error occurred - a *v1.Problem describes the refusal",
@@ -203,7 +201,7 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 	rec, err := h.deps.NightSessions.GetNightSession(r.Context(), id)
 	if err != nil {
 		if err == store.ErrNightSessionNotFound {
-			writeProblem(w, h.logger, now, resourceNotFoundProblem(fmt.Sprintf("no night session with id %q", id)))
+			writeProblem(w, h.logger, now, resourceNotFoundProblem("That night session does not exist. Check the id."))
 			return
 		}
 		h.writeInternalError(w, now, "get night session", err)
@@ -288,12 +286,12 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	}
 	for _, o := range body.InterlockOverrides {
 		if o.Rule == "" || o.Reason == "" {
-			p := invalidParameterProblem("every interlockOverrides entry requires a non-empty \"rule\" and \"reason\"")
+			p := invalidParameterProblem("Every override needs a safety check name and a reason. Fill in both.")
 			return "", nil, false, false, &p
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
-		p := invalidParameterProblem(fmt.Sprintf("%q takes no interlockOverrides. Leave that field out.", cmd))
+		p := invalidParameterProblem(fmt.Sprintf("%s takes no override. Send it without one.", inWords(cmd)))
 		return "", nil, false, false, &p
 	}
 	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, body.StopFPPPlayback, nil
@@ -308,7 +306,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
-		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("Unknown night command %q. Check its spelling against the night command list.", cmd)))
+		writeProblem(w, h.logger, now, invalidParameterProblem("That is not a night command. Check its spelling against the night command list."))
 		return
 	}
 	idempotencyKey, interlockOverrides, skipEnterShowLead, stopFPPPlayback, problem := decodeNightCommandBody(r, cmd)
@@ -328,7 +326,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 			h.writeInternalError(w, now, "check weather delay state", err)
 			return
 		} else if wdRec.Active && wdRec.Kind == weatherdelay.KindCancelNight {
-			h.appendWeatherDelayChangedEvent(ctx, now, "Night start refused: tonight's show was cancelled for weather. Clear the cancellation to start a show.")
+			h.appendWeatherDelayChangedEvent(ctx, now, "Start night was refused because tonight's show was cancelled for weather. Clear the cancellation to start.")
 			writeProblem(w, h.logger, now, weatherDelayActiveProblem("Tonight's show was cancelled for weather. Clear the cancellation to start a show."))
 			return
 		} else if wdRec.Active {
@@ -471,7 +469,7 @@ func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, c
 // inside its own transaction once any needed live pass has completed.
 func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
-		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
+		p := nightAmbiguousProblem(nightDegradedDetail(current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch cmd {
@@ -719,7 +717,7 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 	}
 	if current != nil && current.State != nightStateStopped {
 		if current.State == nightStateFadingOut {
-			p := nightStateRejectedProblem("prepare-site is rejected during finalization or fade-out")
+			p := nightStateRejectedProblem("The night is ending, so the site cannot be prepared yet. Run End session first.")
 			return nightCommandOutcome{}, &p, nil
 		}
 		// Duplicate within the same preparation or active session:
@@ -735,7 +733,7 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 		return nightCommandOutcome{}, problem, nil
 	}
 	if gateObjectID != "" && (objectID != gateObjectID || revision != gateRevision) {
-		p := nightNotReadyProblem("The night settings changed while Prepare Site was running. Run Prepare Site again.")
+		p := nightNotReadyProblem("The night settings changed while Prepare site was running. Run Prepare site again.")
 		return nightCommandOutcome{}, &p, nil
 	}
 
@@ -785,7 +783,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		gate := h.nightLiveEvaluatePhaseGate(dispatchCtx, payload, config.NightInterlockPhasePrepareSite, overrides, callerHasOverrideScope)
 		cancel()
 		if len(gate.Withheld) > 0 {
-			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhasePrepareSite, gate.Withheld).detail())
+			p := nightInterlockRefusal(config.NightInterlockPhasePrepareSite, gate.Withheld)
 			return nightCommandOutcome{}, &p, nil
 		}
 		gateObjectID, gateRevision = objectID, revision
@@ -797,7 +795,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 
 	out, problem, err := h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
-			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
+			p := nightAmbiguousProblem(nightDegradedDetail(cur.DegradedReason))
 			return nightCommandOutcome{}, &p, nil
 		}
 		out, problem, err := h.nightPrepareSiteTx(ctx, tx, now, cur, idempotencyKey, gateObjectID, gateRevision)
@@ -974,13 +972,13 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 	activeObj, aerr := h.deps.Config.GetConfigObject(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID)
 	if aerr != nil {
 		if errors.Is(aerr, store.ErrConfigObjectNotFound) {
-			p := nightNotReadyProblem("No night session is selected. Choose the active night session, then run Prepare Site.")
+			p := nightNotReadyProblem(nightNoDefinitionReason)
 			return "", 0, config.NightSessionPayload{}, &p, nil
 		}
 		return "", 0, config.NightSessionPayload{}, nil, aerr
 	}
 	if activeObj.CurrentRevision == 0 {
-		p := nightNotReadyProblem("No night session is selected. Choose the active night session, then run Prepare Site.")
+		p := nightNotReadyProblem(nightNoDefinitionReason)
 		return "", 0, config.NightSessionPayload{}, &p, nil
 	}
 	activeRev, aerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID, activeObj.CurrentRevision)
@@ -992,7 +990,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 		return "", 0, config.NightSessionPayload{}, nil, fmt.Errorf("api: decode night.session.active payload: %w", err)
 	}
 	if activePayload.Session == "" {
-		p := nightNotReadyProblem("The active night session is not set. Choose one, then run Prepare Site.")
+		p := nightNotReadyProblem(nightNoDefinitionReason)
 		return "", 0, config.NightSessionPayload{}, &p, nil
 	}
 
@@ -1001,7 +999,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, config.NightSessionPayload{}, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("The active night definition %s no longer exists. Activate another, then run Prepare site.", activePayload.Session))
 		return "", 0, config.NightSessionPayload{}, &p, nil
 	}
 	rev, rerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, activePayload.Session, obj.CurrentRevision)
@@ -1021,7 +1019,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 // inside nightRunGated's own transaction.
 func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
-		p := nightStateRejectedProblem("Prepare Site has not run since the last pre-show. Run Prepare Site first.")
+		p := nightStateRejectedProblem("Prepare site has not run since the last preshow. Run Prepare site first.")
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
@@ -1041,7 +1039,7 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 	case nightStatePreshow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting, nightStateRestingIntershow, nightStateEndOfNightResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	default: // fading-out, stopped
-		p := nightStateRejectedProblem("Prepare Site has not run since the last pre-show. Run Prepare Site first.")
+		p := nightStateRejectedProblem("Prepare site has not run since the last preshow. Run Prepare site first.")
 		return nightCommandOutcome{}, &p, nil
 	}
 }
@@ -1059,7 +1057,7 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 // immediately rather than the usual lead later.
 func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
-		p := nightNotReadyProblem("The night is not prepared. Run Prepare Site, Readiness and Pre-show first.")
+		p := nightNotReadyProblem("The night is not prepared. Run Prepare site, Run readiness and Start preshow first.")
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
@@ -1067,13 +1065,13 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		readiness, err := tx.GetLatestNightReadiness(ctx, current.ID)
 		if err != nil {
 			if err == store.ErrNightReadinessNotFound {
-				p := nightNotReadyProblem("start-night: no readiness result recorded yet; run run-readiness first")
+				p := nightNotReadyProblem("Readiness has not run for this night. Run readiness, then Start night.")
 				return nightCommandOutcome{}, &p, nil
 			}
 			return nightCommandOutcome{}, nil, err
 		}
 		if readiness.EpochID != current.ID {
-			p := nightNotReadyProblem("Readiness is stale. Run Run Readiness again, then Start Night.")
+			p := nightNotReadyProblem("Readiness ran before the site was last prepared. Run readiness again, then Start night.")
 			return nightCommandOutcome{}, &p, nil
 		}
 		// Wall-clock, not monotonic: an NTP step backwards can trip the
@@ -1081,7 +1079,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		// direction and is deliberately left as-is.
 		age := now.Sub(readiness.CompletedAt)
 		if age < 0 || age > h.nightReadinessMaxAge {
-			p := nightNotReadyProblem(fmt.Sprintf("The readiness check is %s old, over the %s limit. Run Readiness again.", age.Round(time.Second), h.nightReadinessMaxAge))
+			p := nightNotReadyProblem("The readiness result is too old to start on. Run readiness again, then Start night.")
 			return nightCommandOutcome{}, &p, nil
 		}
 
@@ -1093,7 +1091,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		_ = json.Unmarshal([]byte(readiness.ChecksJSON), &storedChecks)
 		gate := nightEvaluatePhaseInterlockGate(payload, config.NightInterlockPhaseStartNight, nightDecodeWireChecks(storedChecks), age, interlockOverrides, callerHasOverrideScope)
 		if len(gate.Withheld) > 0 {
-			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhaseStartNight, gate.Withheld).detail())
+			p := nightInterlockRefusal(config.NightInterlockPhaseStartNight, gate.Withheld)
 			return nightCommandOutcome{}, &p, nil
 		}
 
@@ -1126,7 +1124,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		// "resynchronized after a clock discontinuity" on a healthy
 		// clock.
 		lastTick := now
-		reason := fmt.Sprintf("Show launch expected at %s.", boundaryE.Format(time.RFC3339))
+		reason := "The show starts at this time."
 		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: reason})
 		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
 		if len(gate.Overridden) > 0 {
@@ -1136,13 +1134,13 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 	case nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	case nightStateEndOfNightResting:
-		p := nightStateRejectedProblem("The night is ending, so no new show starts. Run Prepare Site for the next night.")
+		p := nightStateRejectedProblem("The night is ending, so no new show starts. Run Prepare site for the next night.")
 		return nightCommandOutcome{}, &p, nil
 	case nightStateFadingOut, nightStateStopped:
-		p := nightStateRejectedProblem("This night has closed. Run Prepare Site, Readiness and Pre-show again.")
+		p := nightStateRejectedProblem("This night has closed. Run Prepare site, Run readiness and Start preshow again.")
 		return nightCommandOutcome{}, &p, nil
 	default: // preparing
-		p := nightNotReadyProblem("The night is not ready to start. Run Readiness, then Pre-show.")
+		p := nightNotReadyProblem("The night is not ready to start. Run readiness, then Start preshow.")
 		return nightCommandOutcome{}, &p, nil
 	}
 }
@@ -1203,7 +1201,7 @@ func (h *handlers) nightStartNightCommand(ctx context.Context, now time.Time, is
 
 	return h.nightRunGated(ctx, now, nightCommandStartNight, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
-			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
+			p := nightAmbiguousProblem(nightDegradedDetail(cur.DegradedReason))
 			return nightCommandOutcome{}, &p, nil
 		}
 		return h.nightStartNightTx(ctx, tx, now, cur, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
@@ -1212,7 +1210,7 @@ func (h *handlers) nightStartNightCommand(ctx context.Context, now time.Time, is
 
 func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
-		p := nightStateRejectedProblem("request-final-show: no active or prepared session")
+		p := nightStateRejectedProblem("No night is prepared or running, so there is no final show to request. Run Prepare site.")
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
@@ -1228,7 +1226,7 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 	case nightStateEndOfNightResting, nightStateFadingOut, nightStateStopped:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	default: // preparing
-		p := nightStateRejectedProblem("request-final-show: no active or prepared session")
+		p := nightStateRejectedProblem("No night is prepared or running, so there is no final show to request. Run Prepare site.")
 		return nightCommandOutcome{}, &p, nil
 	}
 }
@@ -1299,7 +1297,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 		rec.ContentAnchorJSON = ""
 		rec.BoundaryJSON = encodeNightBoundary(nightBoundary{
 			State:  nightBoundaryStateInvalid,
-			Reason: "the expected timing was cancelled by a shutdown request",
+			Reason: "A shutdown was requested, so the next show start was cancelled.",
 		})
 		changed = true
 	}
@@ -1357,7 +1355,7 @@ func (h *handlers) nightFadeOutNightCommand(ctx context.Context, now time.Time, 
 		gate := h.nightLiveEvaluatePhaseGate(dispatchCtx, payload, config.NightInterlockPhaseFadeOutNight, overrides, callerHasOverrideScope)
 		cancel()
 		if len(gate.Withheld) > 0 {
-			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhaseFadeOutNight, gate.Withheld).detail())
+			p := nightInterlockRefusal(config.NightInterlockPhaseFadeOutNight, gate.Withheld)
 			return nightCommandOutcome{}, &p, nil
 		}
 		if len(gate.Overridden) > 0 {
@@ -1450,7 +1448,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 		gate := h.nightLiveEvaluatePhaseGate(dispatchCtx, payload, config.NightInterlockPhasePowerDownPresentation, overrides, callerHasOverrideScope)
 		cancel()
 		if len(gate.Withheld) > 0 {
-			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhasePowerDownPresentation, gate.Withheld).detail())
+			p := nightInterlockRefusal(config.NightInterlockPhasePowerDownPresentation, gate.Withheld)
 			return nightCommandOutcome{}, &p, nil
 		}
 		if len(gate.Overridden) > 0 {
@@ -1582,7 +1580,12 @@ const (
 type nightReadinessCheck struct {
 	name   string
 	health nightCheckState
-	reason string
+	// reason is a check's one message. reasons replaces it when the check
+	// has one message for each cue or node.
+	reason  string
+	reasons []string
+	// cause is the error behind a fixed message. It is logged, never shown.
+	cause error
 }
 
 // nightRunReadinessCommand computes readiness OUTSIDE any store
@@ -1624,7 +1627,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 	// require.
 	gate := nightEvaluatePhaseInterlockGate(payload, config.NightInterlockPhaseRunReadiness, interlockChecks, 0, overrides, callerHasOverrideScope)
 	if len(gate.Withheld) > 0 {
-		p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhaseRunReadiness, gate.Withheld).detail())
+		p := nightInterlockRefusal(config.NightInterlockPhaseRunReadiness, gate.Withheld)
 		return nightCommandOutcome{}, &p, nil
 	}
 	var overrideAuditParams []map[string]any
@@ -1647,7 +1650,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 			return nightCommandOutcome{}, problem, nil
 		}
 		if curTx.ID != current.ID {
-			p := nightNotReadyProblem("Prepare Site ran again during the readiness check. Run Readiness again.")
+			p := nightNotReadyProblem("Prepare site ran again during the readiness check. Run readiness again.")
 			return nightCommandOutcome{}, &p, nil
 		}
 		rec := store.NightReadinessRecord{
@@ -1668,16 +1671,16 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 // 2), shared by the pre-read and the tx-bound re-check.
 func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1.Problem {
 	if !ok || current == nil {
-		p := nightNotReadyProblem("run-readiness: no preparation is open; run prepare-site first")
+		p := nightNotReadyProblem("The site is not prepared, so readiness cannot run. Run Prepare site first.")
 		return &p
 	}
 	if current.Degraded && current.State != nightStateStopped {
-		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
+		p := nightAmbiguousProblem(nightDegradedDetail(current.DegradedReason))
 		return &p
 	}
 	switch current.State {
 	case nightStateInactive, nightStateStopped, nightStateFadingOut:
-		p := nightNotReadyProblem("run-readiness: no preparation is open; run prepare-site first")
+		p := nightNotReadyProblem("The site is not prepared, so readiness cannot run. Run Prepare site first.")
 		return &p
 	}
 	return nil
@@ -1734,13 +1737,13 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		if restingEndpointErr == nil && restingEndpointOK {
 			checks = append(checks, nightCheckRestingPlaylistShape(ctx, restingEndpoint, p.prefix, p.playlist, p.singleItem))
 		} else {
-			checks = append(checks, nightReadinessCheck{name: p.prefix + ":playlist-shape:" + p.playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read playlist " + p.playlist + " from"})
+			checks = append(checks, nightReadinessCheck{name: p.prefix + ":playlist-shape:" + p.playlist, health: nightHealthUnknown(), reason: fmt.Sprintf(nightNoFPPForPlaylistReason, p.playlist)})
 		}
 	}
 	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.ShowPlaylist.FPPInstanceID); err == nil && ok {
 		checks = append(checks, nightCheckShowPlaylistPresent(ctx, endpoint, payload.ShowPlaylist.Playlist))
 	} else {
-		checks = append(checks, nightReadinessCheck{name: "show:playlist-present:" + payload.ShowPlaylist.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the show playlist definition from"})
+		checks = append(checks, nightReadinessCheck{name: "show:playlist-present:" + payload.ShowPlaylist.Playlist, health: nightHealthUnknown(), reason: fmt.Sprintf(nightNoFPPForPlaylistReason, payload.ShowPlaylist.Playlist)})
 	}
 	for _, p := range restingPlaylists {
 		checks = append(checks, nightCheckRestingAssetExactVariant(p.prefix, p.playlist))
@@ -1778,6 +1781,11 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, h.nightCheckAnnouncementAssets(ctx, allCues, payload))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
+	for _, c := range checks {
+		if c.cause != nil {
+			h.logWarn("night readiness: a check could not finish", "check", c.name, "error", c.cause)
+		}
+	}
 	return checks, nightOutcomeFromChecks(checks)
 }
 
@@ -1829,7 +1837,10 @@ func nightHealthSeverity(h nightCheckState) int {
 func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 	out := make([]v1.NightReadinessCheck, 0, len(checks))
 	for _, c := range checks {
-		out = append(out, v1.NightReadinessCheck{Name: c.name, Label: nightCheckLabel(c.name), State: string(c.health), Reason: c.reason})
+		out = append(out, v1.NightReadinessCheck{
+			Name: c.name, Label: nightCheckLabel(c.name), State: string(c.health),
+			StateLabel: nightCheckStateLabel(c.health), Reasons: c.messages(),
+		})
 	}
 	return out
 }
@@ -1848,10 +1859,11 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	})
 	name := "fpp:" + instanceID + ":reachable"
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "Could not read whether FPP is reachable: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
+			reason: "ShowMesh could not read whether FPP is reachable. Run readiness again."}
 	}
 	if len(obs) == 0 {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "FPP has not reported whether it is reachable. Check that the player is on."}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "FPP has not reported whether it is reachable. Check that it is on."}
 	}
 	health := observation.DeriveHealth(obs[0], now, func(v any) observation.Health {
 		if b, ok := v.(bool); ok && b {
@@ -1861,7 +1873,10 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	})
 	reason := ""
 	if health != observation.HealthHealthy {
-		reason = fmt.Sprintf("FPP is not confirmed reachable, last report is %s. Check that the player is on.", obs[0].StateAt(now))
+		reason = "FPP is not reachable. Check that it is on and on the network."
+		if obs[0].StateAt(now) != observation.StateCurrent {
+			reason = "ShowMesh has no current report from FPP. Check that it is on and on the network."
+		}
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
 }
@@ -1873,7 +1888,7 @@ func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instan
 	const name = "fpp-plugin-reports-refused"
 	views, err := h.deps.FPP.ListInstances(ctx)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "The coordinator could not read FPP instance state. Run readiness again."}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: "ShowMesh could not read its FPP list. Run readiness again."}
 	}
 	var reasons []string
 	for _, v := range views {
@@ -1883,9 +1898,9 @@ func (h *handlers) nightCheckFPPPluginReportsRefused(ctx context.Context, instan
 		reasons = append(reasons, v.PlaylistObservationRefused.Reason)
 	}
 	if len(reasons) == 0 {
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: ""}
+		return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: strings.Join(reasons, " ")}
+	return nightReadinessCheck{name: name, health: nightHealthFailed(), reasons: reasons}
 }
 
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]
@@ -1914,7 +1929,7 @@ func (h *handlers) getPinnedNightSessionPayloadTx(ctx context.Context, tx *store
 func nightDecodeWireChecks(wire []v1.NightReadinessCheck) []nightReadinessCheck {
 	out := make([]nightReadinessCheck, 0, len(wire))
 	for _, w := range wire {
-		out = append(out, nightReadinessCheck{name: w.Name, health: nightCheckState(w.State), reason: w.Reason})
+		out = append(out, nightReadinessCheck{name: w.Name, health: nightCheckState(w.State), reasons: w.Reasons})
 	}
 	return out
 }
@@ -1930,13 +1945,13 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 	activeObj, aerr := tx.GetConfigObject(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID)
 	if aerr != nil {
 		if errors.Is(aerr, store.ErrConfigObjectNotFound) {
-			p := nightNotReadyProblem("No night session is selected. Choose the active night session, then run Prepare Site.")
+			p := nightNotReadyProblem(nightNoDefinitionReason)
 			return "", 0, &p, nil
 		}
 		return "", 0, nil, aerr
 	}
 	if activeObj.CurrentRevision == 0 {
-		p := nightNotReadyProblem("No night session is selected. Choose the active night session, then run Prepare Site.")
+		p := nightNotReadyProblem(nightNoDefinitionReason)
 		return "", 0, &p, nil
 	}
 	activeRev, aerr := tx.GetConfigRevision(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID, activeObj.CurrentRevision)
@@ -1948,7 +1963,7 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 		return "", 0, nil, fmt.Errorf("api: decode night.session.active payload: %w", err)
 	}
 	if activePayload.Session == "" {
-		p := nightNotReadyProblem("The active night session is not set. Choose one, then run Prepare Site.")
+		p := nightNotReadyProblem(nightNoDefinitionReason)
 		return "", 0, &p, nil
 	}
 
@@ -1957,7 +1972,7 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("The active night definition %s no longer exists. Activate another, then run Prepare site.", activePayload.Session))
 		return "", 0, &p, nil
 	}
 	return activePayload.Session, obj.CurrentRevision, nil, nil
@@ -1977,7 +1992,7 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration, current bool) v1.NightSessionState {
 	out := v1.NightSessionState{
 		ID: rec.ID, ConfigObjectID: rec.ConfigObjectID, ConfigRevision: rec.ConfigRevision,
-		State: rec.State, StateEnteredAt: formatTime(rec.StateEnteredAt), Cycle: rec.Cycle,
+		State: rec.State, StateLabel: nightStateLabel(rec.State), StateEnteredAt: formatTime(rec.StateEnteredAt), Cycle: rec.Cycle,
 		FinalShowRequested: rec.FinalShowRequested, FinalShowRequestedAt: formatTimePtr(rec.FinalShowRequestedAt),
 		AdmissionClosed: rec.AdmissionClosed, AdmissionClosedAt: formatTimePtr(rec.AdmissionClosedAt),
 		ShutdownIntent: rec.ShutdownIntent, ArmedShowID: rec.ArmedShowID, ShowCommitted: rec.ShowCommitted,
@@ -2094,11 +2109,12 @@ func nightBedIsMeantToBePlaying(state string) bool {
 // [mapNightSessionState]'s own doc comment.
 func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: nightNoSessionReason, Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
+		slog.Default().Warn("night session: the background audio record could not be read", "session", rec.ID, "error", err)
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: nightAudioRecordUnreadReason, Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	// The announcement-session sequence is read here too, under its own
 	// phase family and tagged with its own sequence name. Its clear and
@@ -2109,7 +2125,8 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	// but a log line (ADR-039).
 	announcementRows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
+		slog.Default().Warn("night session: the announcement record could not be read", "session", rec.ID, "error", err)
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: nightAudioRecordUnreadReason, Steps: []v1.NightBackgroundAudioStep{}, NodesNotPlaying: []v1.NightBedNodeNotPlaying{}}
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
@@ -2139,7 +2156,8 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 
 	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
 	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out, NodesNotPlaying: notPlaying}
+		slog.Default().Warn("night session: the volume ceiling could not be read", "session", rec.ID, "error", err)
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "The volume ceiling for this night could not be read. Reload the page.", Steps: out, NodesNotPlaying: notPlaying}
 	}
 	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb, NodesNotPlaying: notPlaying}
 }
@@ -2164,7 +2182,7 @@ func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec 
 	if ba.MediaPlaylist != "" {
 		mp, _, ok := nightResolveMediaPlaylist(ctx, deps, ba.MediaPlaylist)
 		if !ok {
-			return nil, fmt.Sprintf("referenced media.playlist %q is missing or has been deleted", ba.MediaPlaylist), nil
+			return nil, fmt.Sprintf("Media playlist %s is missing or was deleted. Pick another in the night definition.", ba.MediaPlaylist), nil
 		}
 		g := mp.MaxGainDb
 		return &g, "", nil
@@ -2244,19 +2262,23 @@ func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSession
 		return v1.NightCues{State: v1.NightEvidenceUnknown, Reason: reason, Cues: []v1.NightCue{}}
 	}
 	if rec.ID == "" || rec.ConfigObjectID == "" {
-		return unreadable("no session")
+		return unreadable(nightNoSessionReason)
 	}
+	const unread = "The cues for this night could not be read. Reload the page."
 	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
 	if err != nil {
-		return unreadable("failed to read the saved night session: " + err.Error())
+		slog.Default().Warn("night session: the night definition could not be read", "session", rec.ID, "error", err)
+		return unreadable(unread)
 	}
 	var payload config.NightSessionPayload
 	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
-		return unreadable("failed to decode the saved night session: " + err.Error())
+		slog.Default().Warn("night session: the night definition could not be read", "session", rec.ID, "error", err)
+		return unreadable(unread)
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
 	if err != nil {
-		return unreadable("failed to read the cue outbox: " + err.Error())
+		slog.Default().Warn("night session: the cue record could not be read", "session", rec.ID, "error", err)
+		return unreadable(unread)
 	}
 	byKey := make(map[string]store.NightCueOutboxRecord, len(rows))
 	for _, row := range rows {
@@ -2306,7 +2328,7 @@ func mapNightCue(phase string, cue config.NightSessionCue, row store.NightCueOut
 	out.ActionRevision = &rev
 	out.State = row.State
 	out.Outcome = row.Outcome
-	out.Reason = row.OutcomeReason
+	out.Reason = nightOperatorReason(row.OutcomeReason)
 	out.DispatchedAt = formatTimePtr(row.DispatchedAt)
 	out.ResolvedAt = formatTimePtr(row.ResolvedAt)
 	return out
@@ -2316,7 +2338,7 @@ func mapNightAuthorization(rec store.NightSessionRecord) v1.NightAuthorization {
 	if rec.Issuer.IsZero() {
 		return v1.NightAuthorization{
 			State:  v1.NightEvidenceUnknown,
-			Reason: "No operator command is on record for this night. Automatic actions still run and are logged.",
+			Reason: "No command from a user is on record for this night. Automatic actions still run and are logged.",
 		}
 	}
 	return v1.NightAuthorization{
@@ -2335,11 +2357,11 @@ func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	switch rec.PowerPhase {
 	case "":
 		if rec.ShutdownIntent == "power-down" {
-			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power-down was asked for and is deferred until playback is seen stopped."}
+			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down was requested. It waits until FPP is seen stopped."}
 		}
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "power-down-presentation has not been requested"}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down has not been requested."}
 	case "not_configured":
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "no site-power configuration is present"}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "This night has no power-off step."}
 	case nightPowerPhaseConfiguredNotDispatched:
 		// nightpoweroff.go's own removal-policy runtime is running: this
 		// value is overwritten with a final, terminal outcome (the default
@@ -2360,36 +2382,37 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 	empty := v1.NightReadiness{Checks: []v1.NightReadinessCheck{}}
 	if rec.ID == "" {
 		empty.State = v1.NightEvidenceUnknown
-		empty.Reason = "no session"
+		empty.Reason = nightNoSessionReason
 		return empty
 	}
 	readiness, err := deps.NightSessions.GetLatestNightReadiness(ctx, rec.ID)
 	if errors.Is(err, store.ErrNightReadinessNotFound) {
 		empty.State = v1.NightEvidenceUnknown
-		empty.Reason = "no readiness result recorded for this preparation"
+		empty.Reason = "Readiness has not run since the site was prepared. Run readiness."
 		return empty
 	}
 	if err != nil {
 		empty.State = v1.NightEvidenceUnknown
-		empty.Reason = "failed to read the readiness result: " + err.Error()
+		slog.Default().Warn("night readiness: the result could not be read", "session", rec.ID, "error", err)
+		empty.Reason = "ShowMesh could not read the readiness result. Reload the page."
 		return empty
 	}
-	var checks []v1.NightReadinessCheck
+	var stored []nightStoredCheck
 	decodeReason := ""
-	if jerr := json.Unmarshal([]byte(readiness.ChecksJSON), &checks); jerr != nil {
-		checks = nil
-		decodeReason = "stored checks payload could not be decoded: " + jerr.Error()
+	if jerr := json.Unmarshal([]byte(readiness.ChecksJSON), &stored); jerr != nil {
+		slog.Default().Warn("night readiness: the stored checks could not be read", "session", rec.ID, "error", jerr)
+		stored = nil
+		decodeReason = "The saved checks could not be read. Run readiness again."
 	}
-	if checks == nil {
-		checks = []v1.NightReadinessCheck{}
-	}
-	for i := range checks {
-		checks[i].Label = nightCheckLabel(checks[i].Name)
+	checks := make([]v1.NightReadinessCheck, 0, len(stored))
+	for _, c := range stored {
+		checks = append(checks, c.wire())
 	}
 	age := now.Sub(readiness.CompletedAt)
 	return v1.NightReadiness{
 		State: v1.NightEvidenceRecorded, Reason: decodeReason, Outcome: readiness.Outcome,
-		EpochID: readiness.EpochID, CompletedAt: formatTime(readiness.CompletedAt),
+		OutcomeLabel: nightOutcomeLabels[readiness.Outcome],
+		EpochID:      readiness.EpochID, CompletedAt: formatTime(readiness.CompletedAt),
 		SameEpoch: readiness.EpochID == rec.ID,
 		Fresh:     age >= 0 && age <= maxAge,
 		Checks:    checks,
@@ -2491,15 +2514,15 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 	switch rec.State {
 	case nightStateLive:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeShow,
-			"the show playlist this session was playing")
+			"The coordinator restarted and cannot tell if the show is still playing.")
 	case nightStateRestingIntershow:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingOneShot,
-			"the one-shot resting item this session was playing")
+			"The coordinator restarted and cannot tell if the resting sequence is still playing.")
 	case nightStateEndOfNightResting:
 		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingRepeat,
-			"the repeating end-of-night resting playlist")
+			"The coordinator restarted and cannot tell if the end of night playlist is still playing.")
 	case nightStateTransitionToShow, nightStateTransitionToResting:
-		return "The coordinator restarted mid-change and cannot tell what is safe to resume. Run End Session, then Prepare Site."
+		return "The coordinator restarted mid-change and cannot tell what is safe to resume. " + nightRecoverAction
 	}
 	return ""
 }
@@ -2511,7 +2534,7 @@ func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time,
 func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, subject string) string {
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
 	if !has || anchor.Purpose != purpose {
-		return fmt.Sprintf("the coordinator restarted with no record of %s", subject)
+		return subject + " " + nightRecoverAction
 	}
 	if anchor.ObservedAt.IsZero() {
 		// Dispatched but never confirmed before the restart: the loop's own
@@ -2521,13 +2544,12 @@ func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.T
 
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 	if !obs.Current {
-		return fmt.Sprintf(
-			"the coordinator restarted with no current status from instance %q to confirm %s",
-			anchor.FPPInstanceID, subject)
+		return subject + " " + nightRecoverAction
 	}
 
 	if bad, reason := nightBoundaryContradicted(anchor, obs, now); bad {
-		return fmt.Sprintf("after a restart, %s", reason)
+		h.logWarn("night session reconciliation: playback does not match the saved session", "sessionId", rec.ID, "reason", reason)
+		return "The coordinator restarted and FPP is not playing what the night expects. " + nightRecoverAction
 	}
 	return ""
 }
@@ -2581,7 +2603,7 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 		}
 		row.State = nightCueStateAmbiguous
 		row.Outcome = nightCueOutcomeAmbiguous
-		row.OutcomeReason = "The coordinator restarted while this cue was running. Run End Session, then Prepare Site."
+		row.OutcomeReason = "The coordinator restarted while this cue was running. " + nightRecoverAction
 		resolvedAt := now
 		row.ResolvedAt = &resolvedAt
 		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
@@ -2597,7 +2619,7 @@ func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind, nodeID st
 	return v1.NightBackgroundAudioStep{
 		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, NodeID: nodeID, Kind: kind,
 		ActionRevision: row.ActionRevision,
-		State:          row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
+		State:          row.State, Outcome: row.Outcome, Reason: nightOperatorReason(row.OutcomeReason),
 		DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),
 	}
 }

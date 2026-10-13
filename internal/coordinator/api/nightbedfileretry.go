@@ -122,7 +122,7 @@ func nightBedRecoveryAppliedSinceLastConfirmedStart(steps []nightBackgroundAudio
 
 // nightBedFilesLandedOperatorReasonNote is the recovery apply's own
 // operator-facing note.
-const nightBedFilesLandedOperatorReasonNote = "This speaker now has every file the background music needs, so it is being given the music again."
+const nightBedFilesLandedOperatorReasonNote = "This speaker now has every file the music needs, so it is being given the music again."
 
 // nightBedRetryOnceFilesLandedForNode is
 // [handlers.nightAdvanceBackgroundAudioForNode]'s own late-file check.

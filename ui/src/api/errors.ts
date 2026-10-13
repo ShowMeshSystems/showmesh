@@ -23,13 +23,22 @@ export class ApiError extends Error {
    * on ApiError, not a new class per type.
    */
   readonly conflictingRunId: string | undefined
+  /** `Problem.blockedChecks`: the safety checks behind a night command refusal. Empty otherwise. */
+  readonly blockedChecks: readonly { name: string; reason: string }[]
 
-  constructor(message: string, status?: number, problemType?: string, conflictingRunId?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    problemType?: string,
+    conflictingRunId?: string,
+    blockedChecks: readonly { name: string; reason: string }[] = [],
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.problemType = problemType
     this.conflictingRunId = conflictingRunId
+    this.blockedChecks = blockedChecks
   }
 }
 

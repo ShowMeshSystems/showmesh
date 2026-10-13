@@ -106,7 +106,7 @@ func TestInterlockBlocksPrepareSiteWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("prepare-site status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 
@@ -158,7 +158,7 @@ func TestInterlockBlocksRunReadinessWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("run-readiness status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 }
@@ -214,7 +214,7 @@ func TestInterlockBlocksStartPreshowWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("start-preshow status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 }
@@ -290,7 +290,7 @@ func TestInterlockBlocksFadeOutNightWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("fade-out-night status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 
@@ -376,7 +376,7 @@ func TestInterlockBlocksPowerDownPresentationWhenConditionFalse(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("power-down-presentation status = %d, want 409; problem: %+v", status, problem)
 	}
-	if !containsAll(problem.Detail, "cooldown") {
+	if !containsAll(nightBlockedText(problem), "cooldown") {
 		t.Fatalf("problem detail does not name the withholding rule: %+v", problem)
 	}
 

@@ -83,10 +83,10 @@ func TestNightCheckAudioAlignment_BeyondThresholdReportsDegradedNamingBothNumber
 	if c.health != nightHealthDegraded() {
 		t.Errorf("health = %q, want degraded (a warning, never a failure)", c.health)
 	}
-	if !strings.Contains(c.reason, "60ms") {
+	if !strings.Contains(c.reason, "60 ms") {
 		t.Errorf("reason = %q, want it to name the measured offset 60ms", c.reason)
 	}
-	if !strings.Contains(c.reason, "40ms") {
+	if !strings.Contains(c.reason, "40 ms") {
 		t.Errorf("reason = %q, want it to name the shipped default threshold 40ms", c.reason)
 	}
 	if outcome := nightOutcomeFromChecks(checks); outcome != "ready_with_warnings" {

@@ -82,7 +82,7 @@ func TestNightShowLaunchIfBusy_ReconnectRetainedLosesToStaleRESTTier1(t *testing
 	if got != fppIfBusyRefuse {
 		t.Fatalf("ifBusy = %q, want %q (REST's own 14s-old row must not license replace)", got, fppIfBusyRefuse)
 	}
-	if reason == "" || !strings.Contains(reason, "old, past") {
+	if reason == "" || !strings.Contains(reason, "out of date") {
 		t.Fatalf("reason = %q, want the stale-coordinator-evidence explanation naming REST's own age, not empty and not a generic mismatch", reason)
 	}
 }

@@ -181,10 +181,11 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 	}
 	row.State = nightCueStateResolved
 	row.Outcome = result.outcome
+	row.OutcomeReason = nightCueReasonWith(result.reason, gain.note)
 	if gain.failed {
 		row.Outcome = nightCueOutcomeWithGainFailure(result.outcome)
+		row.OutcomeReason = nightCueReasonWith(gain.note, result.reason)
 	}
-	row.OutcomeReason = nightCueReasonWith(result.reason, gain.note)
 	resolvedAt := now
 	if result.resolvedAt != nil {
 		resolvedAt = *result.resolvedAt
@@ -231,7 +232,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			// terminal, ambiguous, until an operator resolves it.
 			row.State = nightCueStateAmbiguous
 			row.Outcome = nightCueOutcomeAmbiguous
-			row.OutcomeReason = "it was sent but its outcome was never recorded, and this action has no stable retry identity; end-session and prepare-site again to recover"
+			row.OutcomeReason = "This cue was sent but its result was never recorded. " + nightRecoverAction
 			resolvedAt := now
 			row.ResolvedAt = &resolvedAt
 			if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
@@ -334,13 +335,13 @@ const nightBarrierResolutionDeadline = 60 * time.Second
 // nightBarrierResolutionDeadline has passed, past row's own pre-timeout
 // state (see [nightBarrierResolutionDeadline] for which states and why).
 func (h *handlers) nightTimeoutBarrierCue(ctx context.Context, now time.Time, row store.NightCueOutboxRecord) (store.NightCueOutboxRecord, error) {
-	outcome, verb := nightCueOutcomeUnconfirmed, "nothing confirmed or contradicted it"
+	outcome, reason := nightCueOutcomeUnconfirmed, fmt.Sprintf("Cue %s was not confirmed within a minute of the show start.", row.CueName)
 	if row.State == nightCueStatePending {
-		outcome, verb = nightCueOutcomeFailed, "it was never sent"
+		outcome, reason = nightCueOutcomeFailed, fmt.Sprintf("Cue %s was not sent within a minute of the show start.", row.CueName)
 	}
 	row.State = nightCueStateResolved
 	row.Outcome = outcome
-	row.OutcomeReason = fmt.Sprintf("cue %q: %s within %s of the show start; the show-launch barrier does not wait indefinitely", row.CueName, verb, nightBarrierResolutionDeadline)
+	row.OutcomeReason = reason
 	resolvedAt := now
 	row.ResolvedAt = &resolvedAt
 	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
@@ -358,7 +359,7 @@ func (h *handlers) nightRecordMissingBarrierCue(ctx context.Context, now time.Ti
 	row := store.NightCueOutboxRecord{
 		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: phase, CueName: cueName,
 		State: nightCueStateResolved, Outcome: nightCueOutcomeFailed, ResolvedAt: &resolvedAt,
-		OutcomeReason: fmt.Sprintf("cue %q: no outbox record could be created for it within %s of the show start, so it was never sent", cueName, nightBarrierResolutionDeadline),
+		OutcomeReason: fmt.Sprintf("Cue %s could not be recorded within a minute of the show start, so it was not sent.", cueName),
 	}
 	err := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, row, now)
 	if errors.Is(err, store.ErrNightCueOutboxDuplicate) {
@@ -390,7 +391,7 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 		row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
 		if errors.Is(err, store.ErrNightCueOutboxNotFound) {
 			if now.Sub(dueAt) < nightBarrierResolutionDeadline {
-				return false, fmt.Sprintf("barrier cue %q has not been sent yet", cue.Name), nil
+				return false, fmt.Sprintf("Cue %s has not been sent yet, so the show is waiting for it.", cue.Name), nil
 			}
 			// The row could not be created at all, so the deadline has to
 			// apply to its absence too, and durably: a barrier that stays
@@ -411,10 +412,10 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 			}
 		}
 		if row.State != nightCueStateResolved {
-			return false, fmt.Sprintf("barrier cue %q is %s, not resolved", cue.Name, row.State), nil
+			return false, fmt.Sprintf("Cue %s has not finished yet, so the show is waiting for it.", cue.Name), nil
 		}
 		if row.Outcome != nightCueOutcomeConfirmed && cue.OnFailure == config.NightSessionCueOnFailureAbort {
-			return false, fmt.Sprintf("barrier cue %q resolved %s and its onFailure is abort", cue.Name, row.Outcome), nil
+			return false, fmt.Sprintf("Cue %s did not succeed and is set to stop the show start.", cue.Name), nil
 		}
 	}
 	return true, "", nil
@@ -466,7 +467,7 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {
 			if errors.Is(err, errNightCueSessionMoved) {
-				return false, "the night session moved out from under this cue sequence"
+				return false, "The night moved on before these cues finished."
 			}
 			if errors.Is(err, errNightCueNotConfirmableForFirst) {
 				h.logWarn("night loop: refusing to commit an unconfirmable action as the first outward-facing cue", "sessionId", rec.ID, "cue", cue.Name)
@@ -496,7 +497,8 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 	}
 	ok, reason, err := h.nightBarrierSatisfied(ctx, now, referenceE, rec, phase, cues)
 	if err != nil {
-		return false, "failed to evaluate cue barrier: " + err.Error()
+		h.logWarn("night loop: failed to evaluate the cues the show waits for", "sessionId", rec.ID, "error", err)
+		return false, "ShowMesh could not check the cues the show waits for. Check the coordinator log."
 	}
 	return ok, reason
 }

@@ -75,7 +75,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 		// "Do not evaluate" for either matrix column: reported, never
 		// withheld, and its health is not_verifiable rather than a claim
 		// about anything that was actually checked.
-		return nightInterlockDecision{Health: nightCheckStateNotVerifiable, Reason: "disabled: not evaluated"}
+		return nightInterlockDecision{Health: nightCheckStateNotVerifiable, Reason: "This safety check is turned off."}
 
 	case config.NightInterlockPostureObserve:
 		switch cond {
@@ -84,7 +84,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 		case nightInterlockConditionFalse:
 			return nightInterlockDecision{Health: nightHealthFailed(), Reason: rule.FailureText}
 		default:
-			return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "the source for this check is unavailable"}
+			return nightInterlockDecision{Health: nightHealthUnknown(), Reason: nightInterlockSourceSilentReason}
 		}
 
 	case config.NightInterlockPostureBlock:
@@ -110,14 +110,14 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 				// rule reaching this branch.
 				Withhold: rule.OnUnavailable != config.NightInterlockOnUnavailableAllow,
 				Health:   nightHealthUnknown(),
-				Reason:   "the source for this check is unavailable",
+				Reason:   nightInterlockSourceSilentReason,
 			}
 		}
 	}
 	// Unreachable given the closed posture enum nightsitecontrol.go
 	// already validated; answered rather than left to a zero-value
 	// nightInterlockDecision that would silently never withhold.
-	return nightInterlockDecision{Health: nightHealthUnknown(), Reason: fmt.Sprintf("unrecognized posture %q", rule.Posture)}
+	return nightInterlockDecision{Health: nightHealthUnknown(), Reason: "This safety check has a setting ShowMesh does not know. Edit the night definition."}
 }
 
 // nightConditionFromHealth is [classifyMQTTActionResult]'s own inverse,
@@ -158,13 +158,14 @@ func (h *handlers) nightEvaluateInterlockRuleLive(ctx context.Context, rule conf
 	}
 	action, _, err := nightResolveShowAction(ctx, h.deps.Config, rule.Signal)
 	if err != nil {
+		h.logWarn("night safety check: could not read its action", "rule", rule.Name, "action", rule.Signal, "error", err)
 		return nightInterlockDecision{
 			// Fail closed for the identical reason evaluateNightInterlockRule's
 			// own unavailable branch does: anything other than "allow"
 			// withholds.
 			Withhold: rule.Posture == config.NightInterlockPostureBlock && rule.OnUnavailable != config.NightInterlockOnUnavailableAllow,
 			Health:   nightHealthUnknown(),
-			Reason:   "could not read this check's own signal action: " + err.Error(),
+			Reason:   "ShowMesh could not read the action for this safety check. Run readiness again.",
 		}
 	}
 	res := DispatchMQTTAction(ctx, h.deps.MQTTBrokers, action.Target, h.now)
@@ -184,15 +185,15 @@ func (h *handlers) nightComputeInterlockChecks(ctx context.Context, rules []conf
 	checks := make([]nightReadinessCheck, 0, len(rules))
 	for _, rule := range rules {
 		decision := h.nightEvaluateInterlockRuleLive(ctx, rule)
-		reason := decision.Reason
-		if rule.Posture != config.NightInterlockPostureDisabled {
-			withholdNote := "would not withhold"
+		check := nightReadinessCheck{name: nightInterlockCheckName(rule), health: decision.Health, reason: decision.Reason}
+		if rule.Posture != config.NightInterlockPostureDisabled && decision.Reason != "" {
+			effect := "This does not block " + inWords(rule.Phase) + "."
 			if decision.Withhold {
-				withholdNote = "withholds"
+				effect = "This blocks " + inWords(rule.Phase) + "."
 			}
-			reason = fmt.Sprintf("posture=%s phase=%s (%s this phase): %s", rule.Posture, rule.Phase, withholdNote, decision.Reason)
+			check.reasons = []string{decision.Reason, effect}
 		}
-		checks = append(checks, nightReadinessCheck{name: nightInterlockCheckName(rule), health: decision.Health, reason: reason})
+		checks = append(checks, check)
 	}
 	return checks
 }
@@ -363,33 +364,26 @@ func nightCallerHasOverrideScope(ac authContext) bool {
 	return ac.ok && ac.result.Principal.Role.Has(identity.ScopeNightOverride)
 }
 
-// nightInterlockGateProblem is the 409 a withheld phase answers with,
-// naming every withholding rule's own failure text so an operator sees
-// why without cross-referencing readiness separately.
-func nightInterlockGateProblem(phase string, withheld []nightWithheldInterlock) *interlockGateProblem {
-	if len(withheld) == 0 {
-		return nil
+// nightInterlockSourceSilentReason is the one wording for a safety check
+// whose source gave no answer.
+const nightInterlockSourceSilentReason = "The source for this safety check did not answer. Check the device that reports it."
+
+// nightInterlockRefusal is the 409 a withheld phase answers with. The
+// detail is one line, and each blocking rule is one item of BlockedChecks.
+func nightInterlockRefusal(phase string, withheld []nightWithheldInterlock) v1.Problem {
+	detail := fmt.Sprintf("%d safety checks blocked %s. Fix them, or retry with an override.", len(withheld), inWords(phase))
+	if len(withheld) == 1 {
+		detail = fmt.Sprintf("A safety check blocked %s. Fix it, or retry with an override.", inWords(phase))
 	}
-	return &interlockGateProblem{phase: phase, withheld: withheld}
-}
-
-// interlockGateProblem carries enough to build the eventual v1.Problem in
-// nightsessioncontrol.go, kept as its own type here rather than importing
-// v1 into this file's own pure-decision functions above.
-type interlockGateProblem struct {
-	phase    string
-	withheld []nightWithheldInterlock
-}
-
-func (p *interlockGateProblem) detail() string {
-	reasons := ""
-	for i, w := range p.withheld {
-		if i > 0 {
-			reasons += "; "
+	p := nightNotReadyProblem(detail)
+	for _, w := range withheld {
+		reason := w.Reason
+		if reason == "" {
+			reason = "This safety check did not pass."
 		}
-		reasons += fmt.Sprintf("%q: %s", w.Rule.Name, w.Reason)
+		p.BlockedChecks = append(p.BlockedChecks, v1.NightBlockedCheck{Name: w.Rule.Name, Reason: reason})
 	}
-	return fmt.Sprintf("%d rule(s) blocked %q: %s", len(p.withheld), p.phase, reasons)
+	return p
 }
 
 // A caller computing an overall budget for several rules
@@ -481,7 +475,7 @@ func (h *handlers) nightGatePhaseTx(ctx context.Context, tx *store.Tx, now time.
 	checks, age := h.nightTrustedReadinessChecksTx(ctx, tx, rec.ID, now)
 	gate := nightEvaluatePhaseInterlockGate(payload, phase, checks, age, overrides, callerHasOverrideScope)
 	if len(gate.Withheld) > 0 {
-		p := nightNotReadyProblem(nightInterlockGateProblem(phase, gate.Withheld).detail())
+		p := nightInterlockRefusal(phase, gate.Withheld)
 		return &p, nil
 	}
 	if len(gate.Overridden) > 0 {

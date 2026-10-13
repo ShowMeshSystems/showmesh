@@ -294,6 +294,7 @@ export function makeNightSessionState(overrides: Partial<NightSessionState> = {}
     configObjectId: 'halloween-night',
     configRevision: 1,
     state: 'inactive',
+    stateLabel: 'Not prepared',
     stateEnteredAt: NOW,
     cycle: 0,
     finalShowRequested: false,

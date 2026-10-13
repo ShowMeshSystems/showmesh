@@ -131,7 +131,7 @@ func TestNightParticipationSelectedInstanceMissingOrUnhealthyFailsReadiness(t *t
 	if absent.health != nightHealthFailed() {
 		t.Errorf("selected-but-absent instance: health = %q, want %q", absent.health, nightHealthFailed())
 	}
-	if !strings.Contains(absent.reason, "no such instance is configured on this coordinator") {
+	if !strings.Contains(absent.reason, "is not set up here") {
 		t.Errorf("selected-but-absent instance: reason = %q, want it to say the instance is not configured", absent.reason)
 	}
 

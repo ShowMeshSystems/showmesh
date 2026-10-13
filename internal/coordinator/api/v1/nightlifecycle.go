@@ -28,8 +28,11 @@ type NightReadinessCheck struct {
 	// State is observation.Health's vocabulary plus "not_verifiable" for
 	// a check that can never be anything else - excluded from the
 	// aggregate outcome but always listed.
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+	State string `json:"state"`
+	// StateLabel is State in the words an operator reads.
+	StateLabel string `json:"stateLabel"`
+	// Reasons is one message per item. A healthy check has none.
+	Reasons []string `json:"reasons"`
 }
 
 // NightReadiness is the current session's most recent run-readiness
@@ -37,14 +40,16 @@ type NightReadinessCheck struct {
 // (ADR-020 decision 6): CompletedAt plus the envelope's own serverTime is
 // what a client compares.
 type NightReadiness struct {
-	State       NightEvidenceState    `json:"state"`
-	Reason      string                `json:"reason"`
-	Outcome     string                `json:"outcome,omitempty"`
-	EpochID     string                `json:"epochId,omitempty"`
-	CompletedAt string                `json:"completedAt,omitempty"`
-	SameEpoch   bool                  `json:"sameEpoch"`
-	Fresh       bool                  `json:"fresh"`
-	Checks      []NightReadinessCheck `json:"checks"`
+	State   NightEvidenceState `json:"state"`
+	Reason  string             `json:"reason"`
+	Outcome string             `json:"outcome,omitempty"`
+	// OutcomeLabel is Outcome in the words an operator reads.
+	OutcomeLabel string                `json:"outcomeLabel,omitempty"`
+	EpochID      string                `json:"epochId,omitempty"`
+	CompletedAt  string                `json:"completedAt,omitempty"`
+	SameEpoch    bool                  `json:"sameEpoch"`
+	Fresh        bool                  `json:"fresh"`
+	Checks       []NightReadinessCheck `json:"checks"`
 }
 
 // NightPhaseEvidence names one optional or not-yet-implemented section.
@@ -230,7 +235,9 @@ type NightSessionState struct {
 	ConfigObjectID string `json:"configObjectId"`
 	ConfigRevision int64  `json:"configRevision"`
 
-	State          string `json:"state"`
+	State string `json:"state"`
+	// StateLabel is State in the words an operator reads.
+	StateLabel     string `json:"stateLabel"`
 	StateEnteredAt string `json:"stateEnteredAt"`
 	Cycle          int64  `json:"cycle"`
 

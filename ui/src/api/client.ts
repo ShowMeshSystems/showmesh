@@ -564,6 +564,7 @@ export function classifyProblemResponse(
     status,
     problem?.type,
     problem?.conflictingRunId,
+    problem?.blockedChecks ?? [],
   )
 }
 

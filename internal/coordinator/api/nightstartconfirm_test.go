@@ -53,7 +53,7 @@ func TestNightEnsureAnchor_StartNeverConfirmedDegradesAfterTheWindow(t *testing.
 	if !got.Degraded {
 		t.Fatalf("a start unconfirmed past the window did not degrade the session: %+v", got)
 	}
-	if !strings.Contains(got.DegradedReason, `"halloween-show"`) {
+	if !strings.Contains(got.DegradedReason, "halloween-show") {
 		t.Fatalf("degradedReason = %q, want it to name the playlist", got.DegradedReason)
 	}
 }

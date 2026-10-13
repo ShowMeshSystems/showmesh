@@ -17954,6 +17954,14 @@ components:
             cannot link to it, and matching a substring of this server's
             English is how the Operator UI once told two different 409s
             apart. Additive and omitted when empty.
+        blockedChecks:
+          type: array
+          description: >-
+            The safety checks behind a "night-not-ready" refusal, one per
+            item. `detail` stays one line and never lists them. Omitted
+            when no safety check refused the command.
+          items:
+            $ref: "#/components/schemas/NightBlockedCheck"
     StreamStart:
       type: object
       description: The payload of the first event on every SSE connection.
@@ -21606,8 +21614,8 @@ components:
         never be anything but not_verifiable is excluded from the
         aggregate `outcome` (it is still always listed), so `outcome` can
         still read `"ready"` once every checkable check passes. Each
-        check's own `reason` states exactly what it verified and what it
-        could not. A healthy result on one check is never evidence any
+        check's own `reasons` say what needs attention, one message per
+        item. A healthy result on one check is never evidence any
         other check passed.
 
         It also checks every FPP and Resolume instance the ACTIVE show
@@ -21651,7 +21659,7 @@ components:
         program-to-LTC alignment against `audio.settings`'
         `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded`
         (never `failed`) once the measured offset exceeds the threshold,
-        naming both numbers in `reason`, `healthy` once it is within the
+        naming both numbers in `reasons`, `healthy` once it is within the
         threshold, and `not_verifiable` whenever this coordinator holds no
         current measurement for that node. A drifting show still runs;
         this is a warning, never a reason `outcome` blocks `start-night`.
@@ -21660,10 +21668,10 @@ components:
         not one per instance, that fails when any FPP instance this
         session binds is currently refusing the plugin's playlist-entry
         reports (a sequence regression, most often a plugin reinstall or a
-        wiped state directory), naming the reason in `reason`. Cleared by
+        wiped state directory), one item of `reasons` per FPP. Cleared by
         the referenced instance's next accepted report or by
         DELETE .../playlist-entry-observations/{instanceUuid}.
-      required: [name, label, state, reason]
+      required: [name, label, state, stateLabel, reasons]
       properties:
         name:
           type: string
@@ -21683,8 +21691,31 @@ components:
             the aggregate outcome but always listed. Missing evidence is
             always "unknown".
           enum: [healthy, degraded, failed, unknown, not_verifiable, not_configured]
+        stateLabel:
+          type: string
+          description: >-
+            `state` in the words an operator reads, such as "Passed" or
+            "Cannot be checked".
+        reasons:
+          type: array
+          description: >-
+            One operator message per item, at most two short sentences
+            each. A healthy check has none. A check about several cues or
+            nodes has one item for each. Items are never joined into one
+            string.
+          items:
+            type: string
+    NightBlockedCheck:
+      type: object
+      description: One safety check that refused a night command.
+      required: [name, reason]
+      properties:
+        name:
+          type: string
+          description: The safety check's name, which an override names.
         reason:
           type: string
+          description: One operator message, at most two short sentences.
     NightReadiness:
       type: object
       description: >-
@@ -21714,6 +21745,11 @@ components:
         outcome:
           type: string
           enum: [ready, ready_with_warnings, not_ready, unknown]
+        outcomeLabel:
+          type: string
+          description: >-
+            `outcome` in the words an operator reads, such as "Passed with
+            a warning". Present whenever `outcome` is.
         epochId:
           type: string
         completedAt:
@@ -22030,8 +22066,8 @@ components:
         "" and `state` is "inactive" when no session has ever been
         created.
       required:
-        [id, configObjectId, configRevision, state, stateEnteredAt, cycle,
-         finalShowRequested, finalShowRequestedAt, admissionClosed,
+        [id, configObjectId, configRevision, state, stateLabel,
+         stateEnteredAt, cycle, finalShowRequested, finalShowRequestedAt, admissionClosed,
          admissionClosedAt, shutdownIntent, armedShowId, showCommitted,
          readiness, powerPhase, transition, boundary, cues, backgroundAudio,
          degraded, attributionDegraded, authorization, updatedAt]
@@ -22056,6 +22092,10 @@ components:
             - end-of-night-resting
             - fading-out
             - stopped
+        stateLabel:
+          type: string
+          description: >-
+            `state` in the words an operator reads, such as "Show running".
         stateEnteredAt:
           type: string
           format: date-time

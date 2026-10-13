@@ -25,7 +25,11 @@ func nightReadinessOutcomeGlyph(outcome string) string {
 }
 
 func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
-	_, _ = fmt.Fprintf(w, "State:       %s\n", s.State)
+	if s.StateLabel != "" {
+		_, _ = fmt.Fprintf(w, "State:       %s (%s)\n", s.StateLabel, s.State)
+	} else {
+		_, _ = fmt.Fprintf(w, "State:       %s\n", s.State)
+	}
 	if s.ID == "" {
 		_, _ = fmt.Fprintf(w, "Session:     (no session has ever been created)\n")
 		return
@@ -96,15 +100,17 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, " (outcome=%s sameEpoch=%v fresh=%v)", nightReadinessOutcomeGlyph(s.Readiness.Outcome), s.Readiness.SameEpoch, s.Readiness.Fresh)
 	}
 	_, _ = fmt.Fprintln(w)
+	if s.Readiness.OutcomeLabel != "" {
+		_, _ = fmt.Fprintf(w, "  %s\n", s.Readiness.OutcomeLabel)
+	}
 	if s.Readiness.Reason != "" {
 		_, _ = fmt.Fprintf(w, "  %s\n", s.Readiness.Reason)
 	}
 	for _, c := range s.Readiness.Checks {
-		_, _ = fmt.Fprintf(w, "  - %s: %s", c.Label, c.State)
-		if c.Reason != "" {
-			_, _ = fmt.Fprintf(w, " (%s)", c.Reason)
+		_, _ = fmt.Fprintf(w, "  - %s: %s\n", c.Label, c.StateLabel)
+		for _, reason := range c.Reasons {
+			_, _ = fmt.Fprintf(w, "      %s\n", reason)
 		}
-		_, _ = fmt.Fprintln(w)
 	}
 
 	_, _ = fmt.Fprintf(w, "\nPower phase: %s (%s)\n", s.PowerPhase.State, s.PowerPhase.Reason)

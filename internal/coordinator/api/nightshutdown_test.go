@@ -212,7 +212,7 @@ func TestNightFadingOut_PreWireRefusalRetriesOnALaterTick(t *testing.T) {
 	if !anchor.DispatchedAt.IsZero() {
 		t.Fatalf("DispatchedAt = %v for a stop that never reached the wire, want zero", anchor.DispatchedAt)
 	}
-	if !strings.Contains(anchor.Source, "refused before it reached FPP") {
+	if !strings.Contains(anchor.Source, "not-configured") {
 		t.Fatalf("anchor.Source = %q, want the pre-wire refusal reason", anchor.Source)
 	}
 	if got.State != nightStateFadingOut {

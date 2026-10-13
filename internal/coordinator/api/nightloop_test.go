@@ -644,7 +644,7 @@ func TestNightAdvanceRestingIntershow_InvalidatedBoundaryNeverRecomputed(t *test
 	if !got.Degraded {
 		t.Fatalf("expected the session to be marked degraded once the invalid boundary is found never-recomputable")
 	}
-	if !strings.Contains(got.DegradedReason, "invalidated") {
+	if !strings.Contains(got.DegradedReason, "The next show start was lost") {
 		t.Fatalf("degraded reason = %q, want it to name the invalid boundary", got.DegradedReason)
 	}
 }
@@ -832,7 +832,7 @@ func TestNightAdvanceLive_PastDeadlineStillPlayingWarnsAndDegradesWithoutTransit
 	if !got.Degraded {
 		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
 	}
-	if !strings.Contains(got.DegradedReason, "not idle") {
+	if !strings.Contains(got.DegradedReason, "still playing") {
 		t.Fatalf("degraded reason = %q, want it to name the unmet condition (status not idle)", got.DegradedReason)
 	}
 }
@@ -862,7 +862,7 @@ func TestNightAdvanceLive_PastDeadlinePlaylistStillNamedWarnsAndDegradesWithoutT
 	if !got.Degraded {
 		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
 	}
-	if !strings.Contains(got.DegradedReason, `still named "halloween-show"`) {
+	if !strings.Contains(got.DegradedReason, "without clearing its playlist") {
 		t.Fatalf("degraded reason = %q, want it to name the unmet condition (playlist still named)", got.DegradedReason)
 	}
 }

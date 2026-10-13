@@ -66,22 +66,27 @@ import { RESUME_CONFIRM_TITLE, useResumeShow } from '../app/stopHold'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
-import { formatPosition, nightLifecycleGroups, type CommandOutcome } from './liveControlModel'
+import { formatPosition, nightLifecycleGroups } from './liveControlModel'
 import { AudioAssetPicker } from './audioAssetPicker'
 import { audioAssetOptions, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
 import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
+  CUES_STATE_LABEL,
+  DEGRADED_WITHOUT_REASON,
   backgroundAudioSteps,
+  inWords,
   plannedBackgroundAudio,
   cycleRail,
   evidenceReadouts,
   nextTransition,
+  nightCommandLabel,
   nightRail,
   nowPlaying,
   pinnedCeilingFact,
   readinessChecks,
   runOfShow,
+  type NightCommandOutcome,
   type RailStep,
 } from './showNightModel'
 import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
@@ -139,8 +144,16 @@ function Rail({ title, steps }: { title: string; steps: readonly RailStep[] }) {
   )
 }
 
-/** Whichever lifecycle command a `night-not-ready` refusal named, and its server-supplied detail (verbatim; no structured rule field exists). */
-type Withheld = { command: NightCommandName; detail: string }
+/** Whichever lifecycle command a `night-not-ready` refusal named. */
+type Withheld = { command: NightCommandName }
+
+/** How a refused command is labelled, beside the coordinator's own message. */
+const COMMAND_REFUSAL_WORDS: Record<string, string> = {
+  [PROBLEM_TYPE.nightNotReady]: 'withheld',
+  [PROBLEM_TYPE.nightStateRejected]: 'refused',
+  [PROBLEM_TYPE.nightAmbiguous]: 'refused',
+  [PROBLEM_TYPE.nightCommandRefusedAuditUnavailable]: 'not sent',
+}
 
 export function ShowNight() {
   const model = useModelContext()
@@ -149,7 +162,7 @@ export function ShowNight() {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'night:command')
   const overrideGate = evaluateScope(model.session, model.sessionFetchFailed, 'night:override')
   const resumeShow = useResumeShow(model, session)
-  const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
+  const [outcome, setOutcome] = useState<NightCommandOutcome | null>(null)
   const [withheld, setWithheld] = useState<Withheld | null>(null)
   const [overrideRule, setOverrideRule] = useState('')
   const [overrideReason, setOverrideReason] = useState('')
@@ -183,50 +196,19 @@ export function ShowNight() {
           if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
           if (command === 'start-night') setSkipEnterShowLead(false)
           const applied = response.command.outcome === 'applied'
-          const parts = [
-            applied
-              ? `${command} was accepted. This page shows what the session does.`
-              : `${command} changed nothing. The session was already in that state.`,
-          ]
-          if (response.command.reason !== undefined && response.command.reason !== '') parts.push(response.command.reason)
-          if (response.command.attributionDegraded) {
-            parts.push('This ran with no user recorded.')
-          }
-          setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No-op', detail: parts.join(' ') })
+          const name = nightCommandLabel(command)
+          const lines = [applied ? `${name} was accepted.` : `${name} changed nothing. The night was already there.`]
+          if (response.command.reason !== undefined && response.command.reason !== '') lines.push(response.command.reason)
+          if (response.command.attributionDegraded) lines.push('This ran with no user recorded.')
+          setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No change', lines, blocked: [] })
         })
         .catch((err: unknown) => {
           if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
-          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady) {
-            setWithheld({ command, detail: err.message })
-            setOutcome({ tone: 'bad', label: 'Withheld', detail: err.message })
-            return
-          }
-          setWithheld(null)
-          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightStateRejected) {
-            setOutcome({
-              tone: 'bad',
-              label: 'Refused',
-              detail: `${command} is not valid from the session's current state. ${err.message}`,
-            })
-            return
-          }
-          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightAmbiguous) {
-            setOutcome({
-              tone: 'bad',
-              label: 'Degraded',
-              detail: `${err.message} Recover with end-session, then prepare-site.`,
-            })
-            return
-          }
-          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightCommandRefusedAuditUnavailable) {
-            setOutcome({
-              tone: 'warn',
-              label: 'Not dispatched',
-              detail: `${command} was not sent. ${err.message}`,
-            })
-            return
-          }
-          setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` })
+          const label = `${nightCommandLabel(command)} ${COMMAND_REFUSAL_WORDS[err instanceof ApiError ? (err.problemType ?? '') : ''] ?? 'refused'}`
+          const blocked = err instanceof ApiError ? err.blockedChecks : []
+          setWithheld(err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady ? { command } : null)
+          const tone = err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightCommandRefusedAuditUnavailable ? 'warn' : 'bad'
+          setOutcome({ tone, label, lines: [describeApiError(err)], blocked })
         })
     },
     [prepareSiteKey, skipEnterShowLead, stopFppPlayback],
@@ -278,28 +260,30 @@ export function ShowNight() {
       : null
 
   const statusSection = (
-      <Section id="sn-evidence" title="Status" aside={<span className="sm-small sm-muted">Anything not observed says so</span>}>
+      <Section id="sn-evidence" title="Status">
         {evidenceReadouts(session, nowIso).map((readout) => (
           <div key={readout.key} className="sm-readout">
             <StatusPair tone={readout.tone} label={readout.label} />
             <div>
-              <p className="sm-readout__fact">
-                {readout.fact}
-                {readout.key === 'readiness' && readout.tone !== 'good' && (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      className="sm-linkbutton"
-                      disabled={!gate.allowed}
-                      title={gate.allowed ? undefined : gate.reason}
-                      onClick={() => send('run-readiness')}
-                    >
-                      Run readiness again
-                    </button>
-                  </>
-                )}
-              </p>
+              {readout.facts.map((fact, index) => (
+                <p key={`${index}:${fact}`} className="sm-readout__fact">
+                  {fact}
+                  {readout.key === 'readiness' && readout.tone !== 'good' && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        className="sm-linkbutton"
+                        disabled={!gate.allowed}
+                        title={gate.allowed ? undefined : gate.reason}
+                        onClick={() => send('run-readiness')}
+                      >
+                        Run readiness again
+                      </button>
+                    </>
+                  )}
+                </p>
+              ))}
               {readout.key === 'readiness' &&
                 (session.readiness.checks.length === 0 ? (
                   <p className="sm-small sm-faint">No individual checks were recorded with this result.</p>
@@ -308,7 +292,13 @@ export function ShowNight() {
                     {readinessChecks(session.readiness.checks).map((check) => (
                       <div key={check.key} className="sm-readout">
                         <StatusPair tone={check.tone} label={check.label} />
-                        <p className="sm-readout__fact">{check.fact}</p>
+                        {check.facts.length > 0 && (
+                          <ul className="sm-plain-list sm-readout__fact" aria-label={check.label}>
+                            {check.facts.map((fact, index) => (
+                              <li key={`${index}:${fact}`}>{fact}</li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -445,8 +435,7 @@ export function ShowNight() {
             <RuledStrip
               absence="unobserved"
               label="Unobserved"
-              fact="No FPP instance is reporting playback."
-              detail="The schedule is not used as a stand-in."
+              fact="No FPP is reporting playback."
             />
           ) : (
             <>
@@ -489,12 +478,12 @@ export function ShowNight() {
             Next transition
           </h3>
           {next.known ? (
-            <p className="sm-nownext__title" title="From observed playback. Unknown when the position goes stale.">
+            <p className="sm-nownext__title">
               {formatPosition(next.remainingSeconds)}
               <span className="sm-small sm-muted"> until the next transition</span>
             </p>
           ) : (
-            <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} detail="Derived from observed playback, not a clock." />
+            <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} />
           )}
           <div className="sm-nownext__boundary">
             {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} waiting this cycle`}</p>}
@@ -515,7 +504,7 @@ export function ShowNight() {
           <Notice
             tone="warn"
             live="status"
-            headline={<>The night is not advancing: FPP player <span className="sm-data">{session.fallbackHold.fppInstanceId}</span> is held.</>}
+            headline={<>The night is waiting because FPP <span className="sm-data">{session.fallbackHold.fppInstanceId}</span> is held.</>}
             explanation={session.fallbackHold.message}
           />
         )}
@@ -524,7 +513,7 @@ export function ShowNight() {
             {resumeShow.busy ? 'Resuming…' : 'Resume'}
           </Button>
         </ButtonRow>
-        {resumeShow.error !== null && <Notice tone="bad" headline={`Resume was refused: ${resumeShow.error}`} />}
+        {resumeShow.error !== null && <Notice tone="bad" headline="Resume was refused." explanation={resumeShow.error} />}
         <ConfirmDialog
           open={resumeShow.confirmOpen}
           title={RESUME_CONFIRM_TITLE}
@@ -552,12 +541,12 @@ export function ShowNight() {
           title="Start the night and its first cycle?"
           detail={
             <>
-              <p className="sm-body">This starts the show. The session reports what it does.</p>
+              <p className="sm-body">This starts the show.</p>
               <Choice
                 type="checkbox"
                 checked={skipEnterShowLead}
                 onChange={(event) => setSkipEnterShowLead(event.target.checked)}
-                label="Skip the enter-show lead. An enter-show announcement cue still dispatches."
+                label="Start the show now, without the lead-in. An announcement cue still plays."
               />
             </>
           }
@@ -571,14 +560,25 @@ export function ShowNight() {
         {outcome !== null && (
           <div className="sm-outcome">
             <StatusPair tone={outcome.tone} label={outcome.label} />
-            <p className="sm-outcome__detail">{outcome.detail}</p>
+            {outcome.lines.map((line, index) => (
+              <p key={`${index}:${line}`} className="sm-outcome__detail">{line}</p>
+            ))}
+            {outcome.blocked.length > 0 && (
+              <ul className="sm-plain-list sm-small" aria-label="Safety checks that blocked this">
+                {outcome.blocked.map((check) => (
+                  <li key={check.name}>
+                    <span className="sm-data">{check.name}</span> · {check.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
             {withheld !== null &&
               (overrideGate.allowed ? (
                 <div className="sm-outcome__override">
                   <FieldGrid>
                     <Field
                       label="Safety check"
-                      help="The rule name, exactly as configured."
+                      help="The safety check's name, as listed above."
                       error={overrideInvalid && overrideRule.trim() === '' ? 'Name the rule to override.' : undefined}
                     >
                       {(props) => <Input {...props} value={overrideRule} onChange={(e) => setOverrideRule(e.target.value)} />}
@@ -592,7 +592,7 @@ export function ShowNight() {
                   </FieldGrid>
                   <ButtonRow>
                     <Button size="gloved" disabled={!gate.allowed} onClick={submitOverride}>
-                      Retry {withheld.command} with override
+                      Retry {nightCommandLabel(withheld.command)} with override
                     </Button>
                   </ButtonRow>
                 </div>
@@ -620,7 +620,7 @@ export function ShowNight() {
         {session.cues.state !== 'recorded' ? (
           <RuledStrip
             absence={session.cues.state === 'not_configured' ? 'empty' : 'unobserved'}
-            label={session.cues.state.replace('_', ' ')}
+            label={CUES_STATE_LABEL[session.cues.state] ?? 'Unknown'}
             fact={session.cues.reason !== '' ? session.cues.reason : 'No transition steps are recorded for this cycle.'}
           />
         ) : (
@@ -666,7 +666,7 @@ export function ShowNight() {
               </Table>
             </TableWrap>
             <p className="sm-section__footnote">
-              {steps.length} steps this cycle · {armed} armed for the next transition.
+              {steps.length} {steps.length === 1 ? 'step' : 'steps'} this cycle · {armed} waiting.
             </p>
           </>
         )}
@@ -684,7 +684,7 @@ export function ShowNight() {
           stamp="Degr"
           eyebrow="Night session · degraded"
           title="This session is degraded"
-          detail={session.degradedReason ?? 'The controller reported degraded without a reason.'}
+          detail={session.degradedReason ?? DEGRADED_WITHOUT_REASON}
         />
       )}
 
@@ -786,7 +786,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
     <Section
       id="sn-active"
       title="Night session activation"
-      aside={<span className="sm-small sm-muted">Which definition start-night arms next</span>}
+      aside={<span className="sm-small sm-muted">The definition Start night uses</span>}
     >
       {state.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator which night session definition is active." />
@@ -800,7 +800,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
                 term: 'Active definition',
                 value:
                   state.response.payload.session === '' ? (
-                    <span className="sm-muted">none - the pointer is cleared</span>
+                    <span className="sm-muted">None. No definition is active.</span>
                   ) : (
                     <span className="sm-data">{state.response.payload.session}</span>
                   ),
@@ -820,7 +820,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
           />
 
           <FieldGrid>
-            <Field label="Activate a definition" help="Points start-night at a different night.session object.">
+            <Field label="Activate a definition" help="Start night uses the definition chosen here.">
               {(props) => (
                 <Select {...props} value={selected} onChange={(e) => setSelected(e.target.value)}>
                   <option value="">Choose a definition…</option>
@@ -847,7 +847,7 @@ function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () 
           {state.response.payload.session !== '' && (
             <div className="sm-outcome__override">
               <Field
-                label={`Type ${state.response.payload.session} to confirm clearing the pointer`}
+                label={`Type ${state.response.payload.session} to confirm clearing the active definition`}
                 help="After clearing, Start night has no definition until one is activated."
               >
                 {(props) => <Input {...props} value={clearConfirmText} onChange={(e) => setClearConfirmText(e.target.value)} />}
@@ -991,6 +991,21 @@ const INTERLOCK_PHASES = [
 const INTERLOCK_POSTURES = ['observe', 'block', 'disabled'] as const
 const ON_UNAVAILABLE_OPTIONS = ['block', 'allow'] as const
 const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
+
+/** A stored option value in the words its select shows. */
+const OPTION_LABEL: Record<string, string> = {
+  none: 'None',
+  item: 'Repeat the current item',
+  playlist: 'Repeat the whole list',
+  resume: 'Resume where it left off',
+  restart: 'Restart from the first item',
+  sequential: 'One after another',
+  'authorized-operator': 'A user allowed to override',
+}
+
+function optionLabel(value: string): string {
+  return OPTION_LABEL[value] ?? inWords(value)
+}
 
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
 const blankBackgroundAudioItem = (show = ''): BackgroundAudioItemDraft => ({ itemId: '', show, sequence: '', target: '' })
@@ -1455,7 +1470,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
     >
       <div className="sm-night-session-list">
         <p className="sm-eyebrow">Definitions · {objects?.length ?? 0}</p>
-        {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : objects.length === 0 ? <RuledStrip absence="empty" label="No definitions" fact="No definitions yet." /> : <TableWrap label="Night session definitions"><Table minWidth={820}><thead><tr><th>Definition</th><th>Show playlist</th><th>Resting playlist</th><th>Revision</th><th>State</th></tr></thead><tbody>{objects.map((object) => <SelectableRow key={object.id} selected={selected === object.id} onActivate={() => selectDefinition(object.id)} ariaLabel={`Edit ${object.payload.label}`}><td><strong>{object.payload.label}</strong><br /><span className="sm-data sm-small">{object.id}</span></td><td><span className="sm-data">{object.payload.showPlaylist.fppInstanceId}</span><br />{object.payload.showPlaylist.playlist}</td><td><span className="sm-data">{object.payload.resting.fppInstanceId}</span><br />{object.payload.resting.playlist}</td><td className="sm-data">{object.revision}</td><td><span className={activeId === object.id ? 'sm-meta-status sm-meta-status--live' : 'sm-meta-status'}>{activeId === object.id ? 'Active' : 'Inactive'}</span></td></SelectableRow>)}</tbody></Table></TableWrap>}
+        {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : objects.length === 0 ? <RuledStrip absence="empty" label="No definitions" fact="No definitions yet." /> : <TableWrap label="Night session definitions"><Table minWidth={820}><thead><tr><th>Definition</th><th>Show playlist</th><th>Resting playlist</th><th>Version</th><th>State</th></tr></thead><tbody>{objects.map((object) => <SelectableRow key={object.id} selected={selected === object.id} onActivate={() => selectDefinition(object.id)} ariaLabel={`Edit ${object.payload.label}`}><td><strong>{object.payload.label}</strong><br /><span className="sm-data sm-small">{object.id}</span></td><td><span className="sm-data">{object.payload.showPlaylist.fppInstanceId}</span><br />{object.payload.showPlaylist.playlist}</td><td><span className="sm-data">{object.payload.resting.fppInstanceId}</span><br />{object.payload.resting.playlist}</td><td className="sm-data">{object.revision}</td><td><span className={activeId === object.id ? 'sm-meta-status sm-meta-status--live' : 'sm-meta-status'}>{activeId === object.id ? 'Active' : 'Inactive'}</span></td></SelectableRow>)}</tbody></Table></TableWrap>}
         <p className="sm-small sm-muted sm-night-session-list__note">Activate a definition on Show Night.</p>
       </div>
       <aside>
@@ -1465,7 +1480,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="The length of this file sets how long the resting cycle runs.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resting target">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a target…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
-          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v} value={v}>{optionLabel(v)}</option>)}</Select>}</Field></div>
           <TransitionStepEditor title="Enter show" offsetHelp="Milliseconds from the end of the resting sequence. Negative is before." steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the end of the show. Negative is before." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
           <div className="sm-inspector__group">
@@ -1511,9 +1526,9 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             {draft.backgroundAudio.mode === 'inline' && (
               <>
                 <div className="sm-night-session-compact-grid">
-                  <Field label="Repeat">{(p) => <Select {...p} value={draft.backgroundAudio.repeat} onChange={(e) => updateBackgroundAudio({ repeat: e.target.value as BackgroundAudioDraft['repeat'] })}>{BACKGROUND_AUDIO_REPEATS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Resume" help="How the bed resumes after a show returns to resting.">{(p) => <Select {...p} value={draft.backgroundAudio.resume} onChange={(e) => updateBackgroundAudio({ resume: e.target.value as BackgroundAudioDraft['resume'] })}>{BACKGROUND_AUDIO_RESUMES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Between items">{(p) => <Select {...p} value={draft.backgroundAudio.itemTransition} onChange={(e) => updateBackgroundAudio({ itemTransition: e.target.value as BackgroundAudioDraft['itemTransition'] })}>{BACKGROUND_AUDIO_TRANSITIONS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                  <Field label="Repeat">{(p) => <Select {...p} value={draft.backgroundAudio.repeat} onChange={(e) => updateBackgroundAudio({ repeat: e.target.value as BackgroundAudioDraft['repeat'] })}>{BACKGROUND_AUDIO_REPEATS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                  <Field label="Resume" help="How the bed resumes after a show returns to resting.">{(p) => <Select {...p} value={draft.backgroundAudio.resume} onChange={(e) => updateBackgroundAudio({ resume: e.target.value as BackgroundAudioDraft['resume'] })}>{BACKGROUND_AUDIO_RESUMES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                  <Field label="Between items">{(p) => <Select {...p} value={draft.backgroundAudio.itemTransition} onChange={(e) => updateBackgroundAudio({ itemTransition: e.target.value as BackgroundAudioDraft['itemTransition'] })}>{BACKGROUND_AUDIO_TRANSITIONS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
                   {draft.backgroundAudio.itemTransition === 'crossfade' && (
                     <Field label="Crossfade (ms)" help="Required when item transition is crossfade.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.crossfadeMs} onChange={(e) => updateBackgroundAudio({ crossfadeMs: e.target.value })} />}</Field>
                   )}
@@ -1559,7 +1574,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           </div>
           <div className="sm-inspector__group">
             <h4 className="sm-subsection__title">Site control</h4>
-            <Field label="Request thermal profile" help="The show.action this deployment runs.">
+            <Field label="Request thermal profile" help="The action this site runs.">
               {(p) => <Input {...p} value={draft.siteControl.requestThermalProfile} onChange={(e) => updateSiteControl({ requestThermalProfile: e.target.value })} />}
             </Field>
             <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power-on</h4></div>
@@ -1567,9 +1582,9 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             {draft.siteControl.powerOnEnabled && (
               <div className="sm-night-session-compact-grid">
                 <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOnAction} onChange={(e) => updateSiteControl({ powerOnAction: e.target.value })} />}</Field>
-                <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOnDomain} onChange={(e) => updateSiteControl({ powerOnDomain: e.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                <Field label="Domain provenance" help="Only operator-declared is accepted for this binding.">
-                  {(p) => <Select {...p} value={draft.siteControl.powerOnProvenance} onChange={(e) => updateSiteControl({ powerOnProvenance: e.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOnDomain} onChange={(e) => updateSiteControl({ powerOnDomain: e.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                <Field label="Power kind set by" help="Only Operator declared is accepted here.">
+                  {(p) => <Select {...p} value={draft.siteControl.powerOnProvenance} onChange={(e) => updateSiteControl({ powerOnProvenance: e.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
                 </Field>
               </div>
             )}
@@ -1579,10 +1594,10 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               <>
                 <div className="sm-night-session-compact-grid">
                   <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOffAction} onChange={(e) => updateSiteControl({ powerOffAction: e.target.value })} />}</Field>
-                  <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOffDomain} onChange={(e) => updateSiteControl({ powerOffDomain: e.target.value as SiteControlDraft['powerOffDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Domain provenance">{(p) => <Select {...p} value={draft.siteControl.powerOffProvenance} onChange={(e) => updateSiteControl({ powerOffProvenance: e.target.value as SiteControlDraft['powerOffProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                  <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOffDomain} onChange={(e) => updateSiteControl({ powerOffDomain: e.target.value as SiteControlDraft['powerOffDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                  <Field label="Power kind set by">{(p) => <Select {...p} value={draft.siteControl.powerOffProvenance} onChange={(e) => updateSiteControl({ powerOffProvenance: e.target.value as SiteControlDraft['powerOffProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
                   <Field label="Removal policy" help="Immediate needs the confirmation below. After-actions needs a prerequisite.">
-                    {(p) => <Select {...p} value={draft.siteControl.removalPolicy} onChange={(e) => updateSiteControl({ removalPolicy: e.target.value as SiteControlDraft['removalPolicy'] })}>{REMOVAL_POLICIES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                    {(p) => <Select {...p} value={draft.siteControl.removalPolicy} onChange={(e) => updateSiteControl({ removalPolicy: e.target.value as SiteControlDraft['removalPolicy'] })}>{REMOVAL_POLICIES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
                   </Field>
                 </div>
                 {draft.siteControl.removalPolicy === 'immediate' && (
@@ -1618,13 +1633,13 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               <div className="sm-night-session-item" key={`interlock-${index}`}>
                 <Field label="Name">{(p) => <Input {...p} value={item.name} onChange={(e) => updateInterlock(index, { name: e.target.value })} />}</Field>
                 <div className="sm-night-session-compact-grid">
-                  <Field label="Phase">{(p) => <Select {...p} value={item.phase} onChange={(e) => updateInterlock(index, { phase: e.target.value as InterlockDraft['phase'] })}>{INTERLOCK_PHASES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Posture" help="Block requires on-unavailable and override policy.">
-                    {(p) => <Select {...p} value={item.posture} onChange={(e) => updateInterlock(index, { posture: e.target.value as InterlockDraft['posture'] })}>{INTERLOCK_POSTURES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                  <Field label="Phase">{(p) => <Select {...p} value={item.phase} onChange={(e) => updateInterlock(index, { phase: e.target.value as InterlockDraft['phase'] })}>{INTERLOCK_PHASES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                  <Field label="Mode" help="Block needs the two settings below.">
+                    {(p) => <Select {...p} value={item.posture} onChange={(e) => updateInterlock(index, { posture: e.target.value as InterlockDraft['posture'] })}>{INTERLOCK_POSTURES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
                   </Field>
                   {item.posture !== 'disabled' && (
                     <>
-                      <Field label="Signal action" help="Must name a show.action with an mqtt target and a response expectation.">
+                      <Field label="Signal action" help="Pick an MQTT action that waits for a reply.">
                         {(p) => <Input {...p} value={item.signal} onChange={(e) => updateInterlock(index, { signal: e.target.value })} />}
                       </Field>
                       <Field label="Freshness (s)" help="A reading older than this counts as unavailable.">
@@ -1633,8 +1648,8 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                       <Field label="Failure text">{(p) => <Input {...p} value={item.failureText} onChange={(e) => updateInterlock(index, { failureText: e.target.value })} />}</Field>
                       {item.posture === 'block' && (
                         <>
-                          <Field label="On unavailable">{(p) => <Select {...p} value={item.onUnavailable} onChange={(e) => updateInterlock(index, { onUnavailable: e.target.value as InterlockDraft['onUnavailable'] })}>{ON_UNAVAILABLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                          <Field label="Override policy">{(p) => <Select {...p} value={item.overridePolicy} onChange={(e) => updateInterlock(index, { overridePolicy: e.target.value as InterlockDraft['overridePolicy'] })}>{OVERRIDE_POLICIES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                          <Field label="When the source does not answer">{(p) => <Select {...p} value={item.onUnavailable} onChange={(e) => updateInterlock(index, { onUnavailable: e.target.value as InterlockDraft['onUnavailable'] })}>{ON_UNAVAILABLE_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
+                          <Field label="Who may override">{(p) => <Select {...p} value={item.overridePolicy} onChange={(e) => updateInterlock(index, { overridePolicy: e.target.value as InterlockDraft['overridePolicy'] })}>{OVERRIDE_POLICIES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
                         </>
                       )}
                     </>
@@ -1671,5 +1686,5 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
 }
 
 function TransitionStepEditor({ title, offsetHelp, steps, actions, onChange, onAdd, onRemove }: { title: string; offsetHelp: string; steps: CueDraft[]; actions: ShowActionConfigResponse[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
-  return <div className="sm-inspector__group"><div className="sm-night-session-group-head"><div><h4 className="sm-subsection__title">{title}</h4><p className="sm-small sm-muted">{steps.length} {steps.length === 1 ? 'step' : 'steps'}</p></div><Button onClick={onAdd}>Add step</Button></div>{steps.map((step, index) => <div className="sm-night-session-item" key={index}><Field label="Name">{(p) => <Input {...p} value={step.name} onChange={(e) => onChange(index, { name: e.target.value })} />}</Field><div className="sm-night-session-compact-grid"><Field label="Role">{(p) => <Select {...p} value={step.role} onChange={(e) => onChange(index, { role: e.target.value as CueDraft['role'] })}>{CUE_ROLES.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Action">{(p) => <Select {...p} value={step.action} onChange={(e) => onChange(index, { action: e.target.value })}><option value="">Select an action…</option>{actions.map((action) => <option key={action.id} value={action.id}>{action.payload.label} · {action.id}</option>)}</Select>}</Field><Field label="Offset (ms)" help={offsetHelp}>{(p) => <Input {...p} type="number" step="1" value={step.offsetMs} onChange={(e) => onChange(index, { offsetMs: e.target.value })} />}</Field><Field label="Fade (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={step.fadeDurationMs} onChange={(e) => onChange(index, { fadeDurationMs: e.target.value })} />}</Field><Field label="On failure">{(p) => <Select {...p} value={step.onFailure} onChange={(e) => onChange(index, { onFailure: e.target.value as CueDraft['onFailure'] })}><option>continue</option><option>abort</option></Select>}</Field>{step.role === 'announcement' && <Field label="Announcement policy">{(p) => <Select {...p} value={step.announcementPolicy} onChange={(e) => onChange(index, { announcementPolicy: e.target.value as CueDraft['announcementPolicy'] })}><option value="">Use default</option><option>duck</option><option>mix</option><option>interrupt</option></Select>}</Field>}</div><Choice type="checkbox" checked={step.barrier} onChange={(e) => onChange(index, { barrier: e.target.checked })} label="Wait for this action before continuing" /><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}</div>
+  return <div className="sm-inspector__group"><div className="sm-night-session-group-head"><div><h4 className="sm-subsection__title">{title}</h4><p className="sm-small sm-muted">{steps.length} {steps.length === 1 ? 'step' : 'steps'}</p></div><Button onClick={onAdd}>Add step</Button></div>{steps.map((step, index) => <div className="sm-night-session-item" key={index}><Field label="Name">{(p) => <Input {...p} value={step.name} onChange={(e) => onChange(index, { name: e.target.value })} />}</Field><div className="sm-night-session-compact-grid"><Field label="Role">{(p) => <Select {...p} value={step.role} onChange={(e) => onChange(index, { role: e.target.value as CueDraft['role'] })}>{CUE_ROLES.map((v) => <option key={v} value={v}>{optionLabel(v)}</option>)}</Select>}</Field><Field label="Action">{(p) => <Select {...p} value={step.action} onChange={(e) => onChange(index, { action: e.target.value })}><option value="">Select an action…</option>{actions.map((action) => <option key={action.id} value={action.id}>{action.payload.label} · {action.id}</option>)}</Select>}</Field><Field label="Offset (ms)" help={offsetHelp}>{(p) => <Input {...p} type="number" step="1" value={step.offsetMs} onChange={(e) => onChange(index, { offsetMs: e.target.value })} />}</Field><Field label="Fade (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={step.fadeDurationMs} onChange={(e) => onChange(index, { fadeDurationMs: e.target.value })} />}</Field><Field label="On failure">{(p) => <Select {...p} value={step.onFailure} onChange={(e) => onChange(index, { onFailure: e.target.value as CueDraft['onFailure'] })}><option value="continue">Continue</option><option value="abort">Abort the rest</option></Select>}</Field>{step.role === 'announcement' && <Field label="Announcement policy">{(p) => <Select {...p} value={step.announcementPolicy} onChange={(e) => onChange(index, { announcementPolicy: e.target.value as CueDraft['announcementPolicy'] })}><option value="">Use default</option><option value="duck">Duck</option><option value="mix">Mix</option><option value="interrupt">Interrupt</option></Select>}</Field>}</div><Choice type="checkbox" checked={step.barrier} onChange={(e) => onChange(index, { barrier: e.target.checked })} label="Wait for this action before continuing" /><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}</div>
 }

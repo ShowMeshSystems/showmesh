@@ -434,7 +434,7 @@ func TestAFailingHoldWriteStillStopsEveryTarget(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r.h.handleEmergencyStop(w, httptest.NewRequest(http.MethodPost, "/api/v1/emergency-stop/stop", strings.NewReader(`{"idempotencyKey":"stop-1"}`)))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "hold step failed") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "could not be held") {
 		t.Fatalf("level 1 with a failing hold write: %d %s, want 200 reporting the hold failure", w.Code, w.Body.String())
 	}
 	cmds, _ := r.fppCommands()

@@ -863,10 +863,10 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_WarnsNamingTheBedWhenTar
 
 	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba.PlaybackNodeIDs())
 	if check.health != nightHealthDegraded() {
-		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, nightCheckText(check))
 	}
-	if !reasonMentionsAll(check.reason, "node-a", "node-b") {
-		t.Fatalf("reason = %q, want it to name the bed's own targets", check.reason)
+	if !reasonMentionsAll(nightCheckText(check), "node-a", "node-b") {
+		t.Fatalf("reason = %q, want it to name the bed's own targets", nightCheckText(check))
 	}
 }
 
@@ -880,7 +880,7 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsP
 
 	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba.PlaybackNodeIDs())
 	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %v, reason = %q, want healthy (node-a holds program+ltc)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want healthy (node-a holds program+ltc)", check.health, nightCheckText(check))
 	}
 }
 
@@ -898,8 +898,8 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile(t *te
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %v, want failed (no listed target has a registered copy)", check.health)
 	}
-	if !reasonMentionsAll(check.reason, "node-a", "node-b", "track-1", "track-2") {
-		t.Fatalf("reason = %q, want it to name both nodes and both items", check.reason)
+	if !reasonMentionsAll(nightCheckText(check), "node-a", "node-b", "bg-1", "bg-2") {
+		t.Fatalf("reason = %q, want it to name both nodes and both items", nightCheckText(check))
 	}
 }
 
@@ -924,7 +924,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_HealthyViaFallback(t *testin
 
 	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %v, reason = %q, want healthy (node-b covered via node-a's own registered row, and both nodes' inventory holds it under the expected filename)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want healthy (node-b covered via node-a's own registered row, and both nodes' inventory holds it under the expected filename)", check.health, nightCheckText(check))
 	}
 }
 
@@ -952,10 +952,10 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_FailsWhenHeldUnderWrongFilen
 
 	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthFailed() {
-		t.Fatalf("health = %v, reason = %q, want failed (node-b holds asset-1's bytes under the wrong filename)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want failed (node-b holds asset-1's bytes under the wrong filename)", check.health, nightCheckText(check))
 	}
-	if !reasonMentionsAll(check.reason, "node-b", "track-1", "asset-1.mp3", "content.mp3") {
-		t.Fatalf("reason = %q, want it to name node-b, the item, the expected filename, and the filename node-b actually holds", check.reason)
+	if !reasonMentionsAll(nightCheckText(check), "node-b", "bg-1", "wrong name") {
+		t.Fatalf("reason = %q, want it to name node-b, the item, the expected filename, and the filename node-b actually holds", nightCheckText(check))
 	}
 }
 
@@ -978,10 +978,10 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_UnknownOnStaleReport(t *test
 
 	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthUnknown() {
-		t.Fatalf("health = %v, reason = %q, want unknown (node-b has never reported its inventory)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want unknown (node-b has never reported its inventory)", check.health, nightCheckText(check))
 	}
-	if !strings.Contains(check.reason, "node-b") {
-		t.Fatalf("reason = %q, want it to name node-b", check.reason)
+	if !strings.Contains(nightCheckText(check), "node-b") {
+		t.Fatalf("reason = %q, want it to name node-b", nightCheckText(check))
 	}
 }
 
@@ -997,7 +997,7 @@ func TestNightCheckAudioAlignmentForNode_UnlockedClockIsWarning(t *testing.T) {
 
 	check := h.nightCheckAudioAlignmentForNode(context.Background(), testNow, "node-b")
 	if check.health != nightHealthDegraded() {
-		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, nightCheckText(check))
 	}
 }
 

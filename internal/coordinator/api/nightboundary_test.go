@@ -281,7 +281,7 @@ func TestMapNightTransition_NoAnchorNoBoundaryStillUnknown(t *testing.T) {
 	if got.State != v1.NightEvidenceUnknown {
 		t.Fatalf("State = %q, want %q", got.State, v1.NightEvidenceUnknown)
 	}
-	if got.Reason != "no show transition is set for the current state" {
+	if got.Reason != nightNoShowStartReason {
 		t.Fatalf("Reason = %q, want the original fallback text", got.Reason)
 	}
 }

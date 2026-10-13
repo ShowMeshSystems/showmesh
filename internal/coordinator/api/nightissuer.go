@@ -33,7 +33,7 @@ func nightControllerIssuer(rec store.NightSessionRecord) FPPCommandIssuer {
 
 func nightControllerPrincipalName(rec store.NightSessionRecord) string {
 	if rec.Issuer.PrincipalName == "" {
-		return "night controller (no authorizing principal recorded)"
+		return "night controller, no user recorded"
 	}
 	return "night controller for " + rec.Issuer.PrincipalName
 }

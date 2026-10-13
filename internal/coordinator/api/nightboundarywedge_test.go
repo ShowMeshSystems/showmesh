@@ -126,7 +126,7 @@ func TestNightAdvanceRestingIntershow_DerivedInvalidBoundaryRetriesThenWedgesWhe
 	if !ok || boundary.State != nightBoundaryStateInvalid {
 		t.Fatalf("boundary after tick 1 = %+v, ok=%v, want state=invalid; claim 2 refuted if this pair cannot be produced", boundary, ok)
 	}
-	if !strings.Contains(boundary.Reason, "past the asset's own duration") {
+	if !strings.Contains(boundary.Reason, "past the end of the resting sequence") {
 		t.Fatalf("boundary.Reason = %q, want it to name the past-duration route", boundary.Reason)
 	}
 	if boundary.Kind != nightBoundaryKindDerivation {
@@ -213,10 +213,10 @@ func TestNightAdvanceRestingIntershow_DerivedInvalidBoundaryRetriesThenWedgesWhe
 		t.Fatalf("session not degraded after exhausting all %d retries", nightDerivationInvalidRetryLimit)
 	}
 	degradedReason := got.DegradedReason
-	if !strings.Contains(degradedReason, "invalid") {
+	if !strings.Contains(degradedReason, "could not be worked out") {
 		t.Fatalf("DegradedReason = %q, want it to name the invalid boundary", degradedReason)
 	}
-	limitText := fmt.Sprintf("%d automatic re-derive attempts", nightDerivationInvalidRetryLimit)
+	limitText := fmt.Sprintf("after %d tries", nightDerivationInvalidRetryLimit)
 	if !strings.Contains(degradedReason, limitText) {
 		t.Fatalf("DegradedReason = %q, want it to name the exhausted retry count (%q)", degradedReason, limitText)
 	}

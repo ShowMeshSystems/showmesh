@@ -181,7 +181,7 @@ func TestNightPowerOff_PrerequisiteNeverConfirmingLeavesPowerOnAndNamesTheStep(t
 	if !strings.Contains(final.PowerPhase, "step 1 of 1") {
 		t.Fatalf("PowerPhase = %q, want it to name which prerequisite stopped the sequence", final.PowerPhase)
 	}
-	if !strings.Contains(final.PowerPhase, "Power was not removed") {
+	if !strings.Contains(strings.ToLower(final.PowerPhase), "power was not removed") {
 		t.Fatalf("PowerPhase = %q, want it to state power was not removed", final.PowerPhase)
 	}
 	if !strings.Contains(final.PowerPhase, "Run the power-off action by hand") {
@@ -303,7 +303,7 @@ func TestNightPowerOff_NonPresentationDomainBindingIsRefused(t *testing.T) {
 	if !strings.Contains(final.PowerPhase, "environmental") {
 		t.Fatalf("PowerPhase = %q, want it to name the refused domain", final.PowerPhase)
 	}
-	if !strings.Contains(final.PowerPhase, "Power was not removed") {
+	if !strings.Contains(strings.ToLower(final.PowerPhase), "power was not removed") {
 		t.Fatalf("PowerPhase = %q, want it to state power was not removed", final.PowerPhase)
 	}
 }
@@ -358,7 +358,7 @@ func TestNightPowerOff_CrashMidDispatchIsReportedAmbiguousNotGuessed(t *testing.
 	if final.PowerPhase == nightPowerPhaseConfiguredNotDispatched {
 		t.Fatalf("PowerPhase never resolved to a terminal outcome")
 	}
-	if !strings.Contains(final.PowerPhase, "Power was not removed") {
+	if !strings.Contains(strings.ToLower(final.PowerPhase), "power was not removed") {
 		t.Fatalf("PowerPhase = %q, want it to state power was not removed rather than assume the ambiguous step succeeded", final.PowerPhase)
 	}
 }

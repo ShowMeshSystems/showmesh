@@ -269,8 +269,8 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	if check.health != nightHealthFailed() {
 		t.Fatalf("live node declaring nothing, engine confirmed unavailable: check = %+v, want failed", check)
 	}
-	if !containsAllSubstrings(check.reason, "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop") {
-		t.Fatalf("reason does not name every missing capability; reason: %s", check.reason)
+	if !containsAllSubstrings(nightCheckText(check), "background audio", "playlists", "volume changes", "repeat") {
+		t.Fatalf("reason does not name every missing capability; reason: %s", nightCheckText(check))
 	}
 
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
@@ -280,8 +280,8 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	if check.health != nightHealthFailed() {
 		t.Fatalf("missing only loop: check = %+v, want failed", check)
 	}
-	if !containsAllSubstrings(check.reason, "audio.playback.loop") {
-		t.Fatalf("reason does not name the still-missing loop capability; reason: %s", check.reason)
+	if !containsAllSubstrings(nightCheckText(check), "does not support repeat") {
+		t.Fatalf("reason does not name the still-missing loop capability; reason: %s", nightCheckText(check))
 	}
 
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
@@ -557,8 +557,8 @@ func TestNightCheckAnnouncementAssets_FailsNamingNodeAndFile(t *testing.T) {
 	if check.health != nightHealthFailed() {
 		t.Fatalf("check = %+v, want failed", check)
 	}
-	if !containsAllSubstrings(check.reason, "node-a", "node-b", "thankyou.mp3") {
-		t.Fatalf("reason = %q, want it to name both nodes and the file", check.reason)
+	if !containsAllSubstrings(nightCheckText(check), "node-a", "node-b", "thankyou.mp3") {
+		t.Fatalf("reason = %q, want it to name both nodes and the file", nightCheckText(check))
 	}
 }
 
@@ -584,7 +584,7 @@ func TestNightCheckAnnouncementAssets_NotVerifiableWithIncompleteMediaRef(t *tes
 	if check.health != nightCheckStateNotVerifiable {
 		t.Fatalf("check = %+v, want not_verifiable", check)
 	}
-	if !containsAllSubstrings(check.reason, "thank-you") {
-		t.Fatalf("reason = %q, want it to name the cue", check.reason)
+	if !containsAllSubstrings(nightCheckText(check), "thank-you") {
+		t.Fatalf("reason = %q, want it to name the cue", nightCheckText(check))
 	}
 }

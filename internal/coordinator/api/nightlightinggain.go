@@ -99,18 +99,15 @@ func (h *handlers) nightApplyLightingFade(ctx context.Context, cueName string, t
 	}
 	outcome, err := write(ctx, target, fade, requestID)
 	if err != nil {
+		h.logWarn("night loop: lighting fade could not be written", "cue", cueName, "targetPercent", fade.TargetPercent, "error", err)
 		return nightGainResult{
-			note:   fmt.Sprintf("transition gain write to %d%% over %ds failed: %v", fade.TargetPercent, fade.FadeSeconds, err),
+			note:   fmt.Sprintf("The lights could not be faded to %d%%. Check the brightness on FPP.", fade.TargetPercent),
 			failed: true,
 		}
 	}
-	// Recorded on both paths. applied=false is an idempotent repeat of a
-	// requestId already applied, which is the key working as designed on a
-	// resumed transition; a row that stored nothing there would make the
-	// resume look like it never acted.
-	return nightGainResult{note: fmt.Sprintf(
-		"transition gain to %d%% over %ds: applied=%t, ceiling %d, effective output %d",
-		fade.TargetPercent, fade.FadeSeconds, outcome.Applied, outcome.Ceiling, outcome.EffectiveOutput)}
+	h.logDebug("night loop: lighting fade written", "cue", cueName, "applied", outcome.Applied, "ceiling", outcome.Ceiling, "effectiveOutput", outcome.EffectiveOutput)
+	// Recorded on a repeat too, so a resumed transition shows it acted.
+	return nightGainResult{note: fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds)}
 }
 
 // nightCueReasonWith appends a gain note to a dispatch's own reason,
@@ -122,7 +119,7 @@ func nightCueReasonWith(reason, note string) string {
 	case reason == "":
 		return note
 	default:
-		return reason + "; " + note
+		return reason + nightReasonNoteSeparator + note
 	}
 }
 

@@ -53,13 +53,11 @@ const nightCatalogCurrentCheckPrefix = "catalog:" + string(fppreconcile.Readines
 // [fppreconcile.NodeCatalogAckStatus]'s own currentRevision == "" rule.
 func (h *handlers) nightCheckCatalogCurrent(ctx context.Context, now time.Time, show string) []nightReadinessCheck {
 	if h.deps.AssetManifests == nil {
-		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightCheckStateNotConfigured,
-			reason: "no asset manifest store is configured on this coordinator"}}
+		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightCheckStateNotConfigured, reason: nightNoFileRecordReason}}
 	}
 	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
 	if err != nil {
-		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightHealthUnknown(),
-			reason: "could not resolve the active show: " + err.Error()}}
+		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightHealthUnknown(), cause: err, reason: nightActiveShowUnreadReason}}
 	}
 	if !active.Configured || active.ShowID != show {
 		// A node's cue-catalog acknowledgement is only ever compared
@@ -76,13 +74,13 @@ func (h *handlers) nightCheckCatalogCurrent(ctx context.Context, now time.Time, 
 		// an operator has activated any show at all, not evidence this
 		// coordinator failed to determine something it should know.
 		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightCheckStateNotConfigured,
-			reason: fmt.Sprintf("show.active does not currently name this session's own show %q; catalog currency cannot be evaluated until it does", show)}}
+			reason: fmt.Sprintf("Show %s is not the active show, so its cue list was not checked. Activate the show.", show)}}
 	}
 
 	nodes, err := h.deps.AssetManifests.ListNodeDeclarations(ctx)
 	if err != nil {
-		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightHealthUnknown(),
-			reason: "could not list node declarations: " + err.Error()}}
+		return []nightReadinessCheck{{name: nightCatalogCurrentCheckPrefix, health: nightHealthUnknown(), cause: err,
+			reason: "ShowMesh could not read the list of nodes. Run readiness again."}}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
@@ -101,18 +99,22 @@ func (h *handlers) nightCheckCatalogCurrent(ctx context.Context, now time.Time, 
 // which case check is the zero value and must not be added to the result.
 func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Time, active assetsync.ActiveShow, nodeID string) (check nightReadinessCheck, participates bool) {
 	name := nightCatalogCurrentCheckPrefix + ":" + nodeID
+	unreadable := func(err error) nightReadinessCheck {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
+			reason: fmt.Sprintf("ShowMesh could not read the cue list for node %s. Run readiness again.", nodeID)}
+	}
 
 	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not resolve cue catalog: " + err.Error()}, true
+		return unreadable(err), true
 	}
 	if !catalog.HasAnyOutput() {
 		return nightReadinessCheck{}, false
 	}
 
-	status, ackRevision, _, err := fppreconcile.NodeCatalogAckStatus(ctx, h.deps.AssetManifests, nodeID, catalog.Revision)
+	status, _, _, err := fppreconcile.NodeCatalogAckStatus(ctx, h.deps.AssetManifests, nodeID, catalog.Revision)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not resolve node catalog acknowledgement status: " + err.Error()}, true
+		return unreadable(err), true
 	}
 	if status == v1.CueCatalogStatusCurrent {
 		// A node can only hold a conflicted revision via an operator's own
@@ -122,18 +124,16 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 		if len(catalog.Conflicts) > 0 {
 			covered, overrideRec, err := fppreconcile.CueCatalogOverrideStatus(ctx, h.deps.AssetManifests, nodeID, catalog)
 			if err != nil {
-				return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not resolve node catalog override status: " + err.Error()}, true
+				return unreadable(err), true
 			}
 			if covered {
 				return nightReadinessCheck{name: name, health: nightHealthDegraded(),
 					reason: fppreconcile.CueCatalogOverrideWarning(nodeID, catalog, overrideRec)}, true
 			}
 			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-				"node %q holds the active show's required catalog revision %q, but it carries an exclusive-claim "+
-					"conflict (%s) no recorded operator override covers", nodeID, catalog.Revision, catalog.Conflicts[0].Detail())}, true
+				"Node %s has cues sharing an output that nobody accepted. Fix the cues, or deploy and accept the conflict.", nodeID)}, true
 		}
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
-			"node %q has acknowledged the active show's required catalog revision %q", nodeID, catalog.Revision)}, true
+		return nightReadinessCheck{name: name, health: nightHealthHealthy()}, true
 	}
 
 	// Stale or never-acknowledged: Part 3's own WARN carve-out applies
@@ -146,17 +146,14 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 	hold := h.cueCatalogAutoDeployHold(ctx, now, nodeID)
 	if hold.Hold {
 		reason := fmt.Sprintf(
-			"Node %q does not have the active show's Cue list %q yet (it has %q). The deploy waits because %s.",
-			nodeID, catalog.Revision, ackRevision, hold.Reason)
+			"Node %s does not have the active show's cue list yet. It is sent when the node finishes its cue.", nodeID)
 		if hold.EvidenceUncertain {
 			reason = fmt.Sprintf(
-				"Node %q does not have the active show's Cue list %q yet (it has %q). The deploy waits until the node is seen idle: %s",
-				nodeID, catalog.Revision, ackRevision, hold.Reason)
+				"Node %s does not have the active show's cue list yet. It is sent once the node is seen idle.", nodeID)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: reason}, true
 	}
 
 	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-		"node %q has not acknowledged the active show's required catalog revision %q (status: %s, acknowledged revision: %q); no deploy is currently held for it",
-		nodeID, catalog.Revision, status, ackRevision)}, true
+		"Node %s does not have the active show's cue list. Deploy the cue list to the node.", nodeID)}, true
 }

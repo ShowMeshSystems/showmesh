@@ -171,13 +171,8 @@ func TestNightLightingCueGainOrdering(t *testing.T) {
 			if len(ids) != 1 || ids[0] != wantKey {
 				t.Fatalf("gain requestId = %v, want [%q]", ids, wantKey)
 			}
-			if !strings.Contains(row.OutcomeReason, "transition gain") {
+			if !strings.Contains(row.OutcomeReason, "The lights are fading") {
 				t.Errorf("outbox reason %q does not record the gain outcome", row.OutcomeReason)
-			}
-			if !strings.Contains(row.OutcomeReason, "applied=true") ||
-				!strings.Contains(row.OutcomeReason, "ceiling 80") ||
-				!strings.Contains(row.OutcomeReason, "effective output 40") {
-				t.Errorf("outbox reason %q does not carry applied/ceiling/effectiveOutput", row.OutcomeReason)
 			}
 		})
 	}
@@ -201,10 +196,8 @@ func TestNightLightingCueGainRecordsIdempotentRepeat(t *testing.T) {
 	if row.Outcome != nightCueOutcomeConfirmed {
 		t.Errorf("outcome = %q, want %q: an idempotent repeat is a success", row.Outcome, nightCueOutcomeConfirmed)
 	}
-	for _, want := range []string{"applied=false", "ceiling 70", "effective output 0"} {
-		if !strings.Contains(row.OutcomeReason, want) {
-			t.Errorf("outbox reason %q does not contain %q", row.OutcomeReason, want)
-		}
+	if !strings.Contains(row.OutcomeReason, "The lights are fading to 0%") {
+		t.Errorf("outbox reason %q does not record the repeated fade", row.OutcomeReason)
 	}
 }
 
@@ -227,7 +220,7 @@ func TestNightLightingCueGainFailureSurfaces(t *testing.T) {
 	if row.Outcome != nightCueOutcomeFailed {
 		t.Errorf("outcome = %q, want %q", row.Outcome, nightCueOutcomeFailed)
 	}
-	if !strings.Contains(row.OutcomeReason, "fpp plugin unreachable") {
+	if !strings.Contains(row.OutcomeReason, "could not be faded") {
 		t.Errorf("outbox reason %q does not name the gain failure", row.OutcomeReason)
 	}
 }

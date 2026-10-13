@@ -11,10 +11,10 @@ func TestPrintNightSessionStateDetailShowsTheCheckLabelNotItsName(t *testing.T) 
 	printNightSessionStateDetail(&out, nightSessionStateWire{ID: "sess-1", Readiness: nightReadinessWire{
 		State: "recorded",
 		Checks: []nightReadinessCheckWire{{
-			Name: "audio:alignment:pi-audio-01", Label: "Audio alignment on pi-audio-01", State: "healthy",
+			Name: "audio:alignment:pi-audio-01", Label: "Audio alignment on pi-audio-01", State: "healthy", StateLabel: "Passed",
 		}},
 	}})
-	if !strings.Contains(out.String(), "  - Audio alignment on pi-audio-01: healthy") || strings.Contains(out.String(), "audio:alignment") {
+	if !strings.Contains(out.String(), "  - Audio alignment on pi-audio-01: Passed") || strings.Contains(out.String(), "audio:alignment") {
 		t.Fatalf("output = %q, want the label and never the raw check name", out.String())
 	}
 }

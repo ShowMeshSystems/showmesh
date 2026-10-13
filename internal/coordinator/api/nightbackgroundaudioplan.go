@@ -17,17 +17,17 @@ func unknownNightAudioPlan(reason string) v1.NightBackgroundAudioPlan {
 // configuration revision, so it never reports another revision's items.
 func mapNightBackgroundAudioPlan(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudioPlan {
 	if rec.ID == "" || rec.ConfigObjectID == "" {
-		return unknownNightAudioPlan("No night session yet. Prepare the night to see its background audio.")
+		return unknownNightAudioPlan(nightNoSessionReason)
 	}
 	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
 	if err != nil {
 		slog.Default().Warn("night background audio plan: reading the night session configuration failed", "session", rec.ID, "error", err)
-		return unknownNightAudioPlan("The night's background audio settings could not be read. Check the coordinator log and reload.")
+		return unknownNightAudioPlan("The background audio settings for this night could not be read. Reload the page.")
 	}
 	ba := payload.Resting.BackgroundAudio
 	plan := v1.NightBackgroundAudioPlan{
 		State: v1.NightEvidenceRecorded, Nodes: []string{}, Items: []v1.NightBackgroundAudioPlanItem{},
-		Reason: "This night has no background audio. Add it in the night definition if the night should play a bed.",
+		Reason: "This night has no background audio. Add it in the night definition.",
 	}
 	if ba == nil {
 		return plan
@@ -39,7 +39,7 @@ func mapNightBackgroundAudioPlan(ctx context.Context, deps Dependencies, rec sto
 	if ba.MediaPlaylist != "" {
 		mp, _, ok := nightResolveMediaPlaylist(ctx, deps, ba.MediaPlaylist)
 		if !ok {
-			unknown := unknownNightAudioPlan(fmt.Sprintf("media playlist %q is missing or has been deleted. Restore it or choose another in the night definition.", ba.MediaPlaylist))
+			unknown := unknownNightAudioPlan(fmt.Sprintf("Media playlist %s is missing or was deleted. Pick another in the night definition.", ba.MediaPlaylist))
 			unknown.Configured, unknown.MediaPlaylist = true, ba.MediaPlaylist
 			return unknown
 		}

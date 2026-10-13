@@ -66,7 +66,7 @@ func TestReadiness_UnreadableEndOfNightPlaylistIsNotReady(t *testing.T) {
 		if c.State == string(nightHealthHealthy()) {
 			t.Fatalf("the end-of-night shape check passed against a playlist FPP does not serve: %+v", c)
 		}
-		if c.Reason == "" {
+		if len(c.Reasons) == 0 {
 			t.Error("the failing end-of-night check states no reason")
 		}
 	}

@@ -417,7 +417,7 @@ func TestNightAdvanceTransitionToShow_StalledBarrierCueWithAbort_NeverLaunches(t
 		t.Errorf("stalled cue row = state %q outcome %q, want resolved/unconfirmed even though it still blocks", row.State, row.Outcome)
 	}
 	boundary, ok := decodeNightBoundary(got.BoundaryJSON)
-	if !ok || !nightContainsAll(boundary.Reason, "abort") {
+	if !ok || !nightContainsAll(boundary.Reason, "set to stop the show start") {
 		t.Errorf("boundary reason %+v does not name the abort policy blocking the launch", boundary)
 	}
 }

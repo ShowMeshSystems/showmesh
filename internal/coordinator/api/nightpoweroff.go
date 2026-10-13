@@ -55,7 +55,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 	if payload.SiteControl == nil || payload.SiteControl.PresentationPowerOff == nil {
 		// Cannot happen for a session already prepared against this
 		// configuration; must not spin forever if it somehow does.
-		h.nightCompletePowerPhase(ctx, now, rec, "Power-down was asked for, but this night no longer has a power-off step. Power was not removed.")
+		h.nightCompletePowerPhase(ctx, now, rec, "Power down was requested, but this night has no power-off step. Power was not removed.")
 		return
 	}
 	off := *payload.SiteControl.PresentationPowerOff
@@ -66,8 +66,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 	// come down with it (RESTING-MODE.md section 10.2).
 	if off.PowerDomain != config.NightPowerDomainPresentation {
 		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-			"Power-off refused: its power domain is %q, not %q. Power was not removed.",
-			off.PowerDomain, config.NightPowerDomainPresentation))
+			"The power-off step controls %s power, so it was refused. Power was not removed.", off.PowerDomain))
 		return
 	}
 
@@ -79,9 +78,10 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 				return
 			}
 			if terminal {
+				h.logWarn("night loop: power-off stopped at a prerequisite", "sessionId", rec.ID, "index", i, "prerequisite", nightPowerOffPrerequisiteLabel(prereq), "reason", reason)
 				h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-					"Power-off stopped at step %d of %d (%s): %s. Power was not removed. Run the power-off action by hand.",
-					i+1, len(off.Prerequisites), nightPowerOffPrerequisiteLabel(prereq), reason))
+					"Power-off stopped at step %d of %d, so power was not removed. Run the power-off action by hand.",
+					i+1, len(off.Prerequisites)))
 				return
 			}
 			if !satisfied {
@@ -153,7 +153,7 @@ func (h *handlers) nightPowerOffAdvanceDelay(ctx context.Context, now time.Time,
 	}
 	row.State = nightCueStateResolved
 	row.Outcome = nightCueOutcomeConfirmed
-	row.OutcomeReason = fmt.Sprintf("%s delay elapsed", delay)
+	row.OutcomeReason = "The wait finished."
 	resolvedAt := now
 	row.ResolvedAt = &resolvedAt
 	if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
@@ -197,7 +197,7 @@ func (h *handlers) nightPowerOffAdvanceActionPrerequisite(ctx context.Context, n
 			return false, true, row.OutcomeReason, nil
 		default: // unconfirmed, unconfirmable: acceptable only when confirmation was never required.
 			if requireConfirm {
-				return false, true, fmt.Sprintf("did not confirm (%s): %s", row.Outcome, row.OutcomeReason), nil
+				return false, true, row.OutcomeReason, nil
 			}
 			return true, false, "", nil
 		}
@@ -226,21 +226,17 @@ func (h *handlers) nightPowerOffDispatchAction(ctx context.Context, now time.Tim
 		// own identical case: no bound here, waits rather than guesses.
 		return
 	case nightCueStateAmbiguous:
-		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-			"The power-off result is unclear: %s. Check the power by hand and run the power-off action if it is still on.",
-			row.OutcomeReason))
+		h.nightCompletePowerPhase(ctx, now, rec,
+			"The power-off result is unclear. Check the power by hand, and run the power-off action if it is still on.")
 	case nightCueStateResolved:
 		switch row.Outcome {
 		case nightCueOutcomeFailed, nightCueOutcomeRefused:
-			h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-				"Power-off was not sent: %s. Power was not removed. Run the power-off action by hand.",
-				row.OutcomeReason))
+			h.nightCompletePowerPhase(ctx, now, rec,
+				"The power-off action was not sent, so power was not removed. Run the power-off action by hand.")
+		case nightCueOutcomeConfirmed:
+			h.nightCompletePowerPhase(ctx, now, rec, "Power-off was sent and confirmed.")
 		default:
-			msg := fmt.Sprintf("Power-off was sent, result %s.", row.Outcome)
-			if row.OutcomeReason != "" {
-				msg = fmt.Sprintf("Power-off was sent, result %s: %s", row.Outcome, row.OutcomeReason)
-			}
-			h.nightCompletePowerPhase(ctx, now, rec, msg)
+			h.nightCompletePowerPhase(ctx, now, rec, "Power-off was sent but not confirmed. Check the power by hand.")
 		}
 	}
 }

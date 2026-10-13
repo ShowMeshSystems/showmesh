@@ -474,7 +474,7 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		return
 	}
 	if ready {
-		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateNone, Reason: "pre-show resting has no show-transition deadline; start-night ends it"})
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateNone, Reason: "Preshow runs until Start night."})
 		return
 	}
 	h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
@@ -619,13 +619,13 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
 		if nightBoundaryRetryEligible(persisted) && anchor.DerivationInvalidAttempts < nightDerivationInvalidRetryLimit {
 			anchor.DerivationInvalidAttempts++
-			reason := fmt.Sprintf("retrying an automatically-derived timing that came back invalid (%s); attempt %d of %d", persisted.Reason, anchor.DerivationInvalidAttempts, nightDerivationInvalidRetryLimit)
+			reason := fmt.Sprintf("The next show start could not be worked out. Trying again, attempt %d of %d.", anchor.DerivationInvalidAttempts, nightDerivationInvalidRetryLimit)
 			h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateUnknown, Reason: reason})
 			return
 		}
-		reason := "resting-intershow's timing was invalidated (" + persisted.Reason + ") and won't be recomputed"
+		reason := "The next show start was lost and cannot be worked out again. " + nightRecoverAction
 		if nightBoundaryRetryEligible(persisted) {
-			reason = fmt.Sprintf("resting-intershow's timing stayed invalid (%s) after %d automatic re-derive attempts", persisted.Reason, nightDerivationInvalidRetryLimit)
+			reason = fmt.Sprintf("The next show start could not be worked out after %d tries. %s", nightDerivationInvalidRetryLimit, nightRecoverAction)
 		}
 		h.nightDegradeSession(ctx, now, rec, reason)
 		return
@@ -639,7 +639,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		// waits for playback that is gone, so this would otherwise hold
 		// silently for the rest of the night.
 		if obsNow.Status == fppStatusValueIdle {
-			h.nightDegradeSession(ctx, now, rec, "resting playback stopped before its expected end, with nothing playing to re-derive timing from ("+reason+")")
+			h.nightDegradeSession(ctx, now, rec, "FPP stopped the resting sequence early and nothing is playing. "+nightRecoverAction)
 		}
 		return
 	}
@@ -649,7 +649,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		return
 	}
 	if now.Before(anchor.ObservedAt.Add(-nightClockBackstepTolerance)) {
-		reason := "the local clock now reads earlier than the observation this timing was anchored to; treating as a clock correction"
+		reason := "The coordinator's clock moved backward, so the next show start is being worked out again."
 		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 		return
 	}
@@ -672,7 +672,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		// through the lead window and must stay supervised (finding 7)
 		// until the first outward-facing cue commits.
 		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
-		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "show start time; enterShow cues and the show launch are relative to it"})
+		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "The show starts at this time."})
 		return cur
 	})
 }
@@ -758,7 +758,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 					if obsNow.Status == fppStatusValueIdle {
 						cur.Degraded = true
-						cur.DegradedReason = "resting playback stopped during the transition into a show, with nothing playing to re-derive timing from (" + reason + ")"
+						cur.DegradedReason = "FPP stopped the resting sequence as the show was about to start. " + nightRecoverAction
 					}
 					return cur
 				})
@@ -772,7 +772,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// entry time (that reproduced the collapse-to-zero defect).
 	b, ok := decodeNightBoundary(rec.BoundaryJSON)
 	if !ok || b.ExpectedAt == nil {
-		h.nightDegradeSession(ctx, now, rec, "transition-to-show has no saved show start time; end-session and prepare-site again to recover")
+		h.nightDegradeSession(ctx, now, rec, "The show start time was lost on the way to the show. "+nightRecoverAction)
 		return
 	}
 	boundaryE := *b.ExpectedAt
@@ -783,7 +783,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// benignly - one skipped tick, not a false "jumped" degrade).
 	if b.LastTickAt != nil && (now.Before(b.LastTickAt.Add(-nightClockBackstepTolerance)) || now.After(b.LastTickAt.Add(nightClockForwardJumpTolerance))) {
 		lastTick := now
-		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "resynchronized after a clock discontinuity"})
+		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "The show start was timed again after the coordinator's clock jumped."})
 		return
 	}
 	lastTick := now
@@ -868,7 +868,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		// unconfirmed anchor) never reads as FPP having refused a busy
 		// host it was never actually asked about.
 		if staleEvidenceReason != "" {
-			anchor.Source = staleEvidenceReason + ". " + anchor.Source
+			anchor.Source = staleEvidenceReason
 		}
 		if fellBackFromStaleNudge {
 			h.nightRecordStaleEvidenceNudgeUnproductive(ctx, now, rec, anchor, boundaryE, lastTick, instanceID)
@@ -939,7 +939,7 @@ func (h *handlers) nightRecordStaleEvidenceNudgeUnproductive(ctx context.Context
 		Source:   "night-loop",
 		Resource: observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
 		Category: nightEventCategoryStaleEvidenceUnproductive, Severity: "warning",
-		Summary: fmt.Sprintf("nudging the FPP REST collector for instance %q did not produce fresh evidence within %s; falling back to the ordinary refuse-and-backoff path", instanceID, nightShowLaunchStaleNudgeWindow),
+		Summary: fmt.Sprintf("FPP %s sent no fresh report when asked, so the show start is being retried.", instanceID),
 		Details: details, OccurredAt: &now,
 	}
 	h.nightCommitAnchorAndEvent(ctx, now, rec, anchor, nightBoundary{
@@ -999,8 +999,7 @@ func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, pay
 	}
 	if age := now.Sub(collectedAt); age > nightShowLaunchEvidenceMaxAge {
 		return fppIfBusyRefuse, fmt.Sprintf(
-			"The last report that %q was playing on %q is %s old, past the %s limit. FPP was not asked directly.",
-			payload.Resting.Playlist, instanceID, age.Round(time.Second), nightShowLaunchEvidenceMaxAge)
+			"The last report from FPP %s is out of date, so the show start is waiting. Check that FPP is reporting.", instanceID)
 	}
 	return fppIfBusyReplace, ""
 }
@@ -1037,23 +1036,19 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	var unmet string
 	switch {
 	case !obs.Current:
-		unmet = fmt.Sprintf("playback status or position for FPP instance %q isn't current", anchor.FPPInstanceID)
+		unmet = fmt.Sprintf("FPP %s stopped reporting during the show, so its end was not confirmed.", anchor.FPPInstanceID)
 	case obs.Status != fppStatusValueIdle:
-		unmet = fmt.Sprintf("playback status is %q, not idle", obs.Status)
-	case !obs.PlaylistCurrent:
-		unmet = fmt.Sprintf("the current playlist for FPP instance %q isn't confirmed", anchor.FPPInstanceID)
-	case obs.Playlist != "":
-		unmet = fmt.Sprintf("current playlist is still named %q, not cleared", obs.Playlist)
+		unmet = fmt.Sprintf("FPP %s is still playing long after the show should have ended.", anchor.FPPInstanceID)
+	case !obs.PlaylistCurrent, obs.Playlist != "":
+		unmet = fmt.Sprintf("FPP %s went idle without clearing its playlist, so the show's end was not confirmed.", anchor.FPPInstanceID)
 	}
 	if unmet != "" {
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
 			if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeInterrupted,
-				"The player stopped reporting the show as playing before it could be confirmed finished. The night was left degraded until an operator recovers it."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+				"FPP stopped reporting the show before it was confirmed finished."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
 				h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
 			}
-			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"live hasn't confirmed the show ended after %s: %s",
-				nightAdvanceLiveDeadline, unmet))
+			h.nightDegradeSession(ctx, now, rec, unmet+" "+nightRecoverAction)
 		}
 		return
 	}
@@ -1072,12 +1067,12 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 
 // nightCycleUnknownOutcomeReason explains why a cycle closes unknown: the
 // player's own playlist position was never confirmed for it.
-const nightCycleUnknownOutcomeReason = "The player's playlist position was not reported for this cycle, so whether the show reached its last sequence could not be confirmed."
+const nightCycleUnknownOutcomeReason = "FPP did not report its playlist position, so it is not known if the show reached its last sequence."
 
 // nightCycleInterruptedOutcomeReason is the operator-readable reason
 // recorded when the player left the bound show playlist before its last
 // entry played.
-const nightCycleInterruptedOutcomeReason = "The player left the show before its last sequence played. The night returned to the resting playlist."
+const nightCycleInterruptedOutcomeReason = "FPP left the show before its last sequence played. The night returned to resting."
 
 // nightResolveCycleOutcome decides completed vs interrupted vs unknown from
 // evidence, never from idle-with-no-playlist alone: a player restarted
@@ -1147,7 +1142,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 			cur.ArmedShowID = ""
 			cur.ShowCommitted = false
 			cur.ContentAnchorJSON = ""
-			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "a shutdown was requested during the final show; end-of-night resting is not started"})
+			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "A shutdown was requested during the final show, so end of night resting was not started."})
 			return cur
 		})
 		return
@@ -1181,7 +1176,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 			cur.State = nightStateEndOfNightResting
 			cur.StateEnteredAt = now
 			cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
-			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateNone, Reason: "end-of-night resting has no show-transition deadline"})
+			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateNone, Reason: "End of night resting runs until the night is faded out."})
 			return cur
 		})
 		return
@@ -1241,8 +1236,8 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		}
 		if nightStartUnconfirmed(cur, now) {
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"FPP did not report playlist %q playing on %q within a minute of starting it. The night closes at its next fade-out, or end the night session to close it now.",
-				playlist, instanceID))
+				"FPP %s did not report playlist %s playing within a minute. Run End session to close the night now.",
+				instanceID, playlist))
 		}
 		return cur, false, false
 	}
@@ -1256,8 +1251,7 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 			return cur, false, false
 		case now.Sub(cur.FirstAttemptAt) >= nightDispatchRetryWindow:
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"playlist %q could not be started on FPP instance %q for %s: %s",
-				playlist, instanceID, nightDispatchRetryWindow, cur.Source))
+				"Playlist %s could not be started on FPP %s. %s", playlist, instanceID, nightRecoverAction))
 			return cur, false, false
 		case now.Sub(cur.AttemptedAt) < nightDispatchRetryBackoff:
 			return cur, false, false
@@ -1300,11 +1294,15 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 	// branch above keeps retrying under this same purpose rather than
 	// treating it as a dispatch whose evidence merely has not arrived.
 	if problem != nil || outcome.DispatchFailed {
-		reason := "the request did not reach FPP: " + outcome.OutcomeReason
+		reason := fmt.Sprintf("The request to start playlist %s did not reach FPP %s. Trying again.", playlist, instanceID)
+		cause := outcome.OutcomeReason
 		terminal := false
 		if problem != nil {
-			reason = "refused: " + problem.Detail
-			terminal = nightRefusalIsTerminal(problem)
+			cause = problem.Detail
+			reason = fmt.Sprintf("FPP %s could not be told to start playlist %s yet. Trying again.", instanceID, playlist)
+			if terminal = nightRefusalIsTerminal(problem); terminal {
+				reason = fmt.Sprintf("Playlist %s cannot be started on FPP %s. Check the night definition.", playlist, instanceID)
+			}
 		}
 		// The only line this window gets: every tick this dispatch spends
 		// backing off (nightDispatchRetryBackoff, checked above on a later
@@ -1312,9 +1310,9 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		// has only this one line to learn the launch did not happen on
 		// time and why.
 		if terminal {
-			h.logWarn("night loop: startPlaylist was refused and will not be retried", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", reason)
+			h.logWarn("night loop: startPlaylist was refused and will not be retried", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", cause)
 		} else {
-			h.logWarn("night loop: startPlaylist did not launch on this attempt; retrying after a backoff", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", reason, "backoffMs", nightDispatchRetryBackoff.Milliseconds())
+			h.logWarn("night loop: startPlaylist did not launch on this attempt; retrying after a backoff", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", cause, "backoffMs", nightDispatchRetryBackoff.Milliseconds())
 		}
 		next := nightContentAnchor{
 			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist,

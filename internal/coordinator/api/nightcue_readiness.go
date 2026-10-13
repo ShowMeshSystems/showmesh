@@ -23,17 +23,18 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 	name := "enterShow:first-cue-confirmable"
 	sorted := sortedNightCues(cues)
 	if len(sorted) == 0 {
-		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: "no enterShow cues are configured"}
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: "No cue is set to run when the show starts."}
 	}
 	first := sorted[0]
 	action, _, err := nightResolveShowAction(ctx, h.deps.Config, first.Action)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not resolve cue %q's action %q: %s", first.Name, first.Action, err.Error())}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err,
+			reason: fmt.Sprintf("ShowMesh could not read the action for cue %s. Run readiness again.", first.Name)}
 	}
 	if !nightCueAllowedAsFirstOutwardCue(action) {
-		reason := fmt.Sprintf("Cue %q runs first when the show starts, and its action does not say if it is safe to repeat. Set idempotent on the action.", first.Name)
+		reason := fmt.Sprintf("Cue %s runs first when the show starts, and its action does not say if it is safe to repeat. Set that on the action.", first.Name)
 		if action.Idempotent != nil && !*action.Idempotent {
-			reason = fmt.Sprintf("Cue %q runs first when the show starts, and its action is not safe to repeat. Put a repeatable cue first.", first.Name)
+			reason = fmt.Sprintf("Cue %s runs first when the show starts, and its action is not safe to repeat. Put a repeatable cue first.", first.Name)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: reason}
 	}
@@ -64,7 +65,7 @@ func nightCheckBrightnessCompositionUnverified(transition string, cues []config.
 	for _, cue := range cues {
 		if cue.Role == config.NightSessionCueRoleLighting && cue.FadeDurationMs != nil {
 			return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
-				"Cue %q fades the lights. The fade will run, but it has not been proven on real hardware.", cue.Name)}
+				"Cue %s fades the lights. The fade will run, but it has not been proven on real hardware.", cue.Name)}
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
