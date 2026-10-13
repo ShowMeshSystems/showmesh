@@ -129,3 +129,30 @@ func TestObserveJSONFindsMessageFieldsAtAnyDepth(t *testing.T) {
 		t.Errorf("a field that is not a message was checked:\n%s", out)
 	}
 }
+
+func TestLedgerKeepsDeprecatedEntriesUnderTheirOwnHeading(t *testing.T) {
+	path := listWith(t, "")
+	l := NewLedger(path)
+	l.Deprecate("v1.Old warning")
+	l.Observe("v1.Old warning", "two things; and more")
+	l.Observe("problem conflict in handleStart", "cue bg1 failed.")
+	t.Setenv(UpdateEnv, "1")
+	if code, out := settled(t, l, 0, false); code != 0 {
+		t.Fatalf("rewrite code = %d:\n%s", code, out)
+	}
+	content, _ := os.ReadFile(path)
+	text := string(content)
+	heading := strings.Index(text, "# "+deprecatedHeading)
+	if heading < 0 || !strings.Contains(text[heading:], "v1.Old warning") || strings.Contains(text[:heading], "v1.Old warning") {
+		t.Fatalf("deprecated entries are not under their heading:\n%s", text)
+	}
+
+	t.Setenv(UpdateEnv, "")
+	again := NewLedger(path)
+	again.Deprecate("v1.Old warning")
+	again.Observe("v1.Old warning", "two things; and more")
+	again.Observe("problem conflict in handleStart", "cue bg1 failed.")
+	if code, out := settled(t, again, 0, false); code != 0 {
+		t.Fatalf("code = %d, want 0:\n%s", code, out)
+	}
+}
