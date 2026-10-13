@@ -42,9 +42,7 @@ func assertOneMessage(t *testing.T, msg string) {
 	}
 }
 
-// TestPlaylistReadinessReturnsEachWarningAsItsOwnMessage rebuilds the state
-// the owner read as one paragraph: two nodes with accepted cue pairs, a cue
-// on the default node, a cue with no FPP sequence, and both nodes a version behind.
+// TestPlaylistReadinessReturnsEachWarningAsItsOwnMessage holds every warning to one message and each per-node fact to one line.
 func TestPlaylistReadinessReturnsEachWarningAsItsOwnMessage(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
@@ -79,8 +77,14 @@ func TestPlaylistReadinessReturnsEachWarningAsItsOwnMessage(t *testing.T) {
 			t.Errorf("want one accepted-pairs line for %s in %q", node, report.Warnings)
 		}
 	}
-	if pairs["showmesh-node-01"] != 3 || count("Node showmesh-node-01 has 3 cue pairs") != 1 {
-		t.Errorf("want showmesh-node-01's 3 pairs counted, got %d pairs in %q", pairs["showmesh-node-01"], report.Warnings)
+	if pairs["showmesh-node-01"] != 4 || count("Node showmesh-node-01 has 4 cue pairs") != 1 {
+		t.Errorf("want showmesh-node-01's 4 pairs counted, got %d pairs in %q", pairs["showmesh-node-01"], report.Warnings)
+	}
+	// Three cues play on each node, and neither node is reporting.
+	for _, node := range both {
+		if count("Node "+node+" is not reporting") != 1 || count("Node "+node+" is not reporting, so cues may start out of sync") != 1 {
+			t.Errorf("want one clock line for %s naming no cue in %q", node, report.Warnings)
+		}
 	}
 	if count("dracula", "default node") != 1 {
 		t.Errorf("want one line for the cue on the default node in %q", report.Warnings)
@@ -107,7 +111,7 @@ func seedAcceptedPairsState(t *testing.T, st *store.Store, both []string) (confi
 		declareNode(t, st, node)
 		putNodeVersion(t, st, node, "main-82a9da62")
 	}
-	for _, cue := range []string{"bg1", "kpop-audio", "wake-up"} {
+	for _, cue := range []string{"bg1", "kpop-audio", "wake-up", "finale"} {
 		putCueWithOutputs(t, st, cue, "show-1", config.ShowCueOutputs{
 			Audio: &config.ShowCueAudioOutput{Asset: "asset-" + cue, Targets: both},
 		})
@@ -123,11 +127,12 @@ func seedAcceptedPairsState(t *testing.T, st *store.Store, both []string) (confi
 			{ID: "entry-1", Cue: "kpop-audio", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
 			{ID: "entry-2", Cue: "wake-up", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
 			{ID: "entry-3", Cue: "dracula", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 2}},
+			{ID: "entry-4", Cue: "finale", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 3}},
 		},
 	}
 	if _, err := st.PutFPPPlaylistDefinition(ctx, store.FPPPlaylistDefinitionRecord{
 		InstanceUUID: "inst-1", PlaylistHash: hash, PlaylistName: "Main",
-		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"},{"type":"sequence"},{"type":"sequence"}],"leadOut":[]}`,
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"},{"type":"sequence"},{"type":"sequence"},{"type":"sequence"}],"leadOut":[]}`,
 		CapturedAt:     time.Unix(1000, 0).UTC(), ReceivedAt: time.Unix(1000, 0).UTC(),
 	}); err != nil {
 		t.Fatalf("put fpp playlist definition: %v", err)

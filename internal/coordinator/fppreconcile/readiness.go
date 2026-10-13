@@ -1349,12 +1349,21 @@ func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, 
 		if remotes[n.NodeID] {
 			continue
 		}
+		var cues []string
 		for _, e := range catalog.Entries {
 			if e.Outputs.Audio != nil {
-				return fmt.Sprintf(
-					"FPP does not list node %s as a MultiSync remote, so the coordinator starts cue %s's audio there.",
-					n.NodeID, e.CueID), nil
+				cues = append(cues, e.CueID)
 			}
+		}
+		switch len(cues) {
+		case 0:
+		case 1:
+			return fmt.Sprintf(
+				"FPP does not list node %s as a MultiSync remote, so the coordinator starts cue %s's audio there.",
+				n.NodeID, cues[0]), nil
+		default:
+			return fmt.Sprintf(
+				"FPP does not list node %s as a MultiSync remote, so the coordinator starts audio there.", n.NodeID), nil
 		}
 	}
 	return "", nil

@@ -683,8 +683,8 @@ function FPPPlaylistEditor({
             </p>
             {readiness.state.response.warnings.length > 0 && (
               <ul className="sm-plain-list sm-small" aria-label="Readiness warnings">
-                {readiness.state.response.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
+                {readiness.state.response.warnings.map((warning, index) => (
+                  <li key={`${index}:${warning}`}>{warning}</li>
                 ))}
               </ul>
             )}

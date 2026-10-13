@@ -408,8 +408,8 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 		return nil, fmt.Errorf("fppreconcile: audio target clock readiness: %w", err)
 	}
 
-	reported := make(map[string]bool)
-	var warnings []string
+	cuesOn := make(map[string][]string)
+	var order []string
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
@@ -428,17 +428,33 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 		if len(cueAudioAnnouncementNodes(audioResolved, announcementResolved)) <= 1 {
 			continue
 		}
-		for _, target := range append(append([]string(nil), audioResolved...), announcementResolved...) {
-			if reported[target] {
-				continue
+		for _, target := range cueAudioAnnouncementNodes(audioResolved, announcementResolved) {
+			if _, seen := cuesOn[target]; !seen {
+				order = append(order, target)
 			}
-			if problem, action := nodeClockProblem(clock, liveness, now, target); problem != "" {
-				reported[target] = true
-				warnings = append(warnings, fmt.Sprintf("Node %s%s, so cue %s may start out of sync there.%s", target, problem, entry.Cue, action))
+			if !containsID(cuesOn[target], entry.Cue) {
+				cuesOn[target] = append(cuesOn[target], entry.Cue)
 			}
 		}
 	}
+	var warnings []string
+	for _, target := range order {
+		problem, action := nodeClockProblem(clock, liveness, now, target)
+		if problem == "" {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("Node %s%s, so %s may start out of sync there.%s", target, problem, cueOrCues(cuesOn[target]), action))
+	}
 	return warnings, nil
+}
+
+// cueOrCues names the one cue a per-node warning is about, or says "cues"
+// when it is about several, so a node is never listed once per cue.
+func cueOrCues(cues []string) string {
+	if len(cues) == 1 {
+		return "cue " + cues[0]
+	}
+	return "cues"
 }
 
 // nodeClockProblem states what is wrong with nodeID's clock, as the words that

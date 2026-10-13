@@ -822,3 +822,29 @@ func TestPlaylistReadinessAudioNodeNotMultisyncRemoteNoEvidenceNoWarning(t *test
 		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when no systems-list evidence has ever been collected", report.Ready, warningText(report))
 	}
 }
+
+// TestPlaylistReadinessMultisyncRemoteWarningNamesNoCueForSeveral: a node FPP
+// does not list is reported once, and names a cue only when it carries one.
+func TestPlaylistReadinessMultisyncRemoteWarningNamesNoCueForSeveral(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putCueWithAudio(t, st, "cue-2", "show-1")
+	putPlaylist(t, st, "playlist-2", config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Second", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Second", PlaylistHash: hash64("a2")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-2", Cue: "cue-2", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, true)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncSystemHostnames, "some-other-host")
+
+	warning, err := audioNodeNotMultisyncRemoteReadiness(context.Background(), st, p)
+	if err != nil {
+		t.Fatalf("audioNodeNotMultisyncRemoteReadiness: %v", err)
+	}
+	if !containsAll(warning, "node-1", "MultiSync remote") || strings.Contains(warning, "cue-") {
+		t.Fatalf("warning = %q, want node-1 named once and no cue named for two cues", warning)
+	}
+}
