@@ -128,3 +128,43 @@ func NodeWarning(nodeID, nodeVersion, coordinator string) string {
 	}
 	return fact + " Install " + normalize(coordinator) + " on it to match the coordinator."
 }
+
+// NodeVersion is one node and the version it last reported.
+type NodeVersion struct {
+	NodeID, Version string
+}
+
+// NodeWarnings is the playlist readiness form of [NodeWarning]: one line per
+// version, naming every node on it, so a fleet one release behind reads as
+// one message. nodes must already be the ones the rule does not accept.
+func NodeWarnings(nodes []NodeVersion, coordinator string) []string {
+	byVersion := map[string][]string{}
+	var order []string
+	for _, n := range nodes {
+		v := normalize(n.Version)
+		if _, seen := byVersion[v]; !seen {
+			order = append(order, v)
+		}
+		byVersion[v] = append(byVersion[v], n.NodeID)
+	}
+	c, ok := parse(coordinator)
+	published := ok && !c.ahead
+	warnings := make([]string, 0, len(order))
+	for _, v := range order {
+		ids := byVersion[v]
+		subject, verb, target := "Node "+ids[0], "runs", "it"
+		switch {
+		case len(ids) == 2:
+			subject, verb, target = "Nodes "+ids[0]+" and "+ids[1], "run", "them"
+		case len(ids) > 2:
+			subject, verb, target = strconv.Itoa(len(ids))+" nodes", "run", "them"
+		}
+		fact := subject + " " + verb + " " + v + "."
+		if published {
+			warnings = append(warnings, fact+" Install "+normalize(coordinator)+" on "+target+" to match the coordinator.")
+			continue
+		}
+		warnings = append(warnings, fact+" The coordinator runs "+normalize(coordinator)+".")
+	}
+	return warnings
+}

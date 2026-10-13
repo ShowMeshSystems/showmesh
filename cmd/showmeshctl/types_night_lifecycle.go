@@ -8,6 +8,7 @@ import "time"
 
 type nightReadinessCheckWire struct {
 	Name   string `json:"name"`
+	Label  string `json:"label"`
 	State  string `json:"state"`
 	Reason string `json:"reason"`
 }

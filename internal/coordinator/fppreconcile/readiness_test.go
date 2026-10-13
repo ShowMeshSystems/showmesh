@@ -346,8 +346,8 @@ func TestPlaylistReadinessObservationHashMismatchIsFailureWhenObservationExists(
 	if report.FailingCondition != ReadinessObservationHashMismatch {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessObservationHashMismatch)
 	}
-	if report.Warning != "" {
-		t.Fatalf("Warning = %q, want empty: this is the hard-failure form, not the warning form", report.Warning)
+	if warningText(report) != "" {
+		t.Fatalf("Warning = %q, want empty: this is the hard-failure form, not the warning form", warningText(report))
 	}
 }
 
@@ -366,7 +366,7 @@ func TestPlaylistReadinessObservationHashMismatchIsWarningWhenNoObservationRecei
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true: no observation received is a warning, not a failure (got %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if report.Warning == "" {
+	if warningText(report) == "" {
 		t.Fatal("Warning is empty, want a non-empty warning explaining that no observation has been received yet")
 	}
 }
@@ -515,7 +515,7 @@ func TestPlaylistReadinessObservationUnavailableIsFailureNotWarning(t *testing.T
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
 	if report.Ready {
-		t.Fatalf("Ready = true, want false: the latest observation could not establish identity, so this check could not run; got warning %q", report.Warning)
+		t.Fatalf("Ready = true, want false: the latest observation could not establish identity, so this check could not run; got warning %q", warningText(report))
 	}
 	if report.FailingCondition != ReadinessEvidenceUnavailable {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessEvidenceUnavailable)
@@ -541,8 +541,8 @@ func TestPlaylistReadinessAllConditionsPass(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true (failing condition %q: %s)", report.FailingCondition, report.Reason)
 	}
-	if report.Warning != "" {
-		t.Fatalf("Warning = %q, want empty: an observation matching the binding's hash was received", report.Warning)
+	if warningText(report) != "" {
+		t.Fatalf("Warning = %q, want empty: an observation matching the binding's hash was received", warningText(report))
 	}
 }
 
@@ -759,7 +759,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeNeverReported(t *tes
 	if strings.Contains(report.Reason, "holds no render assignment") {
 		t.Fatalf("Reason = %q, must not assert the node holds no assignment when the node itself has never been observed reporting anything", report.Reason)
 	}
-	if !strings.Contains(report.Reason, "not currently reporting") {
+	if !strings.Contains(report.Reason, "is not reporting") {
 		t.Fatalf("Reason = %q, want it to say the node is not currently reporting", report.Reason)
 	}
 	if !strings.Contains(report.Reason, "node-1") || !strings.Contains(report.Reason, "wall-1") {
@@ -826,7 +826,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOffline(t *testing.T
 	if strings.Contains(report.Reason, "holds no render assignment") {
 		t.Fatalf("Reason = %q, must not assert the node holds no assignment when its own last-will evidence reports it offline", report.Reason)
 	}
-	if !strings.Contains(report.Reason, "not currently reporting") {
+	if !strings.Contains(report.Reason, "is not reporting") {
 		t.Fatalf("Reason = %q, want it to say the node is not currently reporting", report.Reason)
 	}
 }
@@ -871,7 +871,7 @@ func TestPlaylistReadinessNodeRenderStaleAssignmentFails(t *testing.T) {
 	if report.FailingCondition != ReadinessNodeRenderUnassigned {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
 	}
-	if !strings.Contains(report.Reason, "stale") {
+	if !strings.Contains(report.Reason, "recently") {
 		t.Fatalf("Reason = %q, want it to name the evidence as stale rather than assert an unqualified unassignment", report.Reason)
 	}
 }
@@ -1085,8 +1085,8 @@ func TestPlaylistReadinessEmptyPlaylistIsAWarningNotAFailure(t *testing.T) {
 	if !report.Ready || report.FailingCondition != "" {
 		t.Fatalf("Ready = %v, failing = %q (%s), want ready: an empty playlist only warns", report.Ready, report.FailingCondition, report.Reason)
 	}
-	if !strings.Contains(report.Warning, "runs no cues") {
-		t.Fatalf("Warning = %q, want it to say the playlist runs no cues", report.Warning)
+	if !strings.Contains(warningText(report), "runs no cues") {
+		t.Fatalf("Warning = %q, want it to say the playlist runs no cues", warningText(report))
 	}
 }
 
@@ -1100,7 +1100,7 @@ func TestPlaylistReadinessEmptyPlaylistWarningSurvivesAnEarlyFailure(t *testing.
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if report.Ready || !strings.Contains(report.Warning, "runs no cues") {
-		t.Fatalf("Ready = %v, Warning = %q, want a failure that still carries the empty-playlist warning", report.Ready, report.Warning)
+	if report.Ready || !strings.Contains(warningText(report), "runs no cues") {
+		t.Fatalf("Ready = %v, Warning = %q, want a failure that still carries the empty-playlist warning", report.Ready, warningText(report))
 	}
 }

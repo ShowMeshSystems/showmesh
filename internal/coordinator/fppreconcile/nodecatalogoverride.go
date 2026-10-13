@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -55,32 +56,61 @@ func overrideCoversConflicts(recorded []store.StoredCatalogConflict, current []a
 	return true
 }
 
-// CueCatalogOverrideWarning renders rec as the named warning text both
-// readiness paths surface in place of a hard failure, naming the
-// accepted claim(s) and who accepted them.
+// CueCatalogOverrideWarning is the one line both readiness paths show for a
+// node whose cue list was deployed with its conflicts accepted. It counts the
+// pairs; the cue catalog deploy result lists them.
 func CueCatalogOverrideWarning(nodeID string, catalog assetsync.Catalog, rec store.NodeCueCatalogOverrideRecord) string {
-	claims := make([]string, 0, len(catalog.Conflicts))
-	for _, c := range catalog.Conflicts {
-		claims = append(claims, c.Detail())
+	n := len(catalog.Conflicts)
+	pairs := "cue pairs"
+	if n == 1 {
+		pairs = "cue pair"
 	}
-	joined := ""
-	for i, c := range claims {
-		if i > 0 {
-			joined += "; "
-		}
-		joined += c
+	fact := fmt.Sprintf("Node %s has %d %s sharing %s.", nodeID, n, pairs, sharedOutputInWords(catalog.Conflicts))
+	if rec.OverriddenByPrincipalName == "" {
+		return fact + " Accepted at deploy."
 	}
-	return fmt.Sprintf(
-		"node %q deployed with operator override: %s (accepted by %s at revision %q)",
-		nodeID, joined, overrideAttribution(rec), rec.Revision)
+	return fact + " Accepted by " + rec.OverriddenByPrincipalName + "."
 }
 
-// overrideAttribution renders rec's own operator attribution for
-// [CueCatalogOverrideWarning], falling back to the principal id when no
-// display name was recorded.
-func overrideAttribution(rec store.NodeCueCatalogOverrideRecord) string {
-	if rec.OverriddenByPrincipalName != "" {
-		return rec.OverriddenByPrincipalName
+// sharedOutputInWords names the output every conflict is about, or "an
+// output" when they are about different ones.
+func sharedOutputInWords(conflicts []assetsync.CatalogConflict) string {
+	if len(conflicts) == 0 {
+		return "an output"
 	}
-	return rec.OverriddenByPrincipalID
+	kind := conflicts[0].Claim.Kind
+	for _, c := range conflicts[1:] {
+		if c.Claim.Kind != kind {
+			return "an output"
+		}
+	}
+	switch kind {
+	case config.ShowCueClaimKindProgramAudioRoute:
+		return "its program audio output"
+	case config.ShowCueClaimKindLTCOutput:
+		return "its LTC output"
+	case config.ShowCueClaimKindAnnouncementSession:
+		return "its announcements"
+	case config.ShowCueClaimKindRenderSurface:
+		return "a render surface"
+	}
+	return "an output"
+}
+
+// conflictReason is the failing reason for one conflict nobody has accepted.
+func conflictReason(c assetsync.CatalogConflict) string {
+	var what string
+	switch c.Claim.Kind {
+	case config.ShowCueClaimKindProgramAudioRoute:
+		what = "the program audio output on " + c.Claim.Node
+	case config.ShowCueClaimKindLTCOutput:
+		what = "the LTC output on " + c.Claim.Node
+	case config.ShowCueClaimKindAnnouncementSession:
+		what = "announcements on " + c.Claim.Node
+	case config.ShowCueClaimKindRenderSurface:
+		what = "the render surface " + c.Claim.Resource
+	default:
+		what = "the same output"
+	}
+	return fmt.Sprintf("Cues %s and %s both use %s. Change one cue, or accept this when you deploy.", c.CueA, c.CueB, what)
 }

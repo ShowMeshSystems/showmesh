@@ -1829,7 +1829,7 @@ func nightHealthSeverity(h nightCheckState) int {
 func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 	out := make([]v1.NightReadinessCheck, 0, len(checks))
 	for _, c := range checks {
-		out = append(out, v1.NightReadinessCheck{Name: c.name, State: string(c.health), Reason: c.reason})
+		out = append(out, v1.NightReadinessCheck{Name: c.name, Label: nightCheckLabel(c.name), State: string(c.health), Reason: c.reason})
 	}
 	return out
 }
@@ -2382,6 +2382,9 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 	}
 	if checks == nil {
 		checks = []v1.NightReadinessCheck{}
+	}
+	for i := range checks {
+		checks[i].Label = nightCheckLabel(checks[i].Name)
 	}
 	age := now.Sub(readiness.CompletedAt)
 	return v1.NightReadiness{

@@ -53,7 +53,7 @@ func ltcWarningFor(t *testing.T, st *store.Store, p config.ShowPlaylistPayload) 
 	if !report.Ready || report.FailingCondition != "" {
 		t.Fatalf("Ready = %v, failing = %q, want ready: this condition only warns", report.Ready, report.FailingCondition)
 	}
-	return report.Warning
+	return warningText(report)
 }
 
 func TestPlaylistReadinessWarnsWhenAnLTCCapableNodeHasNoLTCChannel(t *testing.T) {

@@ -90,7 +90,7 @@ func TestPlaylistReadinessAudioLTCSeparateLocalClockSilentOnOneInterface(t *test
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
-	if !report.Ready || strings.Contains(report.Warning, "drift against the music") {
-		t.Fatalf("Ready = %v, Warning = %q, want ready with no drift warning for a node whose LTC and program share one route", report.Ready, report.Warning)
+	if !report.Ready || strings.Contains(warningText(report), "drift against the music") {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no drift warning for a node whose LTC and program share one route", report.Ready, warningText(report))
 	}
 }

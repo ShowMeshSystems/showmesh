@@ -23,6 +23,8 @@ const (
 // result on one check is never evidence any other check passed.
 type NightReadinessCheck struct {
 	Name string `json:"name"`
+	// Label is the plain name an operator reads in place of Name.
+	Label string `json:"label"`
 	// State is observation.Health's vocabulary plus "not_verifiable" for
 	// a check that can never be anything else - excluded from the
 	// aggregate outcome but always listed.

@@ -19598,22 +19598,10 @@ components:
         see docs/build/TRACK-H-cues-and-playlists.md section H6 for the
         full account of what was added and why): whether one FPP-backed
         Playlist is ready, and which condition fails first when it is not.
-        `warning` is set when a condition did not fail readiness outright
-        but is still worth surfacing: the non-fatal form of the
-        observation-hash check (no observation received at all yet, "the
-        normal afternoon state, not a fault");
-        `exclusive-claim-conflict`'s own inconclusive form (a stored Cue
-        elsewhere could not be decoded, so the check could not be
-        verified); ADR-049's own audio-target warnings for a Cue whose
-        outputs.audio and outputs.announcement targets, together, reach
-        more than one node (a targets list excluding the installation's
-        program+ltc node, which can never start aligned; or a listed
-        target whose reported PTP clock is not confirmed locked --
-        unlocked, no evidence yet, stale evidence, or the node itself not
-        currently reporting, each named distinctly, never failing
-        readiness on its own). More than one of these can be joined into
-        one `warning` string. `warning` is never set alongside a non-empty
-        `failingCondition` equal to `observation-hash-mismatch`. An
+        `warnings` lists every condition that did not fail readiness but is
+        still worth showing, one complete message per item, each written
+        to be read on its own line. It is always present and is empty when
+        there is nothing to show. Items are never joined into one string. An
         observation that WAS received but could not establish identity is
         the `evidence-unavailable` failing condition, not a warning:
         readiness never returns `ready: true` for a check it could not
@@ -19641,7 +19629,7 @@ components:
         per the same per-node asset manifest `GET /nodes/{nodeId}/assets`
         reports; a target that resolves to nobody is `audio-target-unbound`/
         `-unresolved` instead.
-      required: [playlistId, ready, serverTime]
+      required: [playlistId, ready, warnings, serverTime]
       properties:
         playlistId:
           type: string
@@ -19666,8 +19654,13 @@ components:
             - assets-missing
         reason:
           type: string
-        warning:
-          type: string
+        warnings:
+          type: array
+          description: >-
+            One operator message per item, at most two short sentences
+            each. Empty when there are none.
+          items:
+            type: string
         serverTime:
           type: string
           format: date-time
@@ -21670,10 +21663,16 @@ components:
         wiped state directory), naming the reason in `reason`. Cleared by
         the referenced instance's next accepted report or by
         DELETE .../playlist-entry-observations/{instanceUuid}.
-      required: [name, state, reason]
+      required: [name, label, state, reason]
       properties:
         name:
           type: string
+        label:
+          type: string
+          description: >-
+            The plain name an operator reads in place of `name`, such as
+            "Background audio files". A check about one node, playlist or
+            FPP carries that name in its label.
         state:
           type: string
           description: >-

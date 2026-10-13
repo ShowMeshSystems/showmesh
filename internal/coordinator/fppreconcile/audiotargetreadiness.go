@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
@@ -45,15 +44,15 @@ import (
 // one naming both in a single output. Only the FIRST such Cue is named,
 // matching this function's own failure-reporting determinism; it never
 // overrides an actual failure found later in the same scan.
-func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, string, error) {
+func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, []string, error) {
 	declared, ltcEmitters, err := audioNodeRoles(ctx, st)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, err
 	}
 	if len(ltcEmitters) > 1 {
 		return ReadinessAudioLTCEmitterAmbiguous, fmt.Sprintf(
-			"audio.node %q and %q both hold role %q. Only one node may be the installation's LTC emitter.",
-			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), "", nil
+			"Nodes %s and %s both have the program+LTC role. Give that role to one node only.",
+			ltcEmitters[0], ltcEmitters[1]), nil, nil
 	}
 	programLTC, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
 	var defaultNodes []string
@@ -62,7 +61,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 	}
 	showAudioNodes, err := assetsync.ShowAudioNodes(ctx, st, p.Show)
 	if err != nil {
-		return "", "", "", fmt.Errorf("fppreconcile: audio target readiness: %w", err)
+		return "", "", nil, fmt.Errorf("fppreconcile: audio target readiness: %w", err)
 	}
 
 	warning := ""
@@ -70,7 +69,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
-			return "", "", "", err
+			return "", "", nil, err
 		}
 		if !ok || payload.Show != p.Show {
 			continue
@@ -90,9 +89,9 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			resolvedFrom config.AudioNodeResolution
 			decision10   bool
 		}{
-			{"outputs.audio", audioResolved, payload.Outputs.Audio != nil, audioFrom, true},
-			{"outputs.ltc", resolvedTargets(targetsOfLTC(payload.Outputs.LTC), defaultTarget), payload.Outputs.LTC != nil, "", false},
-			{"outputs.announcement", announcementResolved, payload.Outputs.Announcement != nil, announcementFrom, true},
+			{"audio", audioResolved, payload.Outputs.Audio != nil, audioFrom, true},
+			{"LTC", resolvedTargets(targetsOfLTC(payload.Outputs.LTC), defaultTarget), payload.Outputs.LTC != nil, "", false},
+			{"announcement", announcementResolved, payload.Outputs.Announcement != nil, announcementFrom, true},
 		} {
 			if !out.set {
 				continue
@@ -107,8 +106,8 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				// nodes, none of them the LTC emitter.
 				if len(declared) > 1 && defaultTarget == "" {
 					return ReadinessAudioTargetUnresolved, fmt.Sprintf(
-						"cue %q's %s names no target and this installation has no node for it to resolve to: %d audio.node objects exist and none holds role %q",
-						entry.Cue, out.name, len(declared), config.AudioNodeRoleProgramLTC), "", nil
+						"Cue %s has no node for its %s. Name a node on the cue, or give one node the program+LTC role.",
+						entry.Cue, out.name), nil, nil
 				}
 				continue
 			}
@@ -119,8 +118,8 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			for _, target := range out.targets {
 				if !containsID(declared, target) {
 					return ReadinessAudioTargetUnbound, fmt.Sprintf(
-						"cue %q's %s targets node %q, which holds no audio.node object, so that output would reach nobody",
-						entry.Cue, out.name, target), "", nil
+						"Cue %s sends its %s to node %s, which is not set up for audio. Set up the node or change the cue.",
+						entry.Cue, out.name, target), nil, nil
 				}
 			}
 			// ADR-049 decision 10: a nudge, not a failure, when the show
@@ -129,7 +128,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			// default rather than a choice made for this show.
 			if audioNodesDefaultedWarning == "" && out.decision10 && len(showAudioNodes) == 0 && out.resolvedFrom == config.AudioNodeResolutionDefault {
 				audioNodesDefaultedWarning = fmt.Sprintf(
-					"cue %q's %s has no show-wide audio node list to inherit and plays on the installation's default node instead. Set the show's audio nodes, then re-check.",
+					"Cue %s plays its %s on the default node because the show names no audio nodes. Set the show's audio nodes.",
 					entry.Cue, out.name)
 			}
 		}
@@ -143,23 +142,22 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				// decision 3's one-instant selection to disagree about.
 			case programLTC == "":
 				warning = fmt.Sprintf(
-					"Cue %q plays on several nodes but no node has the program+LTC role. Assign one node that role, then re-check.",
+					"Cue %s plays on several nodes but no node has the program+LTC role. Give one node that role.",
 					entry.Cue)
 			case !containsID(union, programLTC):
 				warning = fmt.Sprintf(
-					"Cue %q plays on several nodes but its outputs do not include the node with the program+LTC role. Add that node to the cue's outputs, then re-check.",
+					"Cue %s plays on several nodes, but not on the node with the program+LTC role. Add that node to the cue.",
 					entry.Cue)
 			}
 		}
 	}
-	if audioNodesDefaultedWarning != "" {
-		if warning == "" {
-			warning = audioNodesDefaultedWarning
-		} else {
-			warning = warning + "; " + audioNodesDefaultedWarning
+	var warnings []string
+	for _, w := range []string{warning, audioNodesDefaultedWarning} {
+		if w != "" {
+			warnings = append(warnings, w)
 		}
 	}
-	return "", "", warning, nil
+	return "", "", warnings, nil
 }
 
 // programLTCAndDefault returns the installation's program+ltc node
@@ -388,17 +386,17 @@ func (noClockObservationsLister) NodeClockObservations(string) []observation.Obs
 // unavailable/offline) gets its own distinct text, per MANAGER DECISION 2,
 // so an operator is never told a missing reading looks the same as a
 // locked one.
-func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, clock ClockObservationsLister, now time.Time, p config.ShowPlaylistPayload) (string, error) {
+func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, clock ClockObservationsLister, now time.Time, p config.ShowPlaylistPayload) ([]string, error) {
 	if clock == nil {
 		clock = noClockObservationsLister{}
 	}
 	liveness, err := nodeLivenessLookup(ctx, st, now)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	declared, ltcEmitters, err := audioNodeRoles(ctx, st)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	_, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
 	var defaultNodes []string
@@ -407,7 +405,7 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 	}
 	showAudioNodes, err := assetsync.ShowAudioNodes(ctx, st, p.Show)
 	if err != nil {
-		return "", fmt.Errorf("fppreconcile: audio target clock readiness: %w", err)
+		return nil, fmt.Errorf("fppreconcile: audio target clock readiness: %w", err)
 	}
 
 	reported := make(map[string]bool)
@@ -415,7 +413,7 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !ok || payload.Show != p.Show {
 			continue
@@ -430,67 +428,39 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 		if len(cueAudioAnnouncementNodes(audioResolved, announcementResolved)) <= 1 {
 			continue
 		}
-		for _, out := range []struct {
-			name    string
-			targets []string
-			set     bool
-		}{
-			{"outputs.audio", audioResolved, payload.Outputs.Audio != nil},
-			{"outputs.announcement", announcementResolved, payload.Outputs.Announcement != nil},
-		} {
-			if !out.set {
+		for _, target := range append(append([]string(nil), audioResolved...), announcementResolved...) {
+			if reported[target] {
 				continue
 			}
-			for _, target := range out.targets {
-				if reported[target] {
-					continue
-				}
-				if warning := nodeClockWarning(clock, liveness, now, target); warning != "" {
-					reported[target] = true
-					warnings = append(warnings, fmt.Sprintf("cue %q's %s targets node %q: %s", entry.Cue, out.name, target, warning))
-				}
+			if problem, action := nodeClockProblem(clock, liveness, now, target); problem != "" {
+				reported[target] = true
+				warnings = append(warnings, fmt.Sprintf("Node %s%s, so cue %s may start out of sync there.%s", target, problem, entry.Cue, action))
 			}
 		}
 	}
-	return strings.Join(warnings, "; "), nil
+	return warnings, nil
 }
 
-// nodeClockWarning reports nodeID's clock-lock problem, or "" when it is
-// locked. Checked in this order: liveness first (a node that is not
-// reporting at all cannot have its clock evidence trusted regardless of
-// what it last said), then the clock evidence itself.
-func nodeClockWarning(clock ClockObservationsLister, liveness map[string]nodeLivenessInfo, now time.Time, nodeID string) string {
+// nodeClockProblem states what is wrong with nodeID's clock, as the words that
+// follow its name, and the action to append; both are "" when it is locked.
+// A node that is not reporting cannot have its last clock reading trusted.
+func nodeClockProblem(clock ClockObservationsLister, liveness map[string]nodeLivenessInfo, now time.Time, nodeID string) (problem, action string) {
 	if info := livenessOrUnknown(liveness, nodeID); info.liveness != inventory.LivenessOnline {
-		return fmt.Sprintf("its clock cannot be confirmed locked: the node itself is not currently reporting (%s)", info.reason)
+		return " is not reporting", " Check the node."
 	}
-
-	var stateObs *observation.Observation
 	for _, o := range clock.NodeClockObservations(nodeID) {
-		if o.Signal == nodeClockStateSignal {
-			o := o
-			stateObs = &o
-			break
+		if o.Signal != nodeClockStateSignal {
+			continue
 		}
-	}
-	if stateObs == nil {
-		return "its clock state has never been reported"
-	}
-	switch state := stateObs.StateAt(now); state {
-	case observation.StateStale:
-		detail := "a clock reading"
-		if stateObs.ObservedAt != nil {
-			detail = fmt.Sprintf("a clock reading from %s", stateObs.ObservedAt.Format(time.RFC3339))
+		if o.StateAt(now) != observation.StateCurrent {
+			return " has not reported its clock recently", " Check the node."
 		}
-		return fmt.Sprintf("its most recent %s is stale, so its clock cannot be confirmed locked right now", detail)
-	case observation.StateCurrent:
-		value, _ := stateObs.Value.(string)
-		if value == clockLockedValue {
-			return ""
+		if value, _ := o.Value.(string); value == clockLockedValue {
+			return "", ""
 		}
-		return fmt.Sprintf("its clock provider reports %q, not locked, so a scheduled multi-node start would ignore the shared instant on this node", value)
-	default:
-		return fmt.Sprintf("its node.clock.ptp.state reading is %s rather than current or stale, so its clock cannot be confirmed locked", state)
+		return "'s clock is not locked", " Check its clock source."
 	}
+	return " has not reported its clock yet", ""
 }
 
 // nodeClockStateSignal is internal/coordinator/collector/nodeclock.SignalState,

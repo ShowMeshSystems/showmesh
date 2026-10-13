@@ -26,7 +26,7 @@ import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
-import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, playlistRows, slugify, type AudioAssetOption } from './showsModel'
+import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, playlistRows, readinessTone, readyLabel, slugify, type AudioAssetOption } from './showsModel'
 import { MediaPlaylistDraft, MediaPlaylistEditor } from './ShowsMediaPlaylists'
 import { ReimportControl } from './ShowsReimport'
 import { PlaylistMoveNotice, PlaylistMoveReview, usePlaylistMove } from './ShowsPlaylistMove'
@@ -667,18 +667,28 @@ function FPPPlaylistEditor({
           <RuledStrip absence="failed" label="Read failed" fact={readiness.state.reason ?? 'Could not read readiness.'} />
         )}
         {readiness.state.state === 'loaded' && readiness.state.response !== null && (
-          <p className="sm-verdict">
-            <StatusPair
-              tone={readiness.state.response.ready ? 'good' : 'bad'}
-              label={readiness.state.response.ready ? 'Ready' : (readiness.state.response.failingCondition?.replace(/-/g, ' ') ?? 'Not ready')}
-            />
-            {readiness.state.response.reason !== undefined && readiness.state.response.reason !== '' && (
-              <span className="sm-verdict__detail">{readiness.state.response.reason}</span>
+          <>
+            <p className="sm-verdict">
+              <StatusPair
+                tone={readinessTone(readiness.state.response.ready, readiness.state.response.warnings.length)}
+                label={
+                  readiness.state.response.ready
+                    ? readyLabel(readiness.state.response.warnings.length)
+                    : (readiness.state.response.failingCondition?.replace(/-/g, ' ') ?? 'Not ready')
+                }
+              />
+              {readiness.state.response.reason !== undefined && readiness.state.response.reason !== '' && (
+                <span className="sm-verdict__detail">{readiness.state.response.reason}</span>
+              )}
+            </p>
+            {readiness.state.response.warnings.length > 0 && (
+              <ul className="sm-plain-list sm-small" aria-label="Readiness warnings">
+                {readiness.state.response.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
             )}
-            {readiness.state.response.warning !== undefined && readiness.state.response.warning !== '' && (
-              <span className="sm-verdict__detail">{readiness.state.response.warning}</span>
-            )}
-          </p>
+          </>
         )}
       </div>
 

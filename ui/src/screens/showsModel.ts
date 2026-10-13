@@ -685,3 +685,15 @@ export function showDeclaredNodes(params: {
   ]
   return [...new Set(nodes.filter((n) => n !== ''))]
 }
+
+/** The status word for a ready playlist: warnings are counted, never hidden under a plain Ready. */
+export function readyLabel(warnings: number): string {
+  if (warnings === 0) return 'Ready'
+  return warnings === 1 ? 'Ready, 1 warning' : `Ready, ${warnings} warnings`
+}
+
+/** Ready with warnings is amber, so a green tick always means nothing to read. */
+export function readinessTone(ready: boolean, warnings: number): 'good' | 'warn' | 'bad' {
+  if (!ready) return 'bad'
+  return warnings > 0 ? 'warn' : 'good'
+}

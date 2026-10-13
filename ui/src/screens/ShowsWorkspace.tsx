@@ -5,7 +5,7 @@ import { BlankingPlate, Button, PageTitle, RuledStrip, StatusPair } from '../kit
 import { describeApiError } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
-import { contentsCounts, type ShowContentsCounts } from './showsModel'
+import { contentsCounts, readinessTone, readyLabel, type ShowContentsCounts } from './showsModel'
 
 type HeadState =
   | { kind: 'loading' }
@@ -68,7 +68,7 @@ function useMediaPlaylistCount(id: string): number | null {
   return count
 }
 
-type ReadinessResult = { playlistId: string; label: string; ready: boolean; failingCondition: string | null; reason: string | null; warning: string | null }
+type ReadinessResult = { playlistId: string; label: string; ready: boolean; failingCondition: string | null; reason: string | null; warnings: number }
 
 /** One button that runs `GET .../readiness` for every FPP-runner playlist in this show. There is no aggregate endpoint; this rolls up N real per-playlist reads, never a fabricated one. */
 function useCheckReadiness(showId: string) {
@@ -93,10 +93,10 @@ function useCheckReadiness(showId: string) {
               ready: r.ready,
               failingCondition: r.failingCondition ?? null,
               reason: r.reason ?? null,
-              warning: r.warning ?? null,
+              warnings: r.warnings.length,
             }
           } catch (err) {
-            return { playlistId: p.id, label: p.payload.name, ready: false, failingCondition: null, reason: describeApiError(err), warning: null }
+            return { playlistId: p.id, label: p.payload.name, ready: false, failingCondition: null, reason: describeApiError(err), warnings: 0 }
           }
         }),
       )
@@ -201,9 +201,8 @@ export function ShowsWorkspace() {
           ) : (
             readiness.results.map((r) => (
               <p key={r.playlistId} className="sm-small">
-                <StatusPair tone={r.ready ? 'good' : 'bad'} label={r.ready ? 'Ready' : (r.failingCondition ?? 'Not ready')} /> {r.label}
+                <StatusPair tone={readinessTone(r.ready, r.warnings)} label={r.ready ? readyLabel(r.warnings) : (r.failingCondition ?? 'Not ready')} /> {r.label}
                 {r.reason !== null && r.reason !== '' && <span className="sm-muted">: {r.reason}</span>}
-                {r.warning !== null && r.warning !== '' && <span className="sm-muted"> ({r.warning})</span>}
               </p>
             ))
           )}
