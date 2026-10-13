@@ -224,7 +224,7 @@ func DecodeShowSurfacePayload(raw string, showExists func(string) bool, nodeDecl
 		return ShowSurfacePayload{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "geometry",
 			Detail: fmt.Sprintf(
-				"geometry %dx%d at %d channels per pixel (%s) computes to %d channels, which does not equal channelRange.channelCount %d",
+				"geometry %dx%d at %d channels per pixel (%s) needs %d channels, but channelCount is %d. Make them match.",
 				geometry.Width, geometry.Height, channelsPerPixel, geometry.PixelFormat, computed, channelRange.ChannelCount),
 		}
 	}
@@ -284,7 +284,7 @@ func decodeShowSurfaceChannelRange(top map[string]json.RawMessage) (ShowSurfaceC
 	if channelCount < 1 {
 		return ShowSurfaceChannelRange{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "channelRange.channelCount",
-			Detail: "channelCount must be at least 1; a zero-length channel range is refused rather than silently accepted",
+			Detail: "channelCount must be at least 1.",
 		}
 	}
 
@@ -450,7 +450,7 @@ func CheckShowSurfaceConflict(id string, candidate ShowSurfacePayload, others []
 		if candStart <= end && start <= candEnd {
 			return &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "channelRange",
-				Detail: fmt.Sprintf("The surface %q already uses channels %d to %d on this node. Choose channels outside that range or move one surface to another node.",
+				Detail: fmt.Sprintf("The surface %q already uses channels %d to %d on this node. Choose other channels.",
 					p.Name, start, end),
 			}
 		}

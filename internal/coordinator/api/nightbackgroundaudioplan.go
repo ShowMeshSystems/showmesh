@@ -17,7 +17,7 @@ func unknownNightAudioPlan(reason string) v1.NightBackgroundAudioPlan {
 // configuration revision, so it never reports another revision's items.
 func mapNightBackgroundAudioPlan(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudioPlan {
 	if rec.ID == "" || rec.ConfigObjectID == "" {
-		return unknownNightAudioPlan("There is no night session yet. Prepare the night to see its background audio.")
+		return unknownNightAudioPlan("No night session yet. Prepare the night to see its background audio.")
 	}
 	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
 	if err != nil {

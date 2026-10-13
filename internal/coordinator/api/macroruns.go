@@ -280,7 +280,7 @@ func (h *handlers) mapMacroRunStep(ctx context.Context, st store.MacroRunStepRec
 // step describes.
 func (h *handlers) mapMacroRunStepCommand(ctx context.Context, commandID *string, attributionDegraded bool) v1.MacroRunStepCommand {
 	if commandID == nil {
-		return v1.MacroRunStepCommand{State: "none", Reason: "this step has no dispatched command: either it is an mqtt step, which never has one, or it has not dispatched yet"}
+		return v1.MacroRunStepCommand{State: "none", Reason: "this step has no command: either it is an mqtt step, which never has one, or it has not been sent yet"}
 	}
 	id := *commandID
 	cmd, err := h.deps.Commands.GetCommand(ctx, id)

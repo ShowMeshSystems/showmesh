@@ -130,7 +130,7 @@ func fppMQTTHostsEqual(a, b map[string]string) bool {
 func ValidateFPPMQTTConfigKind(cfg FPPMQTTConfig, fppEndpoints []FPPEndpoint) error {
 	if cfg.BrokerURL != "" {
 		if brokerURLHasUserinfo(cfg.BrokerURL) {
-			return fmt.Errorf("fpp.mqtt: brokerURL must not embed credentials in the URL; set username/password instead")
+			return fmt.Errorf("fpp.mqtt: brokerURL must not contain a login; set username and password instead")
 		}
 		u, err := url.Parse(cfg.BrokerURL)
 		if err != nil {

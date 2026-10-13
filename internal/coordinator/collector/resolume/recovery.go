@@ -709,7 +709,7 @@ func (r *Recovery) HandleReachableTransition(ctx context.Context, returnedAt tim
 		// is not a gate a test can meaningfully break).
 		r.finish(RestoreReport{
 			StartedAt: startedAt, FinishedAt: r.now(), Trigger: RestoreTriggerAutomatic, Outcome: RestoreOutcomeNothingToDo,
-			Layers: gateRefusalLayers(target, "the confirming survey predates the observed return; refusing to restore into a possibly-wrong composition"),
+			Layers: gateRefusalLayers(target, "the check is older than Resolume's return, so the layers were not restored"),
 		})
 		return
 	}
@@ -741,7 +741,7 @@ func describeIdentityGateRefusal(snap SurveySnapshot) string {
 	case IdentityFalse:
 		return "the confirming survey found the wrong composition loaded; not restoring"
 	case IdentityDeckMismatch:
-		return "the confirming survey found the selected deck changed mid-check; composition identity could not be confirmed"
+		return "the selected deck changed during the check, so the composition could not be confirmed"
 	default: // IdentityUnknown
 		return "the confirming survey could not confirm composition identity"
 	}
@@ -881,7 +881,7 @@ func (r *Recovery) restoreLayer(ctx context.Context, target RecoveryLayerRecord,
 	switch target.State {
 	case RecoveryLayerDark:
 		row.Result = RestoreResultSkipped
-		row.Reason = "this layer was recorded dark; a clearLayer to reach a state it is already in would be a write with no purpose"
+		row.Reason = "this layer was recorded dark, so there is nothing to restore"
 		return row
 	case RecoveryLayerUnknown:
 		row.Result = RestoreResultSkipped

@@ -688,8 +688,8 @@ func TestCmdConfigSetRevisionConflictRendersMovedSinceReadMessage(t *testing.T) 
 		w.Header().Set("ShowMesh-API-Version", "1")
 		w.WriteHeader(http.StatusConflict)
 		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/config-revision-precondition-failed",`+
-			`"title":"Config write refused: the revision precondition is no longer current","status":409,`+
-			`"detail":"If-Match \"1\" is no longer current for fpp.endpoints \"fpp.endpoints\"; its current revision is 3"}`)
+			`"title":"Config write refused: a newer version was saved first","status":409,`+
+			`"detail":"If-Match \"1\" is out of date for fpp.endpoints \"fpp.endpoints\". The current version is 3. Read it again and retry."}`)
 	}))
 	defer ts.Close()
 
@@ -704,7 +704,7 @@ func TestCmdConfigSetRevisionConflictRendersMovedSinceReadMessage(t *testing.T) 
 	if code != exitConflict {
 		t.Fatalf("exit code = %d, want exitConflict (%d); stderr=%s", code, exitConflict, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "its current revision is 3") {
+	if !strings.Contains(stderr.String(), "The current version is 3") {
 		t.Errorf("stderr = %q, want the server's Detail surfaced verbatim", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "get") || !strings.Contains(stderr.String(), "retry") {

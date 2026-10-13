@@ -158,7 +158,7 @@ func ResolveAudioRoutingChoices(nodeID string, ev AudioRoutingEvidence, current 
 		out.Reason = "This node's output list could not be read. Enter channels by hand, or restart ShowMesh on the node."
 	case !ev.Complete:
 		out.Discovery = AudioRoutingDiscoveryPartial
-		out.Reason = "This node could not check all of its audio outputs. Enter channels by hand, or restart ShowMesh on the node to check again."
+		out.Reason = "This node could not check all its audio outputs. Enter channels by hand, or restart ShowMesh on the node."
 		out.DiscoveryDetail = ev.IncompleteReason
 	}
 
@@ -264,7 +264,7 @@ func resolveAudioRoutingCurrent(p AudioNodePayload, out AudioRoutingChoices) *Au
 				return cur
 			}
 		}
-		cur.Reason = "The saved channels are not among this output's choices and stay in use as saved. Pick a choice, or keep them through manual entry."
+		cur.Reason = "The saved channels are not among this output's choices. Pick a choice, or keep them as saved."
 		return cur
 	}
 	cur.Reason = fmt.Sprintf("This node no longer reports %s. The saved channels stay in use; pick an output this node reports.", p.ProgramRoute)

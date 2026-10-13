@@ -283,7 +283,7 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	// with no hint the override never arrived at all.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem(`The body must be JSON like {"idempotencyKey":string?,"interlockOverrides":[{"rule":string,"reason":string}]?,"skipEnterShowLead":bool?,"stopFppPlayback":bool?}.`)
+		p := invalidParameterProblem("The body must be JSON. Allowed fields: idempotencyKey, interlockOverrides, skipEnterShowLead, stopFppPlayback.")
 		return "", nil, false, false, &p
 	}
 	for _, o := range body.InterlockOverrides {
@@ -1001,7 +1001,7 @@ func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectI
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, config.NightSessionPayload{}, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which has no active revision", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
 		return "", 0, config.NightSessionPayload{}, &p, nil
 	}
 	rev, rerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, activePayload.Session, obj.CurrentRevision)
@@ -1848,7 +1848,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	})
 	name := "fpp:" + instanceID + ":reachable"
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "failed to read fpp.reachable evidence: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "Could not read whether FPP is reachable: " + err.Error()}
 	}
 	if len(obs) == 0 {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "FPP has not reported whether it is reachable. Check that the player is on."}
@@ -1957,7 +1957,7 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
 			return "", 0, nil, oerr
 		}
-		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which has no active revision", activePayload.Session))
+		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which is not saved. Save it, then retry.", activePayload.Session))
 		return "", 0, &p, nil
 	}
 	return activePayload.Session, obj.CurrentRevision, nil, nil
@@ -2248,11 +2248,11 @@ func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSession
 	}
 	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
 	if err != nil {
-		return unreadable("failed to read the pinned night.session revision: " + err.Error())
+		return unreadable("failed to read the saved night session: " + err.Error())
 	}
 	var payload config.NightSessionPayload
 	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
-		return unreadable("failed to decode the pinned night.session revision: " + err.Error())
+		return unreadable("failed to decode the saved night session: " + err.Error())
 	}
 	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
 	if err != nil {
@@ -2316,7 +2316,7 @@ func mapNightAuthorization(rec store.NightSessionRecord) v1.NightAuthorization {
 	if rec.Issuer.IsZero() {
 		return v1.NightAuthorization{
 			State:  v1.NightEvidenceUnknown,
-			Reason: "No operator command is on record for this night. Automatic actions still run and are logged without an operator.",
+			Reason: "No operator command is on record for this night. Automatic actions still run and are logged.",
 		}
 	}
 	return v1.NightAuthorization{
@@ -2578,7 +2578,7 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 		}
 		row.State = nightCueStateAmbiguous
 		row.Outcome = nightCueOutcomeAmbiguous
-		row.OutcomeReason = "The coordinator restarted while this cue was running, and it cannot be retried safely. Run End Session, then Prepare Site."
+		row.OutcomeReason = "The coordinator restarted while this cue was running. Run End Session, then Prepare Site."
 		resolvedAt := now
 		row.ResolvedAt = &resolvedAt
 		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {

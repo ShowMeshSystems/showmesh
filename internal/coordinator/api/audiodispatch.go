@@ -866,7 +866,7 @@ func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 	}
 	reason = res.Reason
 	if reason == "" {
-		reason = "no confirmation evidence was reported"
+		reason = "no confirmation was reported"
 	}
 	return string(pkgaudio.OutcomeUnconfirmable), reason
 }

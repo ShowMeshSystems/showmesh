@@ -200,7 +200,7 @@ func DecodeShowPlaylistPayload(raw string, showExists func(string) bool, resolve
 	if runner == showPlaylistRunnerShowmesh {
 		return ShowPlaylistPayload{}, &ValidationError{
 			Code: ValidationCodeNotImplemented, Field: "runner",
-			Detail: "runner \"showmesh\" is reserved but not yet implemented; a runner nothing implements must not be authorable",
+			Detail: "runner \"showmesh\" is not available yet. Choose a different runner.",
 		}
 	}
 	if !showPlaylistRunners[runner] {
@@ -248,7 +248,7 @@ func decodeShowPlaylistMismatchPolicy(top map[string]json.RawMessage, runner, pl
 	if present && runner != ShowPlaylistRunnerFPP {
 		return "", "", &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "mismatchPolicy",
-			Detail: "mismatchPolicy must be absent unless runner is \"fpp\": a ShowMesh-run playlist has no external authority to contradict it",
+			Detail: "mismatchPolicy applies only when runner is \"fpp\". Remove mismatchPolicy.",
 		}
 	}
 

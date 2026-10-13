@@ -80,7 +80,7 @@ const actionInvokeOutcomePendingReason = "this invocation has not yet resolved, 
 // a fresh command row carries between insertion and resolution: a pending
 // result must state a real reason, never an empty string a racing replay
 // could observe.
-const actionInvokePendingOutcomeReason = "this invocation has not yet resolved: it is still being dispatched or is awaiting confirmation evidence"
+const actionInvokePendingOutcomeReason = "this invocation has not resolved yet: it is still being sent or is waiting for confirmation"
 
 // actionInvokeResolvedNoStoredReason is the canned, non-blank OutcomeReason
 // substituted for a resolved invocation whose stored reason is empty.
@@ -187,8 +187,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(bodyBytes) > maxActionInvokeRequestBodyBytes {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"the request body exceeds this endpoint's %d byte limit; an idempotency key and an optional revision "+
-				"number never legitimately need more",
+			"The request body is over the %d byte limit.",
 			maxActionInvokeRequestBodyBytes)))
 		return
 	}
@@ -474,7 +473,7 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 	}
 	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, id, *requestedRevision)
 	if errors.Is(err, store.ErrConfigRevisionNotFound) {
-		p := resourceNotFoundProblem(fmt.Sprintf("show.action %q has no revision %d", id, *requestedRevision))
+		p := resourceNotFoundProblem(fmt.Sprintf("show.action %q has no version %d", id, *requestedRevision))
 		return store.ConfigRevisionRecord{}, &p, nil
 	}
 	if err != nil {
@@ -519,7 +518,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		resolvedAt = h.now()
 		switch {
 		case err != nil:
-			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
 		case problem != nil:
 			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
 		case out.DispatchFailed:
@@ -535,7 +534,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		result, err := h.deps.ResolumeActions.Dispatch(ctx, target.Action, target.Ref, dispatchedNow)
 		resolvedAt = h.now()
 		if err != nil {
-			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
 		}
 		return mapResolumeOutcomeWord(result.Outcome), "", result.Reason, result.DispatchedAt, resolvedAt
 
@@ -587,7 +586,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		resolvedAt = h.now()
 		switch {
 		case err != nil:
-			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
 		case problem != nil:
 			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
 		}

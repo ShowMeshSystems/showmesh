@@ -234,8 +234,8 @@ func (e *Executor) Reconcile(ctx context.Context) error {
 	}
 
 	now := e.now()
-	const restartReason = "the coordinator restarted while this run was in progress; some remaining steps may not have dispatched"
-	const neverDispatchedReason = "the coordinator restarted before this step was dispatched or resolved"
+	const restartReason = "the coordinator restarted while this run was in progress; some remaining steps may not have been sent"
+	const neverDispatchedReason = "the coordinator restarted before this step was sent or resolved"
 
 	var firstErr error
 	for _, run := range running {

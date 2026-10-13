@@ -70,7 +70,7 @@ var audioNodeSinkBackends = map[string]bool{
 // between [DecodeAudioNodePayload]'s "present but sinkBackend is not
 // pipewiresink" branch, so the wording matches the field's own doc
 // comment exactly.
-const audioNodePipewireTargetNodeConstraintDetail = "pipewireTargetNode must be absent unless sinkBackend is \"pipewiresink\": an ignored field would read as an applied one"
+const audioNodePipewireTargetNodeConstraintDetail = "pipewireTargetNode applies only when sinkBackend is \"pipewiresink\". Remove it."
 
 // The four members of outputLatency.method (RES-019 section 8).
 // "unmeasured" is the default and the only member that must carry no
@@ -350,7 +350,7 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, &ValidationError{
 			Code: ValidationCodeAudioNodeRouteMismatch, Field: "ltcRoute",
 			Detail: fmt.Sprintf(
-				"ltcRoute %q names a different interface than programRoute %q. Name the same route for both, so timecode cannot drift against the music.",
+				"ltcRoute %q is a different interface than programRoute %q. Use the same route for both.",
 				ltcRoute, programRoute),
 		}
 	}
@@ -370,7 +370,7 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		if role != AudioNodeRoleZone {
 			return AudioNodePayload{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "zone",
-				Detail: fmt.Sprintf("zone must be absent unless role is %q: an ignored field would read as an applied one", AudioNodeRoleZone),
+				Detail: fmt.Sprintf("zone applies only when role is %q. Remove it.", AudioNodeRoleZone),
 			}
 		}
 		if isJSONNull(raw) {
@@ -469,7 +469,7 @@ func decodeAudioNodeOutputLatency(top map[string]json.RawMessage) (OutputLatency
 			if _, present := fields[key]; present {
 				return OutputLatencyPayload{}, &ValidationError{
 					Code: ValidationCodeFieldInvalid, Field: "outputLatency." + key,
-					Detail: fmt.Sprintf("outputLatency.%s must be absent when method is %q; a value beside the default method would be a fabricated measurement", key, OutputLatencyMethodUnmeasured),
+					Detail: fmt.Sprintf("outputLatency.%s is not allowed when method is %q. Remove it.", key, OutputLatencyMethodUnmeasured),
 				}
 			}
 		}
@@ -489,7 +489,7 @@ func decodeAudioNodeOutputLatency(top map[string]json.RawMessage) (OutputLatency
 	if valueUs == 0 {
 		return OutputLatencyPayload{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputLatency.valueUs",
-			Detail: "outputLatency.valueUs must not be zero for a measured method; no real output chain has zero delay",
+			Detail: "outputLatency.valueUs must not be zero for a measured method. Enter the measured delay.",
 		}
 	}
 	measuredAt, verr := decodeRequiredTime(fields, "measuredAt", "outputLatency.measuredAt")
@@ -576,12 +576,12 @@ func decodeAudioNodeLTC(top map[string]json.RawMessage, programChannels []int) (
 	case haveRoute && !haveChannel:
 		return "", 0, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "ltcChannel",
-			Detail: "ltcChannel is required when ltcRoute is given; omit both to declare a program-only node that emits no LTC",
+			Detail: "ltcChannel is required when ltcRoute is given. Add ltcChannel, or remove ltcRoute for no timecode.",
 		}
 	case !haveRoute && haveChannel:
 		return "", 0, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "ltcRoute",
-			Detail: "ltcRoute is required when ltcChannel is given; omit both to declare a program-only node that emits no LTC",
+			Detail: "ltcRoute is required when ltcChannel is given. Add ltcRoute, or remove ltcChannel for no timecode.",
 		}
 	}
 
@@ -646,8 +646,7 @@ func decodeRequiredIntList(top map[string]json.RawMessage, key, field string) ([
 // node has advertised no audio capability at all — not "this route is
 // wrong", but "this coordinator holds no probe evidence for this node's
 // audio output at all", which is a different, more basic refusal.
-var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has not advertised any audio output. " +
-	"Placement is refused based on what the node itself reports, not the operator's claim alone")
+var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has not reported any audio output; start ShowMesh on the node, then retry")
 
 // ValidateAudioNodePlacement refuses placement of p against advertised
 // probe evidence (audio.output.local / audio.output.ltc capability
@@ -683,8 +682,7 @@ func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []s
 		return nil
 	}
 	if !containsString(ltcRoutes, p.LTCRoute) {
-		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised LTC-capable routes %v. "+
-			"An LTC route needs at least a third channel beyond the program pair",
+		return fmt.Errorf("audio.node: ltcRoute %q is not a timecode route this node reports (%v); pick a route with three or more channels",
 			p.LTCRoute, ltcRoutes)
 	}
 	return nil
@@ -709,7 +707,7 @@ func ValidateAudioNodeRoleUniqueness(id string, p AudioNodePayload, existingRole
 		}
 		if otherRole == AudioNodeRoleProgramLTC {
 			return fmt.Errorf(
-				"audio.node: %q and %q would both carry role %q. Only one audio.node may be the installation's program+ltc node",
+				"audio.node: %q and %q would both carry role %q; only one node may carry program and timecode",
 				id, otherID, AudioNodeRoleProgramLTC)
 		}
 	}

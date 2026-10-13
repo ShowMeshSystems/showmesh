@@ -120,7 +120,7 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 		return MQTTActionResult{
 			Outcome:      outcomeWordUnconfirmed,
 			OutcomeState: mqttActionStateDeadlineExceeded,
-			OutcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm this dispatch",
+			OutcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm it",
 				target.Expect.Topic),
 			PublishAttempted: true, ResolvedAt: now(),
 		}

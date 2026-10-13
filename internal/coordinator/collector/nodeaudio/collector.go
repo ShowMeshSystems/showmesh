@@ -855,7 +855,7 @@ var defaultCeilingReason = fmt.Sprintf("No ceiling is set for this session. The 
 func sessionStateReason(state string) string {
 	switch state {
 	case "playing", "paused":
-		return "the session state machine reports this; this seam has not independently confirmed audio actually reached an output"
+		return "reported by the session. Not confirmed at the audio output."
 	default:
 		return "no playback claim is in effect in this state"
 	}

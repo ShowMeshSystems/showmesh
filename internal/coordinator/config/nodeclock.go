@@ -237,7 +237,7 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 		if provider != NodeClockProviderExternal {
 			return NodeClockPayload{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
-				Detail: fmt.Sprintf("phcDevice must be absent unless provider is %q: an ignored field would read as an applied one", NodeClockProviderExternal),
+				Detail: fmt.Sprintf("phcDevice applies only when provider is %q. Remove it.", NodeClockProviderExternal),
 			}
 		}
 		if !phcDevicePattern.MatchString(phcDevice) {

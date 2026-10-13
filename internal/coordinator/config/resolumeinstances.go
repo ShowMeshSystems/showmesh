@@ -144,31 +144,31 @@ const maxResolumeInstances = 1
 // a []ResolumeInstance payload, not a Config.
 func ValidateResolumeInstances(instances []ResolumeInstance, fppEndpoints []FPPEndpoint) error {
 	if len(instances) > maxResolumeInstances {
-		return fmt.Errorf("resolume.instances: at most %d instance is supported today, got %d", maxResolumeInstances, len(instances))
+		return operatorMessage(fmt.Sprintf("Only %d Resolume instance is supported, but %d were given. Remove the extras.", maxResolumeInstances, len(instances)))
 	}
 
 	seen := make(map[string]bool, len(instances))
 	for _, inst := range instances {
 		if err := mqttproto.ValidateNodeID(inst.ID); err != nil {
-			return fmt.Errorf("resolume.instances: instance id %q: %w", inst.ID, err)
+			return fmt.Errorf("resolume instance id %q: %w", inst.ID, err)
 		}
 		if seen[inst.ID] {
-			return fmt.Errorf("resolume.instances: duplicate instance id %q", inst.ID)
+			return operatorMessage(fmt.Sprintf("Resolume instance id %q is used twice. Rename one.", inst.ID))
 		}
 		seen[inst.ID] = true
 
 		u, err := url.Parse(inst.URL)
 		if err != nil {
-			return fmt.Errorf("resolume.instances: instance %q: url %q is not valid: %w", inst.ID, inst.URL, err)
+			return fmt.Errorf("resolume instance %q: url %q is not valid: %w", inst.ID, inst.URL, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("resolume.instances: instance %q: url %q must use http or https", inst.ID, inst.URL)
+			return operatorMessage(fmt.Sprintf("Resolume instance %q has URL %q. Use an http or https URL.", inst.ID, inst.URL))
 		}
 		if u.Host == "" {
-			return fmt.Errorf("resolume.instances: instance %q: url %q must include a host", inst.ID, inst.URL)
+			return operatorMessage(fmt.Sprintf("Resolume instance %q has URL %q, which has no host. Add the host.", inst.ID, inst.URL))
 		}
 		if u.User != nil {
-			return fmt.Errorf("resolume.instances: instance %q: url must not include userinfo/credentials", inst.ID)
+			return operatorMessage(fmt.Sprintf("Resolume instance %q has a login in its URL. Remove it.", inst.ID))
 		}
 
 		if err := ValidateResolumeIDAgainstFPPEndpoints(inst.ID, fppEndpoints); err != nil {

@@ -78,7 +78,7 @@ func (h *handlers) blackoutAllRenderSurfaces(ctx context.Context, now time.Time,
 			InstanceID:    renderSurfaceListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindRender,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list declared show.surface objects, so no blackout could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("The surfaces could not be listed, so no blackout was sent: %v", err),
 		}}
 	}
 	if len(surfaces) == 0 {
@@ -103,7 +103,7 @@ func (h *handlers) blackoutAllRenderSurfaces(ctx context.Context, now time.Time,
 			outcome, problem, err := h.executeRenderDispatch(ctx, now, in)
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "failed", OutcomeReason: "this blackout could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "failed", OutcomeReason: "this blackout was not sent because of an internal coordinator error"}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindRender, Outcome: "refused", OutcomeReason: problem.Detail}
 			default:

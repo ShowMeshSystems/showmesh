@@ -213,8 +213,8 @@ func TestSilentSinceConnectNeverPublishedDiffersFromWentQuiet(t *testing.T) {
 	if neverReason == quietReason {
 		t.Fatalf("both hosts report the identical reason %q, want a never-published host distinguishable from a went-quiet one", neverReason)
 	}
-	if !strings.Contains(neverReason, "never received") {
-		t.Errorf("never-published reason = %q, want it to say it has never received a message", neverReason)
+	if !strings.Contains(neverReason, "never sent") {
+		t.Errorf("never-published reason = %q, want it to say the host has never sent anything", neverReason)
 	}
 	if strings.Contains(quietReason, "never received") {
 		t.Errorf("went-quiet reason = %q, want it to name when the last message arrived, not claim it never received one", quietReason)

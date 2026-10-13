@@ -67,7 +67,7 @@ func (e *Executor) resolveStrandedStep(ctx context.Context, runID string, step s
 		state := stepStateResolved
 		outcome := outcomeFailed
 		outcomeState := "unknown_integration"
-		reason := fmt.Sprintf("this step names an integration %q this coordinator does not recognize, so startup reconciliation could not determine whether it ever dispatched", step.Integration)
+		reason := fmt.Sprintf("this step names an integration %q this coordinator does not recognize, so the startup check could not tell whether it was ever sent", step.Integration)
 		return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
 			State: &state, ResolvedAt: &now, Outcome: &outcome, OutcomeState: &outcomeState, OutcomeReason: &reason,
 		})
@@ -130,7 +130,7 @@ func (e *Executor) resolveStrandedFPPStep(ctx context.Context, runID string, ste
 		outcome := outcomeUnconfirmed
 		outcomeState := "not_collected"
 		reason := fmt.Sprintf(
-			"this step's command %s was dispatched before the coordinator restarted and had not resolved yet, "+
+			"this step's command %s was sent before the coordinator restarted and had not resolved yet, "+
 				"so this run could not confirm what happened", cmd.ID)
 		return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
 			State: &state, DispatchedAt: cmd.DispatchedAt, ResolvedAt: &now,
@@ -152,7 +152,7 @@ func (e *Executor) resolveStrandedFPPStep(ctx context.Context, runID string, ste
 	_ = json.Unmarshal([]byte(cmd.ResultJSON), &result)
 
 	outcome := outcomeUnconfirmed
-	reason := fmt.Sprintf("this step dispatched before the coordinator restarted; its command resolved %s: %s", result.Outcome, cmd.OutcomeReason)
+	reason := fmt.Sprintf("this step was sent before the coordinator restarted; its command resolved %s: %s", result.Outcome, cmd.OutcomeReason)
 	switch result.Outcome {
 	case outcomeConfirmed:
 		outcome = outcomeConfirmed

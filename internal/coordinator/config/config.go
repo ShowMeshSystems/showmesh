@@ -416,7 +416,7 @@ const (
 	// operator fixes it. The store kind leads because that is the remedy
 	// once migrated; the variable stays named for a coordinator that
 	// still reads its endpoints from the environment.
-	fppEndpointsSource = "fpp.endpoints (or " + envFPPEndpoints + " if this coordinator has not migrated yet)"
+	fppEndpointsSource = "fpp.endpoints (or " + envFPPEndpoints + ")"
 
 	// envAPIToken is SHOWMESH_API_TOKEN, ADR-021's shared secret. ADR-024
 	// decision 2 retires it: this constant now exists only so
@@ -1089,7 +1089,7 @@ func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 			return fmt.Errorf("%s: instance id %q: %w", fppEndpointsSource, ep.ID, err)
 		}
 		if reservedCollectorIDs[ep.ID] {
-			return fmt.Errorf("%s: instance id %q is reserved for one of this coordinator's own collectors and cannot name an FPP endpoint; rename the endpoint",
+			return fmt.Errorf("%s: instance id %q is reserved by ShowMesh; rename the endpoint",
 				fppEndpointsSource, ep.ID)
 		}
 		if seen[ep.ID] {
@@ -1112,7 +1112,7 @@ func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 			// only entry point, rather than relying on every downstream
 			// consumer (log lines, API rendering, error reasons) to
 			// remember to strip it.
-			return fmt.Errorf("%s: instance %q: url must not include userinfo/credentials", fppEndpointsSource, ep.ID)
+			return fmt.Errorf("%s: instance %q: url must not contain a login", fppEndpointsSource, ep.ID)
 		}
 	}
 

@@ -154,7 +154,7 @@ func (e *Executor) publishAndAwait(ctx context.Context, target config.ShowAction
 		return stepResult{
 			outcome:      outcomeUnconfirmed,
 			outcomeState: mqttStateDeadlineExceeded,
-			outcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm this dispatch",
+			outcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm it",
 				target.Expect.Topic),
 			publishAttempted: true,
 		}

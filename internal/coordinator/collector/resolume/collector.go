@@ -1274,7 +1274,7 @@ func (c *Collector) identityObservation(identity IdentityResult, loadWindow bool
 	switch {
 	case loadWindow:
 		return c.surveyMeasured(SignalCompositionIdentified,
-			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now)
+			"unknown: Resolume just connected and may still be loading the composition", now)
 	case identity.Outcome == IdentityTrue:
 		return c.surveyMeasured(SignalCompositionIdentified, "identified", now)
 	case identity.Outcome == IdentityFalse:
@@ -1459,7 +1459,7 @@ func (c *Collector) layerObservations(order []TrackedLayer, layerResults map[Obj
 func (c *Collector) layerReadyObservation(l TrackedLayer, layer Layer, groupResults map[ObjectID]groupReadResult, loadWindow bool, soloActive bool, thisSoloed bool, now time.Time) observation.Observation {
 	if loadWindow {
 		return c.surveyMeasured(LayerReadySignal(l.ID),
-			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now)
+			"unknown: Resolume just connected and may still be loading the composition", now)
 	}
 
 	in := ReadinessInputs{
@@ -1543,7 +1543,7 @@ func (c *Collector) clipObservations(order []ObjectID, results map[ObjectID]clip
 		if r.err != nil {
 			reason := ClassifyError(r.err)
 			if IsNotFound(r.err) {
-				reason = "no longer resolves (404). Check the layer and composition identity signals for whether this is a stale reference or a deck mismatch."
+				reason = "no longer exists in Resolume (404). Check that the right composition and deck are loaded."
 			}
 			obs = append(obs, c.surveyFailed(ClipConnectedSignal(id), reason, now))
 			obs = append(obs, c.surveyFailed(ClipTransportTypeSignal(id), reason, now))

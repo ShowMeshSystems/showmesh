@@ -309,7 +309,7 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 			InstanceID:    emergencyStopInstanceListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindFPP,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list configured FPP instances, so no stop could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("could not list configured FPP instances, so no stop was sent to any of them: %v", err),
 		}}, false
 	}
 	if len(endpoints) == 0 {
@@ -334,7 +334,7 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: "this stop could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: "this stop was not sent because of an internal coordinator error"}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "refused", OutcomeReason: problem.Detail}
 			case outcome.DispatchFailed:
@@ -396,7 +396,7 @@ func (h *handlers) emergencyStopAllAudioNodes(ctx context.Context, now time.Time
 			InstanceID:    emergencyStopNodeListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindNode,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list declared audio.node ids, so no silence could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("could not list declared audio.node ids, so no silence was sent to any of them: %v", err),
 		}}
 	}
 	if len(nodeIDs) == 0 {
@@ -416,7 +416,7 @@ func (h *handlers) emergencyStopAllAudioNodes(ctx context.Context, now time.Time
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "this silence could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "this silence was not sent because of an internal coordinator error"}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "refused", OutcomeReason: problem.Detail}
 			default:
@@ -466,7 +466,7 @@ func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now ti
 			InstanceID:    emergencyStopResolumeListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindResolume,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list configured Resolume instances, so no blackout could be dispatched to any of them: %v", err),
+			OutcomeReason: fmt.Sprintf("could not list configured Resolume instances, so no blackout was sent to any of them: %v", err),
 		}}
 	}
 	if len(instanceIDs) == 0 {
@@ -481,7 +481,7 @@ func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now ti
 			defer wg.Done()
 			result, err := h.deps.ResolumeActions.Dispatch(ctx, emergencyStopResolumeBlackoutAction, map[string]any{}, now)
 			if err != nil {
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: "failed", OutcomeReason: "this blackout could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: "failed", OutcomeReason: "this blackout was not sent because of an internal coordinator error"}
 				return
 			}
 			out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: mapResolumeOutcomeWord(result.Outcome), OutcomeReason: result.Reason, DispatchedAt: formatTimePtr(result.DispatchedAt)}

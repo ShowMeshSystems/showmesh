@@ -659,7 +659,7 @@ func TestPostAssetUploadTooLarge(t *testing.T) {
 	// cannot pass this by coincidence), never the Resolume composition
 	// route's own fixed bound, and must call the uploaded thing an asset,
 	// not a Resolume composition file.
-	wantDetail := "the uploaded file exceeds this coordinator's 4 byte upload limit for an uploaded asset; nothing was stored."
+	wantDetail := "The file is over the 4 byte upload limit for an uploaded asset. Nothing was stored."
 	if p.Detail != wantDetail {
 		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
 	}
@@ -708,7 +708,7 @@ func TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound(t *testing.
 	}
 	var p v1ProblemForTest
 	_ = json.Unmarshal(body, &p)
-	wantDetail := fmt.Sprintf("the uploaded file exceeds this coordinator's %d byte upload limit for an uploaded asset; nothing was stored.", configuredBound)
+	wantDetail := fmt.Sprintf("The file is over the %d byte upload limit for an uploaded asset. Nothing was stored.", configuredBound)
 	if p.Detail != wantDetail {
 		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
 	}

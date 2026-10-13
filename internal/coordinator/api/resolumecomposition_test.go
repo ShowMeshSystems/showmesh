@@ -524,8 +524,8 @@ func TestResolumeCompositionUploadOverLimitRefusedWithoutFullBuffering(t *testin
 	// its own composition-specific wording, unaffected by that
 	// parameterization, and with no em-dash (this coordinator's own
 	// convention).
-	wantDetail := "the uploaded file exceeds this coordinator's 16777216 byte upload limit for a Resolume composition file; " +
-		"nothing was stored. Real composition files are typically well under 3 MB, check that the correct file was selected."
+	wantDetail := "The file is over the 16777216 byte upload limit for a Resolume composition file. " +
+		"Nothing was stored. Composition files are usually under 3 MB. Check that the right file was selected."
 	if m["detail"] != wantDetail {
 		t.Errorf("detail = %q, want %q", m["detail"], wantDetail)
 	}

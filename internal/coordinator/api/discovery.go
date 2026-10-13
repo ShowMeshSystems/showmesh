@@ -222,7 +222,7 @@ func declarationOnlyNodeView(nodeID string, decl store.NodeDeclarationRecord) in
 		FirstSeenAt:    decl.DeclaredAt,
 		UpdatedAt:      decl.UpdatedAt,
 		Liveness:       inventory.LivenessUnknown,
-		LivenessReason: "declared but never observed: no agent hello, last-will evidence, or health heartbeat has ever been recorded for this node id",
+		LivenessReason: "declared but never observed: no agent hello, last-will, or health heartbeat has ever been recorded for this node id",
 	}
 }
 
@@ -575,7 +575,7 @@ func (h *handlers) handleStartDiscoveryRun(w http.ResponseWriter, r *http.Reques
 			// is the ONLY write this handler performs against an existing
 			// declaration.
 			if err := h.deps.Discovery.RecordNodeDiscoverySeen(ctx, e.id, runID, now); err != nil {
-				h.finishDiscoveryRunFailed(r, ac, runID, "failed to record discovery evidence for "+strconv.Quote(e.id)+": "+err.Error())
+				h.finishDiscoveryRunFailed(r, ac, runID, "failed to record discovery result for "+strconv.Quote(e.id)+": "+err.Error())
 				h.writeInternalError(w, now, "record node discovery seen", err)
 				return
 			}

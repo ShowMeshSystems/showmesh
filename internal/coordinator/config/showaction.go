@@ -1171,7 +1171,7 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return ShowActionMQTTExpect{}, &ValidationError{
 					Code: ValidationCodeFieldInvalid, Field: "target.expect.value",
-					Detail: "value must be a JSON string that parses as a number for kind \"number\" (e.g. \"42\"), matching the shape this action is read back in",
+					Detail: "value must be a number in quotes for kind \"number\", like \"42\".",
 				}
 			}
 			if _, err := strconv.ParseFloat(s, 64); err != nil {
@@ -1347,7 +1347,7 @@ func validateAudioTargetGainParams(action string, params map[string]any) *Valida
 		return &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.params." + names.retiredKey,
 			Detail: fmt.Sprintf(
-				"target.params.%s was a linear amplitude multiplier and no longer exists; use %s, in decibels (0 dB is unity, %g dB is silence)",
+				"target.params.%s no longer exists. Use %s in decibels, where 0 dB is unity and %g dB is silence.",
 				names.retiredKey, names.dbKey, audio.SilenceFloorDb),
 		}
 	}
@@ -1369,7 +1369,7 @@ func validateAudioTargetGainParams(action string, params map[string]any) *Valida
 	if db > audio.MaxOperatorGainDb {
 		return &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.params." + names.dbKey,
-			Detail: fmt.Sprintf("target.params.%s is in decibels and must not exceed %g dB: a larger value is a typo, not a level",
+			Detail: fmt.Sprintf("target.params.%s must not exceed %g dB. Enter a lower level.",
 				names.dbKey, audio.MaxOperatorGainDb),
 		}
 	}
@@ -1683,7 +1683,7 @@ func validateShowRef(show string) *ValidationError {
 	if err := mqttproto.ValidateNodeID(show); err != nil {
 		return &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "show",
-			Detail: "show must be 1-64 characters of lowercase letters, digits, and hyphens, and must not start or end with a hyphen",
+			Detail: "show must be 1 to 64 lowercase letters, digits or hyphens, not starting or ending with a hyphen.",
 		}
 	}
 	return nil
@@ -1744,7 +1744,7 @@ func rejectUnknownTopLevelKeys(top map[string]json.RawMessage, known map[string]
 	return &ValidationError{
 		Code: ValidationCodeFieldUnknownKey,
 		Detail: fmt.Sprintf(
-			"the payload contains unrecognized key(s): %s (a typo'd key is refused rather than silently applying that field's own default or being ignored)",
+			"unrecognized key(s): %s. Check the spelling or remove them.",
 			strings.Join(unknown, ", ")),
 	}
 }

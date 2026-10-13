@@ -82,7 +82,7 @@ func decodeExcludeNodes(fields map[string]json.RawMessage, path string, ownExpli
 	if len(ownExplicit) > 0 {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: path + ".excludeNodes",
-			Detail: "excludeNodes applies only when the show's audio nodes are inherited; clear targets first",
+			Detail: "excludeNodes applies only when audio nodes are inherited. Clear targets first.",
 		}
 	}
 	seen := make(map[string]bool, len(excludeNodes))

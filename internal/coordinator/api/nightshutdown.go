@@ -167,7 +167,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 	switch {
 	case err != nil:
 		h.logWarn("night loop: shutdown stop dispatch failed", "sessionId", rec.ID, "instanceId", instanceID, "error", err)
-		notSent("the stop could not be dispatched: " + err.Error())
+		notSent("the stop was not sent: " + err.Error())
 		return
 	case problem != nil:
 		notSent("the stop was refused before it reached FPP: " + problem.Detail)

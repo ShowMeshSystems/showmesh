@@ -672,7 +672,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		// through the lead window and must stay supervised (finding 7)
 		// until the first outward-facing cue commits.
 		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
-		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "content boundary E; enterShow cues and the show launch are relative to it"})
+		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "show start time; enterShow cues and the show launch are relative to it"})
 		return cur
 	})
 }
@@ -772,7 +772,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// entry time (that reproduced the collapse-to-zero defect).
 	b, ok := decodeNightBoundary(rec.BoundaryJSON)
 	if !ok || b.ExpectedAt == nil {
-		h.nightDegradeSession(ctx, now, rec, "transition-to-show has no persisted content boundary; end-session and prepare-site again to recover")
+		h.nightDegradeSession(ctx, now, rec, "transition-to-show has no saved show start time; end-session and prepare-site again to recover")
 		return
 	}
 	boundaryE := *b.ExpectedAt

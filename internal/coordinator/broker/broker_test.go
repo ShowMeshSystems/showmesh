@@ -152,7 +152,7 @@ func TestBrokerManagerReadinessConnectedButStale(t *testing.T) {
 	if report.Ready {
 		t.Errorf("Ready = true, want false for stale evidence")
 	}
-	if report.Reason != "mqtt broker evidence is stale" {
+	if report.Reason != "mqtt broker status is stale" {
 		t.Errorf("Reason = %q, want it to name stale evidence", report.Reason)
 	}
 

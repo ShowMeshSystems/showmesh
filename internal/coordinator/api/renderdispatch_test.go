@@ -433,8 +433,8 @@ func TestRenderApplyRefusesOnAmbiguousAsset(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "ambiguous") {
-		t.Fatalf("body = %q, want it to say ambiguous", body)
+	if !strings.Contains(string(body), "2 FSEQ files match") {
+		t.Fatalf("body = %q, want it to say two FSEQ files match", body)
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0", setup.pub.count())
@@ -479,7 +479,7 @@ func TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio(t *testing.T) 
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem response: %v", err)
 	}
-	if !strings.Contains(problem.Detail, "no fseq asset found") || !strings.Contains(problem.Detail, `sequence "opener"`) {
+	if !strings.Contains(problem.Detail, "has no FSEQ file") || !strings.Contains(problem.Detail, `sequence "opener"`) {
 		t.Fatalf("detail = %q, want it to name the missing fseq asset for the sequence, not pass the audio file through", problem.Detail)
 	}
 	if strings.Contains(problem.Detail, "opener.mp3") {
