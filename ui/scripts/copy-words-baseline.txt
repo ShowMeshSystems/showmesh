@@ -1,0 +1,38 @@
+# Banned words still in operator UI copy: file, word, number of uses.
+# A use beyond this list fails. A line this list overstates is only reported;
+# drop it with
+# node scripts/check-copy-words.mjs --update
+api/uuid.ts	idempotency	1
+app/EmergencyStopChrome.tsx	armed	1
+app/EmergencyStopOutcome.tsx	dispatched	1
+app/Layout.tsx	principal	1
+app/SessionBand.tsx	evidence	1
+domain/session.ts	principal	4
+kit/Specimen.tsx	armed	1
+kit/Specimen.tsx	collector	1
+kit/Specimen.tsx	dispatch	1
+kit/Specimen.tsx	evidence	7
+kit/Specimen.tsx	principal	1
+screens/AssetsSurface.tsx	dispatch	1
+screens/LiveControl.tsx	armed	1
+screens/LiveControl.tsx	dispatch	3
+screens/LiveControl.tsx	dispatched	1
+screens/LiveControl.tsx	payload	2
+screens/LiveControl.tsx	rev	1
+screens/Monitor.tsx	reconciliation	1
+screens/NodeDetail.tsx	dispatched	1
+screens/ResolumeControl.tsx	dispatch	6
+screens/ShowNight.tsx	armed	1
+screens/ShowNight.tsx	dispatched	1
+screens/ShowNight.tsx	posture	1
+screens/ShowNight.tsx	provenance	2
+screens/ShowNight.tsx	revision	1
+screens/Shows.tsx	rev	1
+screens/ShowsAutomation.tsx	dispatched	2
+screens/ShowsAutomation.tsx	payload	1
+screens/ShowsAutomation.tsx	revision	2
+screens/ShowsWorkspace.tsx	principal	1
+screens/liveControlModel.ts	dispatch	1
+screens/liveControlModel.ts	dispatched	3
+screens/showNightModel.ts	dispatch	1
+screens/showNightModel.ts	pinned	3

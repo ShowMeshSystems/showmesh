@@ -434,7 +434,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	// route writes its own status line.
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(v1.NightCommandResponse{
+	jsonEncode(w, v1.NightCommandResponse{
 		ServerTime: formatTime(now),
 		Command:    v1.NightCommandResult{Command: cmd, Outcome: out.outcome, Reason: out.reason, AttributionDegraded: attributionDegraded},
 		Session:    state,

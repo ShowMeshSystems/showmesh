@@ -1435,6 +1435,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // write or encode failure, which callers treat as "the connection is
 // gone, stop".
 func writeSSE(w http.ResponseWriter, event string, payload any) bool {
+	if responseObserver != nil {
+		responseObserver(payload)
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return false

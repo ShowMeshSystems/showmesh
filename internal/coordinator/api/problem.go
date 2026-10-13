@@ -263,6 +263,9 @@ var supportedAPIVersions = []int{1}
 // no second response to fall back to once WriteHeader has been called.
 func writeProblem(w http.ResponseWriter, logger *slog.Logger, now time.Time, p v1.Problem) {
 	p.ServerTime = formatTime(now)
+	if responseObserver != nil {
+		responseObserver(p)
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
 	if err := json.NewEncoder(w).Encode(p); err != nil {

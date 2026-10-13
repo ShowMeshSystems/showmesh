@@ -136,7 +136,7 @@ func (h *handlers) handleSubmitMacroRun(w http.ResponseWriter, r *http.Request) 
 	// — the one route in this file that cannot use jsonWrite.
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(v1.MacroRunSubmitResponse{
+	jsonEncode(w, v1.MacroRunSubmitResponse{
 		ServerTime: formatTime(now),
 		Run:        h.mapMacroRun(r.Context(), result.Run, result.Steps),
 		Replay:     result.Replay,
