@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "visual:review": "node scripts/capture-visual.mjs",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/check-copy-words.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "gen:api": "node scripts/gen-api-types.mjs"
   },

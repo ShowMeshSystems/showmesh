@@ -45,7 +45,7 @@ import (
 // add to the package the race detector is timing.
 func TestMain(m *testing.M) {
 	identity.UseTestArgon2Cost(8, 1, 1)
-	os.Exit(m.Run())
+	os.Exit(copyLedger.Settle(m.Run()))
 }
 
 // newTestIdentityService builds a real [identity.Service] over a

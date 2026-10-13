@@ -66,6 +66,7 @@ func newFakePublisher() *fakePublisher {
 }
 
 func (f *fakePublisher) Publish(_ context.Context, topic string, qos byte, retain bool, payload []byte) error {
+	observeReportCopy(topic, payload)
 	f.mu.Lock()
 	idx := len(f.calls)
 	fail := f.failOn[idx]

@@ -1,0 +1,39 @@
+# Known copy violations in messages this package's tests produce.
+# One line per rule and source, tab separated. This list only shrinks:
+# a violation that is not here fails the tests, and so does a line here
+# that a full run no longer produces. After fixing messages, rerun the
+# whole package with SHOWMESH_COPYCHECK_UPDATE=1 to rewrite it.
+capital	report LWT payload.reason
+full-stop	report LWT payload.reason
+capital	report Observed assets payload.reason
+full-stop	report Observed assets payload.reason
+quoted-name	report Observed assets payload.reason
+capital	report Observed render payload.fppConnectHeldEvents[].reason
+full-stop	report Observed render payload.fppConnectHeldEvents[].reason
+hex	report Observed render payload.fppConnectHeldEvents[].reason
+joined	report Observed render payload.fppConnectHeldEvents[].reason
+length	report Observed render payload.fppConnectHeldEvents[].reason
+capital	report Observed render payload.surfaces[].reason
+full-stop	report Observed render payload.surfaces[].reason
+joined	report Observed render payload.surfaces[].reason
+capital	result audio.gain.fade value reason
+full-stop	result audio.gain.fade value reason
+vocabulary	result audio.gain.fade value reason
+capital	result audio.session.apply value reason
+full-stop	result audio.session.apply value reason
+joined	result audio.session.apply value reason
+capital	result audio.session.pause value reason
+full-stop	result audio.session.pause value reason
+joined	result audio.session.pause value reason
+capital	result audio.session.prepare value reason
+full-stop	result audio.session.prepare value reason
+joined	result audio.session.prepare value reason
+capital	result audio.session.start value reason
+full-stop	result audio.session.start value reason
+joined	result audio.session.start value reason
+capital	result render.surface.apply reason
+capital	result render.surface.clear value reason
+full-stop	result render.surface.clear value reason
+
+# exempt by ruling
+# Config validation errors of the form "<fieldPath> must ...".

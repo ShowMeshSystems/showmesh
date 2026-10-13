@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -221,7 +220,7 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(v1.CueActivateResponse{
+	jsonEncode(w, v1.CueActivateResponse{
 		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes, Actions: actions,
 		Aligned: aligned, UnalignedReason: unalignedReason, ScheduledAtNs: scheduledAtNs,
 	})
