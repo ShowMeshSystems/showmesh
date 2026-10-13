@@ -812,13 +812,6 @@ hex	v1.FPPPlaylistEntryReconciliationResponse reason
 joined	v1.FPPPlaylistEntryReconciliationResponse reason
 kind-name	v1.FPPPlaylistEntryReconciliationResponse reason
 length	v1.FPPPlaylistEntryReconciliationResponse reason
-capital	v1.FPPPlaylistReadinessResponse reason
-full-stop	v1.FPPPlaylistReadinessResponse reason
-hex	v1.FPPPlaylistReadinessResponse reason
-joined	v1.FPPPlaylistReadinessResponse reason
-length	v1.FPPPlaylistReadinessResponse reason
-quoted-name	v1.FPPPlaylistReadinessResponse reason
-sentences	v1.FPPPlaylistReadinessResponse reason
 capital	v1.FPPResponse instances[].observations[].reason
 full-stop	v1.FPPResponse instances[].observations[].reason
 vocabulary	v1.FPPResponse instances[].observations[].reason
