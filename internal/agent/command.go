@@ -814,6 +814,10 @@ func (h *CommandHandler) failedResult(cmd mqttproto.CmdPayload, receivedAt time.
 	}
 }
 
+// resultObserver is nil in a shipped binary. A test binary sets it to read
+// the copy of every result before it is published.
+var resultObserver func(mqttproto.ResultPayload)
+
 // publishResult marshals and publishes result to its command's result
 // topic ([mqttproto.ResultTopic]), per [mqttproto.ResultDeliveryPolicy].
 // Bounded by [commandPublishTimeout]; a publish failure is logged, not
@@ -821,6 +825,9 @@ func (h *CommandHandler) failedResult(cmd mqttproto.CmdPayload, receivedAt time.
 // already computed and cached, matching advertise.go's and heartbeat.go's
 // own "best effort, log on failure" treatment of an outbound publish.
 func (h *CommandHandler) publishResult(ctx context.Context, publisher Publisher, result mqttproto.ResultPayload) {
+	if resultObserver != nil {
+		resultObserver(result)
+	}
 	topic, err := mqttproto.ResultTopic(h.nodeID, result.CommandID)
 	if err != nil {
 		// result.CommandID came from a decoded, Validate()-passed

@@ -43,6 +43,19 @@ const (
 func jsonWrite(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	jsonEncode(w, v)
+}
+
+// responseObserver is nil in a shipped binary. A test binary sets it to read
+// the copy in every body this package writes.
+var responseObserver func(body any)
+
+// jsonEncode writes v as the body of a response whose status line the
+// caller has already written.
+func jsonEncode(w http.ResponseWriter, v any) {
+	if responseObserver != nil {
+		responseObserver(v)
+	}
 	_ = json.NewEncoder(w).Encode(v)
 }
 

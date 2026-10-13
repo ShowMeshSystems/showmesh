@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -137,7 +136,7 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(v1.ResyncNodeAssetsResponse{
+	jsonEncode(w, v1.ResyncNodeAssetsResponse{
 		ServerTime: formatTime(now),
 		Resync:     result,
 	})

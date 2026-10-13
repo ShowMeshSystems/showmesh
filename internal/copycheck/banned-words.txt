@@ -1,0 +1,26 @@
+# Words an operator never reads. One word per line, matched as a whole
+# word without regard to case. The Go copy check and the UI lint both
+# read this file.
+interlock
+attestation
+provenance
+epoch
+revision
+rev
+boundary
+armed
+evidence
+dispatch
+dispatched
+reconcile
+reconciliation
+resolver
+collector
+payload
+idempotency
+principal
+posture
+pinned
+barrier
+outbox
+decode

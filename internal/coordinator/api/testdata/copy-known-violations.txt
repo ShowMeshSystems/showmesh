@@ -1,0 +1,1047 @@
+# Known copy violations in messages this package's tests produce.
+# One line per rule and source, tab separated. A violation that is not here
+# fails the tests. A line a full run no longer produces is only reported;
+# rerun the whole package with SHOWMESH_COPYCHECK_UPDATE=1 to drop it.
+quoted-name	problem asset-pinned in handleDeleteAsset
+capital	problem asset-resync-publish-failed in handlePostResyncNodeAssets
+full-stop	problem asset-resync-publish-failed in handlePostResyncNodeAssets
+hex	problem asset-resync-publish-failed in handlePostResyncNodeAssets
+quoted-name	problem asset-resync-publish-failed in handlePostResyncNodeAssets
+capital	problem asset-target-required in handlePostAssetUpload
+full-stop	problem asset-target-required in handlePostAssetUpload
+joined	problem asset-target-required in handlePostAssetUpload
+quoted-name	problem asset-target-required in handlePostAssetUpload
+capital	problem audio-node-channel-overlap in handlePutAudioNode
+full-stop	problem audio-node-channel-overlap in handlePutAudioNode
+joined	problem audio-node-channel-overlap in handlePutAudioNode
+capital	problem audio-node-route-mismatch in handlePutAudioNode
+quoted-name	problem audio-node-route-mismatch in handlePutAudioNode
+capital	problem config-object-currently-active in writeConfigDeleteResponse
+full-stop	problem config-object-currently-active in writeConfigDeleteResponse
+joined	problem config-object-currently-active in writeConfigDeleteResponse
+kind-name	problem config-object-currently-active in writeConfigDeleteResponse
+length	problem config-object-currently-active in writeConfigDeleteResponse
+quoted-name	problem config-object-currently-active in writeConfigDeleteResponse
+capital	problem config-revision-precondition-failed in handlePutAssetsSettingsConfig
+kind-name	problem config-revision-precondition-failed in handlePutAssetsSettingsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutAssetsSettingsConfig
+sentences	problem config-revision-precondition-failed in handlePutAssetsSettingsConfig
+capital	problem config-revision-precondition-failed in handlePutAudioNode
+kind-name	problem config-revision-precondition-failed in handlePutAudioNode
+quoted-name	problem config-revision-precondition-failed in handlePutAudioNode
+sentences	problem config-revision-precondition-failed in handlePutAudioNode
+kind-name	problem config-revision-precondition-failed in handlePutAudioSettingsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutAudioSettingsConfig
+sentences	problem config-revision-precondition-failed in handlePutAudioSettingsConfig
+kind-name	problem config-revision-precondition-failed in handlePutEmergencyStopConfig
+quoted-name	problem config-revision-precondition-failed in handlePutEmergencyStopConfig
+sentences	problem config-revision-precondition-failed in handlePutEmergencyStopConfig
+kind-name	problem config-revision-precondition-failed in handlePutFPPConnectSettingsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutFPPConnectSettingsConfig
+sentences	problem config-revision-precondition-failed in handlePutFPPConnectSettingsConfig
+capital	problem config-revision-precondition-failed in handlePutFPPEndpointsConfig
+kind-name	problem config-revision-precondition-failed in handlePutFPPEndpointsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutFPPEndpointsConfig
+sentences	problem config-revision-precondition-failed in handlePutFPPEndpointsConfig
+kind-name	problem config-revision-precondition-failed in handlePutFPPMQTTConfig
+quoted-name	problem config-revision-precondition-failed in handlePutFPPMQTTConfig
+sentences	problem config-revision-precondition-failed in handlePutFPPMQTTConfig
+capital	problem config-revision-precondition-failed in handlePutMediaPlaylist
+kind-name	problem config-revision-precondition-failed in handlePutMediaPlaylist
+quoted-name	problem config-revision-precondition-failed in handlePutMediaPlaylist
+sentences	problem config-revision-precondition-failed in handlePutMediaPlaylist
+capital	problem config-revision-precondition-failed in handlePutNightSession
+kind-name	problem config-revision-precondition-failed in handlePutNightSession
+quoted-name	problem config-revision-precondition-failed in handlePutNightSession
+sentences	problem config-revision-precondition-failed in handlePutNightSession
+kind-name	problem config-revision-precondition-failed in handlePutNightSessionActive
+quoted-name	problem config-revision-precondition-failed in handlePutNightSessionActive
+sentences	problem config-revision-precondition-failed in handlePutNightSessionActive
+capital	problem config-revision-precondition-failed in handlePutNodeClock
+kind-name	problem config-revision-precondition-failed in handlePutNodeClock
+quoted-name	problem config-revision-precondition-failed in handlePutNodeClock
+sentences	problem config-revision-precondition-failed in handlePutNodeClock
+kind-name	problem config-revision-precondition-failed in handlePutReleaseSettingsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutReleaseSettingsConfig
+sentences	problem config-revision-precondition-failed in handlePutReleaseSettingsConfig
+kind-name	problem config-revision-precondition-failed in handlePutRenderSettingsConfig
+quoted-name	problem config-revision-precondition-failed in handlePutRenderSettingsConfig
+sentences	problem config-revision-precondition-failed in handlePutRenderSettingsConfig
+kind-name	problem config-revision-precondition-failed in handlePutResolumeInstancesConfig
+quoted-name	problem config-revision-precondition-failed in handlePutResolumeInstancesConfig
+sentences	problem config-revision-precondition-failed in handlePutResolumeInstancesConfig
+kind-name	problem config-revision-precondition-failed in handlePutResolumeRecoveryConfig
+quoted-name	problem config-revision-precondition-failed in handlePutResolumeRecoveryConfig
+sentences	problem config-revision-precondition-failed in handlePutResolumeRecoveryConfig
+capital	problem config-revision-precondition-failed in handlePutShow
+quoted-name	problem config-revision-precondition-failed in handlePutShow
+sentences	problem config-revision-precondition-failed in handlePutShow
+capital	problem config-revision-precondition-failed in handlePutShowAction
+kind-name	problem config-revision-precondition-failed in handlePutShowAction
+quoted-name	problem config-revision-precondition-failed in handlePutShowAction
+sentences	problem config-revision-precondition-failed in handlePutShowAction
+kind-name	problem config-revision-precondition-failed in handlePutShowActive
+quoted-name	problem config-revision-precondition-failed in handlePutShowActive
+sentences	problem config-revision-precondition-failed in handlePutShowActive
+capital	problem config-revision-precondition-failed in handlePutShowCue
+kind-name	problem config-revision-precondition-failed in handlePutShowCue
+quoted-name	problem config-revision-precondition-failed in handlePutShowCue
+sentences	problem config-revision-precondition-failed in handlePutShowCue
+capital	problem config-revision-precondition-failed in handlePutShowMacro
+kind-name	problem config-revision-precondition-failed in handlePutShowMacro
+quoted-name	problem config-revision-precondition-failed in handlePutShowMacro
+sentences	problem config-revision-precondition-failed in handlePutShowMacro
+kind-name	problem config-revision-precondition-failed in handlePutShowModeConfig
+quoted-name	problem config-revision-precondition-failed in handlePutShowModeConfig
+sentences	problem config-revision-precondition-failed in handlePutShowModeConfig
+capital	problem config-revision-precondition-failed in handlePutShowPlaylist
+kind-name	problem config-revision-precondition-failed in handlePutShowPlaylist
+quoted-name	problem config-revision-precondition-failed in handlePutShowPlaylist
+sentences	problem config-revision-precondition-failed in handlePutShowPlaylist
+capital	problem config-revision-precondition-failed in handlePutShowSurface
+kind-name	problem config-revision-precondition-failed in handlePutShowSurface
+quoted-name	problem config-revision-precondition-failed in handlePutShowSurface
+sentences	problem config-revision-precondition-failed in handlePutShowSurface
+kind-name	problem config-revision-precondition-failed in writeConfigDeleteResponse
+quoted-name	problem config-revision-precondition-failed in writeConfigDeleteResponse
+sentences	problem config-revision-precondition-failed in writeConfigDeleteResponse
+capital	problem conflict in dispatchAudioSessionCommand
+hex	problem conflict in dispatchAudioSessionCommand
+kind-name	problem conflict in dispatchAudioSessionCommand
+length	problem conflict in dispatchAudioSessionCommand
+quoted-name	problem conflict in dispatchAudioSessionCommand
+capital	problem conflict in dispatchRenderCommand
+hex	problem conflict in dispatchRenderCommand
+kind-name	problem conflict in dispatchRenderCommand
+length	problem conflict in dispatchRenderCommand
+quoted-name	problem conflict in dispatchRenderCommand
+quoted-name	problem conflict in handleAcknowledgeFPPInstanceUUIDChange
+capital	problem conflict in handleAudioNodeSilence
+hex	problem conflict in handleAudioNodeSilence
+kind-name	problem conflict in handleAudioNodeSilence
+length	problem conflict in handleAudioNodeSilence
+quoted-name	problem conflict in handleAudioNodeSilence
+capital	problem conflict in handleDispatchResolumeAction
+hex	problem conflict in handleDispatchResolumeAction
+kind-name	problem conflict in handleDispatchResolumeAction
+length	problem conflict in handleDispatchResolumeAction
+quoted-name	problem conflict in handleDispatchResolumeAction
+capital	problem conflict in handleEmergencyStopFire
+full-stop	problem conflict in handleEmergencyStopFire
+joined	problem conflict in handleEmergencyStopFire
+capital	problem conflict in handleFPPCommand
+hex	problem conflict in handleFPPCommand
+kind-name	problem conflict in handleFPPCommand
+length	problem conflict in handleFPPCommand
+quoted-name	problem conflict in handleFPPCommand
+capital	problem conflict in handleInvokeAction
+hex	problem conflict in handleInvokeAction
+joined	problem conflict in handleInvokeAction
+kind-name	problem conflict in handleInvokeAction
+length	problem conflict in handleInvokeAction
+quoted-name	problem conflict in handleInvokeAction
+capital	problem conflict in handlePostFPPPlaylistEntryObservation
+full-stop	problem conflict in handlePostFPPPlaylistEntryObservation
+joined	problem conflict in handlePostFPPPlaylistEntryObservation
+capital	problem conflict in handlePostNodeCueCatalogDeploy
+quoted-name	problem conflict in handlePostNodeCueCatalogDeploy
+capital	problem conflict in handlePostRemoveNodeAsset
+full-stop	problem conflict in handlePostRemoveNodeAsset
+hex	problem conflict in handlePostRemoveNodeAsset
+length	problem conflict in handlePostRemoveNodeAsset
+quoted-name	problem conflict in handlePostRemoveNodeAsset
+joined	problem conflict in handlePutAssetsSettingsConfig
+joined	problem conflict in handlePutFPPEndpointsConfig
+joined	problem conflict in handlePutFPPMQTTConfig
+joined	problem conflict in handlePutReleaseSettingsConfig
+joined	problem conflict in handlePutResolumeInstancesConfig
+quoted-name	problem conflict in handlePutShowPlaylist
+hex	problem conflict in handleStartAlignmentRun
+quoted-name	problem conflict in handleStartAlignmentRun
+capital	problem conflict in handleStartFPPPairing
+quoted-name	problem conflict in handleStartFPPPairing
+quoted-name	problem conflict in writeEnrollmentError
+capital	problem credential-in-url in withIdentity
+full-stop	problem credential-in-url in withIdentity
+joined	problem credential-in-url in withIdentity
+length	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
+quoted-name	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
+capital	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
+full-stop	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
+hex	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
+length	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
+capital	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
+full-stop	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
+joined	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
+vocabulary	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
+full-stop	problem enrollment-code-gone in writeEnrollmentError
+capital	problem forbidden in readAnyGuard
+full-stop	problem forbidden in readAnyGuard
+vocabulary	problem forbidden in readAnyGuard
+capital	problem forbidden in readGuardAll
+full-stop	problem forbidden in readGuardAll
+vocabulary	problem forbidden in readGuardAll
+capital	problem forbidden in requireScope
+full-stop	problem forbidden in requireScope
+vocabulary	problem forbidden in requireScope
+capital	problem forbidden in writeGuard
+full-stop	problem forbidden in writeGuard
+vocabulary	problem forbidden in writeGuard
+capital	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
+full-stop	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
+joined	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
+quoted-name	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
+full-stop	problem fpp-brightness-excluded-ranges-write-failed in handleFPPBrightnessExcludedRanges
+full-stop	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
+go-error	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
+joined	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
+length	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
+quoted-name	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
+capital	problem fpp-start-playlist-busy in handleFPPCommand
+quoted-name	problem fpp-start-playlist-busy in handleFPPCommand
+kind-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
+length	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
+quoted-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
+capital	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
+full-stop	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
+joined	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
+quoted-name	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
+capital	problem interlock-shutdown-phase-requires-override in handlePutNightSession
+quoted-name	problem interlock-shutdown-phase-requires-override in handlePutNightSession
+capital	problem internal-error in writeInternalError
+full-stop	problem internal-error in writeInternalError
+joined	problem internal-error in writeInternalError
+capital	problem invalid-parameter in dispatchAudioSessionCommand
+full-stop	problem invalid-parameter in dispatchAudioSessionCommand
+joined	problem invalid-parameter in dispatchAudioSessionCommand
+kind-name	problem invalid-parameter in dispatchAudioSessionCommand
+capital	problem invalid-parameter in dispatchRenderCommand
+full-stop	problem invalid-parameter in dispatchRenderCommand
+quoted-name	problem invalid-parameter in dispatchRenderCommand
+sentences	problem invalid-parameter in dispatchRenderCommand
+capital	problem invalid-parameter in handleActivateCue
+full-stop	problem invalid-parameter in handleActivateCue
+joined	problem invalid-parameter in handleActivateCue
+quoted-name	problem invalid-parameter in handleActivateCue
+capital	problem invalid-parameter in handleAudit
+full-stop	problem invalid-parameter in handleAudit
+joined	problem invalid-parameter in handleAudit
+capital	problem invalid-parameter in handleClaimBootstrap
+full-stop	problem invalid-parameter in handleClaimBootstrap
+capital	problem invalid-parameter in handleCreateSession
+full-stop	problem invalid-parameter in handleCreateSession
+capital	problem invalid-parameter in handleDeleteAsset
+full-stop	problem invalid-parameter in handleDeleteAsset
+quoted-name	problem invalid-parameter in handleDeleteAsset
+capital	problem invalid-parameter in handleDeleteAudioNode
+full-stop	problem invalid-parameter in handleDeleteAudioNode
+quoted-name	problem invalid-parameter in handleDeleteAudioNode
+capital	problem invalid-parameter in handleDeleteNodeDeclaration
+full-stop	problem invalid-parameter in handleDeleteNodeDeclaration
+quoted-name	problem invalid-parameter in handleDeleteNodeDeclaration
+capital	problem invalid-parameter in handleDeleteSession
+full-stop	problem invalid-parameter in handleDeleteSession
+joined	problem invalid-parameter in handleDeleteSession
+quoted-name	problem invalid-parameter in handleDeleteSession
+capital	problem invalid-parameter in handleDispatchResolumeAction
+full-stop	problem invalid-parameter in handleDispatchResolumeAction
+joined	problem invalid-parameter in handleDispatchResolumeAction
+kind-name	problem invalid-parameter in handleDispatchResolumeAction
+length	problem invalid-parameter in handleDispatchResolumeAction
+quoted-name	problem invalid-parameter in handleDispatchResolumeAction
+vocabulary	problem invalid-parameter in handleDispatchResolumeAction
+capital	problem invalid-parameter in handleEmergencyStop
+full-stop	problem invalid-parameter in handleEmergencyStop
+capital	problem invalid-parameter in handleEmergencyStopFire
+full-stop	problem invalid-parameter in handleEmergencyStopFire
+capital	problem invalid-parameter in handleFPPBrightnessCeiling
+full-stop	problem invalid-parameter in handleFPPBrightnessCeiling
+joined	problem invalid-parameter in handleFPPBrightnessCeiling
+quoted-name	problem invalid-parameter in handleFPPBrightnessExcludedRanges
+sentences	problem invalid-parameter in handleFPPBrightnessExcludedRanges
+capital	problem invalid-parameter in handleFPPCommand
+full-stop	problem invalid-parameter in handleFPPCommand
+joined	problem invalid-parameter in handleFPPCommand
+length	problem invalid-parameter in handleFPPCommand
+quoted-name	problem invalid-parameter in handleFPPCommand
+vocabulary	problem invalid-parameter in handleFPPCommand
+capital	problem invalid-parameter in handleFPPDefinitionRepublish
+full-stop	problem invalid-parameter in handleFPPDefinitionRepublish
+quoted-name	problem invalid-parameter in handleFPPDefinitionRepublish
+capital	problem invalid-parameter in handleFPPTransitionGain
+full-stop	problem invalid-parameter in handleFPPTransitionGain
+joined	problem invalid-parameter in handleFPPTransitionGain
+capital	problem invalid-parameter in handleGetFPPPlaylistReadiness
+full-stop	problem invalid-parameter in handleGetFPPPlaylistReadiness
+joined	problem invalid-parameter in handleGetFPPPlaylistReadiness
+quoted-name	problem invalid-parameter in handleInvokeAction
+capital	problem invalid-parameter in handleListMediaPlaylists
+kind-name	problem invalid-parameter in handleListMediaPlaylists
+quoted-name	problem invalid-parameter in handleListMediaPlaylists
+capital	problem invalid-parameter in handleListNightSessions
+kind-name	problem invalid-parameter in handleListNightSessions
+quoted-name	problem invalid-parameter in handleListNightSessions
+capital	problem invalid-parameter in handleListShowActions
+kind-name	problem invalid-parameter in handleListShowActions
+quoted-name	problem invalid-parameter in handleListShowActions
+capital	problem invalid-parameter in handleListShowCues
+kind-name	problem invalid-parameter in handleListShowCues
+quoted-name	problem invalid-parameter in handleListShowCues
+capital	problem invalid-parameter in handleListShowMacros
+kind-name	problem invalid-parameter in handleListShowMacros
+quoted-name	problem invalid-parameter in handleListShowMacros
+capital	problem invalid-parameter in handleListShowPlaylists
+kind-name	problem invalid-parameter in handleListShowPlaylists
+quoted-name	problem invalid-parameter in handleListShowPlaylists
+capital	problem invalid-parameter in handleListShows
+kind-name	problem invalid-parameter in handleListShows
+quoted-name	problem invalid-parameter in handleListShows
+capital	problem invalid-parameter in handleNightCommand
+quoted-name	problem invalid-parameter in handleNightCommand
+capital	problem invalid-parameter in handleNode
+full-stop	problem invalid-parameter in handleNode
+joined	problem invalid-parameter in handleNode
+quoted-name	problem invalid-parameter in handleNode
+capital	problem invalid-parameter in handleNodeAssetManifest
+full-stop	problem invalid-parameter in handleNodeAssetManifest
+joined	problem invalid-parameter in handleNodeAssetManifest
+quoted-name	problem invalid-parameter in handleNodeAssetManifest
+capital	problem invalid-parameter in handlePostAssetUpload
+full-stop	problem invalid-parameter in handlePostAssetUpload
+go-error	problem invalid-parameter in handlePostAssetUpload
+joined	problem invalid-parameter in handlePostAssetUpload
+quoted-name	problem invalid-parameter in handlePostAssetUpload
+capital	problem invalid-parameter in handlePostFPPPlaylistDefinition
+full-stop	problem invalid-parameter in handlePostFPPPlaylistDefinition
+go-error	problem invalid-parameter in handlePostFPPPlaylistDefinition
+joined	problem invalid-parameter in handlePostFPPPlaylistDefinition
+quoted-name	problem invalid-parameter in handlePostFPPPlaylistDefinition
+capital	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+full-stop	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+go-error	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+joined	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+quoted-name	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+capital	problem invalid-parameter in handlePostFallbackProgramAcknowledge
+full-stop	problem invalid-parameter in handlePostFallbackProgramAcknowledge
+capital	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
+full-stop	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
+quoted-name	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
+vocabulary	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
+capital	problem invalid-parameter in handlePostNodeCueCatalogDeploy
+full-stop	problem invalid-parameter in handlePostNodeCueCatalogDeploy
+joined	problem invalid-parameter in handlePostNodeCueCatalogDeploy
+quoted-name	problem invalid-parameter in handlePostNodeCueCatalogDeploy
+capital	problem invalid-parameter in handlePostRemoveNodeAsset
+full-stop	problem invalid-parameter in handlePostRemoveNodeAsset
+joined	problem invalid-parameter in handlePostRemoveNodeAsset
+quoted-name	problem invalid-parameter in handlePostRemoveNodeAsset
+capital	problem invalid-parameter in handlePostResolumeCompositionUpload
+full-stop	problem invalid-parameter in handlePostResolumeCompositionUpload
+quoted-name	problem invalid-parameter in handlePostResolumeCompositionUpload
+capital	problem invalid-parameter in handlePostResyncNodeAssets
+full-stop	problem invalid-parameter in handlePostResyncNodeAssets
+joined	problem invalid-parameter in handlePostResyncNodeAssets
+kind-name	problem invalid-parameter in handlePostResyncNodeAssets
+quoted-name	problem invalid-parameter in handlePostResyncNodeAssets
+capital	problem invalid-parameter in handlePutAssetsSettingsConfig
+full-stop	problem invalid-parameter in handlePutAssetsSettingsConfig
+joined	problem invalid-parameter in handlePutAssetsSettingsConfig
+quoted-name	problem invalid-parameter in handlePutAssetsSettingsConfig
+capital	problem invalid-parameter in handlePutAudioNode
+full-stop	problem invalid-parameter in handlePutAudioNode
+go-error	problem invalid-parameter in handlePutAudioNode
+joined	problem invalid-parameter in handlePutAudioNode
+kind-name	problem invalid-parameter in handlePutAudioNode
+quoted-name	problem invalid-parameter in handlePutAudioNode
+capital	problem invalid-parameter in handlePutEmergencyStopConfig
+full-stop	problem invalid-parameter in handlePutEmergencyStopConfig
+joined	problem invalid-parameter in handlePutEmergencyStopConfig
+kind-name	problem invalid-parameter in handlePutEmergencyStopConfig
+quoted-name	problem invalid-parameter in handlePutEmergencyStopConfig
+capital	problem invalid-parameter in handlePutFPPEndpointsConfig
+full-stop	problem invalid-parameter in handlePutFPPEndpointsConfig
+joined	problem invalid-parameter in handlePutFPPEndpointsConfig
+kind-name	problem invalid-parameter in handlePutFPPEndpointsConfig
+length	problem invalid-parameter in handlePutFPPEndpointsConfig
+quoted-name	problem invalid-parameter in handlePutFPPEndpointsConfig
+capital	problem invalid-parameter in handlePutFPPMQTTConfig
+full-stop	problem invalid-parameter in handlePutFPPMQTTConfig
+go-error	problem invalid-parameter in handlePutFPPMQTTConfig
+joined	problem invalid-parameter in handlePutFPPMQTTConfig
+kind-name	problem invalid-parameter in handlePutFPPMQTTConfig
+quoted-name	problem invalid-parameter in handlePutFPPMQTTConfig
+capital	problem invalid-parameter in handlePutFallbackExecutorKey
+full-stop	problem invalid-parameter in handlePutFallbackExecutorKey
+go-error	problem invalid-parameter in handlePutFallbackExecutorKey
+joined	problem invalid-parameter in handlePutFallbackExecutorKey
+quoted-name	problem invalid-parameter in handlePutFallbackExecutorKey
+capital	problem invalid-parameter in handlePutFallbackState
+full-stop	problem invalid-parameter in handlePutFallbackState
+go-error	problem invalid-parameter in handlePutFallbackState
+capital	problem invalid-parameter in handlePutReleaseSettingsConfig
+full-stop	problem invalid-parameter in handlePutReleaseSettingsConfig
+go-error	problem invalid-parameter in handlePutReleaseSettingsConfig
+joined	problem invalid-parameter in handlePutReleaseSettingsConfig
+quoted-name	problem invalid-parameter in handlePutReleaseSettingsConfig
+capital	problem invalid-parameter in handlePutRenderSettingsConfig
+full-stop	problem invalid-parameter in handlePutRenderSettingsConfig
+capital	problem invalid-parameter in handlePutResolumeInstancesConfig
+full-stop	problem invalid-parameter in handlePutResolumeInstancesConfig
+joined	problem invalid-parameter in handlePutResolumeInstancesConfig
+quoted-name	problem invalid-parameter in handlePutResolumeInstancesConfig
+capital	problem invalid-parameter in handlePutResolumeRecoveryConfig
+full-stop	problem invalid-parameter in handlePutResolumeRecoveryConfig
+joined	problem invalid-parameter in handlePutResolumeRecoveryConfig
+quoted-name	problem invalid-parameter in handlePutResolumeRecoveryConfig
+capital	problem invalid-parameter in handlePutShow
+full-stop	problem invalid-parameter in handlePutShow
+joined	problem invalid-parameter in handlePutShow
+quoted-name	problem invalid-parameter in handlePutShow
+capital	problem invalid-parameter in handlePutShowModeConfig
+full-stop	problem invalid-parameter in handlePutShowModeConfig
+go-error	problem invalid-parameter in handlePutShowModeConfig
+quoted-name	problem invalid-parameter in handleRedeemNodeEnrollment
+capital	problem invalid-parameter in handleStartFPPPairing
+capital	problem invalid-parameter in handleSubmitMacroRun
+full-stop	problem invalid-parameter in handleSubmitMacroRun
+capital	problem invalid-parameter in handleWeatherDelayPresignedStart
+full-stop	problem invalid-parameter in handleWeatherDelayPresignedStart
+quoted-name	problem invalid-parameter in handleWeatherDelayPresignedStart
+capital	problem invalid-parameter in handleWeatherDelayResume
+full-stop	problem invalid-parameter in handleWeatherDelayResume
+joined	problem invalid-parameter in handleWeatherDelayResume
+quoted-name	problem invalid-parameter in handleWeatherDelayResume
+vocabulary	problem invalid-parameter in handleWeatherDelayResume
+capital	problem invalid-parameter in handleWeatherDelayTrigger
+full-stop	problem invalid-parameter in handleWeatherDelayTrigger
+go-error	problem invalid-parameter in handleWeatherDelayTrigger
+joined	problem invalid-parameter in handleWeatherDelayTrigger
+quoted-name	problem invalid-parameter in handleWeatherDelayTrigger
+capital	problem invalid-parameter in weatherDelayStartOrChange
+full-stop	problem invalid-parameter in weatherDelayStartOrChange
+joined	problem invalid-parameter in weatherDelayStartOrChange
+quoted-name	problem invalid-parameter in weatherDelayStartOrChange
+vocabulary	problem invalid-parameter in weatherDelayStartOrChange
+capital	problem invalid-parameter in writeEnrollmentError
+quoted-name	problem invalid-parameter in writeEnrollmentError
+capital	problem method-not-allowed in WriteHeader
+full-stop	problem method-not-allowed in WriteHeader
+joined	problem method-not-allowed in WriteHeader
+joined	problem night-ambiguous in handleNightCommand
+length	problem night-ambiguous in handleNightCommand
+sentences	problem night-ambiguous in handleNightCommand
+capital	problem night-not-ready in handleNightCommand
+full-stop	problem night-not-ready in handleNightCommand
+go-error	problem night-not-ready in handleNightCommand
+joined	problem night-not-ready in handleNightCommand
+quoted-name	problem night-not-ready in handleNightCommand
+joined	problem node-enrollment-unavailable in writeEnrollmentError
+capital	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
+full-stop	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
+hex	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
+length	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
+capital	problem payload-too-large in handlePostFPPPlaylistDefinition
+full-stop	problem payload-too-large in handlePostFPPPlaylistDefinition
+length	problem payload-too-large in handlePostResolumeCompositionUpload
+sentences	problem payload-too-large in handlePostResolumeCompositionUpload
+capital	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
+full-stop	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
+quoted-name	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
+capital	problem resource-not-found in handleActivateCue
+full-stop	problem resource-not-found in handleActivateCue
+kind-name	problem resource-not-found in handleActivateCue
+quoted-name	problem resource-not-found in handleActivateCue
+capital	problem resource-not-found in handleDeleteAsset
+full-stop	problem resource-not-found in handleDeleteAsset
+hex	problem resource-not-found in handleDeleteAsset
+quoted-name	problem resource-not-found in handleDeleteAsset
+capital	problem resource-not-found in handleDeleteSession
+full-stop	problem resource-not-found in handleDeleteSession
+hex	problem resource-not-found in handleDeleteSession
+quoted-name	problem resource-not-found in handleDeleteSession
+vocabulary	problem resource-not-found in handleDeleteSession
+capital	problem resource-not-found in handleFPPBrightnessCeiling
+full-stop	problem resource-not-found in handleFPPBrightnessCeiling
+quoted-name	problem resource-not-found in handleFPPBrightnessCeiling
+capital	problem resource-not-found in handleFPPBrightnessExcludedRanges
+full-stop	problem resource-not-found in handleFPPBrightnessExcludedRanges
+quoted-name	problem resource-not-found in handleFPPBrightnessExcludedRanges
+capital	problem resource-not-found in handleFPPCommand
+full-stop	problem resource-not-found in handleFPPCommand
+quoted-name	problem resource-not-found in handleFPPCommand
+capital	problem resource-not-found in handleFPPDefinitionRepublish
+full-stop	problem resource-not-found in handleFPPDefinitionRepublish
+quoted-name	problem resource-not-found in handleFPPDefinitionRepublish
+capital	problem resource-not-found in handleFPPInstance
+full-stop	problem resource-not-found in handleFPPInstance
+quoted-name	problem resource-not-found in handleFPPInstance
+capital	problem resource-not-found in handleFPPTransitionGain
+full-stop	problem resource-not-found in handleFPPTransitionGain
+quoted-name	problem resource-not-found in handleFPPTransitionGain
+kind-name	problem resource-not-found in handleGetActionBinding
+quoted-name	problem resource-not-found in handleGetActionBinding
+capital	problem resource-not-found in handleGetAlignmentRun
+full-stop	problem resource-not-found in handleGetAlignmentRun
+hex	problem resource-not-found in handleGetAlignmentRun
+quoted-name	problem resource-not-found in handleGetAlignmentRun
+capital	problem resource-not-found in handleGetAsset
+full-stop	problem resource-not-found in handleGetAsset
+quoted-name	problem resource-not-found in handleGetAsset
+capital	problem resource-not-found in handleGetAssetRenditionContent
+full-stop	problem resource-not-found in handleGetAssetRenditionContent
+hex	problem resource-not-found in handleGetAssetRenditionContent
+quoted-name	problem resource-not-found in handleGetAssetRenditionContent
+kind-name	problem resource-not-found in handleGetAudioNode
+quoted-name	problem resource-not-found in handleGetAudioNode
+capital	problem resource-not-found in handleGetFPPEndpointsConfig
+full-stop	problem resource-not-found in handleGetFPPEndpointsConfig
+joined	problem resource-not-found in handleGetFPPEndpointsConfig
+kind-name	problem resource-not-found in handleGetFPPEndpointsConfig
+sentences	problem resource-not-found in handleGetFPPEndpointsConfig
+capital	problem resource-not-found in handleGetFPPMQTTConfig
+full-stop	problem resource-not-found in handleGetFPPMQTTConfig
+joined	problem resource-not-found in handleGetFPPMQTTConfig
+kind-name	problem resource-not-found in handleGetFPPMQTTConfig
+capital	problem resource-not-found in handleGetFPPPlaylistDefinition
+full-stop	problem resource-not-found in handleGetFPPPlaylistDefinition
+hex	problem resource-not-found in handleGetFPPPlaylistDefinition
+capital	problem resource-not-found in handleGetFPPPlaylistEntryReconciliation
+full-stop	problem resource-not-found in handleGetFPPPlaylistEntryReconciliation
+kind-name	problem resource-not-found in handleGetFPPPlaylistReadiness
+quoted-name	problem resource-not-found in handleGetFPPPlaylistReadiness
+capital	problem resource-not-found in handleGetMacroRun
+full-stop	problem resource-not-found in handleGetMacroRun
+quoted-name	problem resource-not-found in handleGetMacroRun
+kind-name	problem resource-not-found in handleGetMediaPlaylist
+quoted-name	problem resource-not-found in handleGetMediaPlaylist
+capital	problem resource-not-found in handleGetNightLifecycleByID
+full-stop	problem resource-not-found in handleGetNightLifecycleByID
+quoted-name	problem resource-not-found in handleGetNightLifecycleByID
+kind-name	problem resource-not-found in handleGetNightSessionActive
+quoted-name	problem resource-not-found in handleGetNightSessionActive
+capital	problem resource-not-found in handleGetNightSessionRevision
+full-stop	problem resource-not-found in handleGetNightSessionRevision
+kind-name	problem resource-not-found in handleGetNightSessionRevision
+quoted-name	problem resource-not-found in handleGetNightSessionRevision
+vocabulary	problem resource-not-found in handleGetNightSessionRevision
+capital	problem resource-not-found in handleGetNodeCueCatalog
+full-stop	problem resource-not-found in handleGetNodeCueCatalog
+quoted-name	problem resource-not-found in handleGetNodeCueCatalog
+capital	problem resource-not-found in handleGetResolumeInstancesConfig
+full-stop	problem resource-not-found in handleGetResolumeInstancesConfig
+joined	problem resource-not-found in handleGetResolumeInstancesConfig
+kind-name	problem resource-not-found in handleGetResolumeInstancesConfig
+sentences	problem resource-not-found in handleGetResolumeInstancesConfig
+kind-name	problem resource-not-found in handleGetShowActive
+quoted-name	problem resource-not-found in handleGetShowActive
+capital	problem resource-not-found in handleNode
+full-stop	problem resource-not-found in handleNode
+quoted-name	problem resource-not-found in handleNode
+capital	problem resource-not-found in handleNodeAssetManifest
+full-stop	problem resource-not-found in handleNodeAssetManifest
+quoted-name	problem resource-not-found in handleNodeAssetManifest
+capital	problem resource-not-found in handlePostResyncNodeAssets
+full-stop	problem resource-not-found in handlePostResyncNodeAssets
+quoted-name	problem resource-not-found in handlePostResyncNodeAssets
+capital	problem resource-not-found in handleResolumeInstance
+full-stop	problem resource-not-found in handleResolumeInstance
+quoted-name	problem resource-not-found in handleResolumeInstance
+capital	problem resource-not-found in handleStopAlignmentRun
+full-stop	problem resource-not-found in handleStopAlignmentRun
+joined	problem resource-not-found in handleStopAlignmentRun
+capital	problem resource-not-found in handleUnknownAPIPath
+full-stop	problem resource-not-found in handleUnknownAPIPath
+quoted-name	problem resource-not-found in handleUnknownAPIPath
+kind-name	problem resource-not-found in writeConfigDeleteResponse
+quoted-name	problem resource-not-found in writeConfigDeleteResponse
+capital	problem resource-not-found in writeEnrollmentError
+full-stop	problem resource-not-found in writeEnrollmentError
+go-error	problem resource-not-found in writeEnrollmentError
+quoted-name	problem resource-not-found in writeEnrollmentError
+quoted-name	problem sequence-filename-claim-duplicate in handlePutShowPlaylist
+capital	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+full-stop	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+joined	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+kind-name	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+length	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+quoted-name	problem show-action-resolume-blocked-by-macro-fallback in handlePutShowAction
+capital	problem show-config-background-audio-items-empty in handlePutMediaPlaylist
+full-stop	problem show-config-background-audio-items-empty in handlePutMediaPlaylist
+go-error	problem show-config-background-audio-items-empty in handlePutMediaPlaylist
+capital	problem show-config-calendar-field-rejected in handlePutNightSession
+go-error	problem show-config-calendar-field-rejected in handlePutNightSession
+joined	problem show-config-calendar-field-rejected in handlePutNightSession
+capital	problem show-config-cross-show-reference in handlePutMediaPlaylist
+go-error	problem show-config-cross-show-reference in handlePutMediaPlaylist
+kind-name	problem show-config-cross-show-reference in handlePutMediaPlaylist
+length	problem show-config-cross-show-reference in handlePutMediaPlaylist
+quoted-name	problem show-config-cross-show-reference in handlePutMediaPlaylist
+capital	problem show-config-cross-show-reference in handlePutShowAction
+go-error	problem show-config-cross-show-reference in handlePutShowAction
+kind-name	problem show-config-cross-show-reference in handlePutShowAction
+length	problem show-config-cross-show-reference in handlePutShowAction
+quoted-name	problem show-config-cross-show-reference in handlePutShowAction
+capital	problem show-config-cross-show-reference in handlePutShowCue
+go-error	problem show-config-cross-show-reference in handlePutShowCue
+kind-name	problem show-config-cross-show-reference in handlePutShowCue
+quoted-name	problem show-config-cross-show-reference in handlePutShowCue
+capital	problem show-config-cross-show-reference in handlePutShowMacro
+go-error	problem show-config-cross-show-reference in handlePutShowMacro
+kind-name	problem show-config-cross-show-reference in handlePutShowMacro
+length	problem show-config-cross-show-reference in handlePutShowMacro
+quoted-name	problem show-config-cross-show-reference in handlePutShowMacro
+capital	problem show-config-cross-show-reference in handlePutShowPlaylist
+full-stop	problem show-config-cross-show-reference in handlePutShowPlaylist
+go-error	problem show-config-cross-show-reference in handlePutShowPlaylist
+kind-name	problem show-config-cross-show-reference in handlePutShowPlaylist
+length	problem show-config-cross-show-reference in handlePutShowPlaylist
+quoted-name	problem show-config-cross-show-reference in handlePutShowPlaylist
+capital	problem show-config-cross-show-reference in handlePutShowSurface
+go-error	problem show-config-cross-show-reference in handlePutShowSurface
+kind-name	problem show-config-cross-show-reference in handlePutShowSurface
+length	problem show-config-cross-show-reference in handlePutShowSurface
+quoted-name	problem show-config-cross-show-reference in handlePutShowSurface
+capital	problem show-config-entry-position-duplicate in handlePutShowPlaylist
+full-stop	problem show-config-entry-position-duplicate in handlePutShowPlaylist
+kind-name	problem show-config-entry-position-duplicate in handlePutShowPlaylist
+quoted-name	problem show-config-entry-position-duplicate in handlePutShowPlaylist
+capital	problem show-config-field-invalid in handlePostAssetUpload
+go-error	problem show-config-field-invalid in handlePostAssetUpload
+capital	problem show-config-field-invalid in handlePutAudioNode
+capital	problem show-config-field-invalid in handlePutFPPConnectSettingsConfig
+full-stop	problem show-config-field-invalid in handlePutFPPConnectSettingsConfig
+capital	problem show-config-field-invalid in handlePutNodeClock
+full-stop	problem show-config-field-invalid in handlePutNodeClock
+go-error	problem show-config-field-invalid in handlePutNodeClock
+quoted-name	problem show-config-field-invalid in handlePutNodeClock
+capital	problem show-config-field-invalid in handlePutShowCue
+full-stop	problem show-config-field-invalid in handlePutShowCue
+go-error	problem show-config-field-invalid in handlePutShowCue
+capital	problem show-config-field-invalid in handlePutShowMacro
+quoted-name	problem show-config-field-invalid in handlePutShowMacro
+capital	problem show-config-field-invalid in handlePutShowSurface
+kind-name	problem show-config-field-invalid in handlePutShowSurface
+quoted-name	problem show-config-field-invalid in handlePutShowSurface
+capital	problem show-config-field-null in handlePutShowMacro
+full-stop	problem show-config-field-null in handlePutShowMacro
+go-error	problem show-config-field-null in handlePutShowMacro
+capital	problem show-config-field-null in handlePutShowSurface
+full-stop	problem show-config-field-null in handlePutShowSurface
+capital	problem show-config-field-required in handlePutAudioSettingsConfig
+full-stop	problem show-config-field-required in handlePutAudioSettingsConfig
+capital	problem show-config-field-required in handlePutFPPConnectSettingsConfig
+full-stop	problem show-config-field-required in handlePutFPPConnectSettingsConfig
+capital	problem show-config-field-required in handlePutNightSession
+capital	problem show-config-field-required in handlePutNodeClock
+full-stop	problem show-config-field-required in handlePutNodeClock
+quoted-name	problem show-config-field-required in handlePutNodeClock
+capital	problem show-config-field-required in handlePutShowMacro
+full-stop	problem show-config-field-required in handlePutShowMacro
+go-error	problem show-config-field-required in handlePutShowMacro
+capital	problem show-config-field-required in handlePutShowSurface
+full-stop	problem show-config-field-required in handlePutShowSurface
+capital	problem show-config-field-unknown-key in handlePutShowAction
+capital	problem show-config-field-unknown-key in handlePutShowMacro
+capital	problem show-config-field-unknown-reference in handlePutMediaPlaylist
+full-stop	problem show-config-field-unknown-reference in handlePutMediaPlaylist
+quoted-name	problem show-config-field-unknown-reference in handlePutMediaPlaylist
+capital	problem show-config-field-unknown-reference in handlePutNightSession
+full-stop	problem show-config-field-unknown-reference in handlePutNightSession
+kind-name	problem show-config-field-unknown-reference in handlePutNightSession
+quoted-name	problem show-config-field-unknown-reference in handlePutNightSession
+capital	problem show-config-field-unknown-reference in handlePutNightSessionActive
+full-stop	problem show-config-field-unknown-reference in handlePutNightSessionActive
+go-error	problem show-config-field-unknown-reference in handlePutNightSessionActive
+kind-name	problem show-config-field-unknown-reference in handlePutNightSessionActive
+quoted-name	problem show-config-field-unknown-reference in handlePutNightSessionActive
+capital	problem show-config-field-unknown-reference in handlePutShowAction
+full-stop	problem show-config-field-unknown-reference in handlePutShowAction
+go-error	problem show-config-field-unknown-reference in handlePutShowAction
+joined	problem show-config-field-unknown-reference in handlePutShowAction
+kind-name	problem show-config-field-unknown-reference in handlePutShowAction
+quoted-name	problem show-config-field-unknown-reference in handlePutShowAction
+capital	problem show-config-field-unknown-reference in handlePutShowCue
+full-stop	problem show-config-field-unknown-reference in handlePutShowCue
+go-error	problem show-config-field-unknown-reference in handlePutShowCue
+kind-name	problem show-config-field-unknown-reference in handlePutShowCue
+quoted-name	problem show-config-field-unknown-reference in handlePutShowCue
+capital	problem show-config-field-unknown-reference in handlePutShowMacro
+full-stop	problem show-config-field-unknown-reference in handlePutShowMacro
+go-error	problem show-config-field-unknown-reference in handlePutShowMacro
+joined	problem show-config-field-unknown-reference in handlePutShowMacro
+kind-name	problem show-config-field-unknown-reference in handlePutShowMacro
+quoted-name	problem show-config-field-unknown-reference in handlePutShowMacro
+capital	problem show-config-field-unknown-reference in handlePutShowPlaylist
+full-stop	problem show-config-field-unknown-reference in handlePutShowPlaylist
+kind-name	problem show-config-field-unknown-reference in handlePutShowPlaylist
+quoted-name	problem show-config-field-unknown-reference in handlePutShowPlaylist
+capital	problem show-config-field-unknown-reference in handlePutShowSurface
+full-stop	problem show-config-field-unknown-reference in handlePutShowSurface
+go-error	problem show-config-field-unknown-reference in handlePutShowSurface
+quoted-name	problem show-config-field-unknown-reference in handlePutShowSurface
+capital	problem show-config-local-fallback-reduced in handlePutShowMacro
+quoted-name	problem show-config-local-fallback-reduced in handlePutShowMacro
+capital	problem show-config-night-background-audio-target-duplicate in handlePutNightSession
+full-stop	problem show-config-night-background-audio-target-duplicate in handlePutNightSession
+quoted-name	problem show-config-night-background-audio-target-duplicate in handlePutNightSession
+capital	problem show-config-safety-class-mismatch in handlePutShowAction
+full-stop	problem show-config-safety-class-mismatch in handlePutShowAction
+quoted-name	problem show-config-safety-class-mismatch in handlePutShowAction
+capital	problem storage-full in handlePostAssetUpload
+full-stop	problem storage-full in handlePostAssetUpload
+joined	problem storage-full in handlePostAssetUpload
+capital	problem too-many-requests in TestOpenAPIProblemSchemaMatchesEveryClass
+full-stop	problem too-many-requests in TestOpenAPIProblemSchemaMatchesEveryClass
+capital	problem too-many-requests in handleClaimBootstrap
+full-stop	problem too-many-requests in handleClaimBootstrap
+joined	problem too-many-requests in handleClaimBootstrap
+capital	problem too-many-requests in handleClaimFPPPairing
+capital	problem too-many-requests in handleCreateSession
+full-stop	problem too-many-requests in handleCreateSession
+joined	problem too-many-requests in handleCreateSession
+capital	problem unauthorized in handleClaimBootstrap
+full-stop	problem unauthorized in handleClaimBootstrap
+capital	problem unauthorized in handleCreateSession
+full-stop	problem unauthorized in handleCreateSession
+capital	problem unauthorized in readAnyGuard
+full-stop	problem unauthorized in readAnyGuard
+capital	problem unauthorized in readGuardAll
+full-stop	problem unauthorized in readGuardAll
+joined	problem unauthorized in readGuardAll
+capital	problem unauthorized in requireScope
+full-stop	problem unauthorized in requireScope
+capital	problem unauthorized in writeGuard
+full-stop	problem unauthorized in writeGuard
+capital	problem unsupported-api-version in handleUnknownAPIPath
+full-stop	problem unsupported-api-version in handleUnknownAPIPath
+joined	problem unsupported-api-version in handleUnknownAPIPath
+quoted-name	problem unsupported-api-version in handleUnknownAPIPath
+capital	problem unsupported-api-version in withVersionNegotiation
+full-stop	problem unsupported-api-version in withVersionNegotiation
+joined	problem unsupported-api-version in withVersionNegotiation
+quoted-name	problem unsupported-api-version in withVersionNegotiation
+capital	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
+full-stop	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
+joined	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
+capital	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
+full-stop	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
+joined	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
+capital	v1.AcknowledgeFPPInstanceUUIDChangeResponse instance.showParticipation.reason
+full-stop	v1.AcknowledgeFPPInstanceUUIDChangeResponse instance.showParticipation.reason
+capital	v1.ActionBindingResponse binding.reason
+full-stop	v1.ActionBindingResponse binding.reason
+go-error	v1.ActionBindingResponse binding.reason
+joined	v1.ActionBindingResponse binding.reason
+kind-name	v1.ActionBindingResponse binding.reason
+quoted-name	v1.ActionBindingResponse binding.reason
+capital	v1.ActionBindingsResponse bindings[].reason
+full-stop	v1.ActionBindingsResponse bindings[].reason
+kind-name	v1.ActionBindingsResponse bindings[].reason
+quoted-name	v1.ActionBindingsResponse bindings[].reason
+capital	v1.ActionInvocationResponse result.outcomeReason
+full-stop	v1.ActionInvocationResponse result.outcomeReason
+kind-name	v1.ActionInvocationResponse result.outcomeReason
+quoted-name	v1.ActionInvocationResponse result.outcomeReason
+capital	v1.AssetManifestResponse nodes[].reason
+full-stop	v1.AssetManifestResponse nodes[].reason
+capital	v1.AudioNodeSilenceResponse command.reason
+full-stop	v1.AudioNodeSilenceResponse command.reason
+kind-name	v1.AudioNodeSilenceResponse command.reason
+quoted-name	v1.AudioNodeSilenceResponse command.reason
+capital	v1.AudioSessionCommandResponse command.reason
+full-stop	v1.AudioSessionCommandResponse command.reason
+quoted-name	v1.AudioSessionCommandResponse command.reason
+vocabulary	v1.AudioSessionCommandResponse command.reason
+capital	v1.AuditResponse entries[].outcomeReason
+full-stop	v1.AuditResponse entries[].outcomeReason
+capital	v1.CueActivateResponse nodes[].outcomeReason
+full-stop	v1.CueActivateResponse nodes[].outcomeReason
+capital	v1.CueActivateResponse nodes[].unalignedReason
+full-stop	v1.CueActivateResponse nodes[].unalignedReason
+go-error	v1.CueActivateResponse nodes[].unalignedReason
+joined	v1.CueActivateResponse nodes[].unalignedReason
+length	v1.CueActivateResponse nodes[].unalignedReason
+quoted-name	v1.CueActivateResponse nodes[].unalignedReason
+capital	v1.CueActivateResponse unalignedReason
+full-stop	v1.CueActivateResponse unalignedReason
+joined	v1.CueActivateResponse unalignedReason
+length	v1.CueActivateResponse unalignedReason
+quoted-name	v1.CueActivateResponse unalignedReason
+capital	v1.CueCatalogDeployResponse command.reason
+full-stop	v1.CueCatalogDeployResponse command.reason
+capital	v1.CurrentRunsResponse runs[].reconciliation.reason
+full-stop	v1.CurrentRunsResponse runs[].reconciliation.reason
+capital	v1.EmergencyStopResponse result.followUps[].outcomeReason
+full-stop	v1.EmergencyStopResponse result.followUps[].outcomeReason
+capital	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+full-stop	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+go-error	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+joined	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+kind-name	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+quoted-name	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
+capital	v1.EventRecordedEvent event.summary
+full-stop	v1.EventRecordedEvent event.summary
+capital	v1.EventsResponse events[].summary
+full-stop	v1.EventsResponse events[].summary
+capital	v1.FPPBrightnessCeilingResponse command.outcomeReason
+full-stop	v1.FPPBrightnessCeilingResponse command.outcomeReason
+quoted-name	v1.FPPBrightnessCeilingResponse command.outcomeReason
+full-stop	v1.FPPBrightnessExcludedRangesResponse command.outcomeReason
+capital	v1.FPPChangedEvent instance.observations[].reason
+full-stop	v1.FPPChangedEvent instance.observations[].reason
+go-error	v1.FPPChangedEvent instance.observations[].reason
+capital	v1.FPPChangedEvent instance.showParticipation.reason
+full-stop	v1.FPPChangedEvent instance.showParticipation.reason
+capital	v1.FPPCommandResponse command.outcomeReason
+full-stop	v1.FPPCommandResponse command.outcomeReason
+go-error	v1.FPPCommandResponse command.outcomeReason
+joined	v1.FPPCommandResponse command.outcomeReason
+kind-name	v1.FPPCommandResponse command.outcomeReason
+length	v1.FPPCommandResponse command.outcomeReason
+quoted-name	v1.FPPCommandResponse command.outcomeReason
+vocabulary	v1.FPPCommandResponse command.outcomeReason
+capital	v1.FPPInstanceResponse instance.observations[].reason
+full-stop	v1.FPPInstanceResponse instance.observations[].reason
+vocabulary	v1.FPPInstanceResponse instance.observations[].reason
+capital	v1.FPPInstanceResponse instance.showParticipation.reason
+full-stop	v1.FPPInstanceResponse instance.showParticipation.reason
+capital	v1.FPPPlaylistEntryReconciliationResponse reason
+full-stop	v1.FPPPlaylistEntryReconciliationResponse reason
+hex	v1.FPPPlaylistEntryReconciliationResponse reason
+joined	v1.FPPPlaylistEntryReconciliationResponse reason
+kind-name	v1.FPPPlaylistEntryReconciliationResponse reason
+length	v1.FPPPlaylistEntryReconciliationResponse reason
+capital	v1.FPPResponse instances[].observations[].reason
+full-stop	v1.FPPResponse instances[].observations[].reason
+vocabulary	v1.FPPResponse instances[].observations[].reason
+capital	v1.FPPResponse instances[].showParticipation.reason
+full-stop	v1.FPPResponse instances[].showParticipation.reason
+joined	v1.FPPResponse instances[].showParticipation.reason
+capital	v1.MacroRunResponse run.steps[].command.detail.outcomeReason
+full-stop	v1.MacroRunResponse run.steps[].command.detail.outcomeReason
+capital	v1.MacroRunResponse run.steps[].command.reason
+full-stop	v1.MacroRunResponse run.steps[].command.reason
+joined	v1.MacroRunResponse run.steps[].command.reason
+capital	v1.MacroRunResponse run.steps[].outcomeReason
+full-stop	v1.MacroRunResponse run.steps[].outcomeReason
+quoted-name	v1.NightCommandResponse command.reason
+capital	v1.NightCommandResponse session.boundary.reason
+full-stop	v1.NightCommandResponse session.boundary.reason
+joined	v1.NightCommandResponse session.boundary.reason
+capital	v1.NightCommandResponse session.cues.cues[].reason
+full-stop	v1.NightCommandResponse session.cues.cues[].reason
+joined	v1.NightCommandResponse session.cues.cues[].reason
+kind-name	v1.NightCommandResponse session.cues.cues[].reason
+capital	v1.NightCommandResponse session.degradedReason
+full-stop	v1.NightCommandResponse session.degradedReason
+capital	v1.NightCommandResponse session.powerPhase.reason
+full-stop	v1.NightCommandResponse session.powerPhase.reason
+capital	v1.NightCommandResponse session.readiness.checks[].reason
+full-stop	v1.NightCommandResponse session.readiness.checks[].reason
+go-error	v1.NightCommandResponse session.readiness.checks[].reason
+joined	v1.NightCommandResponse session.readiness.checks[].reason
+kind-name	v1.NightCommandResponse session.readiness.checks[].reason
+length	v1.NightCommandResponse session.readiness.checks[].reason
+quoted-name	v1.NightCommandResponse session.readiness.checks[].reason
+vocabulary	v1.NightCommandResponse session.readiness.checks[].reason
+capital	v1.NightCommandResponse session.readiness.reason
+full-stop	v1.NightCommandResponse session.readiness.reason
+capital	v1.NightCommandResponse session.transition.reason
+full-stop	v1.NightCommandResponse session.transition.reason
+joined	v1.NightCommandResponse session.transition.reason
+capital	v1.NightSessionResponse session.backgroundAudio.reason
+full-stop	v1.NightSessionResponse session.backgroundAudio.reason
+capital	v1.NightSessionResponse session.boundary.reason
+full-stop	v1.NightSessionResponse session.boundary.reason
+capital	v1.NightSessionResponse session.cues.cues[].reason
+full-stop	v1.NightSessionResponse session.cues.cues[].reason
+vocabulary	v1.NightSessionResponse session.cues.cues[].reason
+capital	v1.NightSessionResponse session.cues.reason
+full-stop	v1.NightSessionResponse session.cues.reason
+capital	v1.NightSessionResponse session.powerPhase.reason
+full-stop	v1.NightSessionResponse session.powerPhase.reason
+capital	v1.NightSessionResponse session.readiness.checks[].reason
+full-stop	v1.NightSessionResponse session.readiness.checks[].reason
+joined	v1.NightSessionResponse session.readiness.checks[].reason
+kind-name	v1.NightSessionResponse session.readiness.checks[].reason
+quoted-name	v1.NightSessionResponse session.readiness.checks[].reason
+vocabulary	v1.NightSessionResponse session.readiness.checks[].reason
+capital	v1.NightSessionResponse session.readiness.reason
+full-stop	v1.NightSessionResponse session.readiness.reason
+go-error	v1.NightSessionResponse session.readiness.reason
+joined	v1.NightSessionResponse session.readiness.reason
+vocabulary	v1.NightSessionResponse session.readiness.reason
+capital	v1.NightSessionResponse session.transition.reason
+full-stop	v1.NightSessionResponse session.transition.reason
+joined	v1.NightSessionResponse session.transition.reason
+capital	v1.NodeAssetManifestResponse manifest.reason
+full-stop	v1.NodeAssetManifestResponse manifest.reason
+go-error	v1.NodeAssetManifestResponse manifest.reason
+joined	v1.NodeAssetManifestResponse manifest.reason
+kind-name	v1.NodeAssetManifestResponse manifest.reason
+length	v1.NodeAssetManifestResponse manifest.reason
+capital	v1.NodeAssetManifestResponse manifest.resyncRequest.outcomeReason
+full-stop	v1.NodeAssetManifestResponse manifest.resyncRequest.outcomeReason
+capital	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
+full-stop	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
+go-error	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
+joined	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
+kind-name	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
+capital	v1.NodeChangedEvent node.showParticipation.reason
+full-stop	v1.NodeChangedEvent node.showParticipation.reason
+capital	v1.NodeResponse node.controlPlane.reason
+full-stop	v1.NodeResponse node.controlPlane.reason
+vocabulary	v1.NodeResponse node.controlPlane.reason
+capital	v1.NodeResponse node.evidence.heartbeat.reason
+full-stop	v1.NodeResponse node.evidence.heartbeat.reason
+capital	v1.NodeResponse node.evidence.hello.reason
+full-stop	v1.NodeResponse node.evidence.hello.reason
+capital	v1.NodeResponse node.evidence.lastWill.reason
+full-stop	v1.NodeResponse node.evidence.lastWill.reason
+vocabulary	v1.NodeResponse node.evidence.lastWill.reason
+capital	v1.NodeResponse node.render[].reason
+full-stop	v1.NodeResponse node.render[].reason
+hex	v1.NodeResponse node.render[].reason
+length	v1.NodeResponse node.render[].reason
+quoted-name	v1.NodeResponse node.render[].reason
+sentences	v1.NodeResponse node.render[].reason
+capital	v1.NodeResponse node.showParticipation.reason
+full-stop	v1.NodeResponse node.showParticipation.reason
+capital	v1.NodeUnusedAssetsResponse reason
+full-stop	v1.NodeUnusedAssetsResponse reason
+capital	v1.NodesResponse nodes[].controlPlane.reason
+full-stop	v1.NodesResponse nodes[].controlPlane.reason
+capital	v1.NodesResponse nodes[].evidence.heartbeat.reason
+full-stop	v1.NodesResponse nodes[].evidence.heartbeat.reason
+capital	v1.NodesResponse nodes[].evidence.hello.reason
+full-stop	v1.NodesResponse nodes[].evidence.hello.reason
+capital	v1.NodesResponse nodes[].evidence.lastWill.reason
+full-stop	v1.NodesResponse nodes[].evidence.lastWill.reason
+vocabulary	v1.NodesResponse nodes[].evidence.lastWill.reason
+capital	v1.NodesResponse nodes[].showParticipation.reason
+full-stop	v1.NodesResponse nodes[].showParticipation.reason
+capital	v1.ObservationsResponse observations[].reason
+full-stop	v1.ObservationsResponse observations[].reason
+capital	v1.RemoveNodeAssetResponse command.reason
+full-stop	v1.RemoveNodeAssetResponse command.reason
+capital	v1.RenderCommandResponse command.outcomeReason
+full-stop	v1.RenderCommandResponse command.outcomeReason
+kind-name	v1.RenderCommandResponse command.outcomeReason
+quoted-name	v1.RenderCommandResponse command.outcomeReason
+capital	v1.ResolumeActionResponse result.outcomeReason
+full-stop	v1.ResolumeActionResponse result.outcomeReason
+vocabulary	v1.ResolumeActionResponse result.outcomeReason
+capital	v1.ResolumeChangedEvent instance.observations[].reason
+full-stop	v1.ResolumeChangedEvent instance.observations[].reason
+go-error	v1.ResolumeChangedEvent instance.observations[].reason
+capital	v1.ResolumeChangedEvent instance.showParticipation.reason
+full-stop	v1.ResolumeChangedEvent instance.showParticipation.reason
+capital	v1.ResolumeInstanceResponse instance.observations[].reason
+full-stop	v1.ResolumeInstanceResponse instance.observations[].reason
+capital	v1.ResolumeInstanceResponse instance.showParticipation.reason
+full-stop	v1.ResolumeInstanceResponse instance.showParticipation.reason
+capital	v1.ResolumeInstancesResponse instances[].observations[].reason
+full-stop	v1.ResolumeInstancesResponse instances[].observations[].reason
+capital	v1.ResolumeInstancesResponse instances[].showParticipation.reason
+full-stop	v1.ResolumeInstancesResponse instances[].showParticipation.reason
+capital	v1.ShowMacroConfigResponse payload.steps[].localFallback.reason
+full-stop	v1.ShowMacroConfigResponse payload.steps[].localFallback.reason
+length	v1.ShowPlaylistMovePreviewResponse entries[].summary
+sentences	v1.ShowPlaylistMovePreviewResponse entries[].summary
+joined	v1.ShowPlaylistMovePreviewResponse newEntries[].summary
+capital	v1.Snapshot audioConfigPush.reason
+full-stop	v1.Snapshot audioConfigPush.reason
+joined	v1.Snapshot audioConfigPush.reason
+kind-name	v1.Snapshot audioConfigPush.reason
+length	v1.Snapshot audioConfigPush.reason
+vocabulary	v1.Snapshot audioConfigPush.reason
+capital	v1.Snapshot auditStore.reason
+full-stop	v1.Snapshot auditStore.reason
+joined	v1.Snapshot auditStore.reason
+capital	v1.Snapshot fpp.instances[].observations[].reason
+full-stop	v1.Snapshot fpp.instances[].observations[].reason
+vocabulary	v1.Snapshot fpp.instances[].observations[].reason
+capital	v1.Snapshot fpp.instances[].showParticipation.reason
+full-stop	v1.Snapshot fpp.instances[].showParticipation.reason
+capital	v1.Snapshot nodes[].controlPlane.reason
+full-stop	v1.Snapshot nodes[].controlPlane.reason
+capital	v1.Snapshot nodes[].evidence.heartbeat.reason
+full-stop	v1.Snapshot nodes[].evidence.heartbeat.reason
+capital	v1.Snapshot nodes[].evidence.hello.reason
+full-stop	v1.Snapshot nodes[].evidence.hello.reason
+capital	v1.Snapshot nodes[].evidence.lastWill.reason
+full-stop	v1.Snapshot nodes[].evidence.lastWill.reason
+capital	v1.Snapshot nodes[].showParticipation.reason
+full-stop	v1.Snapshot nodes[].showParticipation.reason
+capital	v1.Snapshot resolume[].observations[].reason
+full-stop	v1.Snapshot resolume[].observations[].reason
+capital	v1.Snapshot resolume[].showParticipation.reason
+full-stop	v1.Snapshot resolume[].showParticipation.reason
+capital	v1.StreamReset reason
+full-stop	v1.StreamReset reason
+capital	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+full-stop	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+go-error	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+joined	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+kind-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+quoted-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
+
+# exempt by ruling
+# Config validation errors of the form "<fieldPath> must ...".
+capital	problem invalid-parameter in dispatchAudioSessionCommand
+full-stop	problem invalid-parameter in dispatchAudioSessionCommand
+capital	problem invalid-parameter in handleAudit
+full-stop	problem invalid-parameter in handleAudit
+quoted-name	problem invalid-parameter in handleAudit
+capital	problem invalid-parameter in handleCreateNodeEnrollment
+capital	problem invalid-parameter in handleDispatchResolumeAction
+full-stop	problem invalid-parameter in handleDispatchResolumeAction
+go-error	problem invalid-parameter in handleDispatchResolumeAction
+kind-name	problem invalid-parameter in handleDispatchResolumeAction
+quoted-name	problem invalid-parameter in handleDispatchResolumeAction
+capital	problem invalid-parameter in handleEvents
+full-stop	problem invalid-parameter in handleEvents
+quoted-name	problem invalid-parameter in handleEvents
+capital	problem invalid-parameter in handleFPPBrightnessCeiling
+full-stop	problem invalid-parameter in handleFPPBrightnessCeiling
+capital	problem invalid-parameter in handleFPPCommand
+full-stop	problem invalid-parameter in handleFPPCommand
+capital	problem invalid-parameter in handleFPPDefinitionRepublish
+full-stop	problem invalid-parameter in handleFPPDefinitionRepublish
+joined	problem invalid-parameter in handleFPPDefinitionRepublish
+capital	problem invalid-parameter in handleFPPTransitionGain
+full-stop	problem invalid-parameter in handleFPPTransitionGain
+joined	problem invalid-parameter in handleFPPTransitionGain
+capital	problem invalid-parameter in handleListMacroRuns
+full-stop	problem invalid-parameter in handleListMacroRuns
+quoted-name	problem invalid-parameter in handleListMacroRuns
+capital	problem invalid-parameter in handleObservations
+full-stop	problem invalid-parameter in handleObservations
+quoted-name	problem invalid-parameter in handleObservations
+capital	problem invalid-parameter in handlePostAssetUpload
+full-stop	problem invalid-parameter in handlePostAssetUpload
+joined	problem invalid-parameter in handlePostAssetUpload
+quoted-name	problem invalid-parameter in handlePostAssetUpload
+capital	problem invalid-parameter in handlePostFPPPlaylistDefinition
+full-stop	problem invalid-parameter in handlePostFPPPlaylistDefinition
+capital	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+full-stop	problem invalid-parameter in handlePostFPPPlaylistEntryObservation
+capital	problem invalid-parameter in handlePostResolumeCompositionUpload
+full-stop	problem invalid-parameter in handlePostResolumeCompositionUpload
+joined	problem invalid-parameter in handlePostResolumeCompositionUpload
+quoted-name	problem invalid-parameter in handlePostResolumeCompositionUpload
+capital	problem invalid-parameter in handlePutFallbackExecutorKey
+full-stop	problem invalid-parameter in handlePutFallbackExecutorKey
+capital	problem invalid-parameter in handlePutFallbackState
+full-stop	problem invalid-parameter in handlePutFallbackState
+quoted-name	problem invalid-parameter in handlePutFallbackState
+capital	problem invalid-parameter in handleSubmitMacroRun
+full-stop	problem invalid-parameter in handleSubmitMacroRun
+quoted-name	problem invalid-parameter in handleSubmitMacroRun
+capital	problem invalid-parameter in handleWeatherDelayResume
+full-stop	problem invalid-parameter in handleWeatherDelayResume
+capital	problem invalid-parameter in handleWeatherDelayTrigger
+full-stop	problem invalid-parameter in handleWeatherDelayTrigger
+quoted-name	problem invalid-parameter in handleWeatherDelayTrigger
+capital	problem invalid-parameter in weatherDelayStartOrChange
+full-stop	problem invalid-parameter in weatherDelayStartOrChange

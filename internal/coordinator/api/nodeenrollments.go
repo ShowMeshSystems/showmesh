@@ -213,7 +213,7 @@ func (h *handlers) handleCreateNodeEnrollment(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(v1.CreateNodeEnrollmentResponse{
+	jsonEncode(w, v1.CreateNodeEnrollmentResponse{
 		ServerTime: formatTime(now), ID: minted.ID, NodeID: minted.NodeID, Code: minted.Value,
 		Reenroll: minted.Reenroll, ExpiresAt: formatTime(minted.ExpiresAt),
 		CoordinatorURL: h.deps.NodeEnrollment.PublicURL(),
