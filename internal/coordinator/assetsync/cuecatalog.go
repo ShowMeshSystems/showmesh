@@ -250,7 +250,8 @@ type CatalogConflict struct {
 }
 
 // Detail renders c for an operator-visible refusal, naming both Cue ids and
-// the shared resource in plain words (the exact claim stays in the log).
+// the shared resource in plain words; the raw claim key is kept by the
+// override record and its API response, not by this string.
 func (c CatalogConflict) Detail() string {
 	return fmt.Sprintf("Cues %q and %q both use %s", c.CueA, c.CueB, claimInWords(c.Claim))
 }

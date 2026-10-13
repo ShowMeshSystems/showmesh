@@ -299,7 +299,7 @@ func TestPlaylistReadinessExclusiveClaimConflictOverriddenWarnsInsteadOfFailing(
 		t.Fatalf("Ready = false (FailingCondition %q: %s), want true: an overridden conflict must warn, not fail", report.FailingCondition, report.Reason)
 	}
 	if !containsAll(report.Warning, "node-1", "operator override", "cue-1", "cue-2", "the program audio output on node-1") {
-		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the exact claim", report.Warning)
+		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the shared output", report.Warning)
 	}
 }
 

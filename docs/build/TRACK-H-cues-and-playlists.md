@@ -169,7 +169,8 @@ whole point of the model: FPP running a resting sequence while a
 with a disjoint claim set, so it is permitted by construction rather than by
 exception.
 
-A refused claim names both Cues and the exact claim string. Nothing is
+A refused claim names both Cues and the shared resource in plain words
+(the raw claim key is recorded with an operator override). Nothing is
 silently preempted, and a claim conflict is a readiness failure before
 showtime rather than a runtime surprise.
 
