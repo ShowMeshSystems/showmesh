@@ -9,4 +9,4 @@ export declare function findBannedWords(
 ): { word: string; line: number; text: string }[]
 export declare function countBannedWords(root?: string, words?: string[]): Map<string, { count: number; uses: string[] }>
 export declare function readBaseline(file?: string): Map<string, number>
-export declare function checkCopyWords(counts?: Map<string, { count: number; uses: string[] }>, baseline?: Map<string, number>): string[]
+export declare function checkCopyWords(counts?: Map<string, { count: number; uses: string[] }>, baseline?: Map<string, number>, stale?: string[]): string[]
