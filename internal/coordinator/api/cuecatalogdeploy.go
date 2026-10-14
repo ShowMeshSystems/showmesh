@@ -19,6 +19,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file closes the gap a fresh reviewer found in TRACK-H-H3-SPEC.md
@@ -797,7 +798,7 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 
 	key := renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness)
 	if idempotencyWitness == renderEvidenceWitnessNone {
-		key, err = h.renderEstablishKeyAfterResolvedAttempts(ctx, key)
+		key, err = h.renderEstablishKeyAfterLoss(ctx, nodeID, surfaceID, key)
 		if err != nil {
 			h.logWarn("render assignment establishment: look up earlier attempt failed", "node", nodeID, "surface", surfaceID, "error", err)
 			return
@@ -848,10 +849,18 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 // value, so the SAME still-unresolved loss does not spam a fresh dispatch
 // every redeploy either — keys this attempt distinctly from that earlier
 // success and lets a genuine re-establishment actually happen.
-// renderEstablishKeyAfterResolvedAttempts walks past every resolved attempt
-// under key: with no surface evidence at all, the witness cannot tell one loss
-// from the next, so each new loss must not replay an earlier confirmation.
-func (h *handlers) renderEstablishKeyAfterResolvedAttempts(ctx context.Context, key string) (string, error) {
+func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision, witness string) string {
+	key := fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
+	if witness != "" {
+		key += "-" + witness
+	}
+	return key
+}
+
+// renderEstablishKeyAfterLoss walks past a resolved attempt only when the
+// node's live render report, received after that attempt resolved, omits the
+// surface. Without that evidence the earlier attempt is replayed as before.
+func (h *handlers) renderEstablishKeyAfterLoss(ctx context.Context, nodeID, surfaceID, key string) (string, error) {
 	base := key
 	for i := 0; i < renderEstablishMaxKeyChain; i++ {
 		rec, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, key)
@@ -861,21 +870,29 @@ func (h *handlers) renderEstablishKeyAfterResolvedAttempts(ctx context.Context, 
 		if err != nil {
 			return "", err
 		}
-		if rec.ResolvedAt == nil {
+		if rec.ResolvedAt == nil || !h.renderReportOmitsSurfaceSince(nodeID, surfaceID, *rec.ResolvedAt) {
 			return key, nil
 		}
 		key = base + "-after-" + rec.ID
 	}
+	h.logWarn("render assignment establishment: too many earlier attempts, replaying the last one", "node", nodeID, "surface", surfaceID)
 	return key, nil
 }
 
-// renderEstablishMaxKeyChain bounds the walk; past it the last key replays.
+// renderEstablishMaxKeyChain bounds renderEstablishKeyAfterLoss's walk.
 const renderEstablishMaxKeyChain = 64
 
-func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision, witness string) string {
-	key := fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
-	if witness != "" {
-		key += "-" + witness
+// renderReportOmitsSurfaceSince reports whether nodeID's latest render report
+// arrived after since and names no observation for surfaceID.
+func (h *handlers) renderReportOmitsSurfaceSince(nodeID, surfaceID string, since time.Time) bool {
+	var latest time.Time
+	for _, o := range h.deps.Render.NodeRenderObservations(nodeID) {
+		if o.Resource.Kind == observation.ResourceSurface && o.Resource.ID == surfaceID {
+			return false
+		}
+		if o.CollectedAt.After(latest) {
+			latest = o.CollectedAt
+		}
 	}
-	return key
+	return latest.After(since)
 }

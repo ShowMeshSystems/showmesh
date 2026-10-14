@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -329,10 +330,24 @@ func TestCueCatalogDeployDoesNotEstablishSurfacesOnOtherNodesOrShows(t *testing.
 	}
 }
 
-// TestCueCatalogDeployReestablishesAfterAClearThatLeavesNoEvidence covers a
-// surface that loses its assignment and then reports nothing at all: the
-// redeploy must dispatch again instead of replaying the first confirmation.
-func TestCueCatalogDeployReestablishesAfterAClearThatLeavesNoEvidence(t *testing.T) {
+// liveRenderLister stands in for the noderender store's live per-node read.
+type liveRenderLister struct{ obs []observation.Observation }
+
+func (l *liveRenderLister) NodeRenderObservations(string) []observation.Observation { return l.obs }
+
+// nodeOnlyReport is a render report received at at that names no surface.
+func nodeOnlyReport(nodeID string, at time.Time) []observation.Observation {
+	return []observation.Observation{mustObs(observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID},
+		noderender.SignalNodeMultiSyncListening, true, at,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(at), observation.WithSource(noderender.SourceFor(nodeID)),
+	))}
+}
+
+// TestCueCatalogDeployReestablishesOnlyAfterANewerReportOmitsTheSurface
+// covers a surface the coordinator holds no evidence for: a redeploy sends a
+// fresh apply only when a report newer than the last attempt leaves it out.
+func TestCueCatalogDeployReestablishesOnlyAfterANewerReportOmitsTheSurface(t *testing.T) {
 	renderCommandConfirmDeadline = 50 * time.Millisecond
 	renderCommandPollInterval = 5 * time.Millisecond
 	defer func() {
@@ -340,20 +355,42 @@ func TestCueCatalogDeployReestablishesAfterAClearThatLeavesNoEvidence(t *testing
 		renderCommandPollInterval = 250 * time.Millisecond
 	}()
 
-	api, st, deployPub, renderPub, _, token := establishTestFixture(t)
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deployPub, renderPub, live := &fakeAudioPublisher{}, &fakeRenderPublisher{}, &liveRenderLister{}
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AudioPublisher, deps.RenderPublisher = deployPub, renderPub
+	deps.Observations, deps.Render = &dynamicObservationLister{}, live
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
 	renderPutSurface(t, st, "wall-1", "halloween-2026", "render-01")
 	renderPutActiveShow(t, st, "halloween-2026")
 
-	firstRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
 	if got := renderPub.count(); got != 1 {
-		t.Fatalf("after the first deploy, render.surface.apply publish count = %d, want 1", got)
+		t.Fatalf("after the first deploy, publish count = %d, want 1", got)
 	}
 
-	secondRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
-	if secondRevision != firstRevision {
-		t.Fatalf("redeploy changed the catalog revision (%q vs %q); this test needs an unchanged catalog", secondRevision, firstRevision)
+	// No report since the first attempt: a silent node is never re-applied.
+	deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("with no report since the first attempt, publish count = %d, want 1 (a replay)", got)
 	}
+
+	// A newer report that still names the surface is not a loss either.
+	at := testNow.Add(time.Minute)
+	live.obs = append(nodeOnlyReport("render-01", at), surfacePipelineStateObs("render-01", "wall-1", "running", at, at))
+	deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("with a newer report naming the surface, publish count = %d, want 1 (a replay)", got)
+	}
+
+	// A newer report without the surface is the loss: send a fresh apply.
+	live.obs = nodeOnlyReport("render-01", at)
+	deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
 	if got := renderPub.count(); got != 2 {
-		t.Fatalf("after a redeploy with still no surface evidence, publish count = %d, want 2, not a replay of the first confirmation", got)
+		t.Fatalf("after a newer report without the surface, publish count = %d, want 2", got)
 	}
 }
