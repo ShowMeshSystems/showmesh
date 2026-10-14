@@ -1040,3 +1040,66 @@ func resolvedCatalogRevisionForTest(t *testing.T, st *store.Store, showID, nodeI
 	}
 	return catalog.Revision
 }
+
+// TestDispatchPrepareAheadReachesANodeSittingOutTheCurrentCue reproduces the
+// rig: cue-1 plays only on audio-01, so audio-02 still needs cue-2 staged.
+func TestDispatchPrepareAheadReachesANodeSittingOutTheCurrentCue(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	const showID, playlistID, playing, sittingOut = "halloween-2026", "playlist-1", "audio-01", "audio-02"
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	for _, nodeID := range []string{playing, sittingOut} {
+		putAudioNodeForTest(t, setup.st, nodeID)
+		declareNodeForTest(t, setup.st, nodeID)
+		putFreshReportForTest(t, setup.st, nodeID, now)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, "cue-1", mustEncodeShowCuePayloadForTest(t, config.ShowCuePayload{
+		Show: showID, Name: "cue-1", Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-cue-1", Targets: []string{playing}}},
+	}))
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, "cue-2", mustEncodeShowCuePayloadForTest(t, config.ShowCuePayload{
+		Show: showID, Name: "cue-2", Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-cue-2", Targets: []string{playing, sittingOut}}},
+	}))
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: "cue-1", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "entry-2", Cue: "cue-2", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, "cue-1", playing, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, "cue-2", playing, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, "cue-2", sittingOut, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	activations := map[string]cueactivation.Activation{playing: {
+		Runner: "fpp", RunnerInstance: "inst-1", ActivationID: "cueact-1",
+		Show: showID, Generation: 1, CatalogRevision: resolvedCatalogRevisionForTest(t, setup.st, showID, playing),
+		Playlist: playlistID, PlaylistRevision: 1, EntryID: "entry-1", CueID: "cue-1", CueRevision: 1, EvidenceAt: now,
+	}}
+
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 1)
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+	h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	h.dispatchCueActivations(context.Background(), now.Add(30*time.Second), activations, issuer, nil)
+
+	staged := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, sittingOut)
+	if len(staged) != 2 || staged[0].Action != "audio.session.apply" || staged[1].Action != "audio.session.prepare" {
+		t.Fatalf("node %q: staging dispatches = %+v, want apply then prepare once across two ticks", sittingOut, staged)
+	}
+	media, _ := staged[0].Params["media"].(map[string]any)
+	if got := media["assetId"]; got != "asset-cue-2" {
+		t.Fatalf("node %q staged %v, want asset-cue-2", sittingOut, got)
+	}
+	if got, _ := staged[0].Params["invocationId"].(string); !strings.Contains(got, sittingOut) {
+		t.Fatalf("invocationId = %q, want it keyed to %q so it never collides with the playing node's own", got, sittingOut)
+	}
+	if got := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, playing); len(got) != 2 {
+		t.Fatalf("node %q: %d staging dispatches, want 2 from its own activation, with no repeat on the second tick", playing, len(got))
+	}
+}

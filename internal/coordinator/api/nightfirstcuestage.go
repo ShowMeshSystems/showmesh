@@ -22,8 +22,8 @@ import (
 // identical use of it).
 const nightStageFirstShowCueTimeout = scheduleProbeStepTimeout
 
-// nightStageFirstShowCueAudio stages the bound show playlist's own first
-// audio-bearing entry on every audio node that entry's Cue resolves to,
+// nightStageFirstShowCueAudio stages, on every audio node, the first entry
+// of the bound show playlist whose Cue has audio on that node,
 // under [cueactivation.PrepareStagingSessionID], with the exact apply and
 // prepare shape and revision scheme [handlers.dispatchPrepareAheadAudio]
 // already uses for the ordinary cue-to-cue prepare-ahead case
@@ -87,11 +87,6 @@ func (h *handlers) nightStageFirstShowCueAudio(ctx context.Context, now time.Tim
 		catalogs[nodeID] = catalog
 	}
 
-	cueID, ok := nightFirstAudioBearingCue(entries, catalogs)
-	if !ok {
-		return nil
-	}
-
 	issuer := nightControllerIssuer(rec)
 	t := rec.StateEnteredAt
 	applyRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepApply)
@@ -104,23 +99,24 @@ func (h *handlers) nightStageFirstShowCueAudio(ctx context.Context, now time.Tim
 		mu sync.Mutex
 	)
 	for nodeID, catalog := range catalogs {
-		entry, participates := prepareAheadCatalogEntry(catalog, cueID)
-		if !participates || entry.Outputs.Audio == nil || entry.Outputs.Audio.Filename == "" {
+		cueID, ok := nightFirstAudioBearingCue(entries, catalog)
+		if !ok {
 			continue
 		}
+		entry, _ := prepareAheadCatalogEntry(catalog, cueID)
 		contentHash := ""
 		if len(entry.Outputs.Audio.AssetHashes) > 0 {
 			contentHash = entry.Outputs.Audio.AssetHashes[0]
 		}
 		wg.Add(1)
-		go func(nodeID string, assetID, filename string) {
+		go func(nodeID, cueID, assetID, filename string) {
 			defer wg.Done()
 			if unstaged := h.nightStageFirstShowCueAudioOnNode(ctx, now, entryKey, cueID, nodeID, assetID, contentHash, filename, staging, applyRevision, prepareRevision, issuer); unstaged {
 				mu.Lock()
 				unstagedNodes = append(unstagedNodes, nodeID)
 				mu.Unlock()
 			}
-		}(nodeID, entry.Outputs.Audio.Asset, entry.Outputs.Audio.Filename)
+		}(nodeID, cueID, entry.Outputs.Audio.Asset, entry.Outputs.Audio.Filename)
 	}
 	wg.Wait()
 	return unstagedNodes
@@ -314,19 +310,15 @@ func nightAudioNodeIDs(ctx context.Context, cfg ConfigStore) ([]string, error) {
 }
 
 // nightFirstAudioBearingCue scans entries in playlist order for the first
-// one whose Cue has an audio output on at least one node's catalog: the
-// first entry of a show playlist may well be video-only, and the owner
-// ruling's "video leads audio" gap does not exist for a cue with nothing
-// to prepare ahead of time.
-func nightFirstAudioBearingCue(entries []config.ShowPlaylistEntry, catalogs map[string]assetsync.Catalog) (cueID string, ok bool) {
+// one whose Cue has an audio output in this node's catalog: a node that
+// sits out the opening songs stages the first one it actually plays.
+func nightFirstAudioBearingCue(entries []config.ShowPlaylistEntry, catalog assetsync.Catalog) (cueID string, ok bool) {
 	for _, entry := range entries {
 		if entry.Cue == "" {
 			continue
 		}
-		for _, catalog := range catalogs {
-			if e, participates := prepareAheadCatalogEntry(catalog, entry.Cue); participates && e.Outputs.Audio != nil && e.Outputs.Audio.Filename != "" {
-				return entry.Cue, true
-			}
+		if e, participates := prepareAheadCatalogEntry(catalog, entry.Cue); participates && e.Outputs.Audio != nil && e.Outputs.Audio.Filename != "" {
+			return entry.Cue, true
 		}
 	}
 	return "", false
