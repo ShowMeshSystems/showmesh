@@ -346,3 +346,47 @@ func dispatchedActionsToSessionForNode(setup *audioDispatchTestSetup, sessionID,
 	}
 	return out
 }
+
+// TestNightStageFirstShowCueAudioStagesEachNodesOwnFirstSong reproduces the
+// rig: song 1 plays only on node A, so node B must stage song 2, its own first.
+func TestNightStageFirstShowCueAudioStagesEachNodesOwnFirstSong(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeA, nodeB, _, sharedCueID := nightFirstCueStageTestFixture(t, setup, now)
+	const soloCueID, playlistID = "cue-solo", "playlist-solo-first"
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, soloCueID, mustEncodeShowCuePayloadForTest(t, config.ShowCuePayload{
+		Show: "halloween-2026", Name: soloCueID,
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + soloCueID, Targets: []string{nodeA}}},
+	}))
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: soloCueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "entry-2", Cue: sharedCueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	putAuthorizedAudioAssetForTest(t, setup.st, "halloween-2026", soloCueID, nodeA, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+
+	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload); len(unstaged) != 0 {
+		t.Fatalf("unstagedNodes = %v, want none", unstaged)
+	}
+	for nodeID, wantAsset := range map[string]string{nodeA: "asset-" + soloCueID, nodeB: "asset-" + sharedCueID} {
+		staged := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeID)
+		if len(staged) != 2 {
+			t.Fatalf("node %q: dispatched %d staging commands, want 2 (apply, prepare); got %+v", nodeID, len(staged), staged)
+		}
+		media, _ := staged[0].Params["media"].(map[string]any)
+		if got := media["assetId"]; got != wantAsset {
+			t.Fatalf("node %q: staged %v, want %q, the first song this node plays", nodeID, got, wantAsset)
+		}
+	}
+}

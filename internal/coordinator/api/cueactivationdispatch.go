@@ -200,6 +200,13 @@ type cueActivationDispatchOutcome struct {
 // envelope is per-node, so a refusal for one node is not evidence about
 // any other.
 func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
+	var sittingOut sync.WaitGroup
+	sittingOut.Add(1)
+	go func() {
+		defer sittingOut.Done()
+		h.dispatchPrepareAheadToNodesSittingOut(ctx, now, activations, issuer)
+	}()
+	defer sittingOut.Wait()
 	return dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		// Never arm [cueactivation.AudioSessionID] (the live show session)
 		// here: it used the same act.EvidenceAt-derived revision cue.activate
@@ -218,6 +225,48 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 		h.safeDispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 		return outcome
 	})
+}
+
+// dispatchPrepareAheadToNodesSittingOut stages the next Cue's audio on every
+// audio node with no part in the current Cue, so a node that sits out one
+// song still has the next one loaded when it starts.
+func (h *handlers) dispatchPrepareAheadToNodesSittingOut(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer) {
+	if len(activations) == 0 || h.deps.Config == nil {
+		return
+	}
+	nodeIDs, err := nightAudioNodeIDs(ctx, h.deps.Config)
+	if err != nil {
+		h.logWarn("cue activation loop: list audio nodes for prepare-ahead failed", "error", err)
+		return
+	}
+	act := firstActivationByNodeID(activations)
+	var wg sync.WaitGroup
+	for _, nodeID := range nodeIDs {
+		if _, active := activations[nodeID]; active {
+			continue
+		}
+		// The command keys derive from ActivationID, so each node gets its own.
+		nodeAct := act
+		nodeAct.ActivationID = act.ActivationID + ":sitting-out:" + nodeID
+		wg.Add(1)
+		go func(nodeID string) {
+			defer wg.Done()
+			h.safeDispatchPrepareAheadAudio(ctx, now, nodeID, nodeAct, issuer)
+		}(nodeID)
+	}
+	wg.Wait()
+}
+
+// firstActivationByNodeID picks one activation deterministically; every
+// node's activation of one playlist entry names the same entry and evidence.
+func firstActivationByNodeID(activations map[string]cueactivation.Activation) cueactivation.Activation {
+	first := ""
+	for nodeID := range activations {
+		if first == "" || nodeID < first {
+			first = nodeID
+		}
+	}
+	return activations[first]
 }
 
 // dispatchCueActivationsConcurrently runs fn for every (nodeID, act) pair
