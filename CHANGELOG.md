@@ -11,6 +11,117 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.3.0 - 2026-10-14
+
+Third pre-release. Pre-alpha. FPP plugin 0.3.0 is the matching plugin: it
+ships the brightness excluded channel ranges and the Prepare site stop
+option. Upgrade the coordinator, the node agents and the plugin together,
+because the `0.x` line makes no compatibility promise between versions.
+
+### FPP
+
+- An operator can list the channel ranges a player's brightness ceiling
+  never changes, so fixture channels such as pan, tilt, gobo and speed keep
+  their own values. The list is set from the FPP instance page, the API or
+  `showmeshctl`, and reads as saved only once the plugin reports it back.
+- Prepare site can also stop whatever FPP is playing on the night's players.
+  Show Night and Live Control check the stop by default; the API and
+  `showmeshctl` stop only when asked.
+- An FPP playlist can be created before any cue exists, and can be moved to
+  FPP's newest copy of the playlist from the Playlists screen or with
+  `showmeshctl playlist move-to-newer-fpp`, after a preview of what happens
+  to each cue.
+- A playlist cue saved without a sequence name follows the sequence it was
+  on when entries are added or moved, instead of staying at the same
+  position.
+- When a plugin runs a show from its local fallback, the coordinator leaves
+  that player alone until the playlist ends and says so on Show Night and in
+  `showmeshctl`.
+- A ShowMesh node fills its row on an FPP player's MultiSync page with its
+  status, sequence, elapsed time and agent version.
+- A song uploaded through xLights FPP Connect with Media ticked becomes a
+  show-wide audio asset named after its sequence, and reaches every audio
+  node.
+
+### Audio
+
+- Audio no longer drifts late on a node whose agent has been up for days.
+- An audio node whose agent restarts mid-session rejoins at the scheduled
+  position when its clock is locked, instead of at its stored position.
+- Background music follows Start pre-show sooner, and every node still
+  starts it at the same instant.
+- A night that stops on its schedule clears its background music on every
+  node it was sent to, and one unreachable node no longer holds up the rest.
+- A missing-file fault clears once the file lands, and an audio interface
+  that disappears stops reading Available and raises a readiness warning.
+- A node that can send timecode but has no LTC channel set gets a readiness
+  warning.
+
+### Night and show control
+
+- The night fades the lights out into each show and back into resting,
+  using two optional fade times on the night session.
+- A weather delay started on a node while the coordinator was down is taken
+  up when the coordinator returns, and a weather trigger that times out
+  starts the delay instead of crashing the coordinator.
+- A second emergency stop confirms straight away even while an earlier
+  stop's cleanup is stuck.
+- The emergency stop is on the top bar on every screen.
+
+### Render
+
+- A render command the node failed or refused is reported not confirmed
+  with the node's reason, and `showmeshctl render apply` exits non-zero.
+- Live Control says what each render surface is putting out, and Node
+  Detail says when a node holds no assignment for a render surface.
+- A cue catalog redeploy re-establishes a render surface that lost its
+  assignment and reports nothing, instead of replaying the first
+  confirmation. The show editor's Cues page can deploy the active show's
+  cue catalog.
+
+### Operator UI
+
+- Operator messages across the coordinator, node agent, `showmeshctl` and
+  the UI are one short line that states the fact and then the action, and
+  audio outputs show a short name.
+- Playlist readiness lists each warning on its own line with a count.
+- Weather delay settings have their own tab and the banner stays on
+  screen. Access moves under System, Settings tabs share one layout, and
+  activating a show happens in an inspector opened from the Shows page.
+- The cue form picks its sequence from a list of uploaded sequences and
+  warns when a node will play an announcement cue as show audio. The night
+  session editor picks background audio with one choice: none, inline items
+  or a media playlist.
+- The Signals tile counts every signal and shows failed ones, and a signal
+  with nothing to measure reads N/A instead of unobserved.
+- At phone width the top bar keeps only the brand, now playing and the
+  connection.
+
+### Install and versions
+
+- A fresh install saves the asset delivery address and, with the built-in
+  broker, the FPP event feed, so neither needs a manual step. Settings >
+  Content delivery opens as a form with defaults.
+- The coordinator reports the version every component runs, warns about
+  each node it does not accept, and says when a newer release is available,
+  on Monitor and in `showmeshctl system versions`.
+
+### API and CLI
+
+- Playlist readiness returns `warnings` as a list. The old `warning` field
+  stays, marked deprecated, holding the warnings joined.
+
+### Build and release
+
+- Built with Go 1.26.9 and golang.org/x/net 0.60.0 to clear published
+  vulnerabilities.
+
+### Known limitations
+
+- There is no armv7 node agent package yet. Release assets are amd64 and
+  arm64 only.
+- Pre-alpha: there is no compatibility or migration promise before 1.0.
+
 ## 0.2.0 - 2026-09-30
 
 Second pre-release. Pre-alpha. Upgrade the coordinator and the FPP plugin
