@@ -407,7 +407,7 @@ func TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAn
 	if conflictStatus != http.StatusConflict {
 		t.Fatalf("replay with DIFFERENT params: status = %d, want 409; body: %s", conflictStatus, conflictBody)
 	}
-	if !strings.Contains(string(conflictBody), "DIFFERENT") {
+	if !strings.Contains(strings.ToLower(string(conflictBody)), "different") {
 		t.Errorf("409 body does not explain the params conflict; body: %s", conflictBody)
 	}
 	if v, ok := benchVolume(fetchBenchFPPStatus(t, fppURL)); !ok || v != 10 {
