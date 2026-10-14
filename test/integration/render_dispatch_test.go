@@ -107,7 +107,13 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	// must both carry real, actionable evidence that hdmi's output is a
 	// diagnostic fallback, proactively (no explicit render.transport.probe
 	// was ever dispatched in this test). ---
-	statusOut := mustCtl(t, coord, token, []string{"render", "status"}, nodeID)
+	// The apply confirms on the node's own result, which can arrive before
+	// the render report that shows the pipeline running.
+	var statusOut string
+	waitFor(t, 10*time.Second, 100*time.Millisecond, func() bool {
+		statusOut = mustCtl(t, coord, token, []string{"render", "status"}, nodeID)
+		return strings.Contains(statusOut, "running (current")
+	}, "render status to report the applied surface running")
 	if !strings.Contains(statusOut, surfaceID) || !strings.Contains(statusOut, "running") {
 		t.Fatalf("render status (after apply) = %q, want it to report surface %q running", statusOut, surfaceID)
 	}
