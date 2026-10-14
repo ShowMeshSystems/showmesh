@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 )
 
@@ -155,7 +156,7 @@ func TestAudioSessionDispatchApplyThenStopReachesRealAgentAcrossTwoCommands(t *t
 		t.Fatalf("apply outcome = %q, want %q (no audio.node binding has ever been delivered to this node); reason = %q",
 			applyResp.Command.Outcome, "unconfirmable", applyResp.Command.Reason)
 	}
-	if !strings.Contains(applyResp.Command.Reason, "no audio.node configuration has been delivered to this node yet") {
+	if applyResp.Command.Reason != audio.SwitchableEngineNoBindingReason {
 		t.Fatalf("apply reason = %q, want the real engine's own no-binding reason", applyResp.Command.Reason)
 	}
 

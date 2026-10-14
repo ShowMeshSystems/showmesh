@@ -702,13 +702,18 @@ func Run() int {
 	// observations. Its settings are the stored release.settings kind (ADR-039).
 	releaseSettings, releaseSettingsMigrationDeferred := resolveReleaseSettings(ctx, st, identitySvc, cfg.ReleaseSettingsEnvVarsSet,
 		config.ReleaseSettings{Enabled: cfg.ReleaseCheckEnabled, CheckInterval: cfg.ReleaseCheckInterval}, time.Now, logger)
+	// Release status is read over REST and not streamed, so the first stored
+	// status needs no hub nudge; this keeps startup from forcing an early render.
+	var releaseStatusStored atomic.Bool
 	releaseChecker := versions.NewChecker(versions.NewGitHubFetcher("showmesh-coordinator/"+version.Version),
 		versions.Settings{Enabled: releaseSettings.Enabled, Interval: releaseSettings.CheckInterval}, time.Now, logger, func(s versions.Status) {
 			if err := st.ReplaceObservations(ctx, versions.Observations(s, version.Version, time.Now())); err != nil {
 				logger.Error("coordinator: failed to store release check observations", "error", err)
 				return
 			}
-			notifyHub()
+			if releaseStatusStored.Swap(true) {
+				notifyHub()
+			}
 		})
 
 	apiDeps := api.Dependencies{

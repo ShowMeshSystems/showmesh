@@ -19,6 +19,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file closes the gap a fresh reviewer found in TRACK-H-H3-SPEC.md
@@ -795,9 +796,17 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 		return
 	}
 
+	key := renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness)
+	if idempotencyWitness == renderEvidenceWitnessNone {
+		key, err = h.renderEstablishKeyAfterLoss(ctx, nodeID, surfaceID, key)
+		if err != nil {
+			h.logWarn("render assignment establishment: look up earlier attempt failed", "node", nodeID, "surface", surfaceID, "error", err)
+			return
+		}
+	}
 	in := renderDispatchInput{
 		Action: "render.surface.apply", NodeID: nodeID, SurfaceID: surfaceID,
-		IdempotencyKey: renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness),
+		IdempotencyKey: key,
 		DesiredState:   "running",
 		IssuerID:       renderEstablishIssuerPrincipalID, IssuerName: "cuecatalog.deploy",
 		Params: params,
@@ -846,4 +855,44 @@ func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation in
 		key += "-" + witness
 	}
 	return key
+}
+
+// renderEstablishKeyAfterLoss walks past a resolved attempt only when the
+// node's live render report, received after that attempt resolved, omits the
+// surface. Without that evidence the earlier attempt is replayed as before.
+func (h *handlers) renderEstablishKeyAfterLoss(ctx context.Context, nodeID, surfaceID, key string) (string, error) {
+	base := key
+	for i := 0; i < renderEstablishMaxKeyChain; i++ {
+		rec, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, key)
+		if errors.Is(err, store.ErrCommandNotFound) {
+			return key, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if rec.ResolvedAt == nil || !h.renderReportOmitsSurfaceSince(nodeID, surfaceID, *rec.ResolvedAt) {
+			return key, nil
+		}
+		key = base + "-after-" + rec.ID
+	}
+	h.logWarn("render assignment establishment: too many earlier attempts, replaying the last one", "node", nodeID, "surface", surfaceID)
+	return key, nil
+}
+
+// renderEstablishMaxKeyChain bounds renderEstablishKeyAfterLoss's walk.
+const renderEstablishMaxKeyChain = 64
+
+// renderReportOmitsSurfaceSince reports whether nodeID's latest render report
+// arrived after since and names no observation for surfaceID.
+func (h *handlers) renderReportOmitsSurfaceSince(nodeID, surfaceID string, since time.Time) bool {
+	var latest time.Time
+	for _, o := range h.deps.Render.NodeRenderObservations(nodeID) {
+		if o.Resource.Kind == observation.ResourceSurface && o.Resource.ID == surfaceID {
+			return false
+		}
+		if o.CollectedAt.After(latest) {
+			latest = o.CollectedAt
+		}
+	}
+	return latest.After(since)
 }
