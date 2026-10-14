@@ -328,3 +328,32 @@ func TestCueCatalogDeployDoesNotEstablishSurfacesOnOtherNodesOrShows(t *testing.
 		t.Fatalf("render.surface.apply publish count = %d, want 0 — neither surface belongs to (render-01, halloween-2026)", got)
 	}
 }
+
+// TestCueCatalogDeployReestablishesAfterAClearThatLeavesNoEvidence covers a
+// surface that loses its assignment and then reports nothing at all: the
+// redeploy must dispatch again instead of replaying the first confirmation.
+func TestCueCatalogDeployReestablishesAfterAClearThatLeavesNoEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 5 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	api, st, deployPub, renderPub, _, token := establishTestFixture(t)
+	renderPutSurface(t, st, "wall-1", "halloween-2026", "render-01")
+	renderPutActiveShow(t, st, "halloween-2026")
+
+	firstRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("after the first deploy, render.surface.apply publish count = %d, want 1", got)
+	}
+
+	secondRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if secondRevision != firstRevision {
+		t.Fatalf("redeploy changed the catalog revision (%q vs %q); this test needs an unchanged catalog", secondRevision, firstRevision)
+	}
+	if got := renderPub.count(); got != 2 {
+		t.Fatalf("after a redeploy with still no surface evidence, publish count = %d, want 2, not a replay of the first confirmation", got)
+	}
+}

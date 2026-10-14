@@ -583,7 +583,7 @@ func TestAssetTruncatedNeverServedAndAgentDiscardsHashMismatch(t *testing.T) {
 		if err := os.MkdirAll(agentDir, 0o755); err != nil {
 			t.Fatalf("mkdir agent asset dir: %v", err)
 		}
-		startAgent(t, agentConfig{nodeID: badNode, assetDir: agentDir})
+		badAgent := startAgent(t, agentConfig{nodeID: badNode, assetDir: agentDir})
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("not the bytes the coordinator promised"))
@@ -601,8 +601,11 @@ func TestAssetTruncatedNeverServedAndAgentDiscardsHashMismatch(t *testing.T) {
 		if result.Outcome != mqttproto.OutcomeFailed {
 			t.Fatalf("Outcome = %q, want %q; reason=%q", result.Outcome, mqttproto.OutcomeFailed, result.Reason)
 		}
-		if !strings.Contains(result.Reason, "failed verification") {
-			t.Errorf("Reason = %q, want it to name the hash verification failure", result.Reason)
+		if !strings.Contains(result.Reason, "arrived damaged") {
+			t.Errorf("Reason = %q, want the operator reason for a damaged download", result.Reason)
+		}
+		if !strings.Contains(badAgent.logs.String(), "failed verification") {
+			t.Errorf("agent log never named the hash verification failure behind the operator reason")
 		}
 
 		if _, err := os.Stat(filepath.Join(agentDir, "Mismatch.fseq")); !os.IsNotExist(err) {

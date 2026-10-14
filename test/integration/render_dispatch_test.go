@@ -111,7 +111,7 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	if !strings.Contains(statusOut, surfaceID) || !strings.Contains(statusOut, "running") {
 		t.Fatalf("render status (after apply) = %q, want it to report surface %q running", statusOut, surfaceID)
 	}
-	if !strings.Contains(statusOut, "surface.pipeline.reason") || !strings.Contains(statusOut, "hdmi") {
+	if !strings.Contains(statusOut, "surface.pipeline.reason") || !strings.Contains(strings.ToLower(statusOut), "hdmi") {
 		t.Fatalf("render status (after apply) = %q, want surface.pipeline.reason to name hdmi's diagnostic fallback — "+
 			"a pipeline whose output nobody can see must never read as a silent success (ADR-029)", statusOut)
 	}

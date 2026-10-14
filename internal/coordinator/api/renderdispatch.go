@@ -566,8 +566,11 @@ func (h *handlers) renderSurfaceAssignmentEvidence(ctx context.Context, nodeID, 
 		}
 		return true, "", nil
 	}
-	return false, "no-evidence", nil
+	return false, renderEvidenceWitnessNone, nil
 }
+
+// renderEvidenceWitnessNone is the witness for a surface the node reports nothing about.
+const renderEvidenceWitnessNone = "no-evidence"
 
 // renderEvidenceWitnessTimestamp identifies WHEN o's evidence was produced.
 // changedAt (the node's real transition time) is preferred over

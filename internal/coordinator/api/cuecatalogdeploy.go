@@ -795,9 +795,17 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 		return
 	}
 
+	key := renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness)
+	if idempotencyWitness == renderEvidenceWitnessNone {
+		key, err = h.renderEstablishKeyAfterResolvedAttempts(ctx, key)
+		if err != nil {
+			h.logWarn("render assignment establishment: look up earlier attempt failed", "node", nodeID, "surface", surfaceID, "error", err)
+			return
+		}
+	}
 	in := renderDispatchInput{
 		Action: "render.surface.apply", NodeID: nodeID, SurfaceID: surfaceID,
-		IdempotencyKey: renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness),
+		IdempotencyKey: key,
 		DesiredState:   "running",
 		IssuerID:       renderEstablishIssuerPrincipalID, IssuerName: "cuecatalog.deploy",
 		Params: params,
@@ -840,6 +848,30 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 // value, so the SAME still-unresolved loss does not spam a fresh dispatch
 // every redeploy either — keys this attempt distinctly from that earlier
 // success and lets a genuine re-establishment actually happen.
+// renderEstablishKeyAfterResolvedAttempts walks past every resolved attempt
+// under key: with no surface evidence at all, the witness cannot tell one loss
+// from the next, so each new loss must not replay an earlier confirmation.
+func (h *handlers) renderEstablishKeyAfterResolvedAttempts(ctx context.Context, key string) (string, error) {
+	base := key
+	for i := 0; i < renderEstablishMaxKeyChain; i++ {
+		rec, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, key)
+		if errors.Is(err, store.ErrCommandNotFound) {
+			return key, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if rec.ResolvedAt == nil {
+			return key, nil
+		}
+		key = base + "-after-" + rec.ID
+	}
+	return key, nil
+}
+
+// renderEstablishMaxKeyChain bounds the walk; past it the last key replays.
+const renderEstablishMaxKeyChain = 64
+
 func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision, witness string) string {
 	key := fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
 	if witness != "" {
