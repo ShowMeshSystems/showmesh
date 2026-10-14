@@ -60,12 +60,13 @@ const (
 	activationStepSeek    = cueactivation.AudioSessionStepSeek
 )
 
-// unalignedFallbackStepStart/Seek sort past AudioSessionStepStop so a
-// missed-instant fallback's own revisions never collide with the
-// already-consumed scheduled Start step or a coordinator Stop.
+// The missed-instant fallback's steps sort past AudioSessionStepStop so
+// their revisions never collide with the already-consumed scheduled Start
+// step or a coordinator Stop.
 const (
-	unalignedFallbackStepStart = cueactivation.AudioSessionStepStop + 1
-	unalignedFallbackStepSeek  = cueactivation.AudioSessionStepStop + 2
+	unalignedFallbackStepReschedule = cueactivation.AudioSessionStepStop + 1
+	unalignedFallbackStepStart      = cueactivation.AudioSessionStepStop + 2
+	unalignedFallbackStepSeek       = cueactivation.AudioSessionStepStop + 3
 )
 
 // activationRevision derives one step's [pkgaudio.Revision] from act.
@@ -394,19 +395,27 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 }
 
 // startUnalignedOnArrival is activateAudio's own fallback for a scheduled
-// start already missed by the time StartAtPosition runs: start on arrival,
-// seek to position, and report the node as confirmed with the unaligned
-// reason (not apply-failed) once both actually succeed: the node is
-// playing, just not at the scheduled instant. A failed start or seek here
-// still returns an error: the fallback did not actually take effect.
+// start already missed by the time StartAtPosition runs: join where the
+// nodes that made the instant are by now (see [startCaughtUp]), and report
+// the node as confirmed with the unaligned reason once that succeeds. A
+// failed start or seek here still returns an error.
 func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, revisionAt time.Time, position time.Duration, scheduledAtNs int64, mediaIdentity string) (string, *audioStartTriggerRecord, error) {
-	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(revisionAt, unalignedFallbackStepStart))
-	if audioOutcomeFailed(startOutcome) {
-		return "", nil, cueAudioFailure(act.CueID, "did not start", startOutcome.Reason)
-	}
-	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(revisionAt, unalignedFallbackStepSeek), position)
-	if audioOutcomeFailed(seekOutcome) {
-		return "", nil, cueAudioFailure(act.CueID, "did not move to its position", seekOutcome.Reason)
+	failedStep, outcome := startCaughtUp(ctx, mgr, scheduledAtNs, position, lateStartSteps{
+		scheduled: func(atNs int64, at time.Duration) pkgaudio.OutcomeResult {
+			return mgr.StartAtPosition(ctx, id, activationInvocation(act, "start-rescheduled"), activationRevision(revisionAt, unalignedFallbackStepReschedule), atNs, at)
+		},
+		start: func() pkgaudio.OutcomeResult {
+			return mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(revisionAt, unalignedFallbackStepStart))
+		},
+		seek: func(at time.Duration) pkgaudio.OutcomeResult {
+			return mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(revisionAt, unalignedFallbackStepSeek), at)
+		},
+	})
+	switch failedStep {
+	case lateStepStart:
+		return "", nil, cueAudioFailure(act.CueID, "did not start", outcome.Reason)
+	case lateStepSeek:
+		return "", nil, cueAudioFailure(act.CueID, "did not move to its position", outcome.Reason)
 	}
 	if cueActivationTriggerRegistry != nil {
 		cueActivationTriggerRegistry.set(id, audioStartTriggerRecord{
@@ -414,6 +423,68 @@ func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudi
 		})
 	}
 	return startedLateReason(ctx, mgr, scheduledAtNs), nil, nil
+}
+
+// lateStartRescheduleLead is how far ahead on the media clock a missed
+// start is rescheduled, enough for the start call to reach the engine.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED.
+const lateStartRescheduleLead = 150 * time.Millisecond
+
+const (
+	lateStepStart = "start"
+	lateStepSeek  = "seek"
+)
+
+// lateStartSteps are one missed-instant fallback's engine calls.
+type lateStartSteps struct {
+	scheduled func(atNs int64, position time.Duration) pkgaudio.OutcomeResult
+	start     func() pkgaudio.OutcomeResult
+	seek      func(position time.Duration) pkgaudio.OutcomeResult
+}
+
+// startCaughtUp starts a session that missed its instant t0 at the position
+// the on-time nodes have reached: rescheduled just ahead on the media clock,
+// or, if that is missed too, started at once and sought there.
+func startCaughtUp(ctx context.Context, mgr *audio.Manager, t0 int64, position time.Duration, steps lateStartSteps) (failedStep string, outcome pkgaudio.OutcomeResult) {
+	if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
+		at := mediaNow.Time.UnixNano() + mgr.OutputLatencyUs()*int64(time.Microsecond) + int64(lateStartRescheduleLead)
+		outcome = steps.scheduled(at, caughtUpPosition(position, t0, at))
+		if !audioOutcomeFailed(outcome) {
+			if strings.HasPrefix(outcome.Reason, pkgaudio.ReasonScheduledStartIgnored) {
+				// The clock unlocked, so it started now rather than at at.
+				return seekCaughtUp(ctx, mgr, t0, position, steps)
+			}
+			return "", outcome
+		}
+		if outcome.Outcome != pkgaudio.OutcomeRefused || !strings.HasPrefix(outcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
+			return lateStepStart, outcome
+		}
+	}
+	if outcome = steps.start(); audioOutcomeFailed(outcome) {
+		return lateStepStart, outcome
+	}
+	return seekCaughtUp(ctx, mgr, t0, position, steps)
+}
+
+// seekCaughtUp moves an already-started session to the position reached by now.
+func seekCaughtUp(ctx context.Context, mgr *audio.Manager, t0 int64, position time.Duration, steps lateStartSteps) (failedStep string, outcome pkgaudio.OutcomeResult) {
+	seekTo := position
+	if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
+		seekTo = caughtUpPosition(position, t0, mediaNow.Time.UnixNano())
+	}
+	if outcome = steps.seek(seekTo); audioOutcomeFailed(outcome) {
+		return lateStepSeek, outcome
+	}
+	return "", outcome
+}
+
+// caughtUpPosition is where a start scheduled for position at t0 has reached at at.
+func caughtUpPosition(position time.Duration, t0, at int64) time.Duration {
+	if at <= t0 {
+		return position
+	}
+	return position + time.Duration(at-t0)
 }
 
 // startedLateReason says how late a start that missed its scheduled time was.

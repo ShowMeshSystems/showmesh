@@ -63,6 +63,10 @@ Every target node receives the same playback position. On an unaligned start
 each node begins at that position when the command arrives; no per-node
 correction for arrival delay is applied, consistent with ADR-046.
 
+Amended 2026-10-14 (owner): this applies when no locked clock exists. A node
+with a locked clock that reaches a start instant already past joins at the
+position the song has reached, as ADR-051 decision 3 now states.
+
 A Cue reaching one node behaves as it does today.
 
 The same one-instant rule applies to night mode when a start reaches more than

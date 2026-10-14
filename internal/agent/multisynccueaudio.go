@@ -554,28 +554,42 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 }
 
 // startLateOnArrival mirrors cueactivationaudio.go's startUnalignedOnArrival:
-// a T0 already past starts immediately at the Cue's own position, never a
-// refusal. The cue session already carries this media, so Start reuses it.
+// a T0 already past joins at the position the on-time nodes have reached,
+// never a refusal. A song still staged is promoted rather than loaded again.
 func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *audio.Manager, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, position time.Duration, t0, arrivalNs, leadMs int64, target, missedReason string) {
 	now := c.now()
-	startOutcome := mgr.Start(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "start-late", now), c.revision(now, unalignedFallbackStepStart))
-	if audioOutcomeFailed(startOutcome) {
+	var latenessMs int64
+	failedStep, outcome := startCaughtUp(ctx, mgr, t0, position, lateStartSteps{
+		scheduled: func(atNs int64, at time.Duration) pkgaudio.OutcomeResult {
+			latenessMs = (atNs - t0) / int64(time.Millisecond)
+			invocation, revision := c.invocation(entry.CueID, "start-rescheduled", now), c.revision(now, unalignedFallbackStepReschedule)
+			if staged, ok := mgr.LoadedMediaIdentity(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)); ok && staged == target {
+				return mgr.PromoteAtPosition(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), cueActivationAudioSessionID, invocation, revision, atNs, at)
+			}
+			return mgr.StartAtPosition(ctx, cueActivationAudioSessionID, invocation, revision, atNs, at)
+		},
+		start: func() pkgaudio.OutcomeResult {
+			if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
+				latenessMs = mediaNow.Time.Sub(time.Unix(0, t0)).Milliseconds()
+			}
+			return mgr.Start(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "start-late", now), c.revision(now, unalignedFallbackStepStart))
+		},
+		seek: func(at time.Duration) pkgaudio.OutcomeResult {
+			return mgr.Seek(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "seek-late", now), c.revision(now, unalignedFallbackStepSeek), at)
+		},
+	})
+	switch failedStep {
+	case lateStepStart:
 		c.logger.Warn("multisync: cue audio did not start on its sequence's START packet after a missed scheduled instant",
-			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", startOutcome.Outcome, "reason", startOutcome.Reason)
+			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", outcome.Outcome, "reason", outcome.Reason)
 		return
-	}
-	seekOutcome := mgr.Seek(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "seek-late", now), c.revision(now, unalignedFallbackStepSeek), position)
-	if audioOutcomeFailed(seekOutcome) {
+	case lateStepSeek:
 		c.logger.Warn("multisync: cue audio did not move to its cue position after a late start",
-			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", seekOutcome.Outcome, "reason", seekOutcome.Reason)
+			"cue_id", entry.CueID, "sequence_filename", filename, "outcome", outcome.Outcome, "reason", outcome.Reason)
 		return
 	}
 
-	var latenessMs int64
-	if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
-		latenessMs = mediaNow.Time.Sub(time.Unix(0, t0)).Milliseconds()
-	}
-	c.logger.Info("multisync: cue audio started late instead of being refused",
+	c.logger.Info("multisync: cue audio missed its start and joined where the song had reached",
 		"cue_id", entry.CueID, "sequence_filename", filename, "lateness_ms", latenessMs, "reason", missedReason)
 
 	registry.set(cueActivationAudioSessionID, audioStartTriggerRecord{

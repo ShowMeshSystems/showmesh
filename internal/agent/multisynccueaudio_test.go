@@ -32,6 +32,7 @@ type scriptableClockSource struct {
 	state    agentclock.State
 	media    time.Time
 	nowCalls int
+	step     time.Duration // added to media after every read, so a wait for a future instant ends
 
 	// beforeRead, if set, runs inside Now before it reads f.media, given
 	// that call's 1-based number, so a test can block one call
@@ -62,7 +63,15 @@ func (f *scriptableClockSource) Now(context.Context) agentclock.MediaTime {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return agentclock.MediaTime{Time: f.media, Valid: true}
+	now := f.media
+	f.media = f.media.Add(f.step)
+	return agentclock.MediaTime{Time: now, Valid: true}
+}
+
+func (f *scriptableClockSource) setStep(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.step = d
 }
 
 // Last reports no cached status: this fake always exercises the live Poll
@@ -686,6 +695,7 @@ func TestMultiSyncCueAudioStartArrivalStampedBeforeSlowOpenPrepare(t *testing.T)
 	// The clock keeps moving while OPEN's prepare is still in flight: if
 	// arrival had been captured late, it would read this value instead.
 	media.advance(400 * time.Millisecond)
+	media.setStep(50 * time.Millisecond)
 	close(blocking.release)
 
 	select {
@@ -770,6 +780,7 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	}()
 	media.waitForReads(t, 1)
 	media.advance(1100 * time.Millisecond) // 1000ms past the 100ms lead
+	media.setStep(50 * time.Millisecond)
 	close(gate)
 
 	select {
@@ -792,8 +803,14 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	if got == nil || got.State != pkgaudio.StatePlaying {
 		t.Fatalf("session snapshots = %+v, want the cue session playing", snaps)
 	}
-	if got.PositionKnown && got.Position != 1500*time.Millisecond {
-		t.Fatalf("session position = %v, want 1.5s (the Cue's startOffsetMillis)", got.Position)
+	handle, _ := fake.LastLoadedHandle()
+	obs, err := fake.Observe(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	// The other nodes started 1.5s in at T0; this one joins 1s+ later, 150ms ahead.
+	if obs.Position < 2650*time.Millisecond || obs.Position > 3000*time.Millisecond {
+		t.Fatalf("started at %v, want where the song had reached (about 2.65s), not the cue's 1.5s offset", obs.Position)
 	}
 
 	rec, ok := cueActivationTriggerRegistry.get(cueActivationAudioSessionID)
@@ -803,8 +820,8 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	if !rec.PreparedLate {
 		t.Fatal("recorded preparedLate = false, want true: this start missed its computed instant")
 	}
-	if rec.LatenessMs != 1000 {
-		t.Fatalf("recorded lateness = %dms, want 1000ms", rec.LatenessMs)
+	if want := (obs.Position - 1500*time.Millisecond).Milliseconds(); rec.LatenessMs != want {
+		t.Fatalf("recorded lateness = %dms, want %dms (how far past T0 its first sample played)", rec.LatenessMs, want)
 	}
 	if rec.Trigger != pkgaudio.StartTriggerMultiSync {
 		t.Fatalf("recorded trigger = %q, want %q", rec.Trigger, pkgaudio.StartTriggerMultiSync)
