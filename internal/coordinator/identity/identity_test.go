@@ -78,9 +78,10 @@ func TestRoleScopes(t *testing.T) {
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
 		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll, ScopeCompanionReport}},
 		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}},
 		{RoleNode, []Scope{ScopeNodeRead, ScopeAssetWrite}},
+		{RoleCompanion, []Scope{ScopeCompanionReport}},
 	}
 	for _, tc := range cases {
 		got := tc.role.Scopes()
@@ -138,7 +139,7 @@ func TestRoleHas(t *testing.T) {
 }
 
 func TestParseRole(t *testing.T) {
-	for _, s := range []string{"viewer", "operator", "admin", "scheduler"} {
+	for _, s := range []string{"viewer", "operator", "admin", "scheduler", "companion"} {
 		got, err := ParseRole(s)
 		if err != nil {
 			t.Errorf("ParseRole(%q): %v", s, err)

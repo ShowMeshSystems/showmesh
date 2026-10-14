@@ -96,6 +96,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdCueCatalog(rest, stdout, stderr, clock)
 	case "fallback":
 		return cmdFallback(rest, stdout, stderr, clock)
+	case "companion-reports":
+		return cmdCompanionReports(rest, stdout, stderr, clock)
 	case "principal":
 		return cmdPrincipal(rest, stdout, stderr, clock)
 	case "token":
@@ -405,6 +407,9 @@ Commands:
   fallback clear --confirm <fpp-instance-uuid>
                                         forget one player's stored fallback state (write,
                                         requires fpp:command)
+  companion-reports list               files companions uploaded, such as Resolume crash
+                                        reports, newest first
+  companion-reports get <report-id>    print one uploaded report's content
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
   render settings get                  show the active render.settings configuration (Track B,
