@@ -77,6 +77,12 @@ that it started late by the prepare time. A one-off test therefore plays its
 audio without a night session and without the coordinator in the path, late by
 one prepare.
 
+Amended 2026-10-14 (owner): a node whose start instant has already passed when
+it is ready joins at the position the song has reached, rescheduled a moment
+ahead on the media clock, and still reports how late it started. A cold start
+is therefore silent for one prepare and then in step, never behind for the
+whole song. This is a one-time seek at start, which ADR-046 decision 1 permits.
+
 ### 4. The coordinator's chosen instant is the fallback
 
 ADR-049 decisions 3 and 6 now define the fallback start only. If the
