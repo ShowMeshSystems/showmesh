@@ -695,9 +695,9 @@ func (f fixedLockedClockSource) Last() (agentclock.Status, time.Time, bool) {
 func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
-	mgr, _ := newTestAudioManager(t, dir, clock)
+	mgr, fake := newTestAudioManager(t, dir, clock)
 	mediaNow := time.Date(2026, 8, 23, 20, 0, 10, 0, time.UTC)
-	mgr.SetClockSource(fixedLockedClockSource{media: mediaNow})
+	mgr.SetClockSource(newRunningLockedClockSource(mediaNow))
 
 	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
 	catalogStore := heldcatalog.NewFileStore(dir)
@@ -732,8 +732,8 @@ func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(
 	if unalignedReason == "" {
 		t.Fatalf("value = %+v, want a non-empty unalignedReason", value)
 	}
-	if want := "Started late by 1s because the start time had already passed."; unalignedReason != want {
-		t.Fatalf("unalignedReason = %q, want %q", unalignedReason, want)
+	if !strings.HasPrefix(unalignedReason, "Started late by 1.") || !strings.HasSuffix(unalignedReason, "s because the start time had already passed.") {
+		t.Fatalf("unalignedReason = %q, want how late it started", unalignedReason)
 	}
 
 	snaps := mgr.Snapshot(context.Background())
@@ -743,8 +743,14 @@ func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(
 	if snaps[0].State != pkgaudio.StatePlaying {
 		t.Fatalf("session state = %s, want playing: a missed scheduled start must not leave the node silent", snaps[0].State)
 	}
-	if snaps[0].PositionKnown && snaps[0].Position != 4500*time.Millisecond {
-		t.Fatalf("session position = %v, want 4.5s (the activation's PositionMS)", snaps[0].Position)
+	handle, _ := fake.LastLoadedHandle()
+	obs, err := fake.Observe(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	// The on-time nodes started at 4.5s one second ago; this one joins 150ms ahead of now.
+	if obs.Position < 5650*time.Millisecond || obs.Position > 5950*time.Millisecond {
+		t.Fatalf("started at %v, want where the song had reached (about 5.65s), not the activation's 4.5s", obs.Position)
 	}
 }
 
