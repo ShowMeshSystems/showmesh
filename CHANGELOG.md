@@ -11,6 +11,19 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.3.1 - 2026-10-14
+
+Fix release on the 0.3 line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin; upgrade the coordinator and every node agent together.
+
+### Audio
+
+- An audio node that loads a song too slowly to make the shared start time
+  joins the song where the other nodes are, after a short gap, instead of
+  playing behind them for the whole song.
+- Every audio node has its next song prepared before it starts, including
+  a node that sits out the current song or the opening song of the show.
+
 ## 0.3.0 - 2026-10-14
 
 Third pre-release. Pre-alpha. FPP plugin 0.3.0 is the matching plugin: it
