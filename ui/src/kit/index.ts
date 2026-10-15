@@ -1,3 +1,4 @@
+export { PreviewGrid, PreviewTile, type PreviewTileState } from './PreviewTile'
 export { AttentionRow, StatTile, TileCount, Tiles } from './Attention'
 export { Button, ButtonRow, ButtonRule, ReorderButtons } from './Button'
 export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition } from './Blocks'

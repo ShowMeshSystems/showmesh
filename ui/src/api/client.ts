@@ -47,6 +47,9 @@ export interface JsonRequestInit {
   body?: unknown
   /** A config revision sent as `If-Match`, so the coordinator refuses the write if it has moved on. */
   ifMatchRevision?: number
+  /** A plain-text body sent as-is with `textContentType`, for the SDP offer. Takes no JSON encoding. */
+  textBody?: string
+  textContentType?: string
 }
 
 /**
@@ -355,7 +358,10 @@ export class ApiClient {
     // object instead of a pre-encoded BodyInit in the first place.
     if (init.ifMatchRevision !== undefined) headers['If-Match'] = `"${init.ifMatchRevision}"`
     let body: string | null = null
-    if (init.body !== undefined) {
+    if (init.textBody !== undefined) {
+      headers['Content-Type'] = init.textContentType ?? 'text/plain'
+      body = init.textBody
+    } else if (init.body !== undefined) {
       headers['Content-Type'] = 'application/json'
       // A bigint anywhere in the body (an audio session command's exact
       // int64 revision) must reach the wire as a bare number, never a

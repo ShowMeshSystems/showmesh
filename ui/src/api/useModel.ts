@@ -22,6 +22,16 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  ConfigPreviewCameraPutRequest,
+  ConfigPreviewGatewayPutRequest,
+  DashboardLayoutConfigResponse,
+  DashboardLayoutPayload,
+  PreviewCameraConfigResponse,
+  PreviewCameraListResponse,
+  PreviewGatewayConfigResponse,
+  PreviewsResponse,
+} from './previewTypes'
+import type {
   AcknowledgeFPPInstanceUUIDChangeResponse,
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPutPayload,
@@ -1201,4 +1211,45 @@ export function putNightSessionActiveConfig(
 
 export function getNightSessionActiveConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getNightSessionActiveConfigRevisions()
+}
+
+// Dashboard video previews: thin pass-throughs, as above.
+export function getPreviews(): Promise<PreviewsResponse> {
+  return store.getPreviews()
+}
+
+export function postPreviewOffer(key: string, offerSdp: string, signal?: AbortSignal): Promise<string> {
+  return store.postPreviewOffer(key, offerSdp, signal)
+}
+
+export function getPreviewSnapshot(key: string, signal?: AbortSignal): Promise<Blob> {
+  return store.getPreviewSnapshot(key, signal)
+}
+
+export function getPreviewGatewayConfig(): Promise<PreviewGatewayConfigResponse> {
+  return store.getPreviewGatewayConfig()
+}
+
+export function putPreviewGatewayConfig(request: ConfigPreviewGatewayPutRequest): Promise<PreviewGatewayConfigResponse> {
+  return store.putPreviewGatewayConfig(request)
+}
+
+export function listPreviewCameras(): Promise<PreviewCameraListResponse> {
+  return store.listPreviewCameras()
+}
+
+export function getPreviewCamera(id: string): Promise<PreviewCameraConfigResponse> {
+  return store.getPreviewCamera(id)
+}
+
+export function putPreviewCamera(id: string, request: ConfigPreviewCameraPutRequest): Promise<PreviewCameraConfigResponse> {
+  return store.putPreviewCamera(id, request)
+}
+
+export function deletePreviewCamera(id: string): Promise<void> {
+  return store.deletePreviewCamera(id)
+}
+
+export function putDashboardLayout(payload: DashboardLayoutPayload): Promise<DashboardLayoutConfigResponse> {
+  return store.putDashboardLayout(payload)
 }
