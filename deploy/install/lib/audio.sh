@@ -18,8 +18,11 @@ ptp_later_hint() {
   info "To set it up later, run: sudo $(ptp_script) <interface> <domain> follower <sound-card-name>"
 }
 
+# audio_setup_ptp DEFAULT sets up the PTP audio clock. DEFAULT is the answer to "now?":
+# y on an audio node, n on a render node, which needs it only when it also plays audio.
 audio_setup_ptp() {
-  local iface="$OPT_PTP_INTERFACE" domain="$OPT_PTP_DOMAIN" role="$OPT_PTP_ROLE" card="$OPT_AUDIO_CARD"
+  local want="$1" iface="$OPT_PTP_INTERFACE" domain="$OPT_PTP_DOMAIN" role="$OPT_PTP_ROLE" card="$OPT_AUDIO_CARD"
+  [ -z "$iface" ] && [ "$want" = n ] && ! can_prompt && return 0
   step "Audio clock from PTP"
   if [ -z "$iface" ]; then
     if ! can_prompt; then
@@ -27,7 +30,8 @@ audio_setup_ptp() {
       ptp_later_hint
       return
     fi
-    if ! confirm "Lock this node's sound card to the network's PTP clock now?" y; then
+    [ "$want" = n ] && info "A render node needs this only when it also plays audio."
+    if ! confirm "Lock this node's sound card to the network's PTP clock now?" "$want"; then
       info "Skipped the PTP audio clock."
       ptp_later_hint
       return

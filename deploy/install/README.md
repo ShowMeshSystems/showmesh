@@ -39,7 +39,7 @@ curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v<versi
 | Role | What it does | Finishes when |
 | --- | --- | --- |
 | `coordinator` | Installs `docker.io`, `docker-cli` and `docker-compose` from Debian (trixie ships Compose 2.26), places the bundle in `/opt/showmesh/coordinator`, runs `generate-credentials.sh` for the built-in broker or records an external one, writes `.env`, starts the published images, creates the first administrator with the coordinator's `bootstrap` subcommand (or `create-admin` when bootstrap was already claimed), issues it a token, installs `showmeshctl` with a wrapper that reads `/etc/showmesh/showmeshctl.env`, saves the built-in broker and the coordinator's login as the `fpp.mqtt` configuration when none is saved yet (its host map is left for the operator), and writes `/etc/avahi/services/showmesh.service`. | `/healthz` answers, the administrator token reads `/api/v1/nodes`, and the broker accepts the coordinator's login. |
-| `render`, `audio` | Installs the runtime packages, downloads and checks the node agent tarball, runs `preflight.sh --runtime-only`, redeems the enrollment code, writes the returned values into `/etc/showmesh/agent.env` (every other line kept), and runs the package's `install.sh`. A render node installs the packaged NDI plugin and offers the NDI runtime step. An audio node offers `install-ptp-audio.sh`. | `GET /api/v1/nodes/<nodeId>` with the node's token shows `controlPlane.state` `online` with a `startedAt` other than the one seen before the agent started. |
+| `render`, `audio` | Installs the runtime packages, downloads and checks the node agent tarball, runs `preflight.sh --runtime-only`, redeems the enrollment code, writes the returned values into `/etc/showmesh/agent.env` (every other line kept), and runs the package's `install.sh`. A render node installs the packaged NDI plugin and offers the NDI runtime step. An audio node offers `install-ptp-audio.sh`. A render node that also plays audio runs it too when `--ptp-interface` is given, or when the operator says yes at the prompt, which defaults to no. | `GET /api/v1/nodes/<nodeId>` with the node's token shows `controlPlane.state` `online` with a `startedAt` other than the one seen before the agent started. |
 | `coordinator-node` | The coordinator role, then `showmeshctl node enroll <node-id>` against itself, then the node role with that code. | Both of the above. |
 
 A second run upgrades in place. It keeps `.env`, broker logins, the
@@ -62,10 +62,35 @@ and only warns when it cannot.
 have asked for must come from an option, and a missing one stops the run with
 the option to add. `--help` lists every option. Beyond ADR-055's list, these
 exist so every question has an unattended answer: `--address`,
-`--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
+`--ui-port`, `--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
 `--ptp-interface`, `--ptp-domain`, `--ptp-role`, `--audio-card` and
 `--agent-package` (a node agent tarball on disk, for a build that has no
 release).
+
+## Operator UI port
+
+The operator UI answers on port 8081 unless the installer is told otherwise.
+An interactive coordinator run asks for the port every time, defaulting to the
+saved one, and `--ui-port PORT` sets it unattended. Port 80 lets a browser open
+`http://<coordinator>/` with no port in the address, the way FPP does. The
+choice is saved as `SHOWMESH_UI_PORT` in `/opt/showmesh/coordinator/.env`, so a
+later run keeps it, and a later `--ui-port` changes it and recreates only the
+`ui` container. The coordinator API, the broker and every node keep their own
+ports and talk to each other directly; only the browser address changes.
+
+- The UI is plain HTTP on every port, the same as FPP. There is no
+  certificate and nothing is encrypted.
+- On `coordinator-node`, port 80 is refused, because xLights uploads sequences
+  to the node half on port 80.
+- The installer refuses the API's port, the built-in broker's port, and any
+  port another program is already listening on.
+- A friendly name has to resolve on your network. `<hostname>.local` works on
+  most phones and laptops through the coordinator's mDNS (avahi); any other
+  name needs an entry in your own DNS. Hosting the UI under a path such as
+  `http://host/showmesh/` is not supported.
+- Moving the UI off a port leaves the installer's firewall rule for the old
+  port open. Remove it with `ufw delete allow <port>/tcp` or
+  `firewall-cmd --permanent --service=showmesh --remove-port=<port>/tcp`.
 
 ## Firewall
 

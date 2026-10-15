@@ -51,11 +51,12 @@ With no options it asks what this machine is and walks you through it.
   --broker-password PASS    the external broker's password
   --broker-password-file F  a file holding the external broker's password
   --address ADDRESS         the address nodes use to reach this coordinator (default: detected)
+  --ui-port PORT            the operator UI's port, for example 80 (default 8081, or the saved one)
   --admin-name NAME         the first administrator's name, for an unattended coordinator install
   --admin-password-file F   a file holding that administrator's password
   --node-role render|audio  the node half of a coordinator-node install
   --node-id ID              the node ID of a coordinator-node install (default: this host's name)
-  --ptp-interface IFACE     the network interface for the audio node's PTP clock
+  --ptp-interface IFACE     the network interface for the PTP audio clock; on a render node it also sets the clock up
   --ptp-domain N            the PTP domain (default 0)
   --ptp-role ROLE           follower, grandmaster or auto (default follower)
   --audio-card NAME         part of the sound card's name
@@ -74,7 +75,7 @@ EOF
 }
 
 OPT_ROLE=""; OPT_COORDINATOR=""; OPT_CODE=""; OPT_REENROLL=0; OPT_NDI=""; OPT_SKIP_NDI=0
-OPT_BROKER=""; OPT_BROKER_URL=""; OPT_BROKER_PASSWORD_FILE=""; OPT_ADDRESS=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
+OPT_BROKER=""; OPT_BROKER_URL=""; OPT_BROKER_PASSWORD_FILE=""; OPT_ADDRESS=""; OPT_UI_PORT=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
 OPT_NODE_ROLE=""; OPT_NODE_ID=""; OPT_PTP_INTERFACE=""; OPT_PTP_DOMAIN=""; OPT_PTP_ROLE=""
 OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_FIREWALL=""; OPT_YES=0; OPT_FORCE=0; OPT_PARTY=0; PARTY_EGG=""
 unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
@@ -100,6 +101,7 @@ while [ "$#" -gt 0 ]; do
     --broker-password) need_value "$@"; OPT_BROKER_PASSWORD="$2"; shift ;;
     --broker-password-file) need_value "$@"; OPT_BROKER_PASSWORD_FILE="$2"; shift ;;
     --address) need_value "$@"; OPT_ADDRESS="$2"; shift ;;
+    --ui-port) need_value "$@"; OPT_UI_PORT="$2"; shift ;;
     --admin-name) need_value "$@"; OPT_ADMIN_NAME="$2"; shift ;;
     --admin-password-file) need_value "$@"; OPT_ADMIN_PASSWORD_FILE="$2"; shift ;;
     --node-role) need_value "$@"; OPT_NODE_ROLE="$2"; shift ;;

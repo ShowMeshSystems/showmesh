@@ -135,6 +135,31 @@ check "the restored database passes an integrity check" "in_box '[ \"\$(sqlite3 
 check "the upgrade prints the command for a node on the old version" "in_box 'grep -q \"bench-old (0.0.0-bench1): curl -fsSL file:///repo/dist/inst-bench/0.0.0-bench2/get-showmesh.sh | sudo bash -s -- --yes\" /tmp/install-0.0.0-bench2.log'"
 check "a node already on the new version is listed as current" "in_box 'grep -q \"Already on 0.0.0-bench2: bench-cur\" /tmp/install-0.0.0-bench2.log && ! grep -q \"bench-cur (\" /tmp/install-0.0.0-bench2.log'"
 
+# The operator UI port: moved to 80 on a rerun, kept on the next, and refused where it would collide.
+check "a fresh install saves the default operator UI port" "in_box 'grep -qx SHOWMESH_UI_PORT=8081 /opt/showmesh/coordinator/.env && grep -q \"Operator UI: http://192.0.2.44:8081\" /tmp/install-0.0.0-bench1.log'"
+run_install 0.0.0-bench2 --yes --ui-port 80
+check "a rerun with --ui-port 80 succeeds" "[ $? -eq 0 ]"
+check "the operator UI port 80 is saved and printed without a port" "in_box 'grep -qx SHOWMESH_UI_PORT=80 /opt/showmesh/coordinator/.env && grep -q \"Operator UI: http://192.0.2.44\$\" /tmp/install-0.0.0-bench2.log'"
+check "the rerun says the old port's firewall rule stays open" "in_box 'grep -q \"moves from port 8081 to port 80\" /tmp/install-0.0.0-bench2.log'"
+check "the UI answers on port 80 and no longer on 8081" "in_box 'curl -fsS http://127.0.0.1/healthz >/dev/null && ! curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1'"
+# shellcheck disable=SC2016
+ui_proxies='a="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1/api/v1/nodes)"; b="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/v1/nodes)"
+  echo "through the UI: $a, direct: $b"; [ "$a" = "$b" ] && [ "$a" != 502 ]'
+check "the UI on port 80 proxies the API" "in_box '$ui_proxies'"
+run_install 0.0.0-bench2 --yes
+check "a rerun without --ui-port keeps port 80" "[ $? -eq 0 ] && in_box 'grep -qx SHOWMESH_UI_PORT=80 /opt/showmesh/coordinator/.env && curl -fsS http://127.0.0.1/healthz >/dev/null'"
+run_install 0.0.0-bench2 --yes --ui-port 8080
+check "the API's port is refused for the UI" "[ $? -ne 0 ] && in_box 'grep -q \"Port 8080 is the coordinator API.s port\" /tmp/install-0.0.0-bench2.log'"
+run_install 0.0.0-bench2 --yes --ui-port eighty
+check "a port that is not a number is refused" "[ $? -ne 0 ] && in_box 'grep -q \"The operator UI port eighty is not a number\" /tmp/install-0.0.0-bench2.log'"
+in_box '(python3 -m http.server 9090 --bind 0.0.0.0 >/dev/null 2>&1 &); sleep 1'
+run_install 0.0.0-bench2 --yes --ui-port 9090
+check "a port another program holds is refused" "[ $? -ne 0 ] && in_box 'grep -q \"Another program on this machine is already using port 9090\" /tmp/install-0.0.0-bench2.log'"
+check "the refusals left the saved port and the running UI alone" "in_box 'grep -qx SHOWMESH_UI_PORT=80 /opt/showmesh/coordinator/.env && curl -fsS http://127.0.0.1/healthz >/dev/null'"
+in_box 'pkill -f "http.server 9090" || true'
+run_install 0.0.0-bench2 --yes --ui-port 8081
+check "a rerun moves the UI back to 8081" "[ $? -eq 0 ] && in_box 'grep -qx SHOWMESH_UI_PORT=8081 /opt/showmesh/coordinator/.env && curl -fsS http://127.0.0.1:8081/healthz >/dev/null'"
+
 # --force upgrades through a running night with a one-line warning.
 in_box 'sed -i "s#^SHOWMESH_SERVER=.*#SHOWMESH_SERVER=http://127.0.0.1:18081#" /etc/showmesh/showmeshctl.env'
 run_install 0.0.0-bench2 --yes --force
