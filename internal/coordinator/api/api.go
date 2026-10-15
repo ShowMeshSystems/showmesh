@@ -570,6 +570,11 @@ type Dependencies struct {
 	// dependency's posture.
 	FPPMQTTSecret FPPMQTTSecretStore
 
+	// Previews serves the dashboard preview tiles and proxies the preview
+	// gateway's WebRTC and snapshot routes (ADR-060). A nil field is replaced
+	// by [noPreviewService], under which previews are off.
+	Previews PreviewService
+
 	// FPPMQTTEnvVarSet is [Dependencies.FPPEndpointsEnvVarSet]'s mirror for
 	// Track G seam G-3: whether SHOWMESH_FPP_MQTT_BROKER_URL is currently
 	// set in the coordinator PROCESS's environment. Consumed by
@@ -835,6 +840,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.FPPMQTTSecret == nil {
 		d.FPPMQTTSecret = noFPPMQTTSecretStore{}
+	}
+	if d.Previews == nil {
+		d.Previews = noPreviewService{}
 	}
 	if d.NightSessions == nil {
 		d.NightSessions = noNightSessionStore{}
@@ -2122,6 +2130,24 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/fpp.mqtt", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPMQTTConfig))
 	mux.HandleFunc("PUT /api/v1/config/fpp.mqtt", h.writeGuard(&scopeConfigWrite, h.handlePutFPPMQTTConfig))
 	mux.HandleFunc("GET /api/v1/config/fpp.mqtt/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPMQTTConfigRevisions))
+
+	// ADR-060: the preview gateway, cameras and dashboard layout. Reads of the
+	// three kinds are config:write like every other kind; the preview routes
+	// themselves are ordinary reads.
+	mux.HandleFunc("GET /api/v1/config/preview.gateway", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewGatewayConfig))
+	mux.HandleFunc("PUT /api/v1/config/preview.gateway", h.writeGuard(&scopeConfigWrite, h.handlePutPreviewGatewayConfig))
+	mux.HandleFunc("GET /api/v1/config/preview.gateway/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewGatewayConfigRevisions))
+	mux.HandleFunc("GET /api/v1/config/preview.camera", h.requireScope(identity.ScopeConfigWrite, h.handleListPreviewCameras))
+	mux.HandleFunc("GET /api/v1/config/preview.camera/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewCamera))
+	mux.HandleFunc("PUT /api/v1/config/preview.camera/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutPreviewCamera))
+	mux.HandleFunc("DELETE /api/v1/config/preview.camera/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeletePreviewCamera))
+	mux.HandleFunc("GET /api/v1/config/preview.camera/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewCameraRevisions))
+	mux.HandleFunc("GET /api/v1/config/dashboard.layout", h.requireScope(identity.ScopeConfigWrite, h.handleGetDashboardLayoutConfig))
+	mux.HandleFunc("PUT /api/v1/config/dashboard.layout", h.writeGuard(&scopeConfigWrite, h.handlePutDashboardLayoutConfig))
+	mux.HandleFunc("GET /api/v1/config/dashboard.layout/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetDashboardLayoutConfigRevisions))
+	mux.HandleFunc("GET /api/v1/previews", h.readGuard(identity.ScopeObservationRead, h.handleListPreviews))
+	mux.HandleFunc("POST /api/v1/previews/{key}/webrtc", h.readGuard(identity.ScopeObservationRead, h.handlePreviewOffer))
+	mux.HandleFunc("GET /api/v1/previews/{key}/snapshot", h.readGuard(identity.ScopeObservationRead, h.handlePreviewSnapshot))
 
 	// Track G seam G-4 (ADR-039): assets.settings, mirroring
 	// resolume.instances in every respect including the always-config:write,

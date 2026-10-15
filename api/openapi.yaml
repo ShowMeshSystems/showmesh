@@ -113,22 +113,23 @@ info:
 
     **A per-object configuration kind can be deleted; a singleton kind
     cannot.** `audio.node`, `show`, `show.surface`, `show.action`,
-    `show.macro`, `show.cue`, `show.playlist`, `night.session`, and
-    `media.playlist` each hold many independently identified objects, and
+    `show.macro`, `show.cue`, `show.playlist`, `night.session`,
+    `media.playlist`, and `preview.camera` each hold many independently identified objects, and
     each of their `{id}`
     paths carries a `DELETE` operation: a tombstone, not a hard delete, so
     `config_revisions` stays immutable and readable through that kind's own
-    `/revisions` path afterward (ADR-009). The thirteen remaining
+    `/revisions` path afterward (ADR-009). The fifteen remaining
     configuration kinds, `assets.settings`, `audio.settings`,
     `show.emergencystop`, `fppconnect.settings`, `fpp.endpoints`,
     `fpp.mqtt`, `night.session.active`, `release.settings`,
+    `preview.gateway`, `dashboard.layout`,
     `render.settings`,
     `resolume.instances`, `resolume.recovery`, `show.active`, and
     `show.mode`, are singletons: one fixed id per installation holding
     either a settings blob or a whole list as one object. None of them
     carries a `DELETE` operation. A singleton configuration object is
     emptied or reset through its own `PUT`, never deleted; `DELETE` against
-    any of these thirteen paths returns `405 Method Not Allowed` with an
+    any of these fifteen paths returns `405 Method Not Allowed` with an
     `Allow` header naming the methods that path actually serves, the
     identical contract this document already states for every other route
     with no `DELETE` of its own.
@@ -10828,8 +10829,507 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/preview.gateway:
+    get:
+      operationId: getPreviewGatewayConfig
+      summary: The active preview.gateway configuration
+      description: >-
+        Requires `config:write`. `404` when no revision has ever been
+        saved, which means previews are off. The gateway token is never
+        returned: `tokenSet` reports presence only.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewGatewayConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putPreviewGatewayConfig
+      summary: Write a new preview.gateway configuration revision
+      description: >-
+        Requires `config:write`. A partial update: every field is
+        independently optional, and a key absent from the body keeps its
+        stored value. An empty `url` turns previews off. A `null` or empty
+        `token` clears the stored token. A `null` `url` is refused. The
+        token is stored apart from the revision and is never returned.
+        Allowed while show mode is on, because previews are not show
+        configuration. The coordinator sends the gateway its new stream set
+        within seconds of the write.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigPreviewGatewayPutRequest"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewGatewayConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.gateway/revisions:
+    get:
+      operationId: getPreviewGatewayConfigRevisions
+      summary: preview.gateway revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only. `200` with an empty array
+        when nothing has been saved.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.camera:
+    get:
+      operationId: listPreviewCameras
+      summary: Enumerate preview.camera objects
+      description: >-
+        Requires `config:write`. Each summary's `label` is the camera name
+        and `show` is empty, since a camera belongs to no show.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.camera/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The camera id the operator chose: 1 to 64 lowercase letters,
+          digits or hyphens. A tile key for this camera is `camera:<id>`.
+    get:
+      operationId: getPreviewCamera
+      summary: One preview.camera object's active revision
+      description: >-
+        Requires `config:write`. The stream URL is never returned:
+        `urlSet` reports presence and `urlDisplay` carries scheme, host and
+        port only.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewCameraConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putPreviewCamera
+      summary: Write a new preview.camera revision
+      description: >-
+        Requires `config:write`. A partial update: a key absent from the
+        body keeps its stored value, except that creating a camera
+        requires `name` and `url`. `url` must start with `rtsp://` or
+        `rtsps://`; it is stored apart from the revision, never returned,
+        and `urlDisplay` is computed from it at write time. `enabled`
+        defaults to true on creation. Allowed while show mode is on.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigPreviewCameraPutRequest"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewCameraConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deletePreviewCamera
+      summary: Delete a preview.camera object (tombstone)
+      description: >-
+        Requires `config:write`. Requires an explicit `{"confirm":true}`
+        body. A tombstone: the revisions stay readable, and the stored
+        stream URL is removed. Optionally carries `If-Match`.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigObjectDeleteRequest"
+      responses:
+        "204":
+          description: The object was tombstoned.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.camera/{id}/revisions:
+    get:
+      operationId: getPreviewCameraRevisions
+      summary: preview.camera revision history, newest first
+      description: Requires `config:write`. Metadata only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/dashboard.layout:
+    get:
+      operationId: getDashboardLayoutConfig
+      summary: The active dashboard.layout configuration
+      description: >-
+        Requires `config:write`. `404` when no revision has ever been
+        saved, which means every tile is shown in its default order.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardLayoutConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putDashboardLayoutConfig
+      summary: Write a new dashboard.layout revision
+      description: >-
+        Requires `config:write`. A partial update: `previews.order` and
+        `previews.hidden` are each optional, and an absent list keeps its
+        stored value. A list may not repeat a key. Keys that match no tile
+        are kept. An NDI key that is no longer announced still lists a tile
+        with state `not_found`, so a vanished source stays visible. Allowed
+        while show mode is on.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigDashboardLayoutPutRequest"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardLayoutConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/dashboard.layout/revisions:
+    get:
+      operationId: getDashboardLayoutConfigRevisions
+      summary: dashboard.layout revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only. `200` with an empty array
+        when nothing has been saved.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /previews:
+    get:
+      operationId: listPreviews
+      summary: The preview gateway state and every dashboard preview tile
+      description: >-
+        Gated like the other reads. Tiles are in layout order, with tiles
+        the layout does not name appended in a stable order. With no
+        gateway configured, `gateway.state` is `not_configured` and
+        `tiles` is empty. When the gateway cannot be reached,
+        `gateway.state` is `unreachable`, and the tiles for configured
+        cameras are still listed with state `error`. An NDI tile is
+        labelled with a node and surface when the part of its name in
+        parentheses equals a surface's NDI source name; when several
+        nodes render that surface, the host part of the name picks the
+        node. Otherwise the label is the raw NDI name. Neither the camera
+        stream URL nor the gateway token appears here.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /previews/{key}/webrtc:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          A tile key, `ndi:<full NDI source name>` or `camera:<camera id>`,
+          escaped as a URL path segment.
+    post:
+      operationId: offerPreviewWebRTC
+      summary: Exchange a WebRTC offer for an answer for one tile
+      description: >-
+        Gated like the other reads, although it is a POST: it changes
+        nothing the operator configured. The body is the browser's SDP
+        offer. The coordinator forwards it to the gateway and returns the
+        gateway's SDP answer. Media then flows directly between the
+        browser and the gateway. `404` when no tile has this key, and
+        `503` with type
+        `https://showmesh.dev/problems/preview-gateway-unavailable` when
+        no gateway is configured, it cannot be reached, or it refused the
+        offer.
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: The SDP answer.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/sdp:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/PreviewGatewayUnavailable"
+  /previews/{key}/snapshot:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+        description: A tile key, escaped as a URL path segment.
+    get:
+      operationId: getPreviewSnapshot
+      summary: The latest frame of one tile as a JPEG
+      description: >-
+        Gated like the other reads. Proxied to the gateway. The operator UI
+        polls this every two seconds when WebRTC fails. `404` when no tile
+        has this key, and `503` with type
+        `https://showmesh.dev/problems/preview-gateway-unavailable` when
+        no gateway is configured, it cannot be reached, or it has no frame
+        for the tile.
+      responses:
+        "200":
+          description: The latest frame.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/PreviewGatewayUnavailable"
 components:
   responses:
+    PreviewGatewayUnavailable:
+      description: >-
+        No preview gateway is configured, it cannot be reached, or it
+        refused the request. `type` is
+        `https://showmesh.dev/problems/preview-gateway-unavailable` and
+        `detail` states the fact and then the action.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     UnsupportedAPIVersion:
       description: >-
         The request named an API version (in the `ShowMesh-API-Version`
@@ -14946,11 +15446,251 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, dashboard.layout]
         revisions:
           type: array
           items:
             $ref: "#/components/schemas/ConfigRevisionMeta"
+    ConfigPreviewGatewayPayload:
+      type: object
+      description: >-
+        The "preview.gateway" kind's payload. `tokenSet` reports presence
+        only: the gateway token never appears on any wire type. An empty
+        `url` means previews are off.
+      required: [url, tokenSet]
+      properties:
+        url:
+          type: string
+        tokenSet:
+          type: boolean
+    ConfigPreviewGatewayPutRequest:
+      type: object
+      description: >-
+        The request body of PUT /config/preview.gateway. Every field is
+        optional; an absent key keeps the stored value. `url` must be an
+        `http://` or `https://` address, or empty to turn previews off.
+        `token` set to `null` or `""` clears the stored token.
+      properties:
+        url:
+          type: string
+        token:
+          type: [string, "null"]
+    PreviewGatewayConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/preview.gateway.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: preview.gateway
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigPreviewGatewayPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigPreviewCameraPayload:
+      type: object
+      description: >-
+        The "preview.camera" kind's payload. The full stream URL never
+        appears on any wire type. `urlDisplay` is the scheme, host and port
+        only, computed when the URL was written.
+      required: [name, enabled, urlSet, urlDisplay]
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        urlSet:
+          type: boolean
+        urlDisplay:
+          type: string
+    ConfigPreviewCameraPutRequest:
+      type: object
+      description: >-
+        The request body of PUT /config/preview.camera/{id}. Every field is
+        optional on an existing camera; creating one requires `name` and
+        `url`. `url` must start with `rtsp://` or `rtsps://`.
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        url:
+          type: string
+    PreviewCameraConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/preview.camera/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: preview.camera
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigPreviewCameraPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigDashboardPreviewLayout:
+      type: object
+      required: [order, hidden]
+      properties:
+        order:
+          type: array
+          items:
+            type: string
+          description: Tile keys in display order.
+        hidden:
+          type: array
+          items:
+            type: string
+          description: Tile keys the dashboard does not show.
+    ConfigDashboardLayoutPayload:
+      type: object
+      description: The "dashboard.layout" kind's payload.
+      required: [previews]
+      properties:
+        previews:
+          $ref: "#/components/schemas/ConfigDashboardPreviewLayout"
+    ConfigDashboardLayoutPutRequest:
+      type: object
+      description: >-
+        The request body of PUT /config/dashboard.layout. `previews.order`
+        and `previews.hidden` are each optional; an absent list keeps its
+        stored value.
+      properties:
+        previews:
+          type: object
+          properties:
+            order:
+              type: array
+              items:
+                type: string
+            hidden:
+              type: array
+              items:
+                type: string
+    DashboardLayoutConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/dashboard.layout.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: dashboard.layout
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigDashboardLayoutPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    PreviewGatewayStatus:
+      type: object
+      description: The coordinator's latest view of the preview gateway.
+      required: [state, message, observedAt]
+      properties:
+        state:
+          type: string
+          enum: [not_configured, reachable, unreachable]
+        message:
+          type: string
+          description: States the fact, then the action. Empty when reachable.
+        observedAt:
+          type: string
+          format: date-time
+    PreviewTile:
+      type: object
+      description: One tile of the dashboard preview grid.
+      required: [key, kind, label, state, message, hidden, observedAt]
+      properties:
+        key:
+          type: string
+          description: "`ndi:<full NDI source name>` or `camera:<camera id>`."
+        kind:
+          type: string
+          enum: [ndi, camera]
+        label:
+          type: string
+        nodeId:
+          type: string
+          description: Set on an NDI tile matched to a render node.
+        surfaceId:
+          type: string
+          description: Set on an NDI tile matched to a surface.
+        cameraId:
+          type: string
+          description: Set on a camera tile.
+        state:
+          type: string
+          enum: [live, idle, connecting, not_found, disabled, error]
+          description: >-
+            `idle` means nobody is watching, so the source is not started.
+            `not_found` means the NDI source is no longer announced or the
+            camera refused.
+        message:
+          type: string
+          description: States the fact, then the action. Empty when live or idle.
+        hidden:
+          type: boolean
+        observedAt:
+          type: string
+          format: date-time
+    PreviewsResponse:
+      type: object
+      description: The body of GET /previews.
+      required: [serverTime, gateway, tiles]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        gateway:
+          $ref: "#/components/schemas/PreviewGatewayStatus"
+        tiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/PreviewTile"
     ResolumeCompositionWrittenBy:
       type: object
       description: >-
@@ -17869,6 +18609,7 @@ components:
             - https://showmesh.dev/problems/too-many-requests
             - https://showmesh.dev/problems/credential-in-url
             - https://showmesh.dev/problems/conflict
+            - https://showmesh.dev/problems/preview-gateway-unavailable
             - https://showmesh.dev/problems/cue-catalog-claim-conflict
             - https://showmesh.dev/problems/sequence-filename-claim-duplicate
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
@@ -18127,7 +18868,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock, preview.camera]
         objects:
           type: array
           items:
