@@ -38,6 +38,7 @@ const (
 const (
 	msgNotConfigured = "No preview gateway is set up. Add its address in Settings to see previews."
 	msgUnreachable   = "The preview gateway cannot be reached. Check that it is running and that its address and token are right."
+	msgSlowStart     = "The preview took too long to start. Try again in a few seconds."
 	msgNDIGone       = "This source is no longer announced on the network. Check that its sender is running."
 	msgCameraGone    = "The camera did not answer. Check its address and that it is on."
 	msgDisabled      = "This camera is turned off. Turn it on to see it here."
@@ -475,6 +476,9 @@ func (s *Service) gatewayFor(ctx context.Context, key string) (*Client, error) {
 func (s *Service) wrap(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrGatewayTimeout) {
+		return &UnavailableError{Message: msgSlowStart}
 	}
 	var ge *GatewayError
 	if errors.As(err, &ge) && ge.Status >= 400 && ge.Status < 500 && ge.Status != http.StatusUnauthorized && ge.Status != http.StatusForbidden {

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,7 +15,9 @@ import (
 )
 
 const (
-	gatewayRequestTimeout = 5 * time.Second
+	gatewayRequestTimeout  = 5 * time.Second
+	gatewaySnapshotTimeout = 30 * time.Second
+	gatewayWebRTCTimeout   = 15 * time.Second
 	maxGatewayBodyBytes   = 8 << 20
 )
 
@@ -50,25 +54,48 @@ func (e *GatewayError) Error() string {
 	return fmt.Sprintf("preview gateway answered %d: %s", e.Status, e.Message)
 }
 
+// ErrGatewayTimeout means the gateway was reachable but a slow call did not finish in time.
+var ErrGatewayTimeout = errors.New("preview gateway call timed out")
+
 // Client talks to the gateway's own API. The token is sent on every request.
 type Client struct {
 	base  string
 	token string
 	http  *http.Client
+
+	snapshotTimeout time.Duration
+	webrtcTimeout   time.Duration
 }
 
 // NewClient returns a client for the gateway at baseURL.
 func NewClient(baseURL, token string, hc *http.Client) *Client {
 	if hc == nil {
-		hc = &http.Client{Timeout: gatewayRequestTimeout}
+		hc = &http.Client{}
 	}
 	noRedirect := *hc
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	hc = &noRedirect
-	return &Client{base: strings.TrimRight(baseURL, "/"), token: token, http: hc}
+	return &Client{base: strings.TrimRight(baseURL, "/"), token: token, http: hc,
+		snapshotTimeout: gatewaySnapshotTimeout, webrtcTimeout: gatewayWebRTCTimeout}
 }
 
-func (c *Client) do(ctx context.Context, method, path, contentType string, body []byte) ([]byte, http.Header, error) {
+func (c *Client) do(ctx context.Context, timeout time.Duration, method, path, contentType string, body []byte) ([]byte, http.Header, error) {
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, hdr, err := c.send(ctx, method, path, contentType, body)
+	if err != nil && parent.Err() == nil && isTimeout(err) {
+		return nil, nil, ErrGatewayTimeout
+	}
+	return data, hdr, err
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
+}
+
+func (c *Client) send(ctx context.Context, method, path, contentType string, body []byte) ([]byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
@@ -103,7 +130,7 @@ func truncate(b []byte, n int) []byte {
 
 // Sources lists the NDI sources the gateway sees.
 func (c *Client) Sources(ctx context.Context) ([]Source, error) {
-	data, _, err := c.do(ctx, http.MethodGet, "/v1/sources", "", nil)
+	data, _, err := c.do(ctx, gatewayRequestTimeout, http.MethodGet, "/v1/sources", "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -123,13 +150,13 @@ func (c *Client) PutStreams(ctx context.Context, streams []Stream) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = c.do(ctx, http.MethodPut, "/v1/streams", "application/json", b)
+	_, _, err = c.do(ctx, gatewayRequestTimeout, http.MethodPut, "/v1/streams", "application/json", b)
 	return err
 }
 
 // Streams reports the state of every stream in the desired set.
 func (c *Client) Streams(ctx context.Context) ([]StreamState, error) {
-	data, _, err := c.do(ctx, http.MethodGet, "/v1/streams", "", nil)
+	data, _, err := c.do(ctx, gatewayRequestTimeout, http.MethodGet, "/v1/streams", "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -142,12 +169,12 @@ func (c *Client) Streams(ctx context.Context) ([]StreamState, error) {
 
 // Offer sends a browser's SDP offer for one stream and returns the SDP answer.
 func (c *Client) Offer(ctx context.Context, key string, offer []byte) ([]byte, error) {
-	data, _, err := c.do(ctx, http.MethodPost, "/v1/streams/"+url.PathEscape(key)+"/webrtc", "application/sdp", offer)
+	data, _, err := c.do(ctx, c.webrtcTimeout, http.MethodPost, "/v1/streams/"+url.PathEscape(key)+"/webrtc", "application/sdp", offer)
 	return data, err
 }
 
 // Snapshot returns the latest JPEG frame of one stream.
 func (c *Client) Snapshot(ctx context.Context, key string) ([]byte, error) {
-	data, _, err := c.do(ctx, http.MethodGet, "/v1/streams/"+url.PathEscape(key)+"/snapshot", "", nil)
+	data, _, err := c.do(ctx, c.snapshotTimeout, http.MethodGet, "/v1/streams/"+url.PathEscape(key)+"/snapshot", "", nil)
 	return data, err
 }
