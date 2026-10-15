@@ -11,19 +11,6 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
-### Releases
-
-- Every merge to `main` publishes an edge build: coordinator and UI images
-  tagged `edge`, and node agent and installer files on the `edge` GitHub
-  prerelease, installed with the same one-line installer from that release.
-  Each build reports its version as the last release plus the commits since.
-
-## 0.4.0 - 2026-10-15
-
-Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
-matching plugin; upgrade the coordinator and every node agent together.
-ShowMesh Companion 0.2.0 is the first companion that uploads crash reports.
-
 ### Companion
 
 - A ShowMesh Companion can upload Resolume Arena crash reports to the
@@ -32,6 +19,13 @@ ShowMesh Companion 0.2.0 is the first companion that uploads crash reports.
 - An operator can list and read uploaded crash reports through the API and
   with `showmeshctl companion-reports list` and `get`, without logging into
   the render computer. The coordinator keeps the newest 200 per companion.
+
+### Releases
+
+- Every merge to `main` publishes an edge build: coordinator and UI images
+  tagged `edge`, and node agent and installer files on the `edge` GitHub
+  prerelease, installed with the same one-line installer from that release.
+  Each build reports its version as the last release plus the commits since.
 
 ## 0.3.1 - 2026-10-14
 
