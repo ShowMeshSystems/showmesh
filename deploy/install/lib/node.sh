@@ -320,8 +320,10 @@ run_node_role() {
   node_state_save
   [ -n "$COORDINATOR_URL" ] && before="$(node_started_at "$NODE_ID" "$API_TOKEN")"
   node_install_agent
-  [ "$kind" = "render" ] && render_ndi_runtime
-  [ "$kind" = "audio" ] && audio_setup_ptp
+  case "$kind" in
+    render) render_ndi_runtime; audio_setup_ptp n ;;
+    audio) audio_setup_ptp y ;;
+  esac
   if [ -z "$COORDINATOR_URL" ]; then
     warn "This node has no coordinator address saved, so the installer cannot check that it reports in. Save one with: showmesh-install --coordinator http://<address>:8080"
     return 0

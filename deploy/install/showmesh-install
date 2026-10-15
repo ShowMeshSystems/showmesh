@@ -54,7 +54,7 @@ With no options it asks what this machine is and walks you through it.
   --admin-password-file F   a file holding that administrator's password
   --node-role render|audio  the node half of a coordinator-node install
   --node-id ID              the node ID of a coordinator-node install (default: this host's name)
-  --ptp-interface IFACE     the network interface for the audio node's PTP clock
+  --ptp-interface IFACE     the network interface for the PTP audio clock; on a render node it also sets the clock up
   --ptp-domain N            the PTP domain (default 0)
   --ptp-role ROLE           follower, grandmaster or auto (default follower)
   --audio-card NAME         part of the sound card's name

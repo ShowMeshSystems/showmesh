@@ -116,6 +116,7 @@ check "the agent binary is bench2" "/usr/local/bin/showmesh-agent-native -versio
 check "the installer records bench2" "grep -qx 'VERSION=0.0.0-bench2' /etc/showmesh/installer.env"
 check "upgrade did not redeem again" "[ \"\$(grep -c 'POST /api/v1/node-enrollments/redeem' $SERVER_LOG)\" = 4 ]"
 if [ "$ROLE" = "render" ]; then
+  check "an unattended render node with no --ptp-interface has no PTP step" "! grep -q 'Audio clock from PTP' /tmp/install.log && ! grep -q 'Audio clock from PTP' /tmp/upgrade.log"
   check "upgrade keeps the NDI plugin when the new package has none" "grep -q 'kept the plugin already at' /tmp/upgrade.log && [ -f /usr/lib/$multiarch/gstreamer-1.0/libgstndi.so ]"
 fi
 
@@ -140,6 +141,18 @@ inst=/opt/showmesh/installer/0.0.0-bench2
 minted="$(PATH=/tmp/stubbin:$PATH bash -c '. "$1/lib/common.sh"; eval "$(sed -n "/^mint_local_code()/,/^}/p" "$1/showmesh-install")"
   OPT_YES=1 OPT_NODE_ID=rack-0001; mint_local_code >/dev/null; printf %s "$OPT_CODE"' _ "$inst")"
 check "a node named rack-0001 gets the code, not its own name" "[ '$minted' = ABCD-2345 ]"
+
+# A render node that also plays audio runs the bundle's PTP script with the flags it was given.
+if [ "$ROLE" = "render" ]; then
+  ptp=/opt/showmesh/installer/0.0.0-bench2/node/install-ptp-audio.sh
+  mv "$ptp" "$ptp.real"
+  printf '#!/bin/sh\necho "$*" > /tmp/ptp-args\n' > "$ptp"
+  chmod 0755 "$ptp"
+  SHOWMESH_RELEASE_BASE="file://$RELEASES/0.0.0-bench2" SHOWMESH_REPORT_TIMEOUT=30 \
+    /usr/local/bin/showmesh-install --yes --skip-ndi --ptp-interface eth0 --ptp-domain 7 --ptp-role grandmaster --audio-card M4 > /tmp/render-ptp.log 2>&1
+  check "a render node given --ptp-interface sets up the PTP audio clock" "[ $? -eq 0 ] && [ \"\$(cat /tmp/ptp-args)\" = 'eth0 7 grandmaster M4' ] && grep -q 'PTP audio clock set up on eth0, domain 7, role grandmaster' /tmp/render-ptp.log"
+  mv "$ptp.real" "$ptp"
+fi
 
 # By hand: the coordinator does not answer, the operator types the settings, and the node never reports.
 rm -f /tmp/hand.log
