@@ -42,6 +42,7 @@ serves RTSP cameras, and NDI streams report that NDI is not available.
 | `SHOWMESH_PREVIEW_GATEWAY_TOKEN` | none, required | Bearer token every request must carry. The gateway refuses to start without it. |
 | `SHOWMESH_PREVIEW_GATEWAY_ADDR` | `:8095` | Address of the gateway API. |
 | `SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT` | `8555` | WebRTC port, TCP and UDP. |
+| `SHOWMESH_PREVIEW_GATEWAY_WEBRTC_CANDIDATES` | this host's IPv4 addresses | Comma-separated addresses to offer browsers. Set it when browsers reach the gateway through another address. |
 
 ## Network
 
@@ -49,7 +50,21 @@ The container uses host networking: NDI discovery is mDNS and WebRTC media is
 UDP. Open 8095/tcp to the coordinator and 8555 (TCP and UDP) to browsers.
 go2rtc's own API listens on 127.0.0.1:1984 only and also requires a password
 the gateway generates on each start. The go2rtc RTSP and SRTP listeners are
-turned off.
+turned off, and WebRTC does not use a STUN server, so previews stay on the
+local network. Address changes after start need a gateway restart.
+
+## NDI discovery
+
+The NDI runtime finds sources through avahi-daemon over D-Bus. The image runs
+its own browse-only copies as root and drops to an unprivileged user for the
+gateway, so the host needs no Avahi. An NDI source that stops without saying
+goodbye can stay in the source list until its mDNS record expires.
+
+## Cameras
+
+A camera snapshot waits for the next keyframe. A camera that sends a keyframe
+every few seconds answers quickly; one that sends it every 25 seconds or more
+makes snapshots slow.
 
 ## What the image contains
 
