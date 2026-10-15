@@ -3867,7 +3867,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange a WebRTC offer for an answer for one tile
-         * @description Gated like the other reads, although it is a POST: it changes nothing the operator configured. The body is the browser's SDP offer. The coordinator forwards it to the gateway and returns the gateway's SDP answer. Media then flows directly between the browser and the gateway. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it refused the offer.
+         * @description Always requires an authenticated principal, like every write, even when reads are open; it changes nothing the operator configured, so no particular scope is needed. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin`. The body is the browser's SDP offer. The coordinator forwards it to the gateway and returns the gateway's SDP answer. Media then flows directly between the browser and the gateway. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it refused the offer.
          */
         post: operations["offerPreviewWebRTC"];
         delete?: never;

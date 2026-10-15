@@ -2146,7 +2146,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/dashboard.layout", h.writeGuard(&scopeConfigWrite, h.handlePutDashboardLayoutConfig))
 	mux.HandleFunc("GET /api/v1/config/dashboard.layout/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetDashboardLayoutConfigRevisions))
 	mux.HandleFunc("GET /api/v1/previews", h.readGuard(identity.ScopeObservationRead, h.handleListPreviews))
-	mux.HandleFunc("POST /api/v1/previews/{key}/webrtc", h.readGuard(identity.ScopeObservationRead, h.handlePreviewOffer))
+	mux.HandleFunc("POST /api/v1/previews/{key}/webrtc", h.writeGuard(nil, h.handlePreviewOffer))
 	mux.HandleFunc("GET /api/v1/previews/{key}/snapshot", h.readGuard(identity.ScopeObservationRead, h.handlePreviewSnapshot))
 
 	// Track G seam G-4 (ADR-039): assets.settings, mirroring

@@ -463,3 +463,14 @@ func TestOpenAPIPreviewResponsesMatchRealResponses(t *testing.T) {
 	}
 	assertMatchesSchema(t, c, "Problem", got)
 }
+
+func TestPreviewOfferRequiresAuthenticationEvenWhenReadsAreOpen(t *testing.T) {
+	api, _, _, _ := previewTestAPI(t, &fakePreviewService{})
+	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/previews/camera:x/webrtc", "v=0", nil))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", resp.StatusCode, body)
+	}
+	if resp, _ := doRequest(t, api.Handler, http.MethodGet, "/api/v1/previews", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /previews with open reads = %d, want 200", resp.StatusCode)
+	}
+}
