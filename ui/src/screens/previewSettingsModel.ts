@@ -1,7 +1,7 @@
 export type CameraDraft = { id: string; name: string; enabled: boolean; url: string }
 
 export const GATEWAY_URL_ERROR = 'The gateway address must start with http:// or https://. Fix it and save again.'
-export const CAMERA_URL_ERROR = 'The camera address must start with rtsp:// or rtsps://. Fix it and save again.'
+export const CAMERA_URL_ERROR = 'The camera address must start with rtsp:// or rtsps:// and name a host. Correct it and save again.'
 
 export function gatewayUrlError(url: string): string | null {
   const trimmed = url.trim()
@@ -28,7 +28,7 @@ export function cameraDraftError(draft: CameraDraft, mode: 'new' | 'edit', taken
   if (draft.name.trim() === '') return 'Give the camera a name. The Dashboard tile shows it.'
   const url = draft.url.trim()
   if (url === '') return mode === 'new' ? 'Enter the camera address. It is stored and never shown again.' : null
-  return /^rtsps?:\/\/\S+$/i.test(url) ? null : CAMERA_URL_ERROR
+  return /^rtsps?:\/\/[^\s#/?]+[^\s#]*$/i.test(url) ? null : CAMERA_URL_ERROR
 }
 
 /** The write body for a camera: an empty address field leaves the stored address alone. */

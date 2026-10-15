@@ -31,6 +31,12 @@ describe('preview settings model', () => {
     expect(cameraDraftError({ ...draft, url: 'ftp://h' }, 'edit', [])).toMatch(/rtsp/)
   })
 
+  it('refuses an address with a space, a tab, a # or no host', () => {
+    for (const url of ['rtsp://h/a b', 'rtsp://h/a\tb', 'rtsp://h/a#x', 'rtsp:///x']) {
+      expect(cameraDraftError({ ...draft, url }, 'new', [])).toMatch(/must start with rtsp/)
+    }
+  })
+
   it('leaves the address out of a camera write unless one was typed', () => {
     expect(cameraRequest({ ...draft, url: '' })).toEqual({ name: 'Driveway', enabled: true })
     expect(cameraRequest(draft)).toEqual({ name: 'Driveway', enabled: true, url: 'rtsp://10.0.0.5:554/live' })

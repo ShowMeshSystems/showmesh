@@ -42,7 +42,7 @@ function usePreviews(): PreviewRead & { refresh: () => Promise<void> } {
 /** The Dashboard's live preview grid. It renders nothing until a gateway is configured. */
 export function PreviewWall() {
   const model = useModelContext()
-  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'dashboard:write')
   const { data, readAt, failed, refresh } = usePreviews()
   const [pending, setPending] = useState<PreviewLayout | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)

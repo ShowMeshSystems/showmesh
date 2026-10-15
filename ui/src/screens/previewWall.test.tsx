@@ -50,7 +50,7 @@ function signedIn(scopes: string[]): SessionResponse {
   } as unknown as SessionResponse
 }
 
-function renderWall(scopes = ['config:write'], model: Partial<Model> = {}) {
+function renderWall(scopes = ['dashboard:write'], model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), session: signedIn(scopes), ...model }}>
       <PreviewWall />
@@ -217,7 +217,7 @@ describe('PreviewWall', () => {
     expect(screen.queryByText('Layout not saved')).toBeNull()
   })
 
-  it('disables the layout controls with a reason when the principal cannot write configuration', async () => {
+  it('disables the layout controls with a reason when the principal cannot write the dashboard', async () => {
     stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A'), tile('camera:b', 'B')]))
     renderWall([])
     await screen.findByRole('heading', { level: 3, name: 'A' })
@@ -226,6 +226,13 @@ describe('PreviewWall', () => {
     expect(later.getAttribute('title')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Hide A' })).toBeDisabled()
     expect(screen.getByRole('article', { name: 'A' })).not.toHaveAttribute('draggable', 'true')
+  })
+
+  it('disables the layout controls for a principal holding only config:write', async () => {
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')]))
+    renderWall(['config:write'])
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    expect(screen.getByRole('button', { name: 'Hide A' })).toBeDisabled()
   })
 
   it('says the gateway is unreachable and still lists the tiles', async () => {
