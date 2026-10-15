@@ -1,0 +1,34 @@
+name: Edge cleanup
+
+# Deletes edge images beyond the newest 20 of each package. Only image versions
+# carrying an edge-<sha> tag are touched; release images and untagged platform
+# manifests are never deleted.
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KEEP: 20
+    steps:
+      - name: Delete old edge image versions
+        run: |
+          set -euo pipefail
+          for pkg in showmesh-coordinator showmesh-ui; do
+            gh api --paginate "orgs/ShowMeshSystems/packages/container/$pkg/versions" \
+              -q '.[] | select(any(.metadata.container.tags[]; startswith("edge-"))) | [.created_at, .id, (.metadata.container.tags | join(","))] | @tsv' \
+              | sort -r | tail -n +"$((KEEP + 1))" \
+              | while IFS=$'\t' read -r created id tags; do
+                  echo "deleting $pkg version $id ($tags, $created)"
+                  gh api -X DELETE "orgs/ShowMeshSystems/packages/container/$pkg/versions/$id"
+                done
+          done

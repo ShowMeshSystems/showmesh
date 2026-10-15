@@ -5,7 +5,8 @@
 set -euo pipefail
 
 SHOWMESH_VERSION="@SHOWMESH_VERSION@"
-RELEASE_BASE="${SHOWMESH_RELEASE_BASE:-https://github.com/ShowMeshSystems/showmesh/releases/download/v$SHOWMESH_VERSION}"
+SHOWMESH_RELEASE_TAG="@SHOWMESH_RELEASE_TAG@"
+RELEASE_BASE="${SHOWMESH_RELEASE_BASE:-https://github.com/ShowMeshSystems/showmesh/releases/download/$SHOWMESH_RELEASE_TAG}"
 BUNDLE="showmesh-installer_${SHOWMESH_VERSION}.tar.gz"
 INSTALL_ROOT=/opt/showmesh/installer
 

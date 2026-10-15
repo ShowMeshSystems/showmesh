@@ -11,6 +11,13 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+### Releases
+
+- Every merge to `main` publishes an edge build: coordinator and UI images
+  tagged `edge`, and node agent and installer files on the `edge` GitHub
+  prerelease, installed with the same one-line installer from that release.
+  Each build reports its version as the last release plus the commits since.
+
 ## 0.4.0 - 2026-10-15
 
 Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the

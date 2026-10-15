@@ -109,10 +109,45 @@ local build stays `dev`; a build that wants the real version string passes
 `VERSION=` on the `make` command line explicitly, since the Makefile's
 `VERSION ?= dev` default is not overridden by this procedure.
 
-`workflow_dispatch` runs the same pipeline as a proof run on a branch, before
-any tag exists: it builds and packages everything and publishes the two
-images under the non-release tag `0.0.0-dispatch.<short sha>`, but creates no
-GitHub release and uploads no release asset.
+The build itself is `.github/workflows/build.yml`, which the edge build below
+also runs on every merge to `main`, so a release tag runs build steps that
+have already succeeded on its commit's edge build.
+
+## Edge builds
+
+Every merge to `main` that changes more than documentation runs
+`.github/workflows/edge.yml`, which publishes a development build separate
+from any release:
+
+- Binaries report the `git describe` version, for example `0.4.0-3-ga1b2c3d`:
+  three commits after `v0.4.0`. The coordinator's version check reads this as
+  a build made after `0.4.0`, and a node and coordinator from the same edge
+  build match exactly.
+- Coordinator and operator UI images tagged with that version, with
+  `edge-<short sha>`, and with `edge`, which always names the newest one.
+- The node agent tarballs, the installer, and `SHA256SUMS` on a single GitHub
+  prerelease named `edge`, replaced on every build. Its installer downloads
+  from that release, so this installs or upgrades a machine to the newest
+  edge build:
+
+  ```sh
+  curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/edge/get-showmesh.sh | sudo bash
+  ```
+
+  An installer kept from an older edge build stops working once a newer one
+  replaces it; run the command above again instead.
+- A newer merge cancels an edge build still running for an older one, so a
+  long session of merges builds the newest commit rather than every commit.
+- `.github/workflows/edge-cleanup.yml` runs weekly and deletes edge images
+  beyond the newest 20 of each package. It deletes only image versions tagged
+  `edge-<short sha>`, never a release image.
+
+The `edge` prerelease never shows as a newer release in the coordinator,
+because its tag is not a version number.
+
+A feature built as several pull requests that do not work on their own lands
+on a `dev/<feature>` integration branch first, and reaches `main` as one pull
+request when it works. Edge builds then never carry a half-built feature.
 
 ## Cutting a pre-release
 
@@ -147,28 +182,6 @@ anything if the tag, `VERSION`, and `CHANGELOG.md` disagree.
 
 These are decided in direction and not implemented. Each is its own piece of
 work.
-
-### Development builds
-
-Every merge to `main` will produce a development build, separate from any
-release:
-
-- Coordinator and operator UI images tagged `edge-<short sha>`. No GitHub
-  release and no node agent or installer assets.
-- Binaries report the `git describe` version, for example `0.4.0-3-ga1b2c3d`,
-  which the coordinator's version check already reads as a build made after
-  `0.4.0`.
-- A newer merge cancels an edge build still running for an older one, so a
-  long session of merges builds the newest commit rather than every commit.
-- A scheduled cleanup keeps the most recent edge images on GHCR and deletes
-  the rest. Release images are never touched.
-
-This replaces the `0.0.0-dispatch.<short sha>` tag that a `workflow_dispatch`
-proof run uses today. A release tag keeps the pipeline described above.
-
-A feature built as several pull requests that do not work on their own lands
-on a `dev/<feature>` integration branch first, and reaches `main` as one pull
-request when it works. Edge builds then never carry a half-built feature.
 
 ### A release channel setting in the coordinator
 

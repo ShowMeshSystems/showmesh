@@ -29,7 +29,8 @@ if [ -r "$BUNDLE_DIR/BUILD-INFO" ]; then
   # shellcheck disable=SC1091
   . "$BUNDLE_DIR/BUILD-INFO"
 fi
-RELEASE_BASE="${SHOWMESH_RELEASE_BASE:-https://github.com/ShowMeshSystems/showmesh/releases/download/v$SHOWMESH_VERSION}"
+SHOWMESH_RELEASE_TAG="${SHOWMESH_RELEASE_TAG:-v$SHOWMESH_VERSION}"
+RELEASE_BASE="${SHOWMESH_RELEASE_BASE:-https://github.com/ShowMeshSystems/showmesh/releases/download/$SHOWMESH_RELEASE_TAG}"
 
 usage() {
   cat <<EOF

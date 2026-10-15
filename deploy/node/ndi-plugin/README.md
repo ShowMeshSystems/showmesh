@@ -29,8 +29,8 @@ installs a pinned Rust toolchain with `rustup` if `cargo` is not already
 on `PATH`, clones the pinned tag, builds only the `net/ndi` crate in
 release mode, and writes `libgstndi.so` into `<output-directory>`.
 
-The release workflow (`.github/workflows/release.yml`) runs this once per
-architecture and ships the result in the node agent tarball
+The build workflow (`.github/workflows/build.yml`, run for every release and
+edge build) runs this once per architecture and ships the result in the node agent tarball
 (`make package-node-agent NDI_PLUGIN_SO=<path>`). The installer runs the
 same script as its fallback on an architecture with no prebuilt plugin.
 
