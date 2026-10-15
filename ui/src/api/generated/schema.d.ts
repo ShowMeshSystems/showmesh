@@ -3798,12 +3798,12 @@ export interface paths {
         };
         /**
          * The active dashboard.layout configuration
-         * @description Requires `config:write`. `404` when no revision has ever been saved, which means every tile is shown in its default order.
+         * @description Requires `observation:read`, always, even when reads are open. `404` when no revision has ever been saved, which means every tile is shown in its default order.
          */
         get: operations["getDashboardLayoutConfig"];
         /**
          * Write a new dashboard.layout revision
-         * @description Requires `config:write`. A partial update: `previews.order` and `previews.hidden` are each optional, and an absent list keeps its stored value. A list may not repeat a key. Keys that match no tile are kept. An NDI key that is no longer announced still lists a tile with state `not_found`, so a vanished source stays visible. Allowed while show mode is on.
+         * @description Requires `dashboard:write`, which the operator and admin roles hold. A partial update: `previews.order` and `previews.hidden` are each optional, and an absent list keeps its stored value. A list may not repeat a key. Keys that match no tile are kept. An NDI key that is no longer announced still lists a tile with state `not_found`, so a vanished source stays visible. Allowed while show mode is on.
          */
         put: operations["putDashboardLayoutConfig"];
         post?: never;
@@ -3842,7 +3842,7 @@ export interface paths {
         };
         /**
          * The preview gateway state and every dashboard preview tile
-         * @description Gated like the other reads. Tiles are in layout order, with tiles the layout does not name appended in a stable order. With no gateway configured, `gateway.state` is `not_configured` and `tiles` is empty. When the gateway cannot be reached, `gateway.state` is `unreachable`, and the tiles for configured cameras are still listed with state `error`. An NDI tile is labelled with a node and surface when the part of its name in parentheses equals a surface's NDI source name; when several nodes render that surface, the host part of the name picks the node. Otherwise the label is the raw NDI name. Neither the camera stream URL nor the gateway token appears here.
+         * @description Requires `observation:read`, always, even when reads are open. Tiles are in layout order, with tiles the layout does not name appended in a stable order. With no gateway configured, `gateway.state` is `not_configured` and `tiles` is empty. When the gateway cannot be reached, `gateway.state` is `unreachable`, and the tiles for configured cameras are still listed with state `error`. An NDI tile is labelled with a node and surface when the part of its name in parentheses equals the NDI source name of a surface in the active show; when several nodes render that surface, the host part of the name picks the node. Otherwise the label is the raw NDI name. Neither the camera stream URL nor the gateway token appears here.
          */
         get: operations["listPreviews"];
         put?: never;
@@ -3867,7 +3867,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange a WebRTC offer for an answer for one tile
-         * @description Always requires an authenticated principal, like every write, even when reads are open; it changes nothing the operator configured, so no particular scope is needed. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin`. The body is the browser's SDP offer. The coordinator forwards it to the gateway and returns the gateway's SDP answer. Media then flows directly between the browser and the gateway. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it refused the offer.
+         * @description Requires `observation:read`, always, even when reads are open. It changes nothing the operator configured. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin`. The body is the browser's SDP offer. The coordinator forwards it to the gateway and returns the gateway's SDP answer. Media then flows directly between the browser and the gateway. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it refused the offer.
          */
         post: operations["offerPreviewWebRTC"];
         delete?: never;
@@ -3888,7 +3888,7 @@ export interface paths {
         };
         /**
          * The latest frame of one tile as a JPEG
-         * @description Gated like the other reads. Proxied to the gateway. The operator UI polls this every two seconds when WebRTC fails. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it has no frame for the tile.
+         * @description Requires `observation:read`, always, even when reads are open. Proxied to the gateway. The operator UI polls this every two seconds when WebRTC fails. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it has no frame for the tile.
          */
         get: operations["getPreviewSnapshot"];
         put?: never;
