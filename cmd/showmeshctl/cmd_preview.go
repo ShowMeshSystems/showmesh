@@ -566,7 +566,7 @@ func cmdPreviewLayoutChange(verb string, args []string, stdout, stderr io.Writer
 		known = known || t.Key == key
 	}
 	hidden := slices.Clone(layout.Payload.Previews.Hidden)
-	if !known && !(verb == "show" && slices.Contains(hidden, key)) {
+	if !known && (verb != "show" || !slices.Contains(hidden, key)) {
 		return reportError(stderr, name, fmt.Errorf("no tile has the key %q; run \"showmeshctl preview list\" to see the keys", key))
 	}
 
