@@ -18,7 +18,7 @@ const (
 	gatewayRequestTimeout  = 5 * time.Second
 	gatewaySnapshotTimeout = 30 * time.Second
 	gatewayWebRTCTimeout   = 15 * time.Second
-	maxGatewayBodyBytes   = 8 << 20
+	maxGatewayBodyBytes    = 8 << 20
 )
 
 // Source is one NDI source the gateway currently sees announced.
