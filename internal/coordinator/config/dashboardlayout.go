@@ -68,7 +68,7 @@ func DashboardLayoutProblem(p DashboardLayoutPayload) string {
 				return "A tile key is empty. Remove it and save again."
 			}
 			if seen[key] {
-				return fmt.Sprintf("The tile %q is listed twice. Remove the duplicate and save again.", key)
+				return "A tile is listed twice. Remove the duplicate and save again."
 			}
 			seen[key] = true
 		}

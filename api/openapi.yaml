@@ -11099,8 +11099,9 @@ paths:
       operationId: getDashboardLayoutConfig
       summary: The active dashboard.layout configuration
       description: >-
-        Requires `config:write`. `404` when no revision has ever been
-        saved, which means every tile is shown in its default order.
+        Requires `observation:read`, always, even when reads are open. `404`
+        when no revision has ever been saved, which means every tile is shown
+        in its default order.
       responses:
         "200":
           description: OK
@@ -11125,7 +11126,8 @@ paths:
       operationId: putDashboardLayoutConfig
       summary: Write a new dashboard.layout revision
       description: >-
-        Requires `config:write`. A partial update: `previews.order` and
+        Requires `dashboard:write`, which the operator and admin roles hold.
+        A partial update: `previews.order` and
         `previews.hidden` are each optional, and an absent list keeps its
         stored value. A list may not repeat a key. Keys that match no tile
         are kept. An NDI key that is no longer announced still lists a tile
@@ -11192,14 +11194,16 @@ paths:
       operationId: listPreviews
       summary: The preview gateway state and every dashboard preview tile
       description: >-
-        Gated like the other reads. Tiles are in layout order, with tiles
+        Requires `observation:read`, always, even when reads are open. Tiles
+        are in layout order, with tiles
         the layout does not name appended in a stable order. With no
         gateway configured, `gateway.state` is `not_configured` and
         `tiles` is empty. When the gateway cannot be reached,
         `gateway.state` is `unreachable`, and the tiles for configured
         cameras are still listed with state `error`. An NDI tile is
         labelled with a node and surface when the part of its name in
-        parentheses equals a surface's NDI source name; when several
+        parentheses equals the NDI source name of a surface in the active
+        show; when several
         nodes render that surface, the host part of the name picks the
         node. Otherwise the label is the raw NDI name. Neither the camera
         stream URL nor the gateway token appears here.
@@ -11235,8 +11239,9 @@ paths:
       operationId: offerPreviewWebRTC
       summary: Exchange a WebRTC offer for an answer for one tile
       description: >-
-        Gated like the other reads, although it is a POST: it changes
-        nothing the operator configured. The body is the browser's SDP
+        Requires `observation:read`, always, even when reads are open. It
+        changes nothing the operator configured. A cookie-authenticated request
+        additionally requires `Sec-Fetch-Site: same-origin`. The body is the browser's SDP
         offer. The coordinator forwards it to the gateway and returns the
         gateway's SDP answer. Media then flows directly between the
         browser and the gateway. `404` when no tile has this key, and
@@ -11286,7 +11291,8 @@ paths:
       operationId: getPreviewSnapshot
       summary: The latest frame of one tile as a JPEG
       description: >-
-        Gated like the other reads. Proxied to the gateway. The operator UI
+        Requires `observation:read`, always, even when reads are open.
+        Proxied to the gateway. The operator UI
         polls this every two seconds when WebRTC fails. `404` when no tile
         has this key, and `503` with type
         `https://showmesh.dev/problems/preview-gateway-unavailable` when
