@@ -62,6 +62,9 @@ func NewClient(baseURL, token string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = &http.Client{Timeout: gatewayRequestTimeout}
 	}
+	noRedirect := *hc
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc = &noRedirect
 	return &Client{base: strings.TrimRight(baseURL, "/"), token: token, http: hc}
 }
 

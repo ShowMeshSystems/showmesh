@@ -144,6 +144,9 @@ func TestPreviewCameraRefusesBadWrites(t *testing.T) {
 		{"empty url", "/api/v1/config/preview.camera/c1", `{"name":"C","url":""}`},
 		{"null name", "/api/v1/config/preview.camera/c1", `{"name":null,"url":"rtsp://192.168.1.20/a"}`},
 		{"unknown field", "/api/v1/config/preview.camera/c1", `{"name":"C","url":"rtsp://192.168.1.20/a","token":"x"}`},
+		{"space in url", "/api/v1/config/preview.camera/c1", `{"name":"C","url":"rtsp://u:p@cam:554/a b"}`},
+		{"tab in url", "/api/v1/config/preview.camera/c1", "{\"name\":\"C\",\"url\":\"rtsp://cam:554/a\\tb\"}"},
+		{"fragment in url", "/api/v1/config/preview.camera/c1", `{"name":"C","url":"rtsp://cam:554/s#x"}`},
 		{"bad id", "/api/v1/config/preview.camera/Bad_Id", `{"name":"C","url":"rtsp://192.168.1.20/a"}`},
 	}
 	for _, tc := range cases {
@@ -407,20 +410,6 @@ func TestPreviewOfferAndSnapshotPassTheKeyAndBodyThrough(t *testing.T) {
 	}
 }
 
-func TestPreviewRoutesFollowTheReadGuard(t *testing.T) {
-	api, _, _, _ := previewTestAPI(t, &fakePreviewService{}, func(o *Options) { o.CloseReads = true })
-	for _, tc := range []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/previews"},
-		{http.MethodPost, "/api/v1/previews/camera:x/webrtc"},
-		{http.MethodGet, "/api/v1/previews/camera:x/snapshot"},
-	} {
-		resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, tc.method, tc.path, "v=0", nil))
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("%s %s without a credential = %d, want 401: %s", tc.method, tc.path, resp.StatusCode, body)
-		}
-	}
-}
-
 func TestOpenAPIPreviewResponsesMatchRealResponses(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	svc := &fakePreviewService{overview: preview.Overview{
@@ -464,13 +453,63 @@ func TestOpenAPIPreviewResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "Problem", got)
 }
 
-func TestPreviewOfferRequiresAuthenticationEvenWhenReadsAreOpen(t *testing.T) {
+func TestPreviewRoutesRequireObservationReadEvenWhenReadsAreOpen(t *testing.T) {
 	api, _, _, _ := previewTestAPI(t, &fakePreviewService{})
-	resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPost, "/api/v1/previews/camera:x/webrtc", "v=0", nil))
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401: %s", resp.StatusCode, body)
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/previews"},
+		{http.MethodPost, "/api/v1/previews/camera:x/webrtc"},
+		{http.MethodGet, "/api/v1/previews/camera:x/snapshot"},
+	} {
+		resp, body := doRawRequest(t, api.Handler, newJSONRequest(t, tc.method, tc.path, "v=0", nil))
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s %s without a credential = %d, want 401: %s", tc.method, tc.path, resp.StatusCode, body)
+		}
 	}
-	if resp, _ := doRequest(t, api.Handler, http.MethodGet, "/api/v1/previews", nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /previews with open reads = %d, want 200", resp.StatusCode)
+}
+
+func TestPreviewRoutesRefusePrincipalsWithoutObservationRead(t *testing.T) {
+	idSvc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	scheduler := mustIssueToken(t, idSvc, mustCreatePrincipal(t, idSvc, "sched-1", identity.RoleScheduler).ID)
+	viewer := mustIssueToken(t, idSvc, mustCreatePrincipal(t, idSvc, "viewer-1", identity.RoleViewer).ID)
+	deps := configTestDeps(idSvc, st)
+	deps.Previews = &fakePreviewService{}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/previews"},
+		{http.MethodPost, "/api/v1/previews/camera:x/webrtc"},
+		{http.MethodGet, "/api/v1/previews/camera:x/snapshot"},
+	} {
+		if resp, body := send(t, api, tc.method, tc.path, "v=0", scheduler); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("scheduler %s %s = %d, want 403: %s", tc.method, tc.path, resp.StatusCode, body)
+		}
+		if resp, body := send(t, api, tc.method, tc.path, "v=0", viewer); resp.StatusCode != http.StatusOK {
+			t.Fatalf("viewer %s %s = %d, want 200: %s", tc.method, tc.path, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestOperatorArrangesTheGridButCannotChangeGatewayOrCameras(t *testing.T) {
+	idSvc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	operator := mustIssueToken(t, idSvc, mustCreatePrincipal(t, idSvc, "op-1", identity.RoleOperator).ID)
+	viewer := mustIssueToken(t, idSvc, mustCreatePrincipal(t, idSvc, "viewer-1", identity.RoleViewer).ID)
+	api := New(configTestDeps(idSvc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	layout := "/api/v1/config/dashboard.layout"
+
+	if resp, body := send(t, api, http.MethodPut, layout, `{"previews":{"order":["camera:a"]}}`, operator); resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator PUT layout = %d: %s", resp.StatusCode, body)
+	}
+	if resp, body := send(t, api, http.MethodGet, layout, "", operator); resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator GET layout = %d: %s", resp.StatusCode, body)
+	}
+	if resp, _ := send(t, api, http.MethodGet, layout, "", viewer); resp.StatusCode != http.StatusOK {
+		t.Fatalf("viewer GET layout = %d, want 200", resp.StatusCode)
+	}
+	if resp, body := send(t, api, http.MethodPut, layout, `{"previews":{"order":[]}}`, viewer); resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "dashboard:write") {
+		t.Fatalf("viewer PUT layout = %d: %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/api/v1/config/preview.gateway", "/api/v1/config/preview.camera/c1"} {
+		if resp, _ := send(t, api, http.MethodPut, path, `{}`, operator); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("operator PUT %s = %d, want 403", path, resp.StatusCode)
+		}
 	}
 }

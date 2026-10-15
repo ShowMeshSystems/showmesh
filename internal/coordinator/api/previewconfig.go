@@ -523,7 +523,7 @@ func mapDashboardLayoutResponse(now time.Time, rev store.ConfigRevisionRecord, o
 func previewConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Problem {
 	detail := "A newer version was saved first. Read the current settings again and retry."
 	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
-		detail = "These settings already exist. Send If-Match with the current version to change them."
+		detail = "These settings already exist. Read the current settings and save again to change them."
 	}
 	return v1.Problem{
 		Type:   ProblemTypeConfigRevisionPreconditionFailed,

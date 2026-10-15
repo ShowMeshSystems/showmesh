@@ -87,6 +87,10 @@ func (p previewSettingsSource) Load(ctx context.Context) (preview.Settings, erro
 	if out.GatewayURL == "" {
 		return out, nil
 	}
+	activeShow, err := p.activeShow(ctx)
+	if err != nil {
+		return out, err
+	}
 	surfaces, err := p.st.ListConfigObjects(ctx, config.ShowSurfaceConfigKind)
 	if err != nil {
 		return out, fmt.Errorf("list show.surface: %w", err)
@@ -103,7 +107,7 @@ func (p previewSettingsSource) Load(ctx context.Context) (preview.Settings, erro
 		if err := json.Unmarshal([]byte(raw), &sp); err != nil {
 			return out, fmt.Errorf("decode show.surface %q: %w", obj.ID, err)
 		}
-		if sp.Output.NDI != nil {
+		if sp.Show == activeShow && sp.Output.NDI != nil {
 			out.Surfaces = append(out.Surfaces, preview.Surface{NodeID: sp.Node, SurfaceID: obj.ID, SourceName: sp.Output.NDI.SourceName})
 		}
 	}
@@ -121,4 +125,17 @@ func (p previewSettingsSource) Load(ctx context.Context) (preview.Settings, erro
 		}
 	}
 	return out, nil
+}
+
+// activeShow is the id of the active show, or "" when none is set.
+func (p previewSettingsSource) activeShow(ctx context.Context) (string, error) {
+	raw, ok, err := p.activePayload(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID)
+	if err != nil || !ok {
+		return "", err
+	}
+	var payload config.ShowActivePayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", fmt.Errorf("decode show.active: %w", err)
+	}
+	return payload.Show, nil
 }

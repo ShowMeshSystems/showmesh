@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -41,6 +42,7 @@ const (
 	msgCameraGone    = "The camera did not answer. Check its address and that it is on."
 	msgDisabled      = "This camera is turned off. Turn it on to see it here."
 	msgTileError     = "The preview could not start. Check the gateway log."
+	msgCameraRefused = "The gateway did not accept the camera addresses. Check each address and save again."
 )
 
 var (
@@ -128,6 +130,9 @@ type observation struct {
 	status  GatewayStatus
 	sources []Source
 	streams map[string]StreamState
+	// camerasRefused is set when the gateway answered the stream set with a
+	// client error and only the NDI streams were applied.
+	camerasRefused bool
 }
 
 // Service reconciles the gateway's stream set and answers the dashboard.
@@ -210,7 +215,9 @@ func (s *Service) Reconcile(ctx context.Context) {
 	prev := s.snapshot()
 
 	fail := func(err error) {
-		s.logger.Warn("preview: gateway reconcile failed", "error", err)
+		if prev.status.State != GatewayUnreachable {
+			s.logger.Warn("preview: gateway unreachable", "error", logSafe(err))
+		}
 		s.store(observation{
 			status:  GatewayStatus{State: GatewayUnreachable, Message: msgUnreachable, ObservedAt: now},
 			sources: prev.sources,
@@ -221,9 +228,20 @@ func (s *Service) Reconcile(ctx context.Context) {
 		fail(err)
 		return
 	}
+	camerasRefused := false
 	if err := c.PutStreams(ctx, desiredStreams(cfg, sources)); err != nil {
-		fail(err)
-		return
+		if !isRefusal(err) {
+			fail(err)
+			return
+		}
+		camerasRefused = true
+		if prev.status.State != GatewayReachable || !prev.camerasRefused {
+			s.logger.Warn("preview: gateway refused the stream set", "error", logSafe(err))
+		}
+		if err := c.PutStreams(ctx, desiredStreams(Settings{}, sources)); err != nil {
+			fail(err)
+			return
+		}
 	}
 	states, err := c.Streams(ctx)
 	if err != nil {
@@ -238,7 +256,26 @@ func (s *Service) Reconcile(ctx context.Context) {
 		status:  GatewayStatus{State: GatewayReachable, ObservedAt: now},
 		sources: sources,
 		streams: byKey,
+
+		camerasRefused: camerasRefused,
 	})
+}
+
+// isRefusal reports a client error from the gateway that is not a credential
+// problem, meaning the gateway is up and rejected what it was sent.
+func isRefusal(err error) bool {
+	var ge *GatewayError
+	return errors.As(err, &ge) && ge.Status >= 400 && ge.Status < 500 &&
+		ge.Status != http.StatusUnauthorized && ge.Status != http.StatusForbidden
+}
+
+// logSafe drops the gateway's reply text, which may echo a stream address.
+func logSafe(err error) any {
+	var ge *GatewayError
+	if errors.As(err, &ge) {
+		return fmt.Sprintf("preview gateway answered %d", ge.Status)
+	}
+	return err
 }
 
 func (s *Service) store(o observation) {
@@ -334,6 +371,9 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 			t.State, t.Message = TileDisabled, msgDisabled
 		} else {
 			applyStreamState(&t, o.streams, reachable, msgCameraGone)
+			if reachable && o.camerasRefused && cam.URL != "" {
+				t.State, t.Message = TileError, msgCameraRefused
+			}
 		}
 		byKey[t.Key] = t
 	}
@@ -379,16 +419,13 @@ func applyStreamState(t *Tile, streams map[string]StreamState, reachable bool, g
 		t.State = TileConnecting
 		return
 	}
-	t.State, t.Message = st.State, st.Message
+	t.State, t.Message = st.State, ""
 	switch st.State {
 	case TileLive, TileIdle, TileConnecting:
-		t.Message = ""
 	case TileNotFound:
 		t.Message = goneMsg
 	case TileError:
-		if t.Message == "" {
-			t.Message = msgTileError
-		}
+		t.Message = msgTileError
 	default:
 		t.State, t.Message = TileError, msgTileError
 	}

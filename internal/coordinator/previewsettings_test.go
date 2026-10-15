@@ -41,6 +41,8 @@ func TestPreviewSettingsSourceLoadsConfigurationCredentialsAndSurfaces(t *testin
 	}
 	putPreviewRevision(t, st, config.DashboardLayoutConfigKind, "default", `{"previews":{"order":["camera:driveway"],"hidden":[]}}`)
 	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "matrix-main", `{"show":"s","name":"Matrix","node":"node-01","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40,"output":{"transport":"ndi","ndi":{"sourceName":"matrix-main"}}}`)
+	putPreviewRevision(t, st, config.ShowActiveConfigKind, config.ShowActiveObjectID, `{"show":"s"}`)
+	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "matrix-old", `{"show":"other","name":"Old","node":"node-01","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40,"output":{"transport":"ndi","ndi":{"sourceName":"matrix-main"}}}`)
 	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "hdmi-wall", `{"show":"s","name":"Wall","node":"node-02","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40,"output":{"transport":"hdmi","hdmi":{"display":"HDMI-1"}}}`)
 
 	got, err := src.Load(ctx)
@@ -57,7 +59,7 @@ func TestPreviewSettingsSourceLoadsConfigurationCredentialsAndSurfaces(t *testin
 		t.Fatalf("layout = %+v", got.Layout)
 	}
 	if len(got.Surfaces) != 1 || got.Surfaces[0].NodeID != "node-01" || got.Surfaces[0].SurfaceID != "matrix-main" || got.Surfaces[0].SourceName != "matrix-main" {
-		t.Fatalf("surfaces = %+v (only NDI surfaces label tiles)", got.Surfaces)
+		t.Fatalf("surfaces = %+v (only NDI surfaces of the active show label tiles)", got.Surfaces)
 	}
 	if len(got.Nodes) != 1 || got.Nodes[0].Names[0] != "Showhost1" {
 		t.Fatalf("nodes = %+v", got.Nodes)

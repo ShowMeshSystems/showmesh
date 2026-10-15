@@ -133,7 +133,7 @@ Subcommands:
   camera add <id> --name <name> --url-file <path>
                                          add or change a camera (requires config:write)
   camera remove <id>                     remove a camera (requires config:write)
-  layout move <key> --to <index>         move a tile; index counts from 0
+  layout move <key> --to <index>         move a tile; index counts from 0 (requires dashboard:write)
   layout hide <key>                      hide a tile from the dashboard
   layout show <key>                      show a hidden tile again
 
@@ -522,10 +522,10 @@ func cmdPreviewLayoutChange(verb string, args []string, stdout, stderr io.Writer
 	fs.Usage = func() {
 		if verb == "move" {
 			_, _ = fmt.Fprintln(stderr, "usage: showmeshctl preview layout move <key> --to <index>")
-			_, _ = fmt.Fprintln(stderr, "\nMove one tile to a new position (requires config:write). Position 0 is first.")
+			_, _ = fmt.Fprintln(stderr, "\nMove one tile to a new position (requires dashboard:write). Position 0 is first.")
 		} else {
 			_, _ = fmt.Fprintf(stderr, "usage: showmeshctl preview layout %s <key>\n", verb)
-			_, _ = fmt.Fprintf(stderr, "\n%s one tile on the dashboard (requires config:write).\n", map[string]string{"hide": "Hide", "show": "Show again"}[verb])
+			_, _ = fmt.Fprintf(stderr, "\n%s one tile on the dashboard (requires dashboard:write).\n", map[string]string{"hide": "Hide", "show": "Show again"}[verb])
 		}
 		fs.PrintDefaults()
 	}

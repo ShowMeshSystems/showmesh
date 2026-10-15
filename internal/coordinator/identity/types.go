@@ -137,6 +137,11 @@ const (
 	// [ScopeFPPCommand] already carries for FPP's own lifecycle commands.
 	ScopeResolumeAction Scope = "resolume:action"
 
+	// ScopeDashboardWrite arranges the dashboard preview grid
+	// (dashboard.layout). The operator role holds it; every other preview
+	// setting stays behind config:write (ADR-060).
+	ScopeDashboardWrite Scope = "dashboard:write"
+
 	// ScopeAssetWrite is Track E seam E3/E4's own write scope (ADR-028):
 	// uploading an asset. Admin-only, like config:write and
 	// principal:write — asset upload is configuration in the same sense
@@ -253,7 +258,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate, ScopeShowWeatherDelayInvoke, ScopeShowWeatherDelayResume, ScopeDashboardWrite}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

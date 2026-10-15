@@ -71,7 +71,7 @@ func PreviewCameraNameProblem(name string) string {
 // PreviewCameraURLProblem is the operator's one line for a stream URL that cannot be saved, or "".
 func PreviewCameraURLProblem(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "rtsp" && u.Scheme != "rtsps") || u.Hostname() == "" {
+	if err != nil || strings.ContainsAny(raw, " \t#") || (u.Scheme != "rtsp" && u.Scheme != "rtsps") || u.Hostname() == "" {
 		return "The camera address must start with rtsp:// or rtsps:// and name a host. Correct it and save again."
 	}
 	return ""

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,15 +17,17 @@ import (
 var testNow = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 type fakeGateway struct {
-	mu        sync.Mutex
-	token     string
-	sources   []Source
-	states    []StreamState
-	puts      [][]Stream
-	offers    []string
-	snapshots []string
-	down      bool
-	srv       *httptest.Server
+	mu         sync.Mutex
+	token      string
+	sources    []Source
+	states     []StreamState
+	puts       [][]Stream
+	offers     []string
+	snapshots  []string
+	down       bool
+	refuseRTSP bool
+	redirect   string
+	srv        *httptest.Server
 }
 
 func newFakeGateway(t *testing.T, token string) *fakeGateway {
@@ -40,7 +43,16 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 		_ = json.NewDecoder(r.Body).Decode(&set)
 		g.mu.Lock()
 		g.puts = append(g.puts, set)
+		refuse := g.refuseRTSP
 		g.mu.Unlock()
+		if refuse {
+			for _, st := range set {
+				if st.Kind == "rtsp" {
+					http.Error(w, "bad stream "+st.URL, http.StatusBadRequest)
+					return
+				}
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /v1/streams", func(w http.ResponseWriter, r *http.Request) { g.reply(w, r, g.states) })
@@ -71,8 +83,12 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 	})
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
-		down := g.down
+		down, redirect := g.down, g.redirect
 		g.mu.Unlock()
+		if redirect != "" {
+			http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+			return
+		}
 		if down {
 			http.Error(w, "down", http.StatusBadGateway)
 			return
@@ -403,5 +419,76 @@ func TestOfferAndSnapshotAreProxiedWithTheTilesKey(t *testing.T) {
 	var unavailable *UnavailableError
 	if _, err := svc.Snapshot(ctx, "camera:nofeed"); !errors.As(err, &unavailable) || strings.Contains(err.Error(), "no frame yet") {
 		t.Fatalf("a gateway refusal must become an operator message: %v", err)
+	}
+}
+
+func TestRefusedCameraAddressDoesNotMakeTheWholeWallUnreachable(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.refuseRTSP = true
+	gw.sources = []Source{{Name: "NODE-01 (matrix-main)"}}
+	gw.states = []StreamState{{Key: "ndi:NODE-01 (matrix-main)", State: TileLive}}
+	src := &staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok",
+		Cameras: []Camera{{ID: "driveway", Name: "Driveway", Enabled: true, URL: "rtsp://secret-host/a"}}}}
+	svc := newTestService(src)
+	svc.Reconcile(context.Background())
+
+	ov, _ := svc.Overview(context.Background())
+	if ov.Gateway.State != GatewayReachable {
+		t.Fatalf("gateway = %+v, want reachable", ov.Gateway)
+	}
+	if ndi := tileByKey(t, ov, "ndi:NODE-01 (matrix-main)"); ndi.State != TileLive {
+		t.Fatalf("ndi tile = %+v, want live", ndi)
+	}
+	cam := tileByKey(t, ov, "camera:driveway")
+	if cam.State != TileError || cam.Message != msgCameraRefused {
+		t.Fatalf("camera tile = %+v", cam)
+	}
+	if last := gw.lastPut(); len(last) != 1 || last[0].Kind != "ndi" {
+		t.Fatalf("last stream set = %+v, want the NDI stream only", last)
+	}
+}
+
+func TestGatewayTileErrorTextIsNotRelayed(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.states = []StreamState{{Key: "camera:driveway", State: TileError, Message: "dial rtsp://u:p@10.0.0.9/a failed"}}
+	src := &staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok",
+		Cameras: []Camera{{ID: "driveway", Name: "Driveway", Enabled: true, URL: "rtsp://10.0.0.9/a"}}}}
+	svc := newTestService(src)
+	svc.Reconcile(context.Background())
+	ov, _ := svc.Overview(context.Background())
+	if got := tileByKey(t, ov, "camera:driveway"); got.Message != msgTileError {
+		t.Fatalf("message = %q, want %q", got.Message, msgTileError)
+	}
+}
+
+func TestGatewayRedirectsAreNotFollowed(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("redirect target was fetched: %s %s", r.Method, r.URL)
+	}))
+	t.Cleanup(target.Close)
+	gw := newFakeGateway(t, "tok")
+	gw.redirect = target.URL + "/x"
+	svc := newTestService(&staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}})
+	svc.Reconcile(context.Background())
+	ov, _ := svc.Overview(context.Background())
+	if ov.Gateway.State != GatewayUnreachable {
+		t.Fatalf("gateway = %+v", ov.Gateway)
+	}
+}
+
+func TestUnreachableGatewayIsLoggedOnlyWhenItBecomesUnreachable(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	gw := newFakeGateway(t, "tok")
+	gw.down = true
+	svc := NewService(&staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}}, nil, func() time.Time { return testNow }, logger)
+	for range 3 {
+		svc.Reconcile(context.Background())
+	}
+	if n := strings.Count(buf.String(), "gateway unreachable"); n != 1 {
+		t.Fatalf("logged %d times, want 1:\n%s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "down") && strings.Contains(buf.String(), "502: down") {
+		t.Fatalf("gateway reply text was logged:\n%s", buf.String())
 	}
 }
