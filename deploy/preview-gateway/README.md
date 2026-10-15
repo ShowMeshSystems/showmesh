@@ -48,8 +48,11 @@ serves RTSP cameras, and NDI streams report that NDI is not available.
 
 The container uses host networking: NDI discovery is mDNS and WebRTC media is
 UDP. Open 8095/tcp to the coordinator and 8555 (TCP and UDP) to browsers.
-go2rtc's own API listens on 127.0.0.1:1984 only and also requires a password
-the gateway generates on each start. The go2rtc RTSP and SRTP listeners are
+go2rtc's own API listens on a free loopback port the gateway picks on each
+start and also requires a password it generates on each start, so another
+service on the host, such as Frigate or Home Assistant on 1984, cannot collide
+with it or receive camera addresses. The gateway refuses to start if the WebRTC
+port is taken; set `SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT` to a free one. The go2rtc RTSP and SRTP listeners are
 turned off, and WebRTC does not use a STUN server, so previews stay on the
 local network. Address changes after start need a gateway restart.
 
@@ -57,7 +60,9 @@ local network. Address changes after start need a gateway restart.
 
 The NDI runtime finds sources through avahi-daemon over D-Bus. The image runs
 its own browse-only copies as root and drops to an unprivileged user for the
-gateway, so the host needs no Avahi. An NDI source that stops without saying
+gateway, so the host needs no Avahi. If Avahi stops, NDI streams report that
+discovery is not running and the container health check fails; restart the
+container. An NDI source that stops without saying
 goodbye can stay in the source list until its mDNS record expires.
 
 ## Cameras

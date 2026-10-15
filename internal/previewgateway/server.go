@@ -33,6 +33,12 @@ func NewServer(token string, m *Manager, sources SourceProvider, engine Engine) 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if h, ok := s.sources.(interface{ AvahiProblem() string }); ok {
+			if msg := h.AvahiProblem(); msg != "" {
+				http.Error(w, msg, http.StatusServiceUnavailable)
+				return
+			}
+		}
 		_, _ = io.WriteString(w, "ok\n")
 	})
 	mux.HandleFunc("GET /v1/sources", s.auth(s.getSources))

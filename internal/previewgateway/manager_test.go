@@ -35,12 +35,12 @@ func TestSetStartsOnlyChangedStreams(t *testing.T) {
 	changed := camB
 	changed.URL = "rtsp://u:p@h:554/other"
 	m.Set(ctx, []StreamSpec{ndiA, changed})
-	if len(e.puts) != 3 || e.streams[streamID("camera:b")] != changed.URL {
+	if len(e.puts) != 3 || len(e.deletes) != 1 || e.streams[streamID("camera:b")] != changed.URL {
 		t.Fatalf("changed stream not replaced: %v %v", e.puts, e.streams)
 	}
 
 	m.Set(ctx, []StreamSpec{ndiA})
-	if len(e.deletes) != 1 || e.deletes[0] != streamID("camera:b") {
+	if len(e.deletes) != 2 || e.deletes[1] != streamID("camera:b") {
 		t.Fatalf("removed stream not deleted: %v", e.deletes)
 	}
 	if _, _, ok := m.Lookup("camera:b"); ok {

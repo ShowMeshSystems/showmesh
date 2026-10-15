@@ -3,8 +3,10 @@ package previewgateway
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os/exec"
 	"sort"
 	"strings"
@@ -24,7 +26,18 @@ type SourceProvider interface {
 	Sources() []Source
 	// Announced is the set of announced names, and whether discovery works.
 	Announced() (names map[string]bool, ok bool)
+	// Unavailable states why discovery does not work and what to do, or is
+	// empty while it works.
+	Unavailable() string
 }
+
+const (
+	avahiSocket     = "/run/avahi-daemon/socket"
+	avahiWatchEvery = 5 * time.Second
+	msgRestarting   = "NDI discovery stopped. The gateway is restarting it."
+	msgNoAvahi      = "NDI discovery is not running because the Avahi service stopped. Restart the gateway container."
+	msgNoNDIRuntime = "NDI is not available on this host. Mount the NDI runtime and restart the gateway."
+)
 
 const (
 	retryDelay      = 5 * time.Second
@@ -35,28 +48,60 @@ const (
 // it appears and again when it goes away.
 type Discovery struct {
 	Log *slog.Logger
-	// Available reports whether the NDI plugin and runtime load.
+	// Available reports whether Avahi runs and the NDI plugin and runtime load.
 	Available func(ctx context.Context) error
+	// Avahi reports whether the Avahi service the NDI runtime browses through
+	// accepts connections.
+	Avahi func() error
 	// Monitor streams the monitor's output to w until it exits or ctx ends.
 	Monitor func(ctx context.Context, w io.Writer) error
 
 	mu      sync.Mutex
 	sources map[string]Source
 	ok      bool
+	msg     string
 }
 
 func NewDiscovery(log *slog.Logger) *Discovery {
-	return &Discovery{Log: log, Available: checkNDIPlugin, Monitor: runDeviceMonitor, sources: map[string]Source{}}
+	d := &Discovery{Log: log, Avahi: checkAvahi, Monitor: runDeviceMonitor, sources: map[string]Source{}}
+	d.Available = func(ctx context.Context) error {
+		if err := d.Avahi(); err != nil {
+			return err
+		}
+		return checkNDIPlugin(ctx)
+	}
+	return d
+}
+
+func checkAvahi() error {
+	c, err := net.DialTimeout("unix", avahiSocket, 2*time.Second)
+	if err != nil {
+		return errNoAvahi
+	}
+	return c.Close()
+}
+
+var errNoAvahi = errors.New("avahi is not running")
+
+// AvahiProblem is the operator message when Avahi is not running, or empty.
+func (d *Discovery) AvahiProblem() string {
+	if d.Avahi() != nil {
+		return msgNoAvahi
+	}
+	return ""
 }
 
 func checkNDIPlugin(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "gst-inspect-1.0", "ndisrc").Run()
+	cmd := exec.CommandContext(ctx, "gst-inspect-1.0", "ndisrc")
+	cmd.Env = minimalEnv(gstEnvKeys...)
+	return cmd.Run()
 }
 
 func runDeviceMonitor(ctx context.Context, w io.Writer) error {
 	cmd := exec.CommandContext(ctx, "gst-device-monitor-1.0", "-f", "-i", "Source/Network")
+	cmd.Env = minimalEnv(gstEnvKeys...)
 	cmd.Stdout = w
 	cmd.WaitDelay = 2 * time.Second
 	return cmd.Run()
@@ -67,29 +112,51 @@ func (d *Discovery) Loop(ctx context.Context) {
 	warned := false
 	for ctx.Err() == nil {
 		if err := d.Available(ctx); err != nil {
-			d.set(false)
+			msg := msgNoNDIRuntime
+			if errors.Is(err, errNoAvahi) {
+				msg = msgNoAvahi
+			}
+			d.set(false, msg)
 			if !warned {
-				d.Log.Warn("NDI is not available on this host. Mount the NDI runtime and restart the gateway.", "error", err)
+				d.Log.Warn(msg, "error", err)
 				warned = true
 			}
 			sleep(ctx, unavailableWait)
 			continue
 		}
 		warned = false
-		d.set(true)
+		d.set(true, "")
 		pr, pw := io.Pipe()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			d.consume(pr)
 		}()
-		err := d.Monitor(ctx, pw)
+		mctx, stopMonitor := context.WithCancel(ctx)
+		go d.watchAvahi(mctx, stopMonitor)
+		err := d.Monitor(mctx, pw)
+		stopMonitor()
 		_ = pw.Close()
 		<-done
-		d.set(false)
+		d.set(false, msgRestarting)
 		if ctx.Err() == nil {
 			d.Log.Warn("NDI discovery stopped. The gateway is restarting it.", "error", err)
 			sleep(ctx, retryDelay)
+		}
+	}
+}
+
+// watchAvahi ends the monitor when Avahi stops, which leaves it silent.
+func (d *Discovery) watchAvahi(ctx context.Context, stop context.CancelFunc) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(avahiWatchEvery):
+			if d.Avahi() != nil {
+				stop()
+				return
+			}
 		}
 	}
 }
@@ -101,10 +168,10 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-func (d *Discovery) set(ok bool) {
+func (d *Discovery) set(ok bool, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.ok = ok
+	d.ok, d.msg = ok, msg
 	d.sources = map[string]Source{}
 }
 
@@ -145,6 +212,15 @@ func (d *Discovery) Sources() []Source {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (d *Discovery) Unavailable() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ok {
+		return ""
+	}
+	return d.msg
 }
 
 func (d *Discovery) Announced() (map[string]bool, bool) {

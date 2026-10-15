@@ -49,7 +49,8 @@ type Manager struct {
 	log     *slog.Logger
 	now     func() time.Time
 
-	mu      sync.Mutex
+	applyMu sync.Mutex // serialises engine writes
+	mu      sync.Mutex // guards desired and its entries
 	desired map[string]*entry
 }
 
@@ -78,56 +79,78 @@ func (m *Manager) sourceFor(s StreamSpec) string {
 	return s.URL
 }
 
-// Set makes specs the desired set. An unchanged stream is left running.
+// Set makes specs the desired set. A stream whose spec is unchanged is left
+// running; one whose spec changed is removed from the engine and added again.
 func (m *Manager) Set(ctx context.Context, specs []StreamSpec) {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+	var drop []string
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	next := make(map[string]*entry, len(specs))
 	for _, s := range specs {
 		e := &entry{spec: s, id: streamID(s.Key), source: m.sourceFor(s)}
-		if old, ok := m.desired[s.Key]; ok && old.source == e.source {
-			e.applied, e.failedAt = old.applied, old.failedAt
+		if old, ok := m.desired[s.Key]; ok {
+			if old.spec == s {
+				e.applied, e.failedAt = old.applied, old.failedAt
+			} else if old.applied {
+				drop = append(drop, old.id)
+			}
 		}
 		next[s.Key] = e
 	}
 	for key, old := range m.desired {
 		if _, kept := next[key]; !kept {
-			if err := m.engine.Delete(ctx, old.id); err != nil {
-				m.log.Warn("Removing a stream failed.", "id", old.id, "error", err)
-			}
+			drop = append(drop, old.id)
 		}
 	}
 	m.desired = next
+	m.mu.Unlock()
+	for _, id := range drop {
+		if err := m.engine.Delete(ctx, id); err != nil {
+			m.log.Warn("Removing a stream failed.", "id", id, "error", err)
+		}
+	}
 	m.applyPending(ctx)
 }
 
 // Retry applies every stream the engine has not accepted yet.
 func (m *Manager) Retry(ctx context.Context) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	m.applyPending(ctx)
 }
 
 // Resync forgets what the engine holds, for use after the engine restarts.
 func (m *Manager) Resync(ctx context.Context) {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, e := range m.desired {
 		e.applied = false
 	}
+	m.mu.Unlock()
 	m.applyPending(ctx)
 }
 
+// applyPending calls the engine without holding m.mu, so a slow engine never
+// blocks status or lookups. The caller holds applyMu.
 func (m *Manager) applyPending(ctx context.Context) {
+	m.mu.Lock()
+	var pending []*entry
 	for _, e := range m.desired {
-		if e.applied {
-			continue
+		if !e.applied {
+			pending = append(pending, e)
 		}
+	}
+	m.mu.Unlock()
+	for _, e := range pending {
 		if err := m.engine.Put(ctx, e.id, e.source); err != nil {
 			m.log.Warn("Adding a stream failed.", "id", e.id, "error", err)
 			continue
 		}
+		m.mu.Lock()
 		e.applied = true
+		m.mu.Unlock()
 	}
 }
 
@@ -203,7 +226,11 @@ func (m *Manager) classify(e entry, gi Go2RTCInfo, announced map[string]bool, di
 	}
 	if e.spec.Kind == KindNDI {
 		if !discoveryOK {
-			return StateError, "NDI is not available on this host. Mount the NDI runtime and restart the gateway."
+			msg := m.sources.Unavailable()
+			if msg == "" {
+				msg = msgNoNDIRuntime
+			}
+			return StateError, msg
 		}
 		if !announced[e.spec.NDIName] {
 			return StateNotFound, "The NDI source is not announced on the network. Start the sender or check the network."

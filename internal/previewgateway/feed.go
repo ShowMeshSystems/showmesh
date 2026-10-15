@@ -52,7 +52,9 @@ func gstreamerCommand(ctx context.Context, name string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, "gst-launch-1.0", args...), nil
+	cmd := exec.CommandContext(ctx, "gst-launch-1.0", args...)
+	cmd.Env = minimalEnv(gstEnvKeys...)
+	return cmd, nil
 }
 
 func (f *Feed) Handler() http.Handler {

@@ -200,13 +200,13 @@ func TestRedactAndConfig(t *testing.T) {
 	if got := redact(`dial rtsp://admin:hunter2@10.0.0.5:554/x failed`); strings.Contains(got, "hunter2") || strings.Contains(got, "admin") {
 		t.Fatalf("credentials survive: %s", got)
 	}
-	cfg := go2rtcConfig("pw", "8555", []string{"192.168.1.5:8555"})
-	for _, want := range []string{`listen: "127.0.0.1:1984"`, "local_auth: true", "rtsp:\n  listen: \"\"", "srtp:\n  listen: \"\"", `listen: ":8555"`, "ice_servers: []", `- "192.168.1.5:8555"`} {
+	cfg := go2rtcConfig("127.0.0.1:41984", "pw", "8555", []string{"192.168.1.5:8555"})
+	for _, want := range []string{`listen: "127.0.0.1:41984"`, "local_auth: true", "rtsp:\n  listen: \"\"", "srtp:\n  listen: \"\"", `listen: ":8555"`, "ice_servers: []", `- "192.168.1.5:8555"`} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config lacks %q:\n%s", want, cfg)
 		}
 	}
-	if strings.Contains(go2rtcConfig("pw", "8555", nil), "candidates") {
+	if strings.Contains(go2rtcConfig("127.0.0.1:41984", "pw", "8555", nil), "candidates") {
 		t.Error("an empty candidate list must be left out")
 	}
 	if !isJPEG([]byte{0xFF, 0xD8, 0, 0xFF, 0xD9}) || isJPEG([]byte{}) || isJPEG([]byte("<html>")) {

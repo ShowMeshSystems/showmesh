@@ -6,7 +6,8 @@
 # The NDI runtime (libndi.so.6) is never part of this image (ADR-010). The
 # operator downloads it and mounts it at /opt/ndi at run time. The entrypoint
 # starts D-Bus and avahi-daemon as root, which NDI discovery needs, then runs
-# the gateway as the unprivileged showmesh user (uid 10001).
+# the gateway as the unprivileged showmesh user (uid 10001). tini is PID 1 so
+# exited helper processes are reaped.
 
 FROM debian:trixie AS ndi-plugin
 COPY deploy/node/ndi-plugin/build-ndi-plugin.sh /usr/local/bin/build-ndi-plugin.sh
@@ -52,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ffmpeg \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good \
       gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-      dbus avahi-daemon \
+      dbus avahi-daemon tini \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home --home-dir /home/showmesh showmesh
 
@@ -70,5 +71,5 @@ ENV GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
 EXPOSE 8095 8555
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD ["/usr/local/bin/showmesh-preview-gateway", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/local/bin/showmesh-preview-gateway"]

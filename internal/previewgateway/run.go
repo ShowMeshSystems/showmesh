@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,9 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if c.WebRTCPort == "" {
 		c.WebRTCPort = "8555"
 	}
+	if n, err := strconv.Atoi(c.WebRTCPort); err != nil || n < 1 || n > 65535 {
+		return c, problemf("The WebRTC port %q is not a port number. Set SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT to a number from 1 to 65535.", c.WebRTCPort)
+	}
 	if strings.TrimSpace(c.Token) == "" {
 		return c, problem("The gateway token is not set. Set SHOWMESH_PREVIEW_GATEWAY_TOKEN and start the gateway again.")
 	}
@@ -50,10 +54,10 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 
 // Run serves the gateway until ctx ends.
 func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
-	sup, client, err := NewSupervisor(cfg.Go2RTCBin, cfg.WebRTCPort, log)
-	if err != nil {
+	if err := CheckWebRTCPort(cfg.WebRTCPort); err != nil {
 		return err
 	}
+	sup, client := NewSupervisor(cfg.Go2RTCBin, cfg.WebRTCPort, log)
 	disc := NewDiscovery(log)
 	secret, err := randomHex(16)
 	if err != nil {
@@ -71,7 +75,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	defer func() { _ = feed.Close() }()
 
 	sup.Candidates = cfg.Candidates
-	go sup.Run(ctx)
+	errc := make(chan error, 2)
+	go func() {
+		if err := sup.Run(ctx); err != nil {
+			errc <- err
+		}
+	}()
 	go disc.Loop(ctx)
 	go func() {
 		t := time.NewTicker(5 * time.Second)
@@ -91,7 +100,6 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		Handler:           NewServer(cfg.Token, mgr, disc, client).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	select {
 	case err := <-errc:

@@ -63,9 +63,11 @@ type fakeSources struct {
 	names map[string]bool
 	ok    bool
 	list  []Source
+	msg   string
 }
 
-func (f *fakeSources) Sources() []Source { return f.list }
+func (f *fakeSources) Sources() []Source   { return f.list }
+func (f *fakeSources) Unavailable() string { return f.msg }
 func (f *fakeSources) Announced() (map[string]bool, bool) {
 	return f.names, f.ok
 }

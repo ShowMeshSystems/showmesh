@@ -121,8 +121,12 @@ Secrets come from a file or stdin, never a flag value.
 
 Every request carries `Authorization: Bearer <token>`. The token comes from
 `SHOWMESH_PREVIEW_GATEWAY_TOKEN`. The gateway listens on
-`SHOWMESH_PREVIEW_GATEWAY_ADDR`, default `:8095`. go2rtc's API listens on
-`127.0.0.1:1984` only. Its WebRTC port is `8555`, TCP and UDP.
+`SHOWMESH_PREVIEW_GATEWAY_ADDR`, default `:8095`. go2rtc's API listens on a
+random free loopback port chosen on every start and needs a per-run password;
+the gateway sends it camera addresses only after the process on that port has
+shown it knows the password. Its WebRTC port is `8555` by default, TCP and UDP,
+set with `SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT`. The gateway exits with an
+error if that port is taken.
 
 - `GET /v1/sources`: NDI sources currently announced,
   `[{"name": "NODE-01 (matrix-main)", "address": "192.168.130.22:5961"}]`.
