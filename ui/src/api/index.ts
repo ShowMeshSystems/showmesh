@@ -5,22 +5,20 @@
  * `useModel.ts` adds out of necessity (see that file's header comment).
  */
 export type {
+  ConfigDashboardLayoutPayload,
+  ConfigDashboardLayoutPutRequest,
   ConfigPreviewCameraPayload,
   ConfigPreviewCameraPutRequest,
   ConfigPreviewGatewayPayload,
   ConfigPreviewGatewayPutRequest,
   DashboardLayoutConfigResponse,
-  DashboardLayoutPayload,
   PreviewCameraConfigResponse,
-  PreviewCameraListResponse,
   PreviewGateway,
   PreviewGatewayConfigResponse,
   PreviewGatewayState,
   PreviewTile,
   PreviewTileState,
   PreviewsResponse,
-} from './previewTypes'
-export type {
   Capability,
   CollectorStatus,
   ConfigFPPEndpoint,
@@ -387,7 +385,6 @@ export {
   getPreviewSnapshot,
   getPreviewGatewayConfig,
   putPreviewGatewayConfig,
-  listPreviewCameras,
   getPreviewCamera,
   putPreviewCamera,
   deletePreviewCamera,

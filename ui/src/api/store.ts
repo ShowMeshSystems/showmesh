@@ -96,16 +96,6 @@ import { sleep, waitUntilAborted } from './async-utils'
 import { clearStoredToken, setStoredToken } from './token'
 import { randomUUIDv4 } from './uuid'
 import type { components } from './generated/schema'
-import type {
-  ConfigPreviewCameraPutRequest as SchemaConfigPreviewCameraPutRequest,
-  ConfigPreviewGatewayPutRequest as SchemaConfigPreviewGatewayPutRequest,
-  DashboardLayoutConfigResponse as SchemaDashboardLayoutConfigResponse,
-  DashboardLayoutPayload as SchemaDashboardLayoutPayload,
-  PreviewCameraConfigResponse as SchemaPreviewCameraConfigResponse,
-  PreviewCameraListResponse as SchemaPreviewCameraListResponse,
-  PreviewGatewayConfigResponse as SchemaPreviewGatewayConfigResponse,
-  PreviewsResponse as SchemaPreviewsResponse,
-} from './previewTypes'
 
 type SchemaSnapshot = components['schemas']['Snapshot']
 type SchemaEventsResponse = components['schemas']['EventsResponse']
@@ -251,6 +241,13 @@ type SchemaShowPlaylistMovePreviewResponse = components['schemas']['ShowPlaylist
 // media.playlist's own read/write response, same aliasing pattern.
 type SchemaConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
 type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
+type SchemaConfigPreviewCameraPutRequest = components['schemas']['ConfigPreviewCameraPutRequest']
+type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreviewGatewayPutRequest']
+type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
+type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
+type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
+type SchemaPreviewsResponse = components['schemas']['PreviewsResponse']
 type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
@@ -642,16 +639,6 @@ export class ApiStore {
     }
   }
 
-  /** `GET /api/v1/config/preview.camera`: the ids of every configured camera. */
-  async listPreviewCameras(): Promise<SchemaPreviewCameraListResponse> {
-    const controller = this.beginSideCall()
-    try {
-      return await this.client.getJson<SchemaPreviewCameraListResponse>('/config/preview.camera', controller.signal)
-    } finally {
-      this.endSideCall(controller)
-    }
-  }
-
   /** `GET /api/v1/config/preview.camera/{id}`. Throws (404) when no such camera exists. The URL is never returned; `payload.urlDisplay` is scheme, host and port only. */
   async getPreviewCamera(id: string): Promise<SchemaPreviewCameraConfigResponse> {
     const controller = this.beginSideCall()
@@ -683,7 +670,7 @@ export class ApiStore {
   }
 
   /** `PUT /api/v1/config/dashboard.layout`: the tile order and the hidden tiles. */
-  async putDashboardLayout(payload: SchemaDashboardLayoutPayload): Promise<SchemaDashboardLayoutConfigResponse> {
+  async putDashboardLayout(payload: SchemaConfigDashboardLayoutPutRequest): Promise<SchemaDashboardLayoutConfigResponse> {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', payload, controller.signal)
@@ -2535,7 +2522,8 @@ export class ApiStore {
       | 'show.playlist'
       | 'media.playlist'
       | 'night.session'
-      | 'node.clock',
+      | 'node.clock'
+      | 'preview.camera',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse>
   // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
@@ -2554,6 +2542,7 @@ export class ApiStore {
       | 'media.playlist'
       | 'night.session'
       | 'node.clock'
+      | 'preview.camera'
       | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

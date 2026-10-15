@@ -22,16 +22,13 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  ConfigDashboardLayoutPutRequest,
   ConfigPreviewCameraPutRequest,
   ConfigPreviewGatewayPutRequest,
   DashboardLayoutConfigResponse,
-  DashboardLayoutPayload,
   PreviewCameraConfigResponse,
-  PreviewCameraListResponse,
   PreviewGatewayConfigResponse,
   PreviewsResponse,
-} from './previewTypes'
-import type {
   AcknowledgeFPPInstanceUUIDChangeResponse,
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPutPayload,
@@ -772,7 +769,8 @@ export function listConfigObjects(
     | 'show.playlist'
     | 'media.playlist'
     | 'night.session'
-    | 'node.clock',
+    | 'node.clock'
+    | 'preview.camera',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -790,6 +788,7 @@ export function listConfigObjects(
     | 'media.playlist'
     | 'night.session'
     | 'node.clock'
+    | 'preview.camera'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
@@ -1234,10 +1233,6 @@ export function putPreviewGatewayConfig(request: ConfigPreviewGatewayPutRequest)
   return store.putPreviewGatewayConfig(request)
 }
 
-export function listPreviewCameras(): Promise<PreviewCameraListResponse> {
-  return store.listPreviewCameras()
-}
-
 export function getPreviewCamera(id: string): Promise<PreviewCameraConfigResponse> {
   return store.getPreviewCamera(id)
 }
@@ -1250,6 +1245,6 @@ export function deletePreviewCamera(id: string): Promise<void> {
   return store.deletePreviewCamera(id)
 }
 
-export function putDashboardLayout(payload: DashboardLayoutPayload): Promise<DashboardLayoutConfigResponse> {
+export function putDashboardLayout(payload: ConfigDashboardLayoutPutRequest): Promise<DashboardLayoutConfigResponse> {
   return store.putDashboardLayout(payload)
 }

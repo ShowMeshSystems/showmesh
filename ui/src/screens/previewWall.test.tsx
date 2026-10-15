@@ -32,6 +32,7 @@ const tile = (key: string, label: string, over: Partial<PreviewTile> = {}): Prev
 })
 
 const response = (tiles: PreviewTile[], gateway: Partial<PreviewsResponse['gateway']> = {}): PreviewsResponse => ({
+  serverTime: '2026-10-15T12:00:00Z',
   gateway: { state: 'reachable', message: '', observedAt: '2026-10-15T12:00:00Z', ...gateway },
   tiles,
 })

@@ -4,7 +4,7 @@ import {
   deletePreviewCamera,
   getPreviewCamera,
   getPreviewGatewayConfig,
-  listPreviewCameras,
+  listConfigObjects,
   putPreviewCamera,
   putPreviewGatewayConfig,
   type PreviewCameraConfigResponse,
@@ -145,7 +145,7 @@ type CameraLoad = { kind: 'loading' } | { kind: 'loaded'; rows: CameraRow[] } | 
 async function readCameras(): Promise<CameraRow[]> {
   let ids: string[]
   try {
-    ids = (await listPreviewCameras()).objects.map((object) => object.id)
+    ids = (await listConfigObjects('preview.camera')).objects.map((object) => object.id)
   } catch (err: unknown) {
     if (err instanceof ApiError && err.status === 404) return []
     throw err

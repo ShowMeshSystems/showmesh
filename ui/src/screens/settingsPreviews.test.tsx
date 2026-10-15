@@ -7,7 +7,7 @@ import { ModelContext } from '../app/ModelContext'
 const stubs = vi.hoisted(() => ({
   getPreviewGatewayConfig: vi.fn(),
   putPreviewGatewayConfig: vi.fn(),
-  listPreviewCameras: vi.fn(),
+  listConfigObjects: vi.fn(),
   getPreviewCamera: vi.fn(),
   putPreviewCamera: vi.fn(),
   deletePreviewCamera: vi.fn(),
@@ -40,11 +40,14 @@ const envelope = <K extends string, P>(kind: K, payload: P, revision = 1) => ({
   updatedAt: '2026-10-15T12:00:00Z',
   createdByPrincipalId: null,
   createdByPrincipalName: null,
+  source: 'api' as const,
 })
 
 const gatewayResponse = (revision = 1) => envelope('preview.gateway', { url: 'http://10.0.0.9:8095', tokenSet: true }, revision)
-const cameraResponse = (revision = 1) =>
-  envelope('preview.camera', { name: 'Driveway', enabled: true, urlSet: true, urlDisplay: 'rtsp://192.168.1.20:37379' }, revision)
+const cameraResponse = (revision = 1) => ({
+  ...envelope('preview.camera', { name: 'Driveway', enabled: true, urlSet: true, urlDisplay: 'rtsp://192.168.1.20:37379' }, revision),
+  id: 'driveway',
+})
 
 function renderSettings(scopes = ['config:write'], model: Partial<Model> = {}) {
   return render(
@@ -59,7 +62,11 @@ const notFound = () => new ApiError('not found', 404)
 beforeEach(() => {
   stubs.getPreviewGatewayConfig.mockResolvedValue(gatewayResponse())
   stubs.putPreviewGatewayConfig.mockResolvedValue(gatewayResponse(2))
-  stubs.listPreviewCameras.mockResolvedValue({ serverTime: '', kind: 'preview.camera', objects: [{ id: 'driveway' }] })
+  stubs.listConfigObjects.mockResolvedValue({
+    serverTime: '2026-10-15T12:00:00Z',
+    kind: 'preview.camera',
+    objects: [{ id: 'driveway', label: 'Driveway', show: '', currentRevision: 1, updatedAt: '2026-10-15T12:00:00Z' }],
+  })
   stubs.getPreviewCamera.mockResolvedValue(cameraResponse())
   stubs.putPreviewCamera.mockResolvedValue(cameraResponse(2))
   stubs.deletePreviewCamera.mockResolvedValue(undefined)
@@ -130,7 +137,7 @@ describe('Settings › preview cameras', () => {
   })
 
   it('says so when there are no cameras', async () => {
-    stubs.listPreviewCameras.mockRejectedValue(notFound())
+    stubs.listConfigObjects.mockRejectedValue(notFound())
     renderSettings()
     expect(await screen.findByText('No cameras')).toBeInTheDocument()
   })
