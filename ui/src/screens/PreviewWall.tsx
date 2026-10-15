@@ -14,13 +14,15 @@ type PreviewRead = { data: PreviewsResponse | null; readAt: number | null; faile
 function usePreviews(): PreviewRead & { refresh: () => Promise<void> } {
   const [read, setRead] = useState<PreviewRead>({ data: null, readAt: null, failed: false })
   const alive = useRef(true)
+  const refreshSeq = useRef(0)
 
   const refresh = useCallback(async () => {
+    const seq = ++refreshSeq.current
     try {
       const data = await getPreviews()
-      if (alive.current) setRead({ data, readAt: Date.now(), failed: false })
+      if (alive.current && seq === refreshSeq.current) setRead({ data, readAt: Date.now(), failed: false })
     } catch {
-      if (alive.current) setRead((previous) => ({ ...previous, failed: true }))
+      if (alive.current && seq === refreshSeq.current) setRead((previous) => ({ ...previous, failed: true }))
     }
   }, [])
 
@@ -47,7 +49,8 @@ export function PreviewWall() {
   const [showHiddenList, setShowHiddenList] = useState(false)
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [overKey, setOverKey] = useState<string | null>(null)
-  const saveSeq = useRef(0)
+  const saving = useRef(false)
+  const queued = useRef<PreviewLayout | null>(null)
 
   if (data === null || data.gateway.state === 'not_configured') return null
 
@@ -58,17 +61,26 @@ export function PreviewWall() {
 
   const commit = async (next: PreviewLayout) => {
     if (!gate.allowed || next === layout) return
-    const seq = ++saveSeq.current
     setPending(next)
     setSaveError(null)
-    try {
-      await putDashboardLayout({ previews: next })
-      await refresh()
-    } catch (err: unknown) {
-      setSaveError(describeApiError(err))
-    } finally {
-      if (seq === saveSeq.current) setPending(null)
+    if (saving.current) {
+      queued.current = next
+      return
     }
+    saving.current = true
+    let current: PreviewLayout | null = next
+    while (current !== null) {
+      try {
+        await putDashboardLayout({ previews: current })
+        await refresh()
+      } catch (err: unknown) {
+        if (queued.current === null) setSaveError(describeApiError(err))
+      }
+      current = queued.current
+      queued.current = null
+    }
+    saving.current = false
+    setPending(null)
   }
 
   const endDrag = () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ICE_WAIT_MS, SNAPSHOT_INTERVAL_MS, TRACK_WAIT_MS, WEBRTC_RETRY_MS, startFeed, type FeedDeps } from './previewFeed'
+import { DISCONNECT_GRACE_MS, ICE_WAIT_MS, SNAPSHOT_INTERVAL_MS, TRACK_WAIT_MS, WEBRTC_RETRY_MS, startFeed, type FeedDeps } from './previewFeed'
 
 class FakePeer {
   static all: FakePeer[] = []
@@ -34,8 +34,9 @@ class FakePeer {
 
 const blob = new Blob(['x'], { type: 'image/jpeg' })
 
-function makeDeps(overrides: Partial<FeedDeps> = {}): FeedDeps & { revoked: string[] } {
+function makeDeps(overrides: Partial<FeedDeps> = {}): FeedDeps & { revoked: string[]; frames: Array<() => void> } {
   const revoked: string[] = []
+  const frames: Array<() => void> = []
   let n = 0
   return {
     createPeer: () => new FakePeer() as unknown as RTCPeerConnection,
@@ -43,7 +44,12 @@ function makeDeps(overrides: Partial<FeedDeps> = {}): FeedDeps & { revoked: stri
     getSnapshot: vi.fn(async () => blob),
     createObjectURL: () => `blob:frame-${++n}`,
     revokeObjectURL: (url) => revoked.push(url),
+    watchFrame: (_stream, onFrame) => {
+      frames.push(onFrame)
+      return () => {}
+    },
     revoked,
+    frames,
     ...overrides,
   }
 }
@@ -53,6 +59,12 @@ beforeEach(() => {
   FakePeer.all = []
 })
 afterEach(() => vi.useRealTimers())
+
+function connect(peer: FakePeer, stream: unknown = { id: 's' }) {
+  peer.ontrack?.({ streams: [stream] } as unknown as RTCTrackEvent)
+  peer.connectionState = 'connected'
+  peer.onconnectionstatechange?.()
+}
 
 const handlers = () => ({ onStream: vi.fn(), onSnapshot: vi.fn() })
 
@@ -69,16 +81,115 @@ describe('preview feed', () => {
     expect(deps.getSnapshot).not.toHaveBeenCalled()
   })
 
-  it('hands over the stream when a track arrives and never polls', async () => {
+  it('hands over the stream only once connected and a frame has decoded, and never polls', async () => {
     const deps = makeDeps()
     const h = handlers()
     startFeed('k', h, deps)
     await vi.advanceTimersByTimeAsync(0)
     const stream = { id: 's' } as unknown as MediaStream
-    FakePeer.all[0]!.ontrack?.({ streams: [stream] } as unknown as RTCTrackEvent)
+    connect(FakePeer.all[0]!, stream)
+    expect(h.onStream).not.toHaveBeenCalled()
+    deps.frames[0]!()
     expect(h.onStream).toHaveBeenCalledWith(stream)
     await vi.advanceTimersByTimeAsync(TRACK_WAIT_MS + SNAPSHOT_INTERVAL_MS)
     expect(deps.getSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('hands over when the frame decodes before the connection reports connected', async () => {
+    const deps = makeDeps()
+    const h = handlers()
+    startFeed('k', h, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    const peer = FakePeer.all[0]!
+    peer.ontrack?.({ streams: [{ id: 's' }] } as unknown as RTCTrackEvent)
+    deps.frames[0]!()
+    expect(h.onStream).not.toHaveBeenCalled()
+    peer.connectionState = 'connected'
+    peer.onconnectionstatechange?.()
+    expect(h.onStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps showing snapshots when a track arrives but UDP is blocked', async () => {
+    const deps = makeDeps({ postOffer: vi.fn(async () => 'answer-sdp') })
+    const h = handlers()
+    startFeed('k', h, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    FakePeer.all[0]!.ontrack?.({ streams: [{ id: 's' }] } as unknown as RTCTrackEvent)
+    await vi.advanceTimersByTimeAsync(TRACK_WAIT_MS)
+    expect(h.onStream).not.toHaveBeenCalledWith(expect.objectContaining({ id: 's' }))
+    expect(FakePeer.all[0]!.closed).toBe(true)
+    const calls = (deps.getSnapshot as ReturnType<typeof vi.fn>).mock.calls.length
+    expect(calls).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(WEBRTC_RETRY_MS - TRACK_WAIT_MS - 1)
+    expect((deps.getSnapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(calls)
+    expect(h.onSnapshot).toHaveBeenLastCalledWith(expect.stringMatching(/^blob:/))
+    expect(h.onSnapshot).not.toHaveBeenLastCalledWith(null)
+  })
+
+  it('keeps polling while the track is up but the connection has not connected', async () => {
+    const deps = makeDeps()
+    const h = handlers()
+    startFeed('k', h, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    FakePeer.all[0]!.ontrack?.({ streams: [{}] } as unknown as RTCTrackEvent)
+    deps.frames[0]!()
+    await vi.advanceTimersByTimeAsync(TRACK_WAIT_MS)
+    expect(h.onStream).not.toHaveBeenCalledWith(expect.anything())
+    expect(deps.getSnapshot).toHaveBeenCalled()
+  })
+
+  it('falls back when the connection stays disconnected', async () => {
+    const deps = makeDeps()
+    const h = handlers()
+    startFeed('k', h, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    const peer = FakePeer.all[0]!
+    connect(peer)
+    deps.frames[0]!()
+    expect(h.onStream).toHaveBeenCalledTimes(1)
+    peer.connectionState = 'disconnected'
+    peer.onconnectionstatechange?.()
+    await vi.advanceTimersByTimeAsync(DISCONNECT_GRACE_MS)
+    expect(peer.closed).toBe(true)
+    expect(h.onStream).toHaveBeenLastCalledWith(null)
+    expect(deps.getSnapshot).toHaveBeenCalled()
+  })
+
+  it('does not fall back when a disconnect recovers within the grace period', async () => {
+    const deps = makeDeps()
+    startFeed('k', handlers(), deps)
+    await vi.advanceTimersByTimeAsync(0)
+    const peer = FakePeer.all[0]!
+    connect(peer)
+    deps.frames[0]!()
+    peer.connectionState = 'disconnected'
+    peer.onconnectionstatechange?.()
+    await vi.advanceTimersByTimeAsync(DISCONNECT_GRACE_MS - 1)
+    peer.connectionState = 'connected'
+    peer.onconnectionstatechange?.()
+    await vi.advanceTimersByTimeAsync(DISCONNECT_GRACE_MS * 2)
+    expect(peer.closed).toBe(false)
+  })
+
+  it('runs one polling loop when a stale snapshot fetch lands after polling restarted', async () => {
+    const stale: Array<(blob: Blob) => void> = []
+    let calls = 0
+    const getSnapshot = vi.fn(() => (++calls === 1 ? new Promise<Blob>((resolve) => stale.push(resolve)) : Promise.resolve(blob)))
+    const postOffer = vi.fn().mockRejectedValueOnce(new Error('502')).mockResolvedValue('answer-sdp')
+    const deps = makeDeps({ postOffer, getSnapshot })
+    startFeed('k', handlers(), deps)
+    await vi.advanceTimersByTimeAsync(WEBRTC_RETRY_MS)
+    const second = FakePeer.all[1]!
+    connect(second)
+    deps.frames[0]!()
+    second.connectionState = 'failed'
+    second.onconnectionstatechange?.()
+    await vi.advanceTimersByTimeAsync(0)
+    stale[0]!(blob)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = getSnapshot.mock.calls.length
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_INTERVAL_MS * 4)
+    expect(getSnapshot.mock.calls.length - before).toBe(4)
   })
 
   it('falls back to polling the snapshot every 2 s when the offer is refused', async () => {
@@ -141,7 +252,8 @@ describe('preview feed', () => {
     startFeed('k', h, deps)
     await vi.advanceTimersByTimeAsync(WEBRTC_RETRY_MS)
     expect(FakePeer.all).toHaveLength(2)
-    FakePeer.all[1]!.ontrack?.({ streams: [{}] } as unknown as RTCTrackEvent)
+    connect(FakePeer.all[1]!, {})
+    deps.frames[0]!()
     expect(h.onSnapshot).toHaveBeenLastCalledWith(null)
     const calls = (deps.getSnapshot as ReturnType<typeof vi.fn>).mock.calls.length
     await vi.advanceTimersByTimeAsync(SNAPSHOT_INTERVAL_MS * 3)

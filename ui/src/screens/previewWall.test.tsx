@@ -166,6 +166,57 @@ describe('PreviewWall', () => {
     expect(labels()).toEqual(['A', 'B'])
   })
 
+  it('applies only the latest refresh when an older one answers last', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const resolvers: Array<(value: PreviewsResponse) => void> = []
+    stubs.getPreviews.mockImplementation(() => new Promise<PreviewsResponse>((resolve) => resolvers.push(resolve)))
+    renderWall()
+    await act(async () => {})
+    await act(async () => {
+      vi.advanceTimersByTime(5000)
+    })
+    expect(resolvers).toHaveLength(2)
+    await act(async () => resolvers[1]!(response([tile('camera:b', 'B'), tile('camera:a', 'A')])))
+    expect(labels()).toEqual(['B', 'A'])
+    await act(async () => resolvers[0]!(response([tile('camera:a', 'A'), tile('camera:b', 'B')])))
+    expect(labels()).toEqual(['B', 'A'])
+    vi.useRealTimers()
+  })
+
+  it('sends layout saves one at a time and only the latest queued order', async () => {
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A'), tile('camera:b', 'B'), tile('camera:c', 'C')]))
+    const releases: Array<() => void> = []
+    stubs.putDashboardLayout.mockImplementation(() => new Promise<object>((resolve) => releases.push(() => resolve({}))))
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    fireEvent.click(screen.getByRole('button', { name: 'Move A later' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Move C earlier' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide B' }))
+    expect(stubs.putDashboardLayout).toHaveBeenCalledTimes(1)
+    await act(async () => releases[0]!())
+    await waitFor(() => expect(stubs.putDashboardLayout).toHaveBeenCalledTimes(2))
+    expect(stubs.putDashboardLayout).toHaveBeenLastCalledWith({ previews: { order: ['camera:b', 'camera:c', 'camera:a'], hidden: ['camera:b'] } })
+    await act(async () => releases[1]!())
+    expect(stubs.putDashboardLayout).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows no error when a failed save is followed by a queued save that succeeds', async () => {
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A'), tile('camera:b', 'B')]))
+    const settle: Array<{ ok: () => void; fail: () => void }> = []
+    stubs.putDashboardLayout.mockImplementation(
+      () => new Promise<object>((resolve, reject) => settle.push({ ok: () => resolve({}), fail: () => reject(new ApiError('nope')) })),
+    )
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    fireEvent.click(screen.getByRole('button', { name: 'Move A later' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide A' }))
+    await act(async () => settle[0]!.fail())
+    expect(screen.queryByText('Layout not saved')).toBeNull()
+    await waitFor(() => expect(settle).toHaveLength(2))
+    await act(async () => settle[1]!.ok())
+    expect(screen.queryByText('Layout not saved')).toBeNull()
+  })
+
   it('disables the layout controls with a reason when the principal cannot write configuration', async () => {
     stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A'), tile('camera:b', 'B')]))
     renderWall([])

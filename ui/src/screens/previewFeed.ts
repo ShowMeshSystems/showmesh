@@ -4,6 +4,7 @@ export const SNAPSHOT_INTERVAL_MS = 2000
 export const TRACK_WAIT_MS = 8000
 export const ICE_WAIT_MS = 2000
 export const WEBRTC_RETRY_MS = 30000
+export const DISCONNECT_GRACE_MS = 5000
 
 export type FeedHandlers = {
   /** The live video stream, or null when there is none. */
@@ -18,6 +19,28 @@ export type FeedDeps = {
   getSnapshot: (key: string, signal: AbortSignal) => Promise<Blob>
   createObjectURL: (blob: Blob) => string
   revokeObjectURL: (url: string) => void
+  /** Calls onFrame once the stream has decoded a picture. Returns the function that cancels the wait. */
+  watchFrame: (stream: MediaStream, onFrame: () => void) => () => void
+}
+
+function watchFrameInVideo(stream: MediaStream, onFrame: () => void): () => void {
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  const done = () => {
+    cancel()
+    onFrame()
+  }
+  const cancel = () => {
+    video.removeEventListener('loadeddata', done)
+    video.removeEventListener('playing', done)
+    video.srcObject = null
+  }
+  video.addEventListener('loadeddata', done)
+  video.addEventListener('playing', done)
+  video.srcObject = stream
+  void video.play().catch(() => {})
+  return cancel
 }
 
 export const defaultFeedDeps: FeedDeps = {
@@ -26,11 +49,12 @@ export const defaultFeedDeps: FeedDeps = {
   getSnapshot: getPreviewSnapshot,
   createObjectURL: (blob) => URL.createObjectURL(blob),
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
+  watchFrame: watchFrameInVideo,
 }
 
 /**
  * Feeds one tile: WebRTC first, and snapshot polling every 2 s whenever WebRTC
- * fails or sends no picture. While polling it tries WebRTC again every 30 s.
+ * fails or sends no decoded picture. While polling it tries WebRTC again every 30 s.
  * Returns the function that closes everything.
  */
 export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = defaultFeedDeps): () => void {
@@ -42,9 +66,15 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let trackTimer: ReturnType<typeof setTimeout> | undefined
   let snapshotUrl: string | null = null
+  let pollGen = 0
+  let cancelFrameWatch: (() => void) | undefined
+  let disconnectTimer: ReturnType<typeof setTimeout> | undefined
 
   const closePeer = () => {
     clearTimeout(trackTimer)
+    clearTimeout(disconnectTimer)
+    cancelFrameWatch?.()
+    cancelFrameWatch = undefined
     if (peer !== null) {
       peer.ontrack = null
       peer.onconnectionstatechange = null
@@ -58,27 +88,28 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
     snapshotUrl = null
   }
 
-  const poll = async () => {
+  const poll = async (gen: number) => {
     try {
       const blob = await deps.getSnapshot(key, abort.signal)
-      if (stopped || !polling) return
+      if (stopped || gen !== pollGen) return
       dropSnapshot()
       snapshotUrl = deps.createObjectURL(blob)
       handlers.onSnapshot(snapshotUrl)
     } catch {
       // A failed poll keeps the last frame on screen; the tile's state word reports the source.
     }
-    if (!stopped && polling) pollTimer = setTimeout(poll, SNAPSHOT_INTERVAL_MS)
+    if (!stopped && gen === pollGen) pollTimer = setTimeout(() => void poll(gen), SNAPSHOT_INTERVAL_MS)
   }
 
   const startPolling = () => {
     if (polling || stopped) return
     polling = true
-    void poll()
+    void poll(++pollGen)
   }
 
   const stopPolling = () => {
     polling = false
+    pollGen++
     clearTimeout(pollTimer)
     dropSnapshot()
     handlers.onSnapshot(null)
@@ -112,15 +143,30 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
       const pc = deps.createPeer()
       peer = pc
       pc.addTransceiver('video', { direction: 'recvonly' })
-      pc.ontrack = (event) => {
-        if (stopped || peer !== pc) return
+      let frameSeen = false
+      let stream: MediaStream | null = null
+      const deliver = () => {
+        if (stopped || peer !== pc || stream === null || !frameSeen || pc.connectionState !== 'connected') return
         clearTimeout(trackTimer)
         clearTimeout(retryTimer)
         stopPolling()
-        handlers.onStream(event.streams[0] ?? new MediaStream([event.track]))
+        handlers.onStream(stream)
+      }
+      pc.ontrack = (event) => {
+        if (stopped || peer !== pc || stream !== null) return
+        stream = event.streams[0] ?? new MediaStream([event.track])
+        cancelFrameWatch = deps.watchFrame(stream, () => {
+          frameSeen = true
+          deliver()
+        })
       }
       pc.onconnectionstatechange = () => {
-        if (peer === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed')) fallback()
+        if (peer !== pc) return
+        const state = pc.connectionState
+        if (state === 'failed' || state === 'closed') return fallback()
+        clearTimeout(disconnectTimer)
+        if (state === 'connected') deliver()
+        else if (state === 'disconnected') disconnectTimer = setTimeout(() => peer === pc && fallback(), DISCONNECT_GRACE_MS)
       }
       trackTimer = setTimeout(() => peer === pc && fallback(), TRACK_WAIT_MS)
       await pc.setLocalDescription(await pc.createOffer())
