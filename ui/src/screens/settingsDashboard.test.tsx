@@ -18,7 +18,7 @@ vi.mock('../api', async () => {
   return { ...actual, ...stubs }
 })
 
-const { SettingsPreviews } = await import('./SettingsPreviews')
+const { SettingsDashboard } = await import('./SettingsDashboard')
 
 const session = (scopes: string[]) =>
   ({
@@ -52,7 +52,7 @@ const cameraResponse = (revision = 1) => ({
 function renderSettings(scopes = ['config:write'], model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), session: session(scopes), ...model }}>
-      <SettingsPreviews />
+      <SettingsDashboard />
     </ModelContext.Provider>,
   )
 }
@@ -77,7 +77,9 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('Settings › preview gateway', () => {
+const SAVE = 'Save dashboard settings'
+
+describe('Settings › Dashboard: preview gateway', () => {
   it('shows the saved address and reports the token as set without showing it', async () => {
     renderSettings()
     expect(await screen.findByDisplayValue('http://10.0.0.9:8095')).toBeInTheDocument()
@@ -91,21 +93,25 @@ describe('Settings › preview gateway', () => {
     expect(screen.getByLabelText('No token is set. Set one')).toBeInTheDocument()
   })
 
-  it('sends only the address when no new token was typed, then the token when one was', async () => {
+  it('sends only the address when no new token was typed', async () => {
     renderSettings()
-    const address = await screen.findByLabelText('Gateway address')
-    fireEvent.change(address, { target: { value: 'http://10.0.0.10:8095' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview gateway' }))
+    fireEvent.change(await screen.findByLabelText('Gateway address'), { target: { value: 'http://10.0.0.10:8095' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     await waitFor(() => expect(stubs.putPreviewGatewayConfig).toHaveBeenCalledWith({ url: 'http://10.0.0.10:8095' }))
+    expect(stubs.putPreviewCamera).not.toHaveBeenCalled()
+  })
+
+  it('sends the token when one was typed', async () => {
+    renderSettings()
     fireEvent.change(await screen.findByLabelText('A token is set. Set a new one'), { target: { value: 'tok' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview gateway' }))
-    await waitFor(() => expect(stubs.putPreviewGatewayConfig).toHaveBeenLastCalledWith({ url: 'http://10.0.0.9:8095', token: 'tok' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    await waitFor(() => expect(stubs.putPreviewGatewayConfig).toHaveBeenCalledWith({ url: 'http://10.0.0.9:8095', token: 'tok' }))
   })
 
   it('refuses a malformed address before writing', async () => {
     renderSettings()
     fireEvent.change(await screen.findByLabelText('Gateway address'), { target: { value: '10.0.0.9' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview gateway' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     expect(await screen.findAllByText(/must start with http/)).not.toHaveLength(0)
     expect(stubs.putPreviewGatewayConfig).not.toHaveBeenCalled()
   })
@@ -114,7 +120,7 @@ describe('Settings › preview gateway', () => {
     renderSettings()
     fireEvent.change(await screen.findByLabelText('Gateway address'), { target: { value: 'http://10.0.0.10:8095' } })
     stubs.getPreviewGatewayConfig.mockResolvedValue(gatewayResponse(5))
-    fireEvent.click(screen.getByRole('button', { name: 'Save preview gateway' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
     expect(stubs.putPreviewGatewayConfig).not.toHaveBeenCalled()
   })
@@ -122,74 +128,81 @@ describe('Settings › preview gateway', () => {
   it('disables saving with a reason without config:write', async () => {
     renderSettings([])
     fireEvent.change(await screen.findByLabelText('Gateway address'), { target: { value: 'http://x:1' } })
-    const save = screen.getByRole('button', { name: 'Save preview gateway' })
+    const save = screen.getByRole('button', { name: SAVE })
     expect(save).toBeDisabled()
     expect(save.getAttribute('title')).not.toBeNull()
   })
 })
 
-describe('Settings › preview cameras', () => {
-  it('lists each camera with its display address and never an address field value', async () => {
+describe('Settings › Dashboard: cameras', () => {
+  it('lists each camera with its stored address and never fills the address field', async () => {
     renderSettings()
     expect(await screen.findByText('rtsp://192.168.1.20:37379')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Driveway')).toBeInTheDocument()
     expect(screen.getByLabelText('Set a new address')).toHaveValue('')
+    expect(screen.getByLabelText('Camera id')).toBeDisabled()
   })
 
-  it('says so when there are no cameras', async () => {
+  it('says so when there are no cameras, without an empty panel', async () => {
     stubs.listConfigObjects.mockRejectedValue(notFound())
-    renderSettings()
+    const { container } = renderSettings()
     expect(await screen.findByText('No cameras')).toBeInTheDocument()
+    expect(container.querySelector('#st-dash-cameras .sm-panel')).toBeNull()
   })
 
-  it('adds a camera with its id, name and address', async () => {
+  it('adds a camera row and saves it with its id, name and address', async () => {
     stubs.getPreviewCamera.mockImplementation(async (id: string) => {
       if (id === 'porch') throw notFound()
       return cameraResponse()
     })
     renderSettings()
     await screen.findByText('rtsp://192.168.1.20:37379')
-    fireEvent.change(screen.getByLabelText('Camera id'), { target: { value: 'porch' } })
-    fireEvent.change(screen.getByLabelText('Camera name'), { target: { value: 'Porch' } })
-    fireEvent.change(screen.getByLabelText('Camera address'), { target: { value: 'rtsp://10.0.0.7:554/s' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add camera' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a camera' }))
+    const ids = screen.getAllByLabelText('Camera id')
+    fireEvent.change(ids[1]!, { target: { value: 'porch' } })
+    fireEvent.change(screen.getAllByLabelText('Name')[1]!, { target: { value: 'Porch' } })
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'rtsp://10.0.0.7:554/s' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     await waitFor(() => expect(stubs.putPreviewCamera).toHaveBeenCalledWith('porch', { name: 'Porch', enabled: true, url: 'rtsp://10.0.0.7:554/s' }))
+    expect(stubs.putPreviewCamera).toHaveBeenCalledTimes(1)
   })
 
   it('refuses a new camera without an rtsp address', async () => {
     renderSettings()
     await screen.findByText('rtsp://192.168.1.20:37379')
-    fireEvent.change(screen.getByLabelText('Camera id'), { target: { value: 'porch' } })
-    fireEvent.change(screen.getByLabelText('Camera name'), { target: { value: 'Porch' } })
-    fireEvent.change(screen.getByLabelText('Camera address'), { target: { value: 'http://10.0.0.7' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add camera' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a camera' }))
+    fireEvent.change(screen.getAllByLabelText('Camera id')[1]!, { target: { value: 'porch' } })
+    fireEvent.change(screen.getAllByLabelText('Name')[1]!, { target: { value: 'Porch' } })
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'http://10.0.0.7' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     expect(await screen.findByText(/must start with rtsp/)).toBeInTheDocument()
     expect(stubs.putPreviewCamera).not.toHaveBeenCalled()
   })
 
   it('edits a camera without resending the address it never shows', async () => {
     renderSettings()
-    const name = await screen.findByDisplayValue('Driveway')
-    fireEvent.change(name, { target: { value: 'Front drive' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Driveway' }))
+    fireEvent.change(await screen.findByDisplayValue('Driveway'), { target: { value: 'Front drive' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     await waitFor(() => expect(stubs.putPreviewCamera).toHaveBeenCalledWith('driveway', { name: 'Front drive', enabled: true }))
+    expect(stubs.putPreviewGatewayConfig).not.toHaveBeenCalled()
   })
 
   it('sends a new address only when one was typed', async () => {
     renderSettings()
     await screen.findByDisplayValue('Driveway')
     fireEvent.change(screen.getByLabelText('Set a new address'), { target: { value: 'rtsp://10.9.9.9:554/x' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save Driveway' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     await waitFor(() => expect(stubs.putPreviewCamera).toHaveBeenCalledWith('driveway', { name: 'Driveway', enabled: true, url: 'rtsp://10.9.9.9:554/x' }))
   })
 
   it('removes a camera only after the confirmation names the consequence', async () => {
     renderSettings()
     fireEvent.click(await screen.findByRole('button', { name: 'Remove Driveway' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/stored address is deleted/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/stored addresses are deleted/)).toBeInTheDocument()
     expect(stubs.deletePreviewCamera).not.toHaveBeenCalled()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove camera' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove and save' }))
     await waitFor(() => expect(stubs.deletePreviewCamera).toHaveBeenCalledWith('driveway'))
   })
 })
