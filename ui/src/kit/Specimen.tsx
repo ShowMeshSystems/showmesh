@@ -33,6 +33,8 @@ import {
   NotWired,
   NotWiredBanner,
   OneTimeSecret,
+  PreviewGrid,
+  PreviewTile,
   RadioCardList,
   RailBadge,
   RuledStrip,
@@ -834,6 +836,33 @@ export function Specimen() {
               }
             />
           </Tiles>
+        </SpecSection>
+        <SpecSection
+          number="17 · Preview tile"
+          id="specimen-preview-tile"
+          title="A live source: the picture, its name, and one state word"
+          detail="The frame is always 16:9. The sentence under the caption is the coordinator's own, and a tile with no picture says so."
+        >
+          <PreviewGrid>
+            <PreviewTile label="node-01 · matrix-main" state="live" message="" media={<p className="sm-preview__none">Picture here</p>} />
+            <PreviewTile label="Driveway" state="connecting" message="Waiting for the first frame." />
+            <PreviewTile label="ARENA (Composition)" state="not_found" message="This source is no longer announced. Check that Arena is running." />
+            <PreviewTile label="Porch" state="disabled" message="This camera is turned off. Turn it on in Settings." />
+            <PreviewTile label="Garage" state="error" message="The camera refused the connection. Check its address in Settings." />
+            <PreviewTile
+              label="node-02 · roofline"
+              state="idle"
+              message="Nobody is watching this source."
+              handle={<span className="sm-preview__handle" aria-hidden="true">⠿</span>}
+              actions={
+                <ButtonRow>
+                  <Button size="icon" variant="quiet" aria-label="Move node-02 · roofline earlier"><span aria-hidden="true">◀</span></Button>
+                  <Button size="icon" variant="quiet" aria-label="Move node-02 · roofline later"><span aria-hidden="true">▶</span></Button>
+                  <Button variant="quiet">Hide</Button>
+                </ButtonRow>
+              }
+            />
+          </PreviewGrid>
         </SpecSection>
       </div>
     </div>

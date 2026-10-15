@@ -9,7 +9,7 @@ import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail } from './dashboa
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, getCurrentNightSession: () => new Promise(() => {}) }
+  return { ...actual, getCurrentNightSession: () => new Promise(() => {}), getPreviews: () => new Promise(() => {}) }
 })
 
 const evidence = (state: string) => ({
