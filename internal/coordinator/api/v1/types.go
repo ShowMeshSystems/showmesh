@@ -1566,3 +1566,97 @@ type FPPObservationsChangedEvent struct {
 	Changed    []Evidence `json:"changed"`
 	Removed    []string   `json:"removed"`
 }
+
+// ConfigPreviewGatewayPayload is the "preview.gateway" kind's payload. TokenSet
+// reports presence only: the token never appears on any wire type.
+type ConfigPreviewGatewayPayload struct {
+	URL      string `json:"url"`
+	TokenSet bool   `json:"tokenSet"`
+}
+
+// PreviewGatewayConfigResponse is the body of GET and PUT /config/preview.gateway.
+type PreviewGatewayConfigResponse struct {
+	ServerTime             string                      `json:"serverTime"`
+	Kind                   string                      `json:"kind"`
+	Revision               int64                       `json:"revision"`
+	Payload                ConfigPreviewGatewayPayload `json:"payload"`
+	UpdatedAt              string                      `json:"updatedAt"`
+	CreatedByPrincipalID   *string                     `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                     `json:"createdByPrincipalName"`
+	Source                 string                      `json:"source"`
+}
+
+// ConfigPreviewCameraPayload is the "preview.camera" kind's payload. The full
+// stream URL never appears on any wire type; URLDisplay is scheme, host and port only.
+type ConfigPreviewCameraPayload struct {
+	Name       string `json:"name"`
+	Enabled    bool   `json:"enabled"`
+	URLSet     bool   `json:"urlSet"`
+	URLDisplay string `json:"urlDisplay"`
+}
+
+// PreviewCameraConfigResponse is the body of GET and PUT /config/preview.camera/{id}.
+type PreviewCameraConfigResponse struct {
+	ServerTime             string                     `json:"serverTime"`
+	Kind                   string                     `json:"kind"`
+	ID                     string                     `json:"id"`
+	Revision               int64                      `json:"revision"`
+	Payload                ConfigPreviewCameraPayload `json:"payload"`
+	UpdatedAt              string                     `json:"updatedAt"`
+	CreatedByPrincipalID   *string                    `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                    `json:"createdByPrincipalName"`
+	Source                 string                     `json:"source"`
+}
+
+// ConfigDashboardPreviewLayout is the tile order and hidden tiles of the preview grid.
+type ConfigDashboardPreviewLayout struct {
+	Order  []string `json:"order"`
+	Hidden []string `json:"hidden"`
+}
+
+// ConfigDashboardLayoutPayload is the "dashboard.layout" kind's payload.
+type ConfigDashboardLayoutPayload struct {
+	Previews ConfigDashboardPreviewLayout `json:"previews"`
+}
+
+// DashboardLayoutConfigResponse is the body of GET and PUT /config/dashboard.layout.
+type DashboardLayoutConfigResponse struct {
+	ServerTime             string                       `json:"serverTime"`
+	Kind                   string                       `json:"kind"`
+	Revision               int64                        `json:"revision"`
+	Payload                ConfigDashboardLayoutPayload `json:"payload"`
+	UpdatedAt              string                       `json:"updatedAt"`
+	CreatedByPrincipalID   *string                      `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                      `json:"createdByPrincipalName"`
+	Source                 string                       `json:"source"`
+}
+
+// PreviewGatewayStatus is the coordinator's view of the preview gateway.
+type PreviewGatewayStatus struct {
+	State      string `json:"state"`
+	Message    string `json:"message"`
+	ObservedAt string `json:"observedAt"`
+}
+
+// PreviewTile is one tile of the dashboard preview grid. NodeID and SurfaceID
+// are set only for an NDI tile matched to a render node surface; CameraID only
+// for a camera tile.
+type PreviewTile struct {
+	Key        string  `json:"key"`
+	Kind       string  `json:"kind"`
+	Label      string  `json:"label"`
+	NodeID     *string `json:"nodeId,omitempty"`
+	SurfaceID  *string `json:"surfaceId,omitempty"`
+	CameraID   *string `json:"cameraId,omitempty"`
+	State      string  `json:"state"`
+	Message    string  `json:"message"`
+	Hidden     bool    `json:"hidden"`
+	ObservedAt string  `json:"observedAt"`
+}
+
+// PreviewsResponse is the body of GET /previews.
+type PreviewsResponse struct {
+	ServerTime string               `json:"serverTime"`
+	Gateway    PreviewGatewayStatus `json:"gateway"`
+	Tiles      []PreviewTile        `json:"tiles"`
+}
