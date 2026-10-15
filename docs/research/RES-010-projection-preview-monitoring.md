@@ -77,4 +77,6 @@ No open-source "NDI-in, web-multiview-out" product exists; building blocks are m
 
 ## Decision, fallback, and revalidation
 
+**2026-10-15:** [ADR-060](../decisions/ADR-060-dashboard-video-previews.md) builds a view-only version: NDI proxy receive through GStreamer, served by go2rtc over WebRTC with a JPEG snapshot fallback, plus RTSP cameras. It takes no position on frame analysis, and every open bench item above stays open. This record stays at L1 until a bench run lands here.
+
 Direction (pending bench): NDI proxy receive via GStreamer as the single acquisition path for both Resolume outputs and media-node senders; WebRTC via MediaMTX (or go2rtc) as primary delivery; JPEG-over-WebSocket as the reduced fallback; appsink hash analysis for black/frozen candidates gated by ADR-011 context. Fallback remains signal/device-state monitoring without content analysis. Revalidate after Resolume, gateway, runtime, browser, GPU, or network changes.
