@@ -11,6 +11,21 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-15
+
+Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin; upgrade the coordinator and every node agent together.
+ShowMesh Companion 0.2.0 is the first companion that uploads crash reports.
+
+### Companion
+
+- A ShowMesh Companion can upload Resolume Arena crash reports to the
+  coordinator using a token from a principal with the new `companion` role,
+  which can do nothing else.
+- An operator can list and read uploaded crash reports through the API and
+  with `showmeshctl companion-reports list` and `get`, without logging into
+  the render computer. The coordinator keeps the newest 200 per companion.
+
 ## 0.3.1 - 2026-10-14
 
 Fix release on the 0.3 line. Pre-alpha. FPP plugin 0.3.0 is still the
