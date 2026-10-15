@@ -140,6 +140,40 @@ apply_broker_config_ownership() {
   return 0
 }
 
+# coord_choose_ui_port sets UI_PORT from --ui-port, the saved setting, or an answer, and refuses a port something else holds.
+coord_choose_ui_port() {
+  local saved api_port mqtt_port fpp_port held
+  saved="$(env_get "$COORD_ENV" SHOWMESH_UI_PORT)"
+  UI_PORT="${OPT_UI_PORT:-${saved:-8081}}"
+  if [ -z "$OPT_UI_PORT" ] && can_prompt; then
+    step "Choosing the operator UI's port"
+    info "Port 80 opens the UI without a port in the address, like FPP. Port 8081 is the default."
+    ask UI_PORT "Operator UI port" "$UI_PORT"
+  fi
+  case "$UI_PORT" in
+    ''|*[!0-9]*) fail "The operator UI port $UI_PORT is not a number." "showmesh-install --ui-port 8081" ;;
+  esac
+  [ "$UI_PORT" -ge 1 ] && [ "$UI_PORT" -le 65535 ] || fail "The operator UI port $UI_PORT is not between 1 and 65535." "showmesh-install --ui-port 8081"
+  api_port="$(env_get "$COORD_ENV" SHOWMESH_HTTP_PORT)"
+  [ "$UI_PORT" != "${api_port:-8080}" ] || fail "Port $UI_PORT is the coordinator API's port, so the operator UI cannot use it." "showmesh-install --ui-port 8081"
+  mqtt_port="$(env_get "$COORD_ENV" MOSQUITTO_PORT)"
+  if [ "$BROKER_MODE" = "builtin" ] && [ "$UI_PORT" = "${mqtt_port:-1883}" ]; then
+    fail "Port $UI_PORT is the built-in broker's port, so the operator UI cannot use it." "showmesh-install --ui-port 8081"
+  fi
+  if [ "$ROLE" = "coordinator-node" ]; then
+    fpp_port="$(firewall_configured_port "$AGENT_ENV" SHOWMESH_FPPCONNECT_LISTEN_ADDR 80)"
+    [ "$UI_PORT" != "$fpp_port" ] || fail "Port $UI_PORT on this machine is where xLights uploads sequences to the node, so the operator UI cannot use it." "showmesh-install --ui-port 8081"
+  fi
+  # A port the running ui container already publishes is ours, not a conflict.
+  held="$(compose port ui 8080 2>/dev/null || true)"
+  if [ "${held##*:}" != "$UI_PORT" ] && [ -n "$(ss -Htln "sport = :$UI_PORT" 2>/dev/null)" ]; then
+    fail "Another program on this machine is already using port $UI_PORT." "showmesh-install --ui-port 8081, or stop the program using port $UI_PORT"
+  fi
+  if [ -n "$saved" ] && [ "$saved" != "$UI_PORT" ]; then
+    info "The operator UI moves from port $saved to port $UI_PORT. A firewall rule for port $saved stays open until you remove it."
+  fi
+}
+
 coord_write_env() {
   step "Writing the coordinator's settings to $COORD_ENV"
   local addr saved_url http_port mqtt_port
@@ -150,8 +184,6 @@ coord_write_env() {
   http_port="$(env_get "$COORD_ENV" SHOWMESH_HTTP_PORT)"
   mqtt_port="$(env_get "$COORD_ENV" MOSQUITTO_PORT)"
   HTTP_PORT="${http_port:-8080}"
-  UI_PORT="$(env_get "$COORD_ENV" SHOWMESH_UI_PORT)"
-  UI_PORT="${UI_PORT:-8081}"
   PUBLIC_URL="http://$addr:$HTTP_PORT"
   local pairs=(
     "COMPOSE_PROJECT_NAME=showmesh"
@@ -161,6 +193,7 @@ coord_write_env() {
     "SHOWMESH_BUILD_DATE=$SHOWMESH_BUILD_DATE"
     "SHOWMESH_BROKER_MODE=$BROKER_MODE"
     "SHOWMESH_PUBLIC_URL=$PUBLIC_URL"
+    "SHOWMESH_UI_PORT=$UI_PORT"
   )
   if [ "$BROKER_MODE" = "builtin" ]; then
     pairs+=(
@@ -423,6 +456,7 @@ run_coordinator_role() {
   coord_install_docker
   coord_install_bundle
   coord_choose_broker
+  coord_choose_ui_port
   coord_write_env
   coord_state_save
   [ "$BROKER_MODE" = "builtin" ] && coord_builtin_credentials
@@ -438,7 +472,11 @@ coord_success_lines() {
   local addr="${PUBLIC_URL#http://}"
   addr="${addr%:*}"
   info "The coordinator $SHOWMESH_VERSION is running and its broker accepts logins."
-  info "Operator UI: http://$addr:$UI_PORT"
+  if [ "$UI_PORT" = 80 ]; then
+    info "Operator UI: http://$addr"
+  else
+    info "Operator UI: http://$addr:$UI_PORT"
+  fi
   if [ "${ADMIN_READY:-0}" -eq 1 ]; then
     info "Next, enroll a node. Here, run: sudo showmeshctl node enroll porch-left"
     info "Then run the install command it prints on that node."
