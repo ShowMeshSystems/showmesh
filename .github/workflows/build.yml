@@ -63,8 +63,8 @@ jobs:
           coord=""
           ui=""
           for t in ${{ inputs.image_tags }}; do
-            coord="$coord${{ env.COORDINATOR_IMAGE }}:$t"$'\n'
-            ui="$ui${{ env.UI_IMAGE }}:$t"$'\n'
+            coord="${coord}${{ env.COORDINATOR_IMAGE }}:$t"$'\n'
+            ui="${ui}${{ env.UI_IMAGE }}:$t"$'\n'
           done
           {
             echo "coordinator<<EOF"
