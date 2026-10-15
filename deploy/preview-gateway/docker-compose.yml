@@ -1,0 +1,20 @@
+# Standalone preview gateway (ADR-060). Run from this directory:
+#   SHOWMESH_PREVIEW_GATEWAY_TOKEN=... docker compose up -d --build
+# See README.md for the NDI runtime mount.
+
+services:
+  preview-gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/preview-gateway/Dockerfile
+    restart: unless-stopped
+    # NDI discovery is mDNS and WebRTC media is UDP, so the gateway shares the
+    # host's network. Its ports are 8095 (API) and 8555 (WebRTC, TCP and UDP).
+    network_mode: host
+    environment:
+      SHOWMESH_PREVIEW_GATEWAY_TOKEN: ${SHOWMESH_PREVIEW_GATEWAY_TOKEN:?Set SHOWMESH_PREVIEW_GATEWAY_TOKEN to the token the coordinator will use.}
+      SHOWMESH_PREVIEW_GATEWAY_ADDR: ${SHOWMESH_PREVIEW_GATEWAY_ADDR:-:8095}
+    volumes:
+      # The NDI runtime is never in the image (ADR-010). Point this at the
+      # directory holding libndi.so.6 on the host.
+      - ${SHOWMESH_NDI_RUNTIME_DIR:-/opt/ndi}:/opt/ndi:ro
