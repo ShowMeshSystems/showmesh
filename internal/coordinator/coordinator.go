@@ -847,6 +847,7 @@ func Run() int {
 		// *st fallbackReconcile above publishes into, wired the same
 		// AssetManifests/Config/Assets/Commands/Discovery already are.
 		FallbackPrograms:      st,
+		CompanionReports:      st,
 		FallbackProgramNudger: fallbackReconcile,
 		FallbackHolds:         fallbackHolds,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation

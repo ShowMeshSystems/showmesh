@@ -372,6 +372,10 @@ type Dependencies struct {
 	// handler, matching AssetManifests's identical nil-check posture.
 	FallbackPrograms *store.Store
 
+	// CompanionReports stores files companions upload. nil lists nothing
+	// and refuses uploads.
+	CompanionReports *store.Store
+
 	// FallbackHolds answers whether an FPP player's plugin is, or may be,
 	// running the show from its fallback program. nil holds no player.
 	FallbackHolds *fallbackhold.Service
@@ -2560,6 +2564,12 @@ func New(deps Dependencies, opts Options) *API {
 	// matching scopeCueCatalogDeploy's own doc comment on why it mints a
 	// dedicated scope rather than reusing asset:write.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/deploy", h.writeGuard(&scopeCueCatalogDeploy, h.handlePostNodeCueCatalogDeploy))
+
+	// Companion uploads are evidence from the companion's own machine,
+	// behind companion:report; reading them back is an observation read.
+	mux.HandleFunc("POST /api/v1/companion-reports", h.writeGuard(&scopeCompanionReport, h.handlePostCompanionReport))
+	mux.HandleFunc("GET /api/v1/companion-reports", h.readGuard(identity.ScopeObservationRead, h.handleListCompanionReports))
+	mux.HandleFunc("GET /api/v1/companion-reports/{reportId}", h.readGuard(identity.ScopeObservationRead, h.handleGetCompanionReport))
 	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
 	// never gated, per ADR-024's reads-stay-open posture and the build
 	// contract §1.3's own "the dashboard renders with no session"

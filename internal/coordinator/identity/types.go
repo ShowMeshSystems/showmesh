@@ -42,6 +42,10 @@ const (
 	// (ADR-055 decision 5): exactly the scopes the node agent's own HTTP
 	// calls to the coordinator need.
 	RoleNode Role = "node"
+
+	// RoleCompanion is the machine role a ShowMesh Companion's API token
+	// carries: only the scopes the companion's own reports need.
+	RoleCompanion Role = "companion"
 )
 
 // Scope is one `<resource>:<action>` authorization unit (ADR-024 decision
@@ -247,6 +251,11 @@ const (
 	// ScopeNodeEnroll gates minting, listing and cancelling node
 	// enrollment codes (ADR-055 decision 4). Admin only.
 	ScopeNodeEnroll Scope = "node:enroll"
+
+	// ScopeCompanionReport gates POST /api/v1/companion-reports: a
+	// companion uploading evidence it collected on its own machine, such
+	// as an application crash report. It grants no read and no control.
+	ScopeCompanionReport Scope = "companion:report"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -274,7 +283,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // ScopeNightOverride sits here, not in operatorActionScopes, per its own
 // doc comment: bypassing a blocking interlock is deliberately not implied
 // by holding [ScopeNightCommand].
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback, ScopeNodeEnroll, ScopeCompanionReport}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
@@ -307,6 +316,8 @@ func (r Role) Scopes() []Scope {
 		// asset:write registers an FPP Connect upload (POST /api/v1/assets);
 		// node:read fetches asset content when reads are closed.
 		return []Scope{ScopeNodeRead, ScopeAssetWrite}
+	case RoleCompanion:
+		return []Scope{ScopeCompanionReport}
 	default:
 		return nil
 	}
@@ -336,7 +347,7 @@ var ErrUnknownRole = errors.New("identity: unknown role")
 // role string a scope check would then treat as "no scopes at all".
 func ParseRole(s string) (Role, error) {
 	switch Role(s) {
-	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler, RoleRecovery, RoleNode:
+	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler, RoleRecovery, RoleNode, RoleCompanion:
 		return Role(s), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownRole, s)

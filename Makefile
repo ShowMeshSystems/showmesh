@@ -585,6 +585,8 @@ clean-node-agent-dist:
 # tarballs; the bootstrap and the installer read that file.
 INSTALLER_DIST    := ./dist/installer
 INSTALLER_VERSION ?= $(VERSION)
+# The GitHub release the installer downloads from: v<VERSION>, or edge for a development build.
+INSTALLER_RELEASE_TAG ?= v$(INSTALLER_VERSION)
 INSTALLER_STAGE   := $(INSTALLER_DIST)/showmesh-installer_$(INSTALLER_VERSION)
 INSTALLER_TARBALL := showmesh-installer_$(INSTALLER_VERSION).tar.gz
 INSTALLER_LDFLAGS := -X $(MODULE)/internal/version.Version=$(INSTALLER_VERSION) \
@@ -613,8 +615,8 @@ package-installer:
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(INSTALLER_LDFLAGS)" \
 			-o $(INSTALLER_STAGE)/bin/showmeshctl_linux_$$arch ./cmd/showmeshctl || exit 1; \
 	done
-	printf 'SHOWMESH_VERSION=%s\nSHOWMESH_COMMIT=%s\nSHOWMESH_BUILD_DATE=%s\n' \
-		'$(INSTALLER_VERSION)' '$(COMMIT)' '$(NODE_AGENT_COMMIT_DATE)' > $(INSTALLER_STAGE)/BUILD-INFO
+	printf 'SHOWMESH_VERSION=%s\nSHOWMESH_RELEASE_TAG=%s\nSHOWMESH_COMMIT=%s\nSHOWMESH_BUILD_DATE=%s\n' \
+		'$(INSTALLER_VERSION)' '$(INSTALLER_RELEASE_TAG)' '$(COMMIT)' '$(NODE_AGENT_COMMIT_DATE)' > $(INSTALLER_STAGE)/BUILD-INFO
 	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
 		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(INSTALLER_DIST) -cf - showmesh-installer_$(INSTALLER_VERSION) | gzip -n -9 > $(INSTALLER_DIST)/$(INSTALLER_TARBALL); \
 	else \
@@ -622,7 +624,7 @@ package-installer:
 		tar -C $(INSTALLER_DIST) -czf $(INSTALLER_DIST)/$(INSTALLER_TARBALL) showmesh-installer_$(INSTALLER_VERSION); \
 	fi
 	rm -rf $(INSTALLER_STAGE)
-	sed 's/@SHOWMESH_VERSION@/$(INSTALLER_VERSION)/' deploy/install/get-showmesh.sh > $(INSTALLER_DIST)/get-showmesh.sh
+	sed -e 's/@SHOWMESH_VERSION@/$(INSTALLER_VERSION)/' -e 's/@SHOWMESH_RELEASE_TAG@/$(INSTALLER_RELEASE_TAG)/' deploy/install/get-showmesh.sh > $(INSTALLER_DIST)/get-showmesh.sh
 	chmod 0755 $(INSTALLER_DIST)/get-showmesh.sh
 	cd $(INSTALLER_DIST) && sha256sum $(INSTALLER_TARBALL) get-showmesh.sh > showmesh-installer_$(INSTALLER_VERSION)_SHA256SUMS
 	cd $(INSTALLER_DIST) && sha256sum -c showmesh-installer_$(INSTALLER_VERSION)_SHA256SUMS

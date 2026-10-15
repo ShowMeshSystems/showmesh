@@ -195,6 +195,8 @@ var migrations = []migration{
 	// v48 (ADR-048 decision 4): adds fallback_player_states. No existing
 	// table is touched.
 	{version: 48, sql: schemaV48},
+	// v49: adds companion_reports. No existing table is touched.
+	{version: 49, sql: schemaV49},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

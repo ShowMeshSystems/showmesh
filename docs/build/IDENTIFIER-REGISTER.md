@@ -318,6 +318,7 @@ bundles of these (ADR-024).
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 | `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
 | `dashboard:write` | shipped | ADR-060: arranging the dashboard preview grid (`dashboard.layout`). Held by the `operator` role and by admin, because the operator arranges the grid; every other preview setting stays behind `config:write` |
+| `companion:report` | shipped | ADR-059: a ShowMesh Companion uploading a file from its own machine (`POST /api/v1/companion-reports`). Held by the `companion` role and by admin |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -668,6 +669,7 @@ register entry comes from the code and never from a plan.
 | `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
 | `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
 | `node.enrollment.redeem` | reserved | ADR-055: a node redeemed an enrollment code and received its credentials, attributed to the principal who minted the code |
+| `companion.report.upload` | shipped | ADR-059: a companion uploaded a report, or re-sent one already stored |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -1483,7 +1485,8 @@ The store schema version, bumped by migrations in
 | v46 | shipped | `night_cue_outbox` gains nullable `node_responded_at` (`migration_v46.go`): when the node published a bed step's answer, on the node's clock, so a node report built before the answer is not read as the step's result |
 | v47 | shipped | `fallback_executor_keys`: the public key a paired FPP plugin registers, one per FPP instance, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
 | v48 | shipped | `fallback_player_states`: the latest fallback state an FPP plugin reported for its player, one row per FPP instance, with when the coordinator stopped waiting on it (ADR-048 decision 4) |
-| v49+ | unallocated | free |
+| v49 | shipped | `companion_reports`: files ShowMesh Companions uploaded, newest 200 per companion (ADR-059) |
+| v50+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

@@ -3568,6 +3568,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/companion-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Uploaded companion reports, newest first, without their content */
+        get: operations["listCompanionReports"];
+        put?: never;
+        /**
+         * A ShowMesh Companion uploads a file it collected on its own machine
+         * @description Behind `companion:report`, which the `companion` role holds and nothing narrower than admin otherwise does. The companion uploads one application crash report per request. Uploading identical content again from the same companion answers `200` with the stored report and `created: false`, so a retry is always safe. The coordinator keeps the newest 200 reports per companion and removes older ones as new ones arrive.
+         */
+        post: operations["postCompanionReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companion-reports/{reportId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One uploaded companion report with its content */
+        get: operations["getCompanionReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fallback-programs": {
         parameters: {
             query?: never;
@@ -5145,7 +5183,7 @@ export interface components {
             /** @enum {string} */
             kind: "human" | "machine";
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node" | "companion";
             disabled: boolean;
             hasPassword: boolean;
             reserved: boolean;
@@ -5170,13 +5208,13 @@ export interface components {
             /** @enum {string} */
             kind: "human" | "machine";
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node" | "companion";
             password?: string;
         };
         /** @description The body of PUT /principals/{id}/role. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (Track G seam G-5 requirement 3). */
         SetPrincipalRoleRequest: {
             /** @enum {string} */
-            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node";
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery" | "node" | "companion";
         };
         /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty - a reset that silently clears a password would leave a human principal with no way to sign in at all. */
         SetPrincipalPasswordRequest: {
@@ -8744,6 +8782,58 @@ export interface components {
             reason: "running-from-fallback" | "waiting-for-acknowledgement" | "coordinator-starting";
             /** @description One or two sentences for an operator, saying why the night waits and what ends the wait. */
             message: string;
+        };
+        /** @description The body of POST /companion-reports. */
+        CompanionReportUploadRequest: {
+            companionId: string;
+            /** @enum {string} */
+            kind: "crash_report";
+            /** @description The application the file came from, for example `resolume-arena`. */
+            source: string;
+            /** @description The file's base name, with no folder. */
+            fileName: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time on the companion's machine.
+             */
+            capturedAt: string;
+            /** @description Lowercase hex SHA-256 of content's UTF-8 bytes. A mismatch is refused. */
+            contentSha256: string;
+            /** @description The file's text, at most 4 MiB. */
+            content: string;
+        };
+        CompanionReportSummary: {
+            id: string;
+            companionId: string;
+            /** @enum {string} */
+            kind: "crash_report";
+            source: string;
+            fileName: string;
+            /** Format: date-time */
+            capturedAt: string;
+            /** Format: date-time */
+            receivedAt: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            contentSha256: string;
+        };
+        CompanionReportUploadResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @description False when this companion had already uploaded identical content. */
+            created: boolean;
+            report: components["schemas"]["CompanionReportSummary"];
+        };
+        CompanionReportListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            reports: components["schemas"]["CompanionReportSummary"][];
+        };
+        CompanionReportResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            report: components["schemas"]["CompanionReportSummary"];
+            content: string;
         };
         /** @description The body of POST /fallback-programs/{fppInstanceId}/acknowledge (ADR-048 decision 1). age is not a field: it is derived from installedAt at read time. */
         FallbackProgramAcknowledgeRequest: {
@@ -16166,6 +16256,114 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    listCompanionReports: {
+        parameters: {
+            query?: {
+                /** @description List only this companion's reports. */
+                companionId?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionReportListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    postCompanionReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanionReportUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description This companion already uploaded identical content. Nothing new was stored. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionReportUploadResponse"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionReportUploadResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description The report content is over 4 MiB. Nothing was stored. */
+            413: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCompanionReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionReportResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     listFallbackPrograms: {
