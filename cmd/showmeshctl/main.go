@@ -104,6 +104,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSystem(rest, stdout, stderr, clock)
 	case "release":
 		return cmdRelease(rest, stdout, stderr, clock)
+	case "preview":
+		return cmdPreview(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -522,6 +524,21 @@ Commands:
   release settings set     change them (write); only the flags passed are changed
   release settings revisions
                            list every saved change, newest first
+  preview list             the preview gateway state and every dashboard tile with its key
+  preview snapshot <key> -o <file.jpg>
+                           save the latest frame of one tile
+  preview gateway set --url <url> --token-file <path>
+                           set the preview gateway (write, requires config:write)
+  preview camera add <id> --name <name> --url-file <path>
+                           add or change a camera; its address is read from a file (write)
+  preview camera remove <id>
+                           remove a camera and its stored address (write)
+  preview layout move <key> --to <index>
+                           move a tile to a position, counting from 0 (write)
+  preview layout hide <key>
+                           hide a tile from the dashboard (write)
+  preview layout show <key>
+                           show a hidden tile again (write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

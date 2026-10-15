@@ -69,6 +69,9 @@ var getResponseTypeOverrides = map[string]string{
 	"GET /system/versions":                 "systemVersionsResponse",
 	"GET /resolume/recovery":               "resolumeRecoveryResponse",
 	"GET /node-enrollments":                "nodeEnrollmentsResponse",
+	// The snapshot is a JPEG written to a file by cmdPreviewSnapshot; its
+	// --output json result is previewSnapshotSaved. The route has no JSON schema.
+	"GET /previews/{key}/snapshot": "previewSnapshotSaved",
 }
 
 // getResponseFieldExemptions is exemptWritePaths' convention mirrored for
