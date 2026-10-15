@@ -20,6 +20,13 @@ not the public API version (`/api/v1` moves independently).
   with `showmeshctl companion-reports list` and `get`, without logging into
   the render computer. The coordinator keeps the newest 200 per companion.
 
+### Releases
+
+- Every merge to `main` publishes an edge build: coordinator and UI images
+  tagged `edge`, and node agent and installer files on the `edge` GitHub
+  prerelease, installed with the same one-line installer from that release.
+  Each build reports its version as the last release plus the commits since.
+
 ## 0.3.1 - 2026-10-14
 
 Fix release on the 0.3 line. Pre-alpha. FPP plugin 0.3.0 is still the

@@ -1,0 +1,132 @@
+name: Edge
+
+# Publishes a development build of every merge to main: images tagged with the
+# git describe version, edge-<short sha> and edge, and the node agent and
+# installer on the rolling `edge` GitHub prerelease, replaced on every run.
+# Documentation-only merges are skipped because they change no binary.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+
+permissions:
+  contents: read
+
+# A newer merge supersedes an older one, so only the newest build finishes.
+concurrency:
+  group: edge
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      short_sha: ${{ steps.derive.outputs.short_sha }}
+      build_date: ${{ steps.derive.outputs.build_date }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # --long keeps the commit count and hash even on a tagged commit, so an
+      # edge version never equals a release version.
+      - name: Derive the development version
+        id: derive
+        run: |
+          set -euo pipefail
+          described="$(git describe --tags --long --abbrev=7 --match 'v[0-9]*')"
+          {
+            echo "version=${described#v}"
+            echo "short_sha=${GITHUB_SHA:0:7}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::edge build ${described#v}"
+
+  build:
+    needs: [resolve]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      release_tag: edge
+      image_tags: ${{ needs.resolve.outputs.version }} edge-${{ needs.resolve.outputs.short_sha }} edge
+      commit: ${{ github.sha }}
+      build_date: ${{ needs.resolve.outputs.build_date }}
+
+  publish:
+    if: success()
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist-artifacts
+          pattern: node-agent-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: installer
+          path: dist-artifacts
+
+      - name: Write and verify one SHA256SUMS covering every downloadable file
+        run: |
+          set -euo pipefail
+          cd dist-artifacts
+          files=(
+            "showmesh-node-agent_${VERSION}_linux_amd64.tar.gz"
+            "showmesh-node-agent_${VERSION}_linux_arm64.tar.gz"
+            "showmesh-installer_${VERSION}.tar.gz"
+            get-showmesh.sh
+          )
+          ls "${files[@]}"
+          sha256sum "${files[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Point the edge tag at this commit
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GH_REPO/git/ref/tags/edge" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/edge" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/edge -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+      - name: Replace the edge prerelease's notes and files
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          Development build of \`main\` at ${GITHUB_SHA}, version \`${VERSION}\`. This is not a release: the next merge to \`main\` replaces it, and the install command below then installs that newer build.
+
+          Install or upgrade a machine to this build:
+
+          \`\`\`sh
+          curl -fsSL https://github.com/${GH_REPO}/releases/download/edge/get-showmesh.sh | sudo bash
+          \`\`\`
+
+          Images: \`ghcr.io/showmeshsystems/showmesh-coordinator:${VERSION}\` and \`ghcr.io/showmeshsystems/showmesh-ui:${VERSION}\`, also tagged \`edge-${GITHUB_SHA:0:7}\` and \`edge\`.
+          EOF
+          if gh release view edge >/dev/null 2>&1; then
+            gh release edit edge --title "Edge ${VERSION}" --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create edge --verify-tag --title "Edge ${VERSION}" --notes-file notes.md --prerelease --latest=false
+          fi
+          gh release upload edge dist-artifacts/* --clobber
+          keep="$(cd dist-artifacts && ls)"
+          gh release view edge --json assets -q '.assets[].name' | while read -r name; do
+            grep -qxF "$name" <<<"$keep" || gh release delete-asset edge "$name" --yes
+          done
