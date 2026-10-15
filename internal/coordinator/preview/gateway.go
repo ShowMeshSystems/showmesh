@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -148,9 +147,4 @@ func (c *Client) Offer(ctx context.Context, key string, offer []byte) ([]byte, e
 func (c *Client) Snapshot(ctx context.Context, key string) ([]byte, error) {
 	data, _, err := c.do(ctx, http.MethodGet, "/v1/streams/"+url.PathEscape(key)+"/snapshot", "", nil)
 	return data, err
-}
-
-func isGatewayReply(err error) bool {
-	var ge *GatewayError
-	return errors.As(err, &ge)
 }

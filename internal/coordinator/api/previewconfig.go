@@ -94,7 +94,7 @@ func decodePreviewPutBody(body io.Reader, known ...string) (map[string]json.RawM
 	}
 	for key := range top {
 		if !allowed[key] {
-			return nil, operatorErrorf("The field %q is not accepted. Use only %s.", key, strings.Join(known, ", "))
+			return nil, operatorErrorf("The request has a field that is not accepted. Use only %s.", strings.Join(known, ", "))
 		}
 	}
 	return top, nil
@@ -102,22 +102,22 @@ func decodePreviewPutBody(body io.Reader, known ...string) (map[string]json.RawM
 
 func decodePreviewString(raw json.RawMessage, field string) (string, error) {
 	if isJSONNull(raw) {
-		return "", operatorErrorf("The field %q must not be null. Omit it to keep the stored value.", field)
+		return "", operatorErrorf("The %s cannot be blank. Leave it out to keep the stored value.", field)
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", operatorErrorf("The field %q must be text.", field)
+		return "", operatorErrorf("The %s must be text.", field)
 	}
 	return s, nil
 }
 
 func decodePreviewStringList(raw json.RawMessage, field string) ([]string, error) {
 	if isJSONNull(raw) {
-		return nil, operatorErrorf("The field %q must not be null. Omit it to keep the stored value.", field)
+		return nil, operatorErrorf("The %s cannot be blank. Leave it out to keep the stored value.", field)
 	}
 	var list []string
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, operatorErrorf("The field %q must be a list of text values.", field)
+		return nil, operatorErrorf("The %s must be a list of tile keys.", field)
 	}
 	if list == nil {
 		list = []string{}
@@ -152,7 +152,7 @@ func (h *handlers) writePreviewRevision(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		var conflict *errConfigRevisionPreconditionFailed
 		if errors.As(err, &conflict) {
-			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			writeProblem(w, h.logger, now, previewConflictProblem(conflict))
 			return rec, 0, false
 		}
 		h.writeInternalError(w, now, "write "+kind+" config revision", err)
@@ -217,7 +217,7 @@ func (h *handlers) handlePutPreviewGatewayConfig(w http.ResponseWriter, r *http.
 	}
 	cred := credentialChange{kind: config.PreviewGatewayConfigKind, id: config.PreviewGatewayConfigObjectID, field: config.PreviewGatewayTokenCredentialField}
 	if raw, ok := top["url"]; ok {
-		s, err := decodePreviewString(raw, "url")
+		s, err := decodePreviewString(raw, "address")
 		if err != nil {
 			writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 			return
@@ -297,15 +297,16 @@ func (h *handlers) handleListPreviewCameras(w http.ResponseWriter, r *http.Reque
 func (h *handlers) handleGetPreviewCamera(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	id := r.PathValue("id")
-	rev, obj, problem, err := h.getActiveShowConfigRevision(r.Context(), config.PreviewCameraConfigKind, id)
+	cur, err := h.readActivePreviewConfig(r.Context(), config.PreviewCameraConfigKind, id)
 	if err != nil {
 		h.writeInternalError(w, now, "get active preview.camera config revision", err)
 		return
 	}
-	if problem != nil {
-		writeProblem(w, h.logger, now, *problem)
+	if !cur.ok {
+		writeProblem(w, h.logger, now, resourceNotFoundProblem("No camera has this id. Add it first or check the id."))
 		return
 	}
+	rev, obj := cur.rev, cur.obj
 	p, err := config.DecodePreviewCameraPayload(rev.PayloadJSON)
 	if err != nil {
 		h.writeInternalError(w, now, "decode preview.camera config payload", err)
@@ -322,7 +323,7 @@ func (h *handlers) handlePutPreviewCamera(w http.ResponseWriter, r *http.Request
 	now := h.now()
 	id := r.PathValue("id")
 	if verr := config.ValidatePreviewCameraObjectID(id); verr != nil {
-		writeProblem(w, h.logger, now, invalidParameterProblem(verr.Detail))
+		writeProblem(w, h.logger, now, invalidParameterProblem("The camera id must be 1 to 64 lowercase letters, digits or hyphens, and cannot start or end with a hyphen."))
 		return
 	}
 	precondition, problem := parseRevisionPrecondition(r)
@@ -358,13 +359,13 @@ func (h *handlers) handlePutPreviewCamera(w http.ResponseWriter, r *http.Request
 	}
 	if raw, ok := top["enabled"]; ok {
 		if isJSONNull(raw) || json.Unmarshal(raw, &next.Enabled) != nil {
-			bad(`The field "enabled" must be true or false.`)
+			bad("The enabled setting must be true or false.")
 			return
 		}
 	}
 	cred := credentialChange{kind: config.PreviewCameraConfigKind, id: id, field: config.PreviewCameraURLCredentialField}
 	if raw, ok := top["url"]; ok {
-		s, err := decodePreviewString(raw, "url")
+		s, err := decodePreviewString(raw, "address")
 		if err != nil {
 			bad(err.Error())
 			return
@@ -469,7 +470,7 @@ func (h *handlers) handlePutDashboardLayoutConfig(w http.ResponseWriter, r *http
 	}
 	if raw, ok := top["previews"]; ok {
 		if isJSONNull(raw) || bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
-			writeProblem(w, h.logger, now, invalidParameterProblem(`The field "previews" must be an object with "order" and "hidden".`))
+			writeProblem(w, h.logger, now, invalidParameterProblem("The layout must be an object with an order list and a hidden list."))
 			return
 		}
 		inner, err := decodePreviewPutBody(bytes.NewReader(raw), "order", "hidden")
@@ -478,13 +479,13 @@ func (h *handlers) handlePutDashboardLayoutConfig(w http.ResponseWriter, r *http
 			return
 		}
 		if rawList, ok := inner["order"]; ok {
-			if next.Previews.Order, err = decodePreviewStringList(rawList, "order"); err != nil {
+			if next.Previews.Order, err = decodePreviewStringList(rawList, "order list"); err != nil {
 				writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 				return
 			}
 		}
 		if rawList, ok := inner["hidden"]; ok {
-			if next.Previews.Hidden, err = decodePreviewStringList(rawList, "hidden"); err != nil {
+			if next.Previews.Hidden, err = decodePreviewStringList(rawList, "hidden list"); err != nil {
 				writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 				return
 			}
@@ -515,5 +516,19 @@ func mapDashboardLayoutResponse(now time.Time, rev store.ConfigRevisionRecord, o
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
+	}
+}
+
+// previewConflictProblem is the 409 for a refused If-Match or If-None-Match on a preview kind.
+func previewConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Problem {
+	detail := "A newer version was saved first. Read the current settings again and retry."
+	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
+		detail = "These settings already exist. Send If-Match with the current version to change them."
+	}
+	return v1.Problem{
+		Type:   ProblemTypeConfigRevisionPreconditionFailed,
+		Title:  "Config write refused: a newer version was saved first",
+		Status: http.StatusConflict,
+		Detail: detail,
 	}
 }

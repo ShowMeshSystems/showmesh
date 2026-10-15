@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -438,7 +439,8 @@ func (s *Service) wrap(err error) error {
 	if err == nil {
 		return nil
 	}
-	if isGatewayReply(err) {
+	var ge *GatewayError
+	if errors.As(err, &ge) && ge.Status >= 400 && ge.Status < 500 && ge.Status != http.StatusUnauthorized && ge.Status != http.StatusForbidden {
 		return &UnavailableError{Message: "The preview gateway could not serve this tile. Check the tile's state and try again."}
 	}
 	return &UnavailableError{Message: msgUnreachable}
