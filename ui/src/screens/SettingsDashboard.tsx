@@ -10,7 +10,7 @@ import {
   type PreviewCameraConfigResponse,
   type PreviewGatewayConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, ConfirmDialog, Field, Input, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, ConfirmDialog, Field, FieldGrid, Input, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave } from '../domain/save'
@@ -206,7 +206,7 @@ export function SettingsDashboard() {
             {load.data.gateway === null && (
               <RuledStrip absence="unavailable" label="Not configured" fact="No preview gateway is set, so the Dashboard shows no previews. Enter its address and token to turn them on." />
             )}
-            <div className="sm-grid sm-form-column">
+            <FieldGrid>
               <Field label="Gateway address" error={urlError ?? undefined}>
                 {(props) => (
                   <Input {...props} value={url} onChange={(e) => { setUrl(e.target.value); setDirty(true) }} />
@@ -217,50 +217,50 @@ export function SettingsDashboard() {
                   <Input {...props} type="password" value={token} autoComplete="new-password" onChange={(e) => { setToken(e.target.value); setDirty(true) }} />
                 )}
               </Field>
-            </div>
+            </FieldGrid>
           </Section>
 
-          <Section id="st-dash-cameras" title="Cameras" detail="A camera's address is stored and never shown again.">
+          <Section
+            id="st-dash-cameras"
+            title="Cameras"
+            detail="A camera's address is stored and never shown again."
+            aside={
+              <Button variant="quiet" size="compact" onClick={addRow}>
+                Add a camera
+              </Button>
+            }
+          >
             {rows.length === 0 ? (
               <RuledStrip absence="empty" label="No cameras" fact="No camera is set. Add one to show its picture on the Dashboard." />
             ) : (
-              <div className="sm-panel sm-stack-4">
-                {rows.map((row) => (
-                  <div key={row.key} className="sm-panel">
-                    <div className="sm-inline-row sm-inline-row--end">
-                      <Field label="Camera id">
-                        {(props) => (
-                          <Input {...props} value={row.id} disabled={row.loaded !== null} className="sm-input--id" onChange={(e) => patchRow(row.key, { id: e.target.value })} />
-                        )}
-                      </Field>
-                      <Field label="Name">
-                        {(props) => <Input {...props} value={row.name} onChange={(e) => patchRow(row.key, { name: e.target.value })} />}
-                      </Field>
-                      <Field label={row.loaded === null ? 'Address' : 'Set a new address'}>
-                        {(props) => (
-                          <Input {...props} type="password" value={row.url} autoComplete="off" className="sm-input--address" onChange={(e) => patchRow(row.key, { url: e.target.value })} />
-                        )}
-                      </Field>
-                      <Choice type="checkbox" checked={row.enabled} onChange={(e) => patchRow(row.key, { enabled: e.target.checked })} label="Show on the Dashboard" />
-                      <Button variant="quiet" aria-label={`Remove ${row.name === '' ? 'this camera' : row.name}`} onClick={() => removeRow(row)}>
-                        Remove
-                      </Button>
-                      {rowDirty(row) && <StatusPair tone="warn" label="Unsaved" />}
-                    </div>
-                    {row.loaded !== null && (
-                      <p className="sm-small sm-muted">
-                        {row.loaded.payload.urlSet ? (
-                          <>Stored address <span className="sm-data">{row.loaded.payload.urlDisplay}</span></>
-                        ) : (
-                          'No address is stored. Set one to show this camera.'
-                        )}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
+              rows.map((row) => (
+                <div key={row.key} className="sm-subsection">
+                  <h3 className="sm-subsection__title">
+                    {row.loaded !== null ? row.loaded.payload.name : 'New camera'} {rowDirty(row) && <StatusPair tone="warn" label="Unsaved" />}
+                  </h3>
+                  <FieldGrid>
+                    <Field label="Camera id">
+                      {(props) => <Input {...props} value={row.id} disabled={row.loaded !== null} onChange={(e) => patchRow(row.key, { id: e.target.value })} />}
+                    </Field>
+                    <Field label="Name">
+                      {(props) => <Input {...props} value={row.name} onChange={(e) => patchRow(row.key, { name: e.target.value })} />}
+                    </Field>
+                    <Field
+                      label={row.loaded === null ? 'Address' : 'Set a new address'}
+                      help={row.loaded === null ? undefined : row.loaded.payload.urlSet ? `Stored address ${row.loaded.payload.urlDisplay}` : 'No address is stored. Set one to show this camera.'}
+                    >
+                      {(props) => <Input {...props} type="password" value={row.url} autoComplete="off" onChange={(e) => patchRow(row.key, { url: e.target.value })} />}
+                    </Field>
+                  </FieldGrid>
+                  <Choice type="checkbox" checked={row.enabled} onChange={(e) => patchRow(row.key, { enabled: e.target.checked })} label="Show on the Dashboard" />
+                  <ButtonRow>
+                    <Button variant="quiet" size="compact" aria-label={`Remove ${row.name === '' ? 'this camera' : row.name}`} onClick={() => removeRow(row)}>
+                      Remove camera
+                    </Button>
+                  </ButtonRow>
+                </div>
+              ))
             )}
-            <Button onClick={addRow}>Add a camera</Button>
           </Section>
         </>
       )}
