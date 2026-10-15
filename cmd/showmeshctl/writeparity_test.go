@@ -23,6 +23,10 @@ import (
 // Path keys match api/openapi.yaml verbatim (no /api/v1 prefix, {param}
 // placeholders as written there).
 var exemptWritePaths = map[string]string{
+	"/previews/{key}/webrtc": "POST carries a browser's WebRTC offer and returns the answer for that browser's " +
+		"own peer connection (ADR-060 decision 6). A command line has no peer to connect, so a verb for it " +
+		"would have nothing to do with the answer. The same tile's latest frame IS covered: " +
+		"\"preview snapshot\".",
 	"/node-enrollments/redeem": "a node exchanges its one-time code for its own credentials, which the " +
 		"installer writes into the node's agent.env (ADR-055 decisions 5 and 6). It is the node's call, not " +
 		"an operator capability; the operator's half is \"node enroll\", \"node enrollments\" and " +

@@ -66,6 +66,11 @@ func newClient(server, token string, httpClient *http.Client) (*client, error) {
 func (c *client) endpoint(apiPath string, query url.Values) string {
 	u := *c.baseURL
 	u.Path = strings.TrimRight(u.Path, "/") + apiPath
+	if strings.Contains(apiPath, "%") {
+		if decoded, err := url.PathUnescape(u.Path); err == nil {
+			u.RawPath, u.Path = u.Path, decoded
+		}
+	}
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()
 	}

@@ -227,7 +227,8 @@ single scope whose name is narrower than the surface it controls. The write
 surface adds `show:macro:run`, `device:power`, `fpp:command`, `config:write`,
 `principal:write`, and `audit:read`. **Amended 2026-08-15:** Track D's seam D-3
 adds `resolume:action`, one scope for the whole Resolume action vocabulary, on
-the same reasoning as `fpp:command`.
+the same reasoning as `fpp:command`. **Amended 2026-10-15:** ADR-060 adds
+`dashboard:write`, held by the operator role, for arranging the dashboard preview grid.
 
 Roles are named bundles of scopes. None of them is restricted to a principal
 kind:
