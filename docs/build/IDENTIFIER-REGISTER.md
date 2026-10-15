@@ -317,6 +317,7 @@ bundles of these (ADR-024).
 | `show:weatherdelay:resume` | shipped | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 | `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
+| `dashboard:write` | reserved | ADR-060: arranging the dashboard preview grid (`dashboard.layout`). Held by the `operator` role and by admin, because the operator arranges the grid; every other preview setting stays behind `config:write` |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares

@@ -63,7 +63,11 @@ NDI. Neither go2rtc nor MediaMTX reads NDI (RES-010), so GStreamer must.
 8. **One arrangement per installation.** The tile order and hidden tiles are
    stored on the coordinator as `dashboard.layout`, so every browser sees the
    same grid. A new source is appended at the end. A later configurable
-   dashboard extends this kind rather than replacing it.
+   dashboard extends this kind rather than replacing it. Arranging it needs
+   `dashboard:write`, which the operator role holds; the gateway and
+   camera settings stay behind `config:write`. Every preview read, including
+   video and snapshots, needs `observation:read`, as OBSERVABILITY §13 requires
+   for preview streams.
 9. **API first.** Gateway address, cameras and layout are configuration
    objects, and `showmeshctl` can list previews with their state, manage
    cameras and the layout, and save a snapshot to a file.
