@@ -15,7 +15,7 @@ var (
 )
 
 func newTestManager(e *fakeEngine, s *fakeSources) *Manager {
-	return NewManager(e, s, "/usr/local/bin/gw", quietLog())
+	return NewManager(e, s, "http://127.0.0.1:9/ndi/sec", quietLog())
 }
 
 func TestSetStartsOnlyChangedStreams(t *testing.T) {
@@ -48,14 +48,20 @@ func TestSetStartsOnlyChangedStreams(t *testing.T) {
 	}
 }
 
-func TestNDISourceIsOneExecToken(t *testing.T) {
+func TestNDISourceIsALoopbackFeedNotACommand(t *testing.T) {
 	e := newFakeEngine()
 	m := newTestManager(e, &fakeSources{ok: true})
 	m.Set(context.Background(), []StreamSpec{{Key: "k", Kind: KindNDI, NDIName: "A (x) y"}})
 	src := e.streams[streamID("k")]
-	want := "exec:/usr/local/bin/gw ndi-pipeline " + EncodeNDIName("A (x) y")
-	if src != want || strings.Count(src, " ") != 2 {
+	want := "http://127.0.0.1:9/ndi/sec/" + streamID("k")
+	if src != want {
 		t.Fatalf("source = %q", src)
+	}
+	if name, ok := m.NDIName(streamID("k")); !ok || name != "A (x) y" {
+		t.Fatalf("NDIName = %q, %v", name, ok)
+	}
+	if _, ok := m.NDIName(streamID("other")); ok {
+		t.Fatal("unknown id resolved")
 	}
 }
 
@@ -104,10 +110,21 @@ func TestStreamStates(t *testing.T) {
 		t.Fatalf("watched, no media: %+v", s)
 	}
 
-	e.info[streamID("ndi:A")] = Go2RTCInfo{Producers: []map[string]any{{"recv": float64(1200)}}, Consumers: []map[string]any{{}}}
+	e.info[streamID("ndi:A")] = Go2RTCInfo{Producers: []map[string]any{{"id": float64(1), "bytes_recv": float64(1200)}}, Consumers: []map[string]any{{}}}
 	if s := byKey()["ndi:A"]; s.State != StateLive || s.Message != "" {
 		t.Fatalf("live: %+v", s)
 	}
+
+	now0 := time.Now()
+	m.now = func() time.Time { return now0.Add(stallAfter + time.Second) }
+	if s := byKey()["ndi:A"]; s.State != StateConnecting {
+		t.Fatalf("a source that stopped sending must not stay live: %+v", s)
+	}
+	e.info[streamID("ndi:A")] = Go2RTCInfo{Producers: []map[string]any{{"id": float64(1), "bytes_recv": float64(5000)}}}
+	if s := byKey()["ndi:A"]; s.State != StateLive {
+		t.Fatalf("growing bytes: %+v", s)
+	}
+	m.now = time.Now
 
 	delete(e.info, streamID("ndi:A"))
 	src.names = map[string]bool{}
@@ -264,7 +281,7 @@ func TestDiscoveryLoopFeedsMonitorOutput(t *testing.T) {
 	d := NewDiscovery(quietLog())
 	d.Available = func(context.Context) error { return nil }
 	d.Monitor = func(ctx context.Context, w io.Writer) error {
-		io.WriteString(w, "Device found:\n\t\tndi-name = A (x)\n\t\turl-address = 10.0.0.5:5961\n\tgst-launch-1.0 x\n")
+		_, _ = io.WriteString(w, "Device found:\n\t\tndi-name = A (x)\n\t\turl-address = 10.0.0.5:5961\n\tgst-launch-1.0 x\n")
 		<-ctx.Done()
 		return ctx.Err()
 	}

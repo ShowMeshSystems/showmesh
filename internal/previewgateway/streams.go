@@ -2,10 +2,8 @@ package previewgateway
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -38,37 +36,37 @@ func ParseStreams(r io.Reader) ([]StreamSpec, error) {
 	var specs []StreamSpec
 	dec := json.NewDecoder(io.LimitReader(r, maxStreamBody+1))
 	if err := dec.Decode(&specs); err != nil {
-		return nil, errors.New("The stream list is not a JSON array of streams. Send an array of key, kind and source objects.")
+		return nil, problem("The stream list is not a JSON array of streams. Send an array of key, kind and source objects.")
 	}
 	if dec.More() {
-		return nil, errors.New("The stream list has data after the array. Send only the array.")
+		return nil, problem("The stream list has data after the array. Send only the array.")
 	}
 	if specs == nil {
 		specs = []StreamSpec{}
 	}
 	if len(specs) > maxStreams {
-		return nil, fmt.Errorf("The stream list has more than %d streams. Send fewer streams.", maxStreams)
+		return nil, problemf("The stream list has more than %d streams. Send fewer streams.", maxStreams)
 	}
 	seen := make(map[string]bool, len(specs))
 	for i, s := range specs {
 		if err := validateKey(s.Key); err != nil {
-			return nil, fmt.Errorf("Stream %d has an invalid key: %w", i+1, err)
+			return nil, problemf("Stream %d: %s", i+1, err)
 		}
 		if seen[s.Key] {
-			return nil, fmt.Errorf("The key %q appears twice. Send each key once.", s.Key)
+			return nil, problemf("The key %q appears twice. Send each key once.", s.Key)
 		}
 		seen[s.Key] = true
 		switch s.Kind {
 		case KindNDI:
 			if err := ValidateNDIName(s.NDIName); err != nil {
-				return nil, fmt.Errorf("Stream %q has an invalid NDI name: %w", s.Key, err)
+				return nil, problemf("Stream %q: %s", s.Key, err)
 			}
 		case KindRTSP:
 			if err := ValidateRTSPURL(s.URL); err != nil {
-				return nil, fmt.Errorf("Stream %q has an invalid camera address: %w", s.Key, err)
+				return nil, problemf("Stream %q: %s", s.Key, err)
 			}
 		default:
-			return nil, fmt.Errorf("Stream %q has an unknown kind. Use ndi or rtsp.", s.Key)
+			return nil, problemf("Stream %q has an unknown kind. Use ndi or rtsp.", s.Key)
 		}
 	}
 	return specs, nil
@@ -86,11 +84,11 @@ func hasControl(s string) bool {
 func validateKey(k string) error {
 	switch {
 	case k == "":
-		return errors.New("The key is empty. Give every stream a key.")
+		return problem("The key is empty. Give every stream a key.")
 	case len(k) > maxKeyBytes:
-		return errors.New("The key is too long. Use a shorter key.")
+		return problem("The key is too long. Use a shorter key.")
 	case !utf8.ValidString(k) || hasControl(k):
-		return errors.New("The key has unreadable characters. Use plain text.")
+		return problem("The key has unreadable characters. Use plain text.")
 	}
 	return nil
 }
@@ -100,15 +98,15 @@ func validateKey(k string) error {
 func ValidateNDIName(name string) error {
 	switch {
 	case name == "":
-		return errors.New("The NDI name is empty. Give the full source name.")
+		return problem("The NDI name is empty. Give the full source name.")
 	case len(name) > maxNDIName:
-		return errors.New("The NDI name is too long. Use the name the sender announces.")
+		return problem("The NDI name is too long. Use the name the sender announces.")
 	case !utf8.ValidString(name) || hasControl(name):
-		return errors.New("The NDI name has unreadable characters. Use the name the sender announces.")
+		return problem("The NDI name has unreadable characters. Use the name the sender announces.")
 	case strings.ContainsAny(name, "\"\\"):
-		return errors.New("The NDI name has a quote or backslash. Rename the NDI source.")
+		return problem("The NDI name has a quote or backslash. Rename the NDI source.")
 	case name != strings.TrimSpace(name):
-		return errors.New("The NDI name starts or ends with a space. Use the name the sender announces.")
+		return problem("The NDI name starts or ends with a space. Use the name the sender announces.")
 	}
 	return nil
 }
@@ -117,11 +115,11 @@ func ValidateNDIName(name string) error {
 // fragment, because go2rtc reads options from the fragment.
 func ValidateRTSPURL(raw string) error {
 	if raw == "" || len(raw) > maxURLBytes || !utf8.ValidString(raw) || hasControl(raw) || strings.ContainsAny(raw, " \t#") {
-		return errors.New("The address must be one rtsp:// or rtsps:// URL with no spaces or #.")
+		return problem("The address must be one rtsp:// or rtsps:// URL with no spaces or #.")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "rtsp" && u.Scheme != "rtsps") || u.Hostname() == "" {
-		return errors.New("The address must be one rtsp:// or rtsps:// URL with a host.")
+		return problem("The address must be one rtsp:// or rtsps:// URL with a host.")
 	}
 	return nil
 }
@@ -133,20 +131,9 @@ func streamID(key string) string {
 	return "k" + hex.EncodeToString(sum[:8])
 }
 
-// EncodeNDIName and DecodeNDIName carry an NDI name through a go2rtc exec
-// command line as one token with no characters a command parser could split.
-func EncodeNDIName(name string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(name))
-}
+// problem is an error whose text is shown to the operator as written.
+type problem string
 
-func DecodeNDIName(token string) (string, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return "", errors.New("the NDI name token is not valid base64")
-	}
-	name := string(raw)
-	if err := ValidateNDIName(name); err != nil {
-		return "", err
-	}
-	return name, nil
-}
+func (p problem) Error() string { return string(p) }
+
+func problemf(format string, a ...any) error { return problem(fmt.Sprintf(format, a...)) }

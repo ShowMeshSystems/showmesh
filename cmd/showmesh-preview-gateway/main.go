@@ -23,13 +23,6 @@ func main() {
 		case "-version", "--version", "version":
 			fmt.Println(version.String())
 			return
-		case "ndi-pipeline":
-			if len(os.Args) != 3 {
-				fmt.Fprintln(os.Stderr, "usage: showmesh-preview-gateway ndi-pipeline <encoded-name>")
-				os.Exit(2)
-			}
-			fmt.Fprintln(os.Stderr, previewgateway.ExecNDIPipeline(os.Args[2]))
-			os.Exit(1)
 		case "healthcheck":
 			os.Exit(healthcheck())
 		}
@@ -64,7 +57,7 @@ func healthcheck() int {
 	if err != nil {
 		return 1
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 1
 	}

@@ -76,26 +76,8 @@ func itoa(i int) string {
 	return s
 }
 
-func TestNDINameRoundTrip(t *testing.T) {
-	for _, name := range []string{"NODE-01 (matrix-main)", "ARENA (Composition)", "Ünï cödé/slash", "a b"} {
-		got, err := DecodeNDIName(EncodeNDIName(name))
-		if err != nil || got != name {
-			t.Errorf("%q: got %q, %v", name, got, err)
-		}
-		if strings.ContainsAny(EncodeNDIName(name), " ()\"'\\#=") {
-			t.Errorf("%q: token has a character a command parser could split on", name)
-		}
-	}
-	if _, err := DecodeNDIName("!!!"); err == nil {
-		t.Error("bad token accepted")
-	}
-	if _, err := DecodeNDIName(EncodeNDIName(`A"B`)); err == nil {
-		t.Error("unsafe name accepted")
-	}
-}
-
 func TestNDIPipelineArgsKeepNameInOneArgument(t *testing.T) {
-	name := "NODE-01 (matrix-main) ; $(rm -rf /)"
+	name := "NODE-01 (matrix-main) ; $(rm -rf /) ! fdsink"
 	args, err := NDIPipelineArgs(name)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +86,7 @@ func TestNDIPipelineArgsKeepNameInOneArgument(t *testing.T) {
 	for _, a := range args {
 		if strings.Contains(a, "rm -rf") {
 			found++
-			if a != `ndi-name="`+name+`"` {
+			if a != "ndi-name="+name {
 				t.Errorf("name is not a single property argument: %q", a)
 			}
 		}
@@ -112,12 +94,23 @@ func TestNDIPipelineArgsKeepNameInOneArgument(t *testing.T) {
 	if found != 1 {
 		t.Fatalf("name appears in %d arguments", found)
 	}
-	if args[0] != "gst-launch-1.0" {
-		t.Fatalf("args[0] = %q", args[0])
+	if !contains(args, "bandwidth=0") {
+		t.Fatal("the lowest NDI bandwidth is not requested")
 	}
-	if _, err := NDIPipelineArgs(`A" ! filesink location=/x`); err == nil {
-		t.Fatal("unsafe name accepted")
+	for _, bad := range []string{`A" ! filesink location=/x`, `A\B`, "A\nB", ""} {
+		if _, err := NDIPipelineArgs(bad); err == nil {
+			t.Errorf("unsafe name %q accepted", bad)
+		}
 	}
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStreamIDHidesKey(t *testing.T) {

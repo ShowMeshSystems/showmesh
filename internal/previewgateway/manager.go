@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const failureMemory = 30 * time.Second
+const (
+	failureMemory = 30 * time.Second
+	stallAfter    = 5 * time.Second
+)
 
 // Stream states reported by GET /v1/streams.
 const (
@@ -33,13 +36,16 @@ type entry struct {
 	source   string
 	applied  bool
 	failedAt time.Time
+
+	lastBytes  float64
+	advancedAt time.Time
 }
 
 // Manager holds the desired stream set and keeps go2rtc equal to it.
 type Manager struct {
 	engine  Engine
 	sources SourceProvider
-	self    string
+	feed    string
 	log     *slog.Logger
 	now     func() time.Time
 
@@ -47,15 +53,27 @@ type Manager struct {
 	desired map[string]*entry
 }
 
-// NewManager builds a Manager. self is the path of the gateway binary that
-// go2rtc runs to start an NDI pipeline.
-func NewManager(engine Engine, sources SourceProvider, self string, log *slog.Logger) *Manager {
-	return &Manager{engine: engine, sources: sources, self: self, log: log, now: time.Now, desired: map[string]*entry{}}
+// NewManager builds a Manager. feed is the loopback URL prefix under which
+// the gateway serves each NDI stream's video to go2rtc.
+func NewManager(engine Engine, sources SourceProvider, feed string, log *slog.Logger) *Manager {
+	return &Manager{engine: engine, sources: sources, feed: feed, log: log, now: time.Now, desired: map[string]*entry{}}
+}
+
+// NDIName returns the NDI source name of the desired NDI stream with this id.
+func (m *Manager) NDIName(id string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.desired {
+		if e.id == id && e.spec.Kind == KindNDI {
+			return e.spec.NDIName, true
+		}
+	}
+	return "", false
 }
 
 func (m *Manager) sourceFor(s StreamSpec) string {
 	if s.Kind == KindNDI {
-		return "exec:" + m.self + " ndi-pipeline " + EncodeNDIName(s.NDIName)
+		return m.feed + "/" + streamID(s.Key)
 	}
 	return s.URL
 }
@@ -140,15 +158,18 @@ func (m *Manager) NoteResult(key string, ok bool) {
 
 // Streams reports every desired stream, ordered by key.
 func (m *Manager) Streams(ctx context.Context) []StreamStatus {
+	info, listErr := m.engine.List(ctx)
 	m.mu.Lock()
 	entries := make([]entry, 0, len(m.desired))
 	for _, e := range m.desired {
+		if listErr == nil {
+			m.trackBytes(e, info[e.id])
+		}
 		entries = append(entries, *e)
 	}
 	m.mu.Unlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].spec.Key < entries[j].spec.Key })
 
-	info, listErr := m.engine.List(ctx)
 	announced, discoveryOK := m.sources.Announced()
 	out := make([]StreamStatus, 0, len(entries))
 	for _, e := range entries {
@@ -167,8 +188,17 @@ func (m *Manager) Streams(ctx context.Context) []StreamStatus {
 	return out
 }
 
+// trackBytes remembers when a stream's received byte count last grew, so that
+// a source that stops sending stops reporting live.
+func (m *Manager) trackBytes(e *entry, gi Go2RTCInfo) {
+	n := producerBytes(gi)
+	if n != e.lastBytes {
+		e.lastBytes, e.advancedAt = n, m.now()
+	}
+}
+
 func (m *Manager) classify(e entry, gi Go2RTCInfo, announced map[string]bool, discoveryOK bool) (string, string) {
-	if producerLive(gi) {
+	if producerBytes(gi) > 0 && m.now().Sub(e.advancedAt) < stallAfter {
 		return StateLive, ""
 	}
 	if e.spec.Kind == KindNDI {
@@ -185,7 +215,7 @@ func (m *Manager) classify(e entry, gi Go2RTCInfo, announced map[string]bool, di
 		}
 		return StateError, "The source did not send video. Check that the sender is running."
 	}
-	if len(gi.Consumers) > 0 || len(gi.Producers) > 0 && producerConnecting(gi) {
+	if len(gi.Consumers) > 0 || producerConnected(gi) {
 		return StateConnecting, "Waiting for the first frame."
 	}
 	return StateIdle, ""

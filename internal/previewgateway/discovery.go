@@ -84,7 +84,7 @@ func (d *Discovery) Loop(ctx context.Context) {
 			d.consume(pr)
 		}()
 		err := d.Monitor(ctx, pw)
-		pw.Close()
+		_ = pw.Close()
 		<-done
 		d.set(false)
 		if ctx.Err() == nil {
@@ -166,8 +166,7 @@ type monitorEvent struct {
 // gst-device-monitor-1.0. A block ends at its gst-launch line, or when the
 // next block starts.
 type monitorParser struct {
-	cur     *monitorEvent
-	removed bool
+	cur *monitorEvent
 }
 
 func (p *monitorParser) Feed(line string) *monitorEvent {
