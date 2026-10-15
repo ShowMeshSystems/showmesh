@@ -137,7 +137,7 @@ describe('Settings › Dashboard: preview gateway', () => {
 describe('Settings › Dashboard: cameras', () => {
   it('lists each camera with its stored address and never fills the address field', async () => {
     renderSettings()
-    expect(await screen.findByText('rtsp://192.168.1.20:37379')).toBeInTheDocument()
+    expect(await screen.findByText('Stored address rtsp://192.168.1.20:37379')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Driveway')).toBeInTheDocument()
     expect(screen.getByLabelText('Set a new address')).toHaveValue('')
     expect(screen.getByLabelText('Camera id')).toBeDisabled()
@@ -156,7 +156,7 @@ describe('Settings › Dashboard: cameras', () => {
       return cameraResponse()
     })
     renderSettings()
-    await screen.findByText('rtsp://192.168.1.20:37379')
+    await screen.findByText('Stored address rtsp://192.168.1.20:37379')
     fireEvent.click(screen.getByRole('button', { name: 'Add a camera' }))
     const ids = screen.getAllByLabelText('Camera id')
     fireEvent.change(ids[1]!, { target: { value: 'porch' } })
@@ -169,7 +169,7 @@ describe('Settings › Dashboard: cameras', () => {
 
   it('refuses a new camera without an rtsp address', async () => {
     renderSettings()
-    await screen.findByText('rtsp://192.168.1.20:37379')
+    await screen.findByText('Stored address rtsp://192.168.1.20:37379')
     fireEvent.click(screen.getByRole('button', { name: 'Add a camera' }))
     fireEvent.change(screen.getAllByLabelText('Camera id')[1]!, { target: { value: 'porch' } })
     fireEvent.change(screen.getAllByLabelText('Name')[1]!, { target: { value: 'Porch' } })
