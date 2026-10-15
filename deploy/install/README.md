@@ -62,10 +62,35 @@ and only warns when it cannot.
 have asked for must come from an option, and a missing one stops the run with
 the option to add. `--help` lists every option. Beyond ADR-055's list, these
 exist so every question has an unattended answer: `--address`,
-`--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
+`--ui-port`, `--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
 `--ptp-interface`, `--ptp-domain`, `--ptp-role`, `--audio-card` and
 `--agent-package` (a node agent tarball on disk, for a build that has no
 release).
+
+## Operator UI port
+
+The operator UI answers on port 8081 unless the installer is told otherwise.
+An interactive coordinator run asks for the port every time, defaulting to the
+saved one, and `--ui-port PORT` sets it unattended. Port 80 lets a browser open
+`http://<coordinator>/` with no port in the address, the way FPP does. The
+choice is saved as `SHOWMESH_UI_PORT` in `/opt/showmesh/coordinator/.env`, so a
+later run keeps it, and a later `--ui-port` changes it and recreates only the
+`ui` container. The coordinator API, the broker and every node keep their own
+ports and talk to each other directly; only the browser address changes.
+
+- The UI is plain HTTP on every port, the same as FPP. There is no
+  certificate and nothing is encrypted.
+- On `coordinator-node`, port 80 is refused, because xLights uploads sequences
+  to the node half on port 80.
+- The installer refuses the API's port, the built-in broker's port, and any
+  port another program is already listening on.
+- A friendly name has to resolve on your network. `<hostname>.local` works on
+  most phones and laptops through the coordinator's mDNS (avahi); any other
+  name needs an entry in your own DNS. Hosting the UI under a path such as
+  `http://host/showmesh/` is not supported.
+- Moving the UI off a port leaves the installer's firewall rule for the old
+  port open. Remove it with `ufw delete allow <port>/tcp` or
+  `firewall-cmd --permanent --service=showmesh --remove-port=<port>/tcp`.
 
 ## Firewall
 
