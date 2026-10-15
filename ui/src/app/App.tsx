@@ -33,6 +33,7 @@ import { SettingsDelivery } from '../screens/SettingsDelivery'
 import { SettingsRecovery } from '../screens/SettingsRecovery'
 import { SettingsWeatherDelay } from '../screens/SettingsWeatherDelay'
 import { SettingsAppearance } from '../screens/SettingsAppearance'
+import { SettingsDashboard } from '../screens/SettingsDashboard'
 import { SettingsAudioDefaults } from '../screens/SettingsAudioDefaults'
 import { SettingsNodeRouting } from '../screens/SettingsNodeRouting'
 import { SettingsNodeEnrollment } from '../screens/SettingsNodeEnrollment'
@@ -128,6 +129,7 @@ export default function App() {
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
               <Route path="weather-delay" element={<SettingsWeatherDelay />} />
+              <Route path="dashboard" element={<SettingsDashboard />} />
               <Route path="appearance" element={<SettingsAppearance />} />
               <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
               <Route path="node-routing" element={<SettingsNodeRouting />} />
