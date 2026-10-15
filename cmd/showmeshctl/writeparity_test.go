@@ -34,6 +34,10 @@ var exemptWritePaths = map[string]string{
 	"/session": "POST mints and DELETE destroys a browser session cookie; this CLI is bearer-only and " +
 		"never holds one. GET /session (whoami against whatever --token resolves to) IS covered — see " +
 		"cmd_session.go — only the cookie-minting/destroying half is exempt.",
+	"/companion-reports": "POST is evidence ingestion from a ShowMesh Companion: a file the companion " +
+		"read from its own machine, hashed, and uploaded under the companion role's token. A hand-typed " +
+		"crash report is not an operator capability. The READ half, GET on this path and on " +
+		"/companion-reports/{reportId}, IS covered by showmeshctl companion-reports list|get.",
 	"/integrations/fpp/playlist-entry-observations": "POST is evidence ingestion from the installed FPP " +
 		"plugin, not an operator capability: the body is machine-derived identity (a canonical playlist " +
 		"hash and a derived entry key over a definition only the plugin holds) plus a per-instance " +

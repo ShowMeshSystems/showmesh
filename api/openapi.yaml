@@ -10583,6 +10583,131 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /companion-reports:
+    post:
+      operationId: postCompanionReport
+      summary: A ShowMesh Companion uploads a file it collected on its own machine
+      description: >-
+        Behind `companion:report`, which the `companion` role holds and
+        nothing narrower than admin otherwise does. The companion uploads
+        one application crash report per request. Uploading identical
+        content again from the same companion answers `200` with the stored
+        report and `created: false`, so a retry is always safe. The
+        coordinator keeps the newest 200 reports per companion and removes
+        older ones as new ones arrive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompanionReportUploadRequest"
+      responses:
+        "200":
+          description: This companion already uploaded identical content. Nothing new was stored.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanionReportUploadResponse"
+        "201":
+          description: Created.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanionReportUploadResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          description: >-
+            The report content is over 4 MiB. Nothing was stored.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listCompanionReports
+      summary: Uploaded companion reports, newest first, without their content
+      parameters:
+        - name: companionId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: List only this companion's reports.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanionReportListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /companion-reports/{reportId}:
+    get:
+      operationId: getCompanionReport
+      summary: One uploaded companion report with its content
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanionReportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fallback-programs:
     get:
       operationId: listFallbackPrograms
@@ -14400,7 +14525,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery, node]
+          enum: [viewer, operator, admin, scheduler, recovery, node, companion]
         disabled:
           type: boolean
         hasPassword:
@@ -14451,7 +14576,7 @@ components:
           enum: [human, machine]
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery, node]
+          enum: [viewer, operator, admin, scheduler, recovery, node, companion]
         password:
           type: string
     SetPrincipalRoleRequest:
@@ -14464,7 +14589,7 @@ components:
       properties:
         role:
           type: string
-          enum: [viewer, operator, admin, scheduler, recovery, node]
+          enum: [viewer, operator, admin, scheduler, recovery, node, companion]
     SetPrincipalPasswordRequest:
       type: object
       description: >-
@@ -23545,6 +23670,98 @@ components:
         message:
           type: string
           description: One or two sentences for an operator, saying why the night waits and what ends the wait.
+    CompanionReportUploadRequest:
+      type: object
+      description: The body of POST /companion-reports.
+      required: [companionId, kind, source, fileName, capturedAt, contentSha256, content]
+      additionalProperties: false
+      properties:
+        companionId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        kind:
+          type: string
+          enum: [crash_report]
+        source:
+          type: string
+          pattern: "^[a-z0-9-]{1,64}$"
+          description: The application the file came from, for example `resolume-arena`.
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The file's base name, with no folder.
+        capturedAt:
+          type: string
+          format: date-time
+          description: The file's modification time on the companion's machine.
+        contentSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: Lowercase hex SHA-256 of content's UTF-8 bytes. A mismatch is refused.
+        content:
+          type: string
+          description: The file's text, at most 4 MiB.
+    CompanionReportSummary:
+      type: object
+      required: [id, companionId, kind, source, fileName, capturedAt, receivedAt, sizeBytes, contentSha256]
+      properties:
+        id:
+          type: string
+        companionId:
+          type: string
+        kind:
+          type: string
+          enum: [crash_report]
+        source:
+          type: string
+        fileName:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+        sizeBytes:
+          type: integer
+          format: int64
+        contentSha256:
+          type: string
+    CompanionReportUploadResponse:
+      type: object
+      required: [serverTime, created, report]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        created:
+          type: boolean
+          description: False when this companion had already uploaded identical content.
+        report:
+          $ref: "#/components/schemas/CompanionReportSummary"
+    CompanionReportListResponse:
+      type: object
+      required: [serverTime, reports]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompanionReportSummary"
+    CompanionReportResponse:
+      type: object
+      required: [serverTime, report, content]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        report:
+          $ref: "#/components/schemas/CompanionReportSummary"
+        content:
+          type: string
     FallbackProgramAcknowledgeRequest:
       type: object
       description: >-

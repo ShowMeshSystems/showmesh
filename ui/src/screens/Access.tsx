@@ -47,7 +47,7 @@ import {
   type TokenRead,
 } from './accessModel'
 
-const CREATABLE_ROLES: readonly PrincipalObject['role'][] = ['viewer', 'operator', 'admin', 'scheduler', 'recovery']
+const CREATABLE_ROLES: readonly PrincipalObject['role'][] = ['viewer', 'operator', 'admin', 'scheduler', 'recovery', 'companion']
 
 type AccessData =
   | { kind: 'denied'; reason: string }
