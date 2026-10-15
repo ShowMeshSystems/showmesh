@@ -27,6 +27,7 @@ type fakeGateway struct {
 	down       bool
 	refuseRTSP bool
 	redirect   string
+	slow       time.Duration
 	srv        *httptest.Server
 }
 
@@ -60,6 +61,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 		if !g.authorized(w, r) {
 			return
 		}
+		time.Sleep(g.slow)
 		b, _ := io.ReadAll(r.Body)
 		g.mu.Lock()
 		g.offers = append(g.offers, r.PathValue("key")+"|"+string(b))
@@ -71,6 +73,7 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 		if !g.authorized(w, r) {
 			return
 		}
+		time.Sleep(g.slow)
 		if r.PathValue("key") == "camera:nofeed" {
 			http.Error(w, "no frame yet", http.StatusNotFound)
 			return
@@ -490,5 +493,54 @@ func TestUnreachableGatewayIsLoggedOnlyWhenItBecomesUnreachable(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "down") && strings.Contains(buf.String(), "502: down") {
 		t.Fatalf("gateway reply text was logged:\n%s", buf.String())
+	}
+}
+
+func slowCallService(gw *fakeGateway, snapshot, webrtc time.Duration) *Service {
+	src := &staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}}
+	return NewService(src, func(url, token string) *Client {
+		c := NewClient(url, token, nil)
+		c.snapshotTimeout, c.webrtcTimeout = snapshot, webrtc
+		return c
+	}, func() time.Time { return testNow }, nil)
+}
+
+func TestSlowSnapshotWaitsLongerThanControlCalls(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.sources = []Source{{Name: "NODE-01 (matrix-main)"}}
+	gw.slow = 150 * time.Millisecond
+	svc := slowCallService(gw, 2*time.Second, 2*time.Second)
+	svc.Reconcile(context.Background())
+	key := "ndi:NODE-01 (matrix-main)"
+	if frame, err := svc.Snapshot(context.Background(), key); err != nil || !strings.HasPrefix(string(frame), "\xff\xd8") {
+		t.Fatalf("slow snapshot = %q, %v", frame, err)
+	}
+	if answer, err := svc.Offer(context.Background(), key, []byte("o")); err != nil || string(answer) != "v=0 answer" {
+		t.Fatalf("slow offer = %q, %v", answer, err)
+	}
+}
+
+func TestSlowSnapshotAndOfferTimeOutWithoutMarkingTheGatewayUnreachable(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.sources = []Source{{Name: "NODE-01 (matrix-main)"}}
+	svc := slowCallService(gw, 50*time.Millisecond, 50*time.Millisecond)
+	svc.Reconcile(context.Background())
+	gw.mu.Lock()
+	gw.slow = 300 * time.Millisecond
+	gw.mu.Unlock()
+	key := "ndi:NODE-01 (matrix-main)"
+	calls := map[string]func() error{
+		"snapshot": func() error { _, err := svc.Snapshot(context.Background(), key); return err },
+		"offer":    func() error { _, err := svc.Offer(context.Background(), key, []byte("o")); return err },
+	}
+	for name, call := range calls {
+		var unavailable *UnavailableError
+		if err := call(); !errors.As(err, &unavailable) || unavailable.Message != msgSlowStart {
+			t.Fatalf("%s timeout err = %v", name, err)
+		}
+	}
+	ov, err := svc.Overview(context.Background())
+	if err != nil || ov.Gateway.State != GatewayReachable {
+		t.Fatalf("gateway state = %q, %v", ov.Gateway.State, err)
 	}
 }
