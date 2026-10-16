@@ -3816,7 +3816,7 @@ export interface paths {
         };
         /**
          * preview.camera revision history, newest first
-         * @description Requires `config:write`. Metadata only.
+         * @description Requires `config:write`. Metadata only. `200` with an empty array for an id that has never been saved.
          */
         get: operations["getPreviewCameraRevisions"];
         put?: never;
@@ -3880,7 +3880,7 @@ export interface paths {
         };
         /**
          * The preview gateway state and every dashboard preview tile
-         * @description Requires `observation:read`, always, even when reads are open. Tiles are in layout order, with tiles the layout does not name appended in a stable order. With no gateway configured, `gateway.state` is `not_configured` and `tiles` is empty. When the gateway cannot be reached, `gateway.state` is `unreachable`, and the tiles for configured cameras are still listed with state `error`. An NDI tile is labelled with a node and surface when the part of its name in parentheses equals the NDI source name of a surface in the active show; when several nodes render that surface, the host part of the name picks the node. Otherwise the label is the raw NDI name. Neither the camera stream URL nor the gateway token appears here.
+         * @description Requires `observation:read`, always, even when reads are open. Tiles are in layout order, and a tile the layout does not name is placed after the others in the order it first appeared. With no gateway configured, `gateway.state` is `not_configured` and `tiles` is empty. When a gateway address is set but the coordinator has not yet heard from that address, `gateway.state` is `connecting`; an earlier answer from a different address or token never counts. When the gateway cannot be reached, `gateway.state` is `unreachable`, and the tiles for configured cameras are still listed with state `error`. An NDI tile is labelled with a node and surface when the part of its name in parentheses equals the NDI source name of a surface in the active show; when several nodes render that surface, the host part of the name picks the node. Otherwise the label is the raw NDI name. Neither the camera stream URL nor the gateway token appears here.
          */
         get: operations["listPreviews"];
         put?: never;
@@ -5495,7 +5495,7 @@ export interface components {
         /** @description The coordinator's latest view of the preview gateway. */
         PreviewGatewayStatus: {
             /** @enum {string} */
-            state: "not_configured" | "reachable" | "unreachable";
+            state: "not_configured" | "connecting" | "reachable" | "unreachable";
             /** @description States the fact, then the action. Empty when reachable. */
             message: string;
             /** Format: date-time */
@@ -16785,7 +16785,6 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };

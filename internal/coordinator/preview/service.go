@@ -2,6 +2,8 @@ package preview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +19,7 @@ const (
 	ReconcileInterval = 10 * time.Second
 
 	GatewayNotConfigured = "not_configured"
+	GatewayConnecting    = "connecting"
 	GatewayReachable     = "reachable"
 	GatewayUnreachable   = "unreachable"
 
@@ -37,6 +40,7 @@ const (
 // Messages an operator sees. Each states the fact, then the action.
 const (
 	msgNotConfigured = "No preview gateway is set up. Add its address in Settings to see previews."
+	msgConnecting    = "The preview gateway has not answered yet. Wait a few seconds and reload."
 	msgUnreachable   = "The preview gateway cannot be reached. Check that it is running and that its address and token are right."
 	msgSlowStart     = "The preview took too long to start. Try again in a few seconds."
 	msgNDIGone       = "This source is no longer announced on the network. Check that its sender is running."
@@ -128,6 +132,8 @@ type Overview struct {
 }
 
 type observation struct {
+	// gateway identifies the address and token the observation was made for.
+	gateway string
 	status  GatewayStatus
 	sources []Source
 	streams map[string]StreamState
@@ -143,9 +149,17 @@ type Service struct {
 	logger   *slog.Logger
 	wake     chan struct{}
 
-	mu     sync.Mutex
-	obs    observation
-	client func(url, token string) *Client
+	mu        sync.Mutex
+	obs       observation
+	cfg       Settings
+	cfgLoaded bool
+	cfgStale  bool
+	firstSeen map[string]int
+	pass      int
+	client    func(url, token string) *Client
+
+	loadMu    sync.Mutex
+	snapshots singleflight
 }
 
 // NewService returns a service reading settings from src. clientFor builds the
@@ -160,11 +174,61 @@ func NewService(src SettingsSource, clientFor func(url, token string) *Client, n
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{settings: src, client: clientFor, now: now, logger: logger, wake: make(chan struct{}, 1)}
+	return &Service{settings: src, client: clientFor, now: now, logger: logger, wake: make(chan struct{}, 1), firstSeen: map[string]int{}}
 }
 
-// Notify asks the run loop to reconcile now. It never blocks.
+// gatewayID names the address and token an observation belongs to without keeping the token.
+func gatewayID(cfg Settings) string {
+	if cfg.GatewayURL == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(cfg.GatewayURL + "\n" + cfg.Token))
+	return hex.EncodeToString(sum[:])
+}
+
+// loadSettings reads the settings and caches them.
+func (s *Service) loadSettings(ctx context.Context) (Settings, error) {
+	s.loadMu.Lock()
+	defer s.loadMu.Unlock()
+	s.mu.Lock()
+	s.cfgStale = false
+	s.mu.Unlock()
+	cfg, err := s.settings.Load(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	s.mu.Lock()
+	s.cfg, s.cfgLoaded = cfg, true
+	s.mu.Unlock()
+	return cfg, nil
+}
+
+// cachedSettings returns the settings from the last load. It reloads only when
+// there is none yet or a configuration change has been announced, and falls back
+// to the last good copy when that reload fails.
+func (s *Service) cachedSettings(ctx context.Context) (Settings, error) {
+	s.mu.Lock()
+	cfg, ok, stale := s.cfg, s.cfgLoaded, s.cfgStale
+	s.mu.Unlock()
+	if ok && !stale {
+		return cfg, nil
+	}
+	loaded, err := s.loadSettings(ctx)
+	if err == nil {
+		return loaded, nil
+	}
+	if ok {
+		s.logger.Warn("preview: could not refresh settings", "error", err)
+		return cfg, nil
+	}
+	return Settings{}, err
+}
+
+// Notify asks the run loop to reconcile now and marks the cached settings out of date. It never blocks.
 func (s *Service) Notify() {
+	s.mu.Lock()
+	s.cfgStale = true
+	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -202,24 +266,26 @@ func desiredStreams(cfg Settings, sources []Source) []Stream {
 
 // Reconcile sends the gateway the full desired stream set and records what it reports.
 func (s *Service) Reconcile(ctx context.Context) {
-	cfg, err := s.settings.Load(ctx)
+	cfg, err := s.loadSettings(ctx)
 	if err != nil {
 		s.logger.Warn("preview: could not read settings", "error", err)
 		return
 	}
 	now := s.now()
+	id := gatewayID(cfg)
 	if cfg.GatewayURL == "" {
-		s.store(observation{status: GatewayStatus{State: GatewayNotConfigured, Message: msgNotConfigured, ObservedAt: now}})
+		s.record(cfg, observation{status: GatewayStatus{State: GatewayNotConfigured, Message: msgNotConfigured, ObservedAt: now}})
 		return
 	}
 	c := s.client(cfg.GatewayURL, cfg.Token)
-	prev := s.snapshot()
+	prev := s.observationFor(id)
 
 	fail := func(err error) {
 		if prev.status.State != GatewayUnreachable {
 			s.logger.Warn("preview: gateway unreachable", "error", logSafe(err))
 		}
-		s.store(observation{
+		s.record(cfg, observation{
+			gateway: id,
 			status:  GatewayStatus{State: GatewayUnreachable, Message: msgUnreachable, ObservedAt: now},
 			sources: prev.sources,
 		})
@@ -253,7 +319,8 @@ func (s *Service) Reconcile(ctx context.Context) {
 	for _, st := range states {
 		byKey[st.Key] = st
 	}
-	s.store(observation{
+	s.record(cfg, observation{
+		gateway: id,
 		status:  GatewayStatus{State: GatewayReachable, ObservedAt: now},
 		sources: sources,
 		streams: byKey,
@@ -279,16 +346,47 @@ func logSafe(err error) any {
 	return err
 }
 
-func (s *Service) store(o observation) {
+// record stores o and notes which tiles it shows for the first time.
+func (s *Service) record(cfg Settings, o observation) {
 	s.mu.Lock()
 	s.obs = o
 	s.mu.Unlock()
-}
-
-func (s *Service) snapshot() observation {
+	keys := s.tiles(cfg, o)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pass := 0
+	for _, t := range keys {
+		if _, seen := s.firstSeen[t.Key]; !seen {
+			if pass == 0 {
+				s.pass++
+				pass = s.pass
+			}
+			s.firstSeen[t.Key] = pass
+		}
+	}
+}
+
+// observationFor returns the stored observation when it was made for the gateway
+// id, and an empty one otherwise.
+func (s *Service) observationFor(id string) observation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.obs.gateway != id {
+		return observation{}
+	}
 	return s.obs
+}
+
+// currentObservation is what the service knows about the configured gateway.
+func (s *Service) currentObservation(cfg Settings) observation {
+	if cfg.GatewayURL == "" {
+		return observation{status: GatewayStatus{State: GatewayNotConfigured, Message: msgNotConfigured, ObservedAt: s.now()}}
+	}
+	o := s.observationFor(gatewayID(cfg))
+	if o.status.State == "" || o.status.State == GatewayNotConfigured {
+		return observation{gateway: gatewayID(cfg), status: GatewayStatus{State: GatewayConnecting, Message: msgConnecting, ObservedAt: s.now()}}
+	}
+	return o
 }
 
 var ndiNamePattern = regexp.MustCompile(`^(.*) \(([^()]*)\)$`)
@@ -341,6 +439,7 @@ func nodeHasName(nodes []Node, nodeID, host string) bool {
 func (s *Service) tiles(cfg Settings, o observation) []Tile {
 	at := o.status.ObservedAt
 	reachable := o.status.State == GatewayReachable
+	connecting := o.status.State == GatewayConnecting
 	announced := make(map[string]bool, len(o.sources))
 	byKey := map[string]Tile{}
 
@@ -351,7 +450,7 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 	for _, src := range o.sources {
 		announced[src.Name] = true
 		t := ndiTile(src.Name)
-		applyStreamState(&t, o.streams, reachable, msgNDIGone)
+		applyStreamState(&t, o, msgNDIGone)
 		byKey[t.Key] = t
 	}
 	for _, key := range append(append([]string{}, cfg.Layout.Order...), cfg.Layout.Hidden...) {
@@ -361,7 +460,9 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 		}
 		t := ndiTile(name)
 		t.State, t.Message = TileNotFound, msgNDIGone
-		if !reachable {
+		if connecting {
+			t.State, t.Message = TileConnecting, ""
+		} else if !reachable {
 			t.State, t.Message = TileError, o.status.Message
 		}
 		byKey[t.Key] = t
@@ -371,7 +472,7 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 		if !cam.Enabled {
 			t.State, t.Message = TileDisabled, msgDisabled
 		} else {
-			applyStreamState(&t, o.streams, reachable, msgCameraGone)
+			applyStreamState(&t, o, msgCameraGone)
 			if reachable && o.camerasRefused && cam.URL != "" {
 				t.State, t.Message = TileError, msgCameraRefused
 			}
@@ -400,7 +501,23 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 			rest = append(rest, k)
 		}
 	}
-	sort.Strings(rest)
+	s.mu.Lock()
+	seen := make(map[string]int, len(rest))
+	for _, k := range rest {
+		seen[k] = s.firstSeen[k]
+	}
+	s.mu.Unlock()
+	// A tile not seen yet sorts after every tile that was.
+	sort.Slice(rest, func(i, j int) bool {
+		a, b := seen[rest[i]], seen[rest[j]]
+		if (a == 0) != (b == 0) {
+			return b == 0
+		}
+		if a != b {
+			return a < b
+		}
+		return rest[i] < rest[j]
+	})
 	for _, k := range rest {
 		out = append(out, byKey[k])
 	}
@@ -410,12 +527,17 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 	return out
 }
 
-func applyStreamState(t *Tile, streams map[string]StreamState, reachable bool, goneMsg string) {
-	if !reachable {
+func applyStreamState(t *Tile, o observation, goneMsg string) {
+	switch o.status.State {
+	case GatewayReachable:
+	case GatewayConnecting:
+		t.State = TileConnecting
+		return
+	default:
 		t.State, t.Message = TileError, msgUnreachable
 		return
 	}
-	st, ok := streams[t.Key]
+	st, ok := o.streams[t.Key]
 	if !ok {
 		t.State = TileConnecting
 		return
@@ -433,32 +555,27 @@ func applyStreamState(t *Tile, streams map[string]StreamState, reachable bool, g
 }
 
 // Overview returns the gateway state and every tile from the latest reconcile
-// and the current settings.
+// and the settings loaded with it.
 func (s *Service) Overview(ctx context.Context) (Overview, error) {
-	cfg, err := s.settings.Load(ctx)
+	cfg, err := s.cachedSettings(ctx)
 	if err != nil {
 		return Overview{}, err
 	}
-	o := s.snapshot()
-	if cfg.GatewayURL == "" {
-		o = observation{status: GatewayStatus{State: GatewayNotConfigured, Message: msgNotConfigured, ObservedAt: s.now()}}
-	} else if o.status.State == "" || o.status.State == GatewayNotConfigured {
-		o = observation{status: GatewayStatus{State: GatewayUnreachable, Message: msgUnreachable, ObservedAt: s.now()}}
-	}
+	o := s.currentObservation(cfg)
 	return Overview{Gateway: o.status, Tiles: s.tiles(cfg, o)}, nil
 }
 
-func (s *Service) gatewayFor(ctx context.Context, key string) (*Client, error) {
-	cfg, err := s.settings.Load(ctx)
+func (s *Service) gatewayFor(ctx context.Context, key string) (*Client, string, error) {
+	cfg, err := s.cachedSettings(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if cfg.GatewayURL == "" {
-		return nil, &UnavailableError{Message: msgNotConfigured}
+		return nil, "", &UnavailableError{Message: msgNotConfigured}
 	}
-	o := s.snapshot()
-	if o.status.State == "" || o.status.State == GatewayNotConfigured {
-		o = observation{status: GatewayStatus{State: GatewayUnreachable}}
+	o := s.currentObservation(cfg)
+	if o.status.State == GatewayConnecting {
+		return nil, "", &UnavailableError{Message: msgConnecting}
 	}
 	found := false
 	for _, t := range s.tiles(cfg, o) {
@@ -468,9 +585,9 @@ func (s *Service) gatewayFor(ctx context.Context, key string) (*Client, error) {
 		}
 	}
 	if !found {
-		return nil, ErrUnknownKey
+		return nil, "", ErrUnknownKey
 	}
-	return s.client(cfg.GatewayURL, cfg.Token), nil
+	return s.client(cfg.GatewayURL, cfg.Token), gatewayID(cfg), nil
 }
 
 func (s *Service) wrap(err error) error {
@@ -489,7 +606,7 @@ func (s *Service) wrap(err error) error {
 
 // Offer forwards a browser's SDP offer for one tile and returns the gateway's answer.
 func (s *Service) Offer(ctx context.Context, key string, offer []byte) ([]byte, error) {
-	c, err := s.gatewayFor(ctx, key)
+	c, _, err := s.gatewayFor(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -499,10 +616,12 @@ func (s *Service) Offer(ctx context.Context, key string, offer []byte) ([]byte, 
 
 // Snapshot returns the latest JPEG frame of one tile.
 func (s *Service) Snapshot(ctx context.Context, key string) ([]byte, error) {
-	c, err := s.gatewayFor(ctx, key)
+	c, id, err := s.gatewayFor(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	frame, err := c.Snapshot(ctx, key)
+	frame, err := s.snapshots.do(id+"|"+key, func() ([]byte, error) {
+		return c.Snapshot(context.WithoutCancel(ctx), key)
+	})
 	return frame, s.wrap(err)
 }

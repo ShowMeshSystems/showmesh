@@ -120,9 +120,9 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
-| `preview.gateway` | `default` singleton | reserved | ADR-060: the preview gateway address and its token (credential) |
-| `preview.camera` | operator-chosen | reserved | ADR-060: one RTSP camera; its URL is a credential |
-| `dashboard.layout` | `default` singleton | reserved | ADR-060: the dashboard preview order and hidden tiles |
+| `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
+| `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
+| `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds

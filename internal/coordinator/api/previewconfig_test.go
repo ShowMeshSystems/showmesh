@@ -513,3 +513,27 @@ func TestOperatorArrangesTheGridButCannotChangeGatewayOrCameras(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewCameraRevisionsOfAnUnknownIdIsAnEmptyListLikeOtherKinds(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, _, admin, _ := previewTestAPI(t, nil)
+	resp, body := doRequest(t, api.Handler, http.MethodGet, "/api/v1/config/preview.camera/never-saved/revisions", bearer(admin))
+	if resp.StatusCode != http.StatusOK || len(decodeMap(t, body)["revisions"].([]any)) != 0 {
+		t.Fatalf("status = %d: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "ConfigRevisionsResponse", body)
+}
+
+func TestPreviewsReportsAConnectingGateway(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	svc := &fakePreviewService{overview: preview.Overview{
+		Gateway: preview.GatewayStatus{State: preview.GatewayConnecting, Message: "The preview gateway has not answered yet. Wait a few seconds and reload.", ObservedAt: testNow},
+		Tiles:   []preview.Tile{},
+	}}
+	api, _, admin, _ := previewTestAPI(t, svc)
+	resp, body := doRequest(t, api.Handler, http.MethodGet, "/api/v1/previews", bearer(admin))
+	if resp.StatusCode != http.StatusOK || decodeMap(t, body)["gateway"].(map[string]any)["state"] != "connecting" {
+		t.Fatalf("status = %d: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "PreviewsResponse", body)
+}

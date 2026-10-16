@@ -13,7 +13,7 @@ import (
 )
 
 type previewReq struct {
-	method, path, ifMatch, body string
+	method, path, escapedPath, ifMatch, body string
 }
 
 const previewTilesJSON = `{"serverTime":"2026-10-15T12:00:00Z","gateway":{"state":"reachable","message":"","observedAt":"2026-10-15T12:00:00Z"},
@@ -26,13 +26,18 @@ const previewLayoutJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"dashboar
 "payload":{"previews":{"order":["camera:driveway"],"hidden":["camera:driveway"]}},
 "updatedAt":"2026-10-15T11:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`
 
+// The extra token and url fields stand for a coordinator leaking a secret by mistake; no command may print them.
+const previewGatewayJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.gateway","revision":1,"payload":{"url":"http://gw:8095","tokenSet":true,"token":"LEAKED-TOKEN"},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`
+
+const previewCameraJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.camera","id":"driveway","revision":1,"payload":{"name":"Driveway","enabled":true,"urlSet":true,"urlDisplay":"rtsp://192.168.1.20:37379","url":"rtsp://LEAKED-URL/stream"},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`
+
 // previewServer plays the coordinator for every preview command. layoutStatus 404 means no layout is stored.
 func previewServer(t *testing.T, layoutStatus int, snapshotStatus int) (*httptest.Server, *[]previewReq) {
 	t.Helper()
 	var seen []previewReq
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		seen = append(seen, previewReq{r.Method, r.URL.Path, r.Header.Get("If-Match"), string(body)})
+		seen = append(seen, previewReq{r.Method, r.URL.Path, r.URL.EscapedPath(), r.Header.Get("If-Match"), string(body)})
 		w.Header().Set("ShowMesh-API-Version", "1")
 		problem := func(status int, detail string) {
 			w.Header().Set("Content-Type", "application/problem+json")
@@ -57,6 +62,18 @@ func previewServer(t *testing.T, layoutStatus int, snapshotStatus int) (*httptes
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(previewLayoutJSON))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/revisions"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"serverTime":"2026-10-15T12:00:00Z","kind":"x","revisions":[{"revision":2,"createdAt":"2026-10-15T11:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api","note":"","active":true},{"revision":1,"createdAt":"2026-10-14T11:00:00Z","createdByPrincipalId":null,"createdByPrincipalName":null,"source":"api","note":"","active":false}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/config/preview.camera":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.camera","objects":[{"id":"driveway","label":"Driveway","show":"","currentRevision":3,"updatedAt":"2026-10-15T11:00:00Z"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/config/preview.gateway":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(previewGatewayJSON))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/config/preview.camera/"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(previewCameraJSON))
 		case r.Method == http.MethodGet:
 			problem(http.StatusNotFound, "Not saved yet.")
 		case r.Method == http.MethodDelete:
@@ -66,10 +83,10 @@ func previewServer(t *testing.T, layoutStatus int, snapshotStatus int) (*httptes
 			_, _ = w.Write([]byte(strings.Replace(previewLayoutJSON, `"revision":4`, `"revision":5`, 1)))
 		case r.URL.Path == "/api/v1/config/preview.gateway":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.gateway","revision":1,"payload":{"url":"http://gw:8095","tokenSet":true},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`))
+			_, _ = w.Write([]byte(previewGatewayJSON))
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.camera","id":"driveway","revision":1,"payload":{"name":"Driveway","enabled":true,"urlSet":true,"urlDisplay":"rtsp://192.168.1.20:37379"},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`))
+			_, _ = w.Write([]byte(previewCameraJSON))
 		}
 	}))
 	t.Cleanup(ts.Close)
@@ -129,6 +146,71 @@ func TestPreviewSnapshotSavesTheFrameUnderTheEscapedKey(t *testing.T) {
 	}
 	if p := (*seen)[0].path; p != "/api/v1/previews/ndi:NODE-01 (matrix-main)/snapshot" {
 		t.Fatalf("request path = %q", p)
+	}
+
+	if code, _, errOut := runPreview(t, ts, "snapshot", "camera:a/b c%d", "-o", file); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if p := (*seen)[1].escapedPath; p != "/api/v1/previews/camera:a%2Fb%20c%25d/snapshot" {
+		t.Fatalf("escaped request path = %q: a key must be escaped once", p)
+	}
+}
+
+func TestPreviewListKeepsTheNodeSurfaceAndCameraOfEachTile(t *testing.T) {
+	ts, _ := previewServer(t, http.StatusOK, http.StatusOK)
+	code, out, errOut := runPreview(t, ts, "list", "--output", "json")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	var decoded struct {
+		Tiles []map[string]any `json:"tiles"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Tiles[0]["nodeId"] != "node-01" || decoded.Tiles[0]["surfaceId"] != "matrix-main" || decoded.Tiles[1]["cameraId"] != "driveway" {
+		t.Fatalf("tiles = %v", decoded.Tiles)
+	}
+}
+
+func TestPreviewReadVerbsShowTheSameThingsTheUIShowsAndNeverASecret(t *testing.T) {
+	ts, seen := previewServer(t, http.StatusOK, http.StatusOK)
+	cases := []struct {
+		args []string
+		path string
+		want []string
+	}{
+		{[]string{"gateway", "get"}, "/api/v1/config/preview.gateway", []string{"http://gw:8095", "tokenSet", "true"}},
+		{[]string{"camera", "list"}, "/api/v1/config/preview.camera", []string{"driveway", "Driveway", "3"}},
+		{[]string{"camera", "get", "driveway"}, "/api/v1/config/preview.camera/driveway", []string{"Driveway", "rtsp://192.168.1.20:37379"}},
+		{[]string{"layout", "get"}, "/api/v1/config/dashboard.layout", []string{"camera:driveway", "order", "hidden", "4"}},
+		{[]string{"gateway", "revisions"}, "/api/v1/config/preview.gateway/revisions", []string{"REVISION", "ada"}},
+		{[]string{"camera", "revisions", "driveway"}, "/api/v1/config/preview.camera/driveway/revisions", []string{"REVISION", "ada"}},
+		{[]string{"layout", "revisions"}, "/api/v1/config/dashboard.layout/revisions", []string{"REVISION", "ada"}},
+	}
+	for _, tc := range cases {
+		before := len(*seen)
+		for _, format := range [][]string{nil, {"--output", "json"}} {
+			code, out, errOut := runPreview(t, ts, append(append([]string{}, tc.args...), format...)...)
+			if code != exitOK {
+				t.Fatalf("%v %v: exit %d: %s", tc.args, format, code, errOut)
+			}
+			if strings.Contains(out, "LEAKED") {
+				t.Fatalf("%v %v printed a secret:\n%s", tc.args, format, out)
+			}
+			if format == nil {
+				for _, w := range tc.want {
+					if !strings.Contains(out, w) {
+						t.Fatalf("%v output lacks %q:\n%s", tc.args, w, out)
+					}
+				}
+			} else if !json.Valid([]byte(out)) {
+				t.Fatalf("%v json output is not JSON: %s", tc.args, out)
+			}
+		}
+		if got := (*seen)[before].path; got != tc.path || (*seen)[before].method != http.MethodGet {
+			t.Fatalf("%v requested %s %s, want GET %s", tc.args, (*seen)[before].method, got, tc.path)
+		}
 	}
 }
 

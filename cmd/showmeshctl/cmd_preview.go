@@ -21,22 +21,27 @@ const (
 )
 
 type previewsResponse struct {
-	ServerTime time.Time `json:"serverTime"`
-	Gateway    struct {
-		State      string    `json:"state"`
-		Message    string    `json:"message"`
-		ObservedAt time.Time `json:"observedAt"`
-	} `json:"gateway"`
-	Tiles []previewTile `json:"tiles"`
+	ServerTime time.Time            `json:"serverTime"`
+	Gateway    previewGatewayStatus `json:"gateway"`
+	Tiles      []previewTile        `json:"tiles"`
+}
+
+type previewGatewayStatus struct {
+	State      string    `json:"state"`
+	Message    string    `json:"message"`
+	ObservedAt time.Time `json:"observedAt"`
 }
 
 type previewTile struct {
-	Key     string `json:"key"`
-	Kind    string `json:"kind"`
-	Label   string `json:"label"`
-	State   string `json:"state"`
-	Message string `json:"message"`
-	Hidden  bool   `json:"hidden"`
+	Key       string `json:"key"`
+	Kind      string `json:"kind"`
+	Label     string `json:"label"`
+	NodeID    string `json:"nodeId,omitempty"`
+	SurfaceID string `json:"surfaceId,omitempty"`
+	CameraID  string `json:"cameraId,omitempty"`
+	State     string `json:"state"`
+	Message   string `json:"message"`
+	Hidden    bool   `json:"hidden"`
 
 	ObservedAt time.Time `json:"observedAt"`
 }
@@ -58,38 +63,46 @@ type previewConfigMeta struct {
 
 type previewLayoutResponse struct {
 	previewConfigMeta
-	ServerTime time.Time `json:"serverTime"`
-	Kind       string    `json:"kind"`
-	Revision   int64     `json:"revision"`
-	Payload    struct {
-		Previews struct {
-			Order  []string `json:"order"`
-			Hidden []string `json:"hidden"`
-		} `json:"previews"`
-	} `json:"payload"`
+	ServerTime time.Time            `json:"serverTime"`
+	Kind       string               `json:"kind"`
+	Revision   int64                `json:"revision"`
+	Payload    previewLayoutPayload `json:"payload"`
+}
+
+type previewLayoutPayload struct {
+	Previews previewLayoutTiles `json:"previews"`
+}
+
+type previewLayoutTiles struct {
+	Order  []string `json:"order"`
+	Hidden []string `json:"hidden"`
 }
 
 type previewGatewayConfigResponse struct {
 	previewConfigMeta
-	ServerTime time.Time `json:"serverTime"`
-	Revision   int64     `json:"revision"`
-	Payload    struct {
-		URL      string `json:"url"`
-		TokenSet bool   `json:"tokenSet"`
-	} `json:"payload"`
+	ServerTime time.Time             `json:"serverTime"`
+	Revision   int64                 `json:"revision"`
+	Payload    previewGatewayPayload `json:"payload"`
+}
+
+type previewGatewayPayload struct {
+	URL      string `json:"url"`
+	TokenSet bool   `json:"tokenSet"`
 }
 
 type previewCameraConfigResponse struct {
 	previewConfigMeta
-	ServerTime time.Time `json:"serverTime"`
-	ID         string    `json:"id"`
-	Revision   int64     `json:"revision"`
-	Payload    struct {
-		Name       string `json:"name"`
-		Enabled    bool   `json:"enabled"`
-		URLSet     bool   `json:"urlSet"`
-		URLDisplay string `json:"urlDisplay"`
-	} `json:"payload"`
+	ServerTime time.Time            `json:"serverTime"`
+	ID         string               `json:"id"`
+	Revision   int64                `json:"revision"`
+	Payload    previewCameraPayload `json:"payload"`
+}
+
+type previewCameraPayload struct {
+	Name       string `json:"name"`
+	Enabled    bool   `json:"enabled"`
+	URLSet     bool   `json:"urlSet"`
+	URLDisplay string `json:"urlDisplay"`
 }
 
 func cmdPreview(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -128,11 +141,18 @@ The dashboard's video previews. A tile key is "ndi:<NDI source name>" or
 Subcommands:
   list                                   show the gateway state and every tile
   snapshot <key> -o <file.jpg>           save the latest frame of one tile
+  gateway get                            show the gateway address and whether a token is stored
   gateway set --url <url> --token-file <path>
                                          set the preview gateway (requires config:write)
+  gateway revisions                      list the gateway's saved changes, newest first
+  camera list                            list the cameras
+  camera get <id>                        show one camera
+  camera revisions <id>                  list one camera's saved changes, newest first
   camera add <id> --name <name> --url-file <path>
                                          add or change a camera (requires config:write)
   camera remove <id>                     remove a camera (requires config:write)
+  layout get                             show the saved tile order and hidden tiles
+  layout revisions                       list the layout's saved changes, newest first
   layout move <key> --to <index>         move a tile; index counts from 0 (requires dashboard:write)
   layout hide <key>                      hide a tile from the dashboard
   layout show <key>                      show a hidden tile again
@@ -279,6 +299,14 @@ func cmdPreviewSnapshot(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdPreviewGateway(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "get":
+			return cmdPreviewGatewayGet(args[1:], stdout, stderr, clock)
+		case "revisions":
+			return cmdPreviewRevisions("preview gateway revisions", previewGatewayAPIPath, false, args[1:], stdout, stderr, clock)
+		}
+	}
 	if len(args) == 0 || args[0] != "set" {
 		printPreviewUsage(stderr)
 		return exitUsage
@@ -370,6 +398,12 @@ func cmdPreviewCamera(args []string, stdout, stderr io.Writer, clock func() time
 		return exitUsage
 	}
 	switch args[0] {
+	case "list":
+		return cmdPreviewCameraList(args[1:], stdout, stderr, clock)
+	case "get":
+		return cmdPreviewCameraGet(args[1:], stdout, stderr, clock)
+	case "revisions":
+		return cmdPreviewRevisions("preview camera revisions", previewCameraAPIPath, true, args[1:], stdout, stderr, clock)
 	case "add":
 		return cmdPreviewCameraAdd(args[1:], stdout, stderr, clock)
 	case "remove":
@@ -453,13 +487,7 @@ func cmdPreviewCameraAdd(args []string, stdout, stderr io.Writer, clock func() t
 		}
 		return exitOK
 	}
-	tw := newTabWriter(stdout)
-	_, _ = fmt.Fprintf(tw, "camera:\t%s\n", resp.ID)
-	_, _ = fmt.Fprintf(tw, "name:\t%s\n", resp.Payload.Name)
-	_, _ = fmt.Fprintf(tw, "enabled:\t%t\n", resp.Payload.Enabled)
-	_, _ = fmt.Fprintf(tw, "address:\t%s\n", emptyOrDash(resp.Payload.URLDisplay))
-	_, _ = fmt.Fprintf(tw, "revision:\t%d\n", resp.Revision)
-	_ = tw.Flush()
+	printPreviewCamera(stdout, resp)
 	return exitOK
 }
 
@@ -503,6 +531,10 @@ func cmdPreviewLayout(args []string, stdout, stderr io.Writer, clock func() time
 		return exitUsage
 	}
 	switch args[0] {
+	case "get":
+		return cmdPreviewLayoutGet(args[1:], stdout, stderr, clock)
+	case "revisions":
+		return cmdPreviewRevisions("preview layout revisions", dashboardLayoutAPIPath, false, args[1:], stdout, stderr, clock)
 	case "move", "hide", "show":
 		return cmdPreviewLayoutChange(args[0], args[1:], stdout, stderr, clock)
 	default:

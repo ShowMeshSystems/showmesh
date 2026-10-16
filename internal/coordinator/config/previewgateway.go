@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 const (
@@ -55,11 +56,14 @@ func PreviewGatewayProblem(cfg PreviewGatewayConfig) string {
 		return ""
 	}
 	u, err := url.Parse(cfg.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.Opaque != "" {
 		return "The gateway address must start with http:// or https:// and name a host. Correct it and save again."
 	}
 	if u.User != nil {
 		return "The gateway address must not contain a login. Remove it and set the token separately."
+	}
+	if (u.Path != "" && u.Path != "/") || strings.ContainsAny(cfg.URL, "?#") {
+		return "The gateway address must be only the scheme, host and port, such as http://192.168.1.20:8095. Remove anything after the port and save again."
 	}
 	return ""
 }
