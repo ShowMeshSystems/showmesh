@@ -96,11 +96,10 @@ describe('PreviewWall', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('says it is reading before the first answer', async () => {
+  it('stays hidden before the first answer', async () => {
     stubs.getPreviews.mockReturnValue(new Promise(() => {}))
-    renderWall()
-    expect(screen.getByRole('heading', { level: 2, name: 'Live previews' })).toBeInTheDocument()
-    expect(screen.getByText('Reading')).toBeInTheDocument()
+    const { container } = renderWall()
+    expect(container).toBeEmptyDOMElement()
   })
 
   it('says the read failed when the first read fails', async () => {

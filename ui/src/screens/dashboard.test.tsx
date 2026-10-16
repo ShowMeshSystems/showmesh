@@ -132,8 +132,14 @@ function renderDashboard(model: Partial<Model>) {
 describe('Dashboard', () => {
   afterEach(cleanup)
 
-  it('renders the mock’s three blocks, in order, as real headings, with live previews after them', () => {
+  it('renders the mock’s three blocks, in order, as real headings, with live previews after them', async () => {
+    previewStubs.getPreviews.mockResolvedValueOnce({
+      serverTime: '2026-10-15T12:00:00Z',
+      gateway: { state: 'reachable', message: '', observedAt: '2026-10-15T12:00:00Z' },
+      tiles: [],
+    })
     renderDashboard({})
+    await screen.findByRole('heading', { level: 2, name: 'Live previews' })
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(['Readiness', 'Needs you', 'System health', 'Live previews'])
   })

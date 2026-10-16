@@ -105,11 +105,11 @@ export function PreviewWall() {
   const queued = useRef<PreviewLayout | null>(null)
 
   if (data === null) {
+    // Most installs have no gateway, so the section stays hidden until the first answer says otherwise.
+    if (failure === null) return null
     return (
       <Section id="db-previews" title="Live previews">
-        {failure === null ? (
-          <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the live previews." />
-        ) : failure.kind === 'denied' ? (
+        {failure.kind === 'denied' ? (
           <RuledStrip absence="noPermission" label="Previews not shown" fact={PREVIEW_READ_DENIED} />
         ) : (
           <RuledStrip absence="failed" label="Previews unread" fact={failure.reason} />
