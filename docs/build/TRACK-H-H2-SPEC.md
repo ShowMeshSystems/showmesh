@@ -55,8 +55,10 @@ what the hash is over, it is what a later re-verification must reproduce, and
 it removes any question of which of two byte sequences the row represents.
 
 **Retention.** A definition referenced by any stored `show.playlist` binding
-is never evicted. Beyond those, the newest 16 per instance are kept and older
-unreferenced rows are removed. The bound exists because the plugin re-scans
+is never evicted, and neither is the newest definition of each playlist name,
+which is the playlist as the FPP has it now. Beyond those, the newest 16
+superseded versions per instance are kept and older unreferenced rows are
+removed. The bound exists because the plugin re-scans
 and re-posts, so an unbounded table would grow with every playlist edit the
 operator ever made.
 

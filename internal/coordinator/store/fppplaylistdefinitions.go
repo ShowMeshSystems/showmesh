@@ -240,17 +240,25 @@ func (t *Tx) DeleteFPPPlaylistDefinition(ctx context.Context, instanceUUID, play
 // later, for a different hash, fails.
 func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) (bool, error)) (int, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT playlist_hash FROM fpp_playlist_definitions WHERE instance_uuid = ? ORDER BY received_at DESC`,
+		`SELECT playlist_hash, playlist_name FROM fpp_playlist_definitions WHERE instance_uuid = ? ORDER BY received_at DESC`,
 		instanceUUID)
 	if err != nil {
 		return 0, fmt.Errorf("store: prune fpp playlist definitions for %q: list: %w", instanceUUID, err)
 	}
+	// The newest row for each playlist name is the playlist as the FPP has
+	// it now and is never evicted; the bound applies to superseded versions.
 	var hashes []string
+	current := map[string]bool{}
+	newestByName := map[string]bool{}
 	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
+		var h, name string
+		if err := rows.Scan(&h, &name); err != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("store: prune fpp playlist definitions for %q: scan: %w", instanceUUID, err)
+		}
+		if !newestByName[name] {
+			newestByName[name] = true
+			current[h] = true
 		}
 		hashes = append(hashes, h)
 	}
@@ -269,7 +277,7 @@ func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID st
 		if err != nil {
 			return 0, fmt.Errorf("store: prune fpp playlist definitions for %q: check referenced %q: %w", instanceUUID, h, err)
 		}
-		if referenced {
+		if referenced || current[h] {
 			continue
 		}
 		unreferencedSeen++

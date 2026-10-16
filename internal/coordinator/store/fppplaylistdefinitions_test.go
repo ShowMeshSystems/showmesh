@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -243,22 +244,68 @@ func TestPruneFPPPlaylistDefinitionsKeepsNewestUnreferencedAndRemovesOlder(t *te
 		}
 	}
 	// Newest received first is hash-d (sec=4), then hash-c, hash-b, hash-a.
+	// hash-d is the playlist as the FPP has it now and is outside the bound;
+	// the bound of 2 keeps hash-c and hash-b and removes hash-a.
 	isReferenced := func(string) (bool, error) { return false, nil }
 	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 2, isReferenced)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	if pruned != 2 {
-		t.Fatalf("pruned = %d, want 2", pruned)
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want 1", pruned)
 	}
-	for _, want := range []string{"hash-d", "hash-c"} {
+	for _, want := range []string{"hash-d", "hash-c", "hash-b"} {
 		if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", want); err != nil {
 			t.Errorf("%s should have survived pruning: %v", want, err)
 		}
 	}
-	for _, want := range []string{"hash-b", "hash-a"} {
-		if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", want); !errors.Is(err, ErrFPPPlaylistDefinitionNotFound) {
-			t.Errorf("%s should have been pruned, got err=%v", want, err)
+	if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", "hash-a"); !errors.Is(err, ErrFPPPlaylistDefinitionNotFound) {
+		t.Errorf("hash-a should have been pruned, got err=%v", err)
+	}
+}
+
+// An FPP with more playlists than the bound keeps every one of them: the
+// bound counts superseded versions, not distinct playlists. A player with
+// twenty-two playlists lost six to the sweep before this rule existed.
+func TestPruneFPPPlaylistDefinitionsKeepsEveryPlaylistsCurrentDefinition(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	for i := 0; i < 22; i++ {
+		name := fmt.Sprintf("Playlist %02d", i)
+		rec := fppDefinitionFixture("instance-1", fmt.Sprintf("hash-%02d", i), name, time.Unix(int64(100+i), 0))
+		if _, err := st.PutFPPPlaylistDefinition(ctx, rec); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+	isReferenced := func(string) (bool, error) { return false, nil }
+	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 16, isReferenced)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if pruned != 0 {
+		t.Fatalf("pruned = %d, want 0: every playlist's current definition must survive", pruned)
+	}
+
+	// An edit to one playlist supersedes its old row, which then counts
+	// toward the bound; with a bound of 0 the old row goes and the rest stay.
+	edited := fppDefinitionFixture("instance-1", "hash-00-edited", "Playlist 00", time.Unix(200, 0))
+	if _, err := st.PutFPPPlaylistDefinition(ctx, edited); err != nil {
+		t.Fatalf("put edited: %v", err)
+	}
+	pruned, err = st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, isReferenced)
+	if err != nil {
+		t.Fatalf("prune after edit: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned after edit = %d, want 1", pruned)
+	}
+	if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", "hash-00"); !errors.Is(err, ErrFPPPlaylistDefinitionNotFound) {
+		t.Errorf("the superseded hash-00 should have been pruned, got err=%v", err)
+	}
+	for _, want := range []string{"hash-00-edited", "hash-01", "hash-21"} {
+		if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", want); err != nil {
+			t.Errorf("%s should have survived pruning: %v", want, err)
 		}
 	}
 }
@@ -306,8 +353,12 @@ func TestPruneFPPPlaylistDefinitionsOnlyTouchesTheNamedInstance(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
 
+	// Two versions of A on instance-1, so one superseded row is prunable there.
 	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-a", "A", time.Unix(1, 0))); err != nil {
 		t.Fatalf("put instance-1: %v", err)
+	}
+	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-a2", "A", time.Unix(2, 0))); err != nil {
+		t.Fatalf("put instance-1 edit: %v", err)
 	}
 	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-2", "hash-b", "B", time.Unix(1, 0))); err != nil {
 		t.Fatalf("put instance-2: %v", err)

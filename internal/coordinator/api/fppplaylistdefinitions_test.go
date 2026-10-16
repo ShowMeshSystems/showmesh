@@ -752,12 +752,12 @@ func TestFPPPlaylistDefinitionIdempotentRepeatStoresNothingAndKeepsFirstProvenan
 // covers review fix item 10: retention orders by received_at DESC (store's
 // pruneFPPPlaylistDefinitions), so a fixed clock gives every unreferenced
 // row the SAME received_at and this test's old count-only assertion
-// ("17 survive") would pass however SQLite happened to break that tie;
-// it would never actually prove the NEWEST 16 are the ones kept. An
-// incrementing clock gives each POST a distinct, later received_at, so
-// the test can name exactly which hashes must survive (the 16 posted
-// LAST) and which must not (the 4 posted first, after the referenced
-// seed).
+// ("18 survive") would pass however SQLite happened to break that tie;
+// it would never actually prove the NEWEST 16 superseded versions are
+// the ones kept. An incrementing clock gives each POST a distinct, later
+// received_at, so the test can name exactly which hashes must survive
+// (the current version and the 16 superseded posted LAST) and which must
+// not (the 3 posted first, after the referenced seed).
 func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testing.T) {
 	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
 	tick := 0
@@ -776,15 +776,15 @@ func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testi
 	}
 	mustBindShowPlaylist(t, setup.st, "playlist-1", "instance-1", hash0)
 
-	// 20 more unreferenced definitions, posted in order, each with a
-	// strictly later received_at than the last (incrementingClock above),
-	// exceeding the 16-newest bound.
+	// 20 versions of one playlist, posted in order, each with a strictly
+	// later received_at than the last (incrementingClock above), exceeding
+	// the 16-superseded bound. The newest version is the playlist as the
+	// FPP has it now and sits outside the bound.
 	hashes := make([]string, 20)
 	for i := 0; i < 20; i++ {
-		name := "p" + string(rune('A'+i))
-		def, hash := simpleDefinitionAndHash(t, name)
+		def, hash := simpleDefinitionAndHash(t, "pA-v"+string(rune('A'+i)))
 		hashes[i] = hash
-		body := fppPlaylistDefinitionPublishBody(t, "instance-1", name, def, hash, int64(1000+i))
+		body := fppPlaylistDefinitionPublishBody(t, "instance-1", "pA", def, hash, int64(1000+i))
 		if resp, m := mustPostPlaylistDefinition(t, api, body, token); resp.StatusCode != http.StatusOK {
 			t.Fatalf("post %d: status = %d, want 200; body: %v", i, resp.StatusCode, m)
 		}
@@ -794,17 +794,17 @@ func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testi
 		t.Errorf("referenced definition was evicted: %v", err)
 	}
 
-	// The 4 posted FIRST (oldest) must be pruned; the 16 posted LAST
-	// (newest) must survive: the actual claim "newest 16," not merely
-	// "16 survive."
-	for i := 0; i < 4; i++ {
+	// The 3 posted FIRST (oldest superseded) must be pruned; the 16
+	// superseded posted after them and the current version must survive:
+	// the actual claim "newest 16 superseded," not merely "16 survive."
+	for i := 0; i < 3; i++ {
 		if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hashes[i]); err == nil {
-			t.Errorf("oldest unreferenced definition %d (hash %s) survived retention, want pruned", i, hashes[i])
+			t.Errorf("oldest superseded definition %d (hash %s) survived retention, want pruned", i, hashes[i])
 		}
 	}
-	for i := 4; i < 20; i++ {
+	for i := 3; i < 20; i++ {
 		if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hashes[i]); err != nil {
-			t.Errorf("newest unreferenced definition %d (hash %s) was pruned, want kept: %v", i, hashes[i], err)
+			t.Errorf("definition %d (hash %s) was pruned, want kept: %v", i, hashes[i], err)
 		}
 	}
 
@@ -812,9 +812,40 @@ func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testi
 	if err != nil {
 		t.Fatalf("ListFPPPlaylistDefinitionsByInstance: %v", err)
 	}
-	// 16 newest unreferenced + the 1 referenced (however old) = 17.
-	if len(all) != 17 {
-		t.Errorf("len(all) = %d, want 17 (16 newest unreferenced + 1 referenced)", len(all))
+	// 1 current + 16 newest superseded + the 1 referenced (however old) = 18.
+	if len(all) != 18 {
+		t.Errorf("len(all) = %d, want 18 (current + 16 newest superseded + 1 referenced)", len(all))
+	}
+}
+
+// A player with more playlists than the bound keeps all of them. A real
+// FPP with twenty-two playlists lost six on every sweep when the bound
+// counted distinct playlists instead of superseded versions.
+func TestFPPPlaylistDefinitionRetentionKeepsEveryPlaylistOnThePlayer(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	tick := 0
+	incrementingClock := func() time.Time {
+		tick++
+		return testNow.Add(time.Duration(tick) * time.Second)
+	}
+	api := New(setup.deps(), Options{Clock: incrementingClock, Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	hashes := make([]string, 22)
+	for i := 0; i < 22; i++ {
+		name := "playlist-" + string(rune('A'+i))
+		def, hash := simpleDefinitionAndHash(t, name)
+		hashes[i] = hash
+		body := fppPlaylistDefinitionPublishBody(t, "instance-1", name, def, hash, int64(1000+i))
+		if resp, m := mustPostPlaylistDefinition(t, api, body, token); resp.StatusCode != http.StatusOK {
+			t.Fatalf("post %d: status = %d, want 200; body: %v", i, resp.StatusCode, m)
+		}
+	}
+	for i, hash := range hashes {
+		if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hash); err != nil {
+			t.Errorf("playlist %d (hash %s) was pruned, want kept: %v", i, hash, err)
+		}
 	}
 }
 
