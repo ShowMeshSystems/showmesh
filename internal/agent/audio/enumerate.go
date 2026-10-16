@@ -25,10 +25,13 @@ func runRealCommand(ctx context.Context, name string, args ...string) (string, e
 // virtualDeviceNames are PCM device names ALSA reports even with no real
 // interface attached — MEASURED, bench/audio-node/results/
 // r7_capability_discovery.json, a container with no /dev/snd: never a
-// candidate route for a real output.
+// candidate route for a real output. A bare "sysdefault" is the same
+// card-less alias as "default"; a headless PipeWire holding the cards makes
+// it fail to open and mark an otherwise complete discovery partial.
 var virtualDeviceNames = map[string]struct{}{
-	"null":    {},
-	"default": {},
+	"null":       {},
+	"default":    {},
+	"sysdefault": {},
 }
 
 // Enumerator reports what this node's ALSA stack currently exposes. A real
