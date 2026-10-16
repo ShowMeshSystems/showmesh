@@ -1085,11 +1085,12 @@ func isPreviewRoute(p string) bool {
 // previewReadVerbs names the showmeshctl command that shows what each preview
 // read of the UI shows. A write command that reads a revision first does not count.
 var previewReadVerbs = map[string][]string{
-	"/previews":                   {"list"},
-	"/config/preview.gateway":     {"gateway", "get"},
-	"/config/preview.camera/{id}": {"camera", "get", "driveway"},
-	"/config/preview.camera":      {"camera", "list"},
-	"/config/dashboard.layout":    {"layout", "get"},
+	"/previews":                         {"list"},
+	"/config/preview.gateway":           {"gateway", "get"},
+	"/config/preview.gateway/revisions": {"gateway", "revisions"},
+	"/config/preview.camera/{id}":       {"camera", "get", "driveway"},
+	"/config/preview.camera":            {"camera", "list"},
+	"/config/dashboard.layout":          {"layout", "get"},
 }
 
 // TestEveryPreviewReadTheUIMakesHasACLIVerb fails when the UI reads a preview
