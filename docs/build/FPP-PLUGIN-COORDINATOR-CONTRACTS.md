@@ -946,10 +946,12 @@ In order:
    or excessive nesting, fails here too and is the same refusal: the
    coordinator never stores a definition it could not canonicalize.
 8. Store under the key `(instanceUuid, playlistHash)`. A repeat of a key
-   already held is idempotent `200` and stores nothing, because the key is the
-   content. `playlistName` and `capturedAtMillis` on a repeat are ignored
+   already held is idempotent `200` and stores no new row, because the key is
+   the content. `playlistName` and `capturedAtMillis` on a repeat are ignored
    rather than overwriting the stored ones: the first report of a given
-   content is the one with provenance.
+   content is the one with provenance. The row's receipt time does move
+   forward on a repeat, so a playlist put back to an earlier version is the
+   newest-received copy again and the move preview offers it.
 
 There is no sequence and no ordering. Content addressing removes the need for
 one, which also removes section 1.5's wedging hazard from this route entirely:
