@@ -11,6 +11,21 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.4.1 - 2026-10-16
+
+Patch release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin. Upgrade the coordinator; nodes and the plugin need no change.
+
+### FPP
+
+- The coordinator keeps the current definition of every playlist on an FPP.
+  It used to keep only the newest sixteen rows per player across all
+  playlists, so a player with more than sixteen playlists lost the rest on
+  every plugin sweep, and an edit to one of those playlists never arrived.
+  The bound of sixteen now applies only to superseded versions of a playlist.
+  After upgrading, reload the plugin on each FPP once so it posts every
+  playlist again.
+
 ## 0.4.0 - 2026-10-15
 
 Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
