@@ -73,7 +73,9 @@ its own browse-only copies as root and drops to an unprivileged user for the
 gateway, so the host needs no Avahi. If Avahi stops, NDI streams report that
 discovery is not running, RTSP cameras keep working, and the container stays
 healthy; restart the container to bring NDI discovery back. An NDI source that stops without saying
-goodbye can stay in the source list until its mDNS record expires.
+goodbye can stay in the source list until its mDNS record expires. Discovery
+does not reach a sender on another subnet or VLAN; add it in Settings >
+Dashboard with its NDI name and `host:port` address.
 
 ## Cameras
 

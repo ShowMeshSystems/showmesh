@@ -78,7 +78,7 @@ func itoa(i int) string {
 
 func TestNDIPipelineArgsKeepNameInOneArgument(t *testing.T) {
 	name := "NODE-01 (matrix-main) ; $(rm -rf /) ! fdsink"
-	args, err := NDIPipelineArgs(name)
+	args, err := NDIPipelineArgs(name, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestNDIPipelineArgsKeepNameInOneArgument(t *testing.T) {
 		t.Fatal("the lowest NDI bandwidth is not requested")
 	}
 	for _, bad := range []string{`A" ! filesink location=/x`, `A\B`, "A\nB", ""} {
-		if _, err := NDIPipelineArgs(bad); err == nil {
+		if _, err := NDIPipelineArgs(bad, ""); err == nil {
 			t.Errorf("unsafe name %q accepted", bad)
 		}
 	}
@@ -117,5 +117,40 @@ func TestStreamIDHidesKey(t *testing.T) {
 	id := streamID("camera:driveway")
 	if strings.Contains(id, "driveway") || id != streamID("camera:driveway") || id == streamID("camera:other") {
 		t.Fatalf("bad id %q", id)
+	}
+}
+
+func TestNDIPipelineArgsPassTheAddressAsOneProperty(t *testing.T) {
+	args, err := NDIPipelineArgs("A (x)", "10.0.20.15:5961")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(args, "url-address=10.0.20.15:5961") || !contains(args, "ndi-name=A (x)") {
+		t.Fatalf("args = %q", args)
+	}
+	if args, _ := NDIPipelineArgs("A (x)", ""); strings.Contains(strings.Join(args, " "), "url-address") {
+		t.Fatalf("an empty address was passed: %q", args)
+	}
+}
+
+func TestValidateNDIAddress(t *testing.T) {
+	for _, ok := range []string{"10.0.20.15:5961", "render-01.local:5961", "[fe80::1]:5961"} {
+		if err := ValidateNDIAddress(ok); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "10.0.20.15", ":5961", "10.0.20.15:0", "10.0.20.15:70000", "host:port", `a" ! filesink:1`, "a b:1", "a\\b:1", "a\nb:1"} {
+		if err := ValidateNDIAddress(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestParseStreamsChecksTheNDIAddress(t *testing.T) {
+	if _, err := ParseStreams(strings.NewReader(`[{"key":"ndi:A","kind":"ndi","ndiName":"A","ndiAddress":"10.0.0.5:5961"}]`)); err != nil {
+		t.Fatalf("valid address refused: %v", err)
+	}
+	if _, err := ParseStreams(strings.NewReader(`[{"key":"ndi:A","kind":"ndi","ndiName":"A","ndiAddress":"10.0.0.5"}]`)); err == nil {
+		t.Fatal("an address without a port was accepted")
 	}
 }

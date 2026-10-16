@@ -1090,6 +1090,8 @@ var previewReadVerbs = map[string][]string{
 	"/config/preview.gateway/revisions": {"gateway", "revisions"},
 	"/config/preview.camera/{id}":       {"camera", "get", "driveway"},
 	"/config/preview.camera":            {"camera", "list"},
+	"/config/preview.ndi/{id}":          {"ndi", "get", "far-barn"},
+	"/config/preview.ndi":               {"ndi", "list"},
 	"/config/dashboard.layout":          {"layout", "get"},
 }
 
@@ -1144,6 +1146,8 @@ var previewSchemaTypes = map[string]string{
 	"ConfigPreviewGatewayPayload":   "previewGatewayPayload",
 	"PreviewCameraConfigResponse":   "previewCameraConfigResponse",
 	"ConfigPreviewCameraPayload":    "previewCameraPayload",
+	"PreviewNDIConfigResponse":      "previewNDIConfigResponse",
+	"ConfigPreviewNDIPayload":       "previewNDIPayload",
 	"DashboardLayoutConfigResponse": "previewLayoutResponse",
 	"ConfigDashboardLayoutPayload":  "previewLayoutPayload",
 	"ConfigDashboardPreviewLayout":  "previewLayoutTiles",

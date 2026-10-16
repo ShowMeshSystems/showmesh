@@ -3827,6 +3827,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/preview.ndi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate preview.ndi objects
+         * @description Requires `config:write`. Each summary's `label` is the source's label, or its NDI name when it has none, and `show` is empty.
+         */
+        get: operations["listPreviewNDISources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.ndi/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id the operator chose: 1 to 64 lowercase letters, digits or hyphens. The tile key is `ndi:<NDI name>`, shared with a discovered source of the same name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * One preview.ndi object's active revision
+         * @description Requires `config:write`. An NDI source added by hand, for a sender that discovery cannot reach. It is not a credential.
+         */
+        get: operations["getPreviewNDISource"];
+        /**
+         * Write a new preview.ndi revision
+         * @description Requires `config:write`. A partial update: a key absent from the body keeps its stored value, except that creating a source requires `ndiName`. `address` is the sender's `host:port`, passed to the gateway so the source need not be announced; empty finds it by name. `enabled` defaults to true on creation. Allowed while show mode is on.
+         */
+        put: operations["putPreviewNDISource"];
+        post?: never;
+        /**
+         * Delete a preview.ndi object (tombstone)
+         * @description Requires `config:write`. Requires an explicit `{"confirm":true}` body. A tombstone: the revisions stay readable. Optionally carries `If-Match`.
+         */
+        delete: operations["deletePreviewNDISource"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.ndi/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * preview.ndi revision history, newest first
+         * @description Requires `config:write`. Metadata only. `200` with an empty array for an id that has never been saved.
+         */
+        get: operations["getPreviewNDISourceRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/dashboard.layout": {
         parameters: {
             query?: never;
@@ -5403,7 +5474,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "dashboard.layout";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The "preview.gateway" kind's payload. `tokenSet` reports presence only: the gateway token never appears on any wire type. An empty `url` means previews are off. */
@@ -5453,6 +5524,36 @@ export interface components {
             id: string;
             revision: number;
             payload: components["schemas"]["ConfigPreviewCameraPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The "preview.ndi" kind's payload: one NDI source added by hand. `address` is `host:port`, or empty to find the source by name. */
+        ConfigPreviewNDIPayload: {
+            label: string;
+            ndiName: string;
+            address: string;
+            enabled: boolean;
+        };
+        /** @description The request body of PUT /config/preview.ndi/{id}. Every field is optional on an existing source; creating one requires `ndiName`. */
+        ConfigPreviewNDIPutRequest: {
+            label?: string;
+            ndiName?: string;
+            address?: string;
+            enabled?: boolean;
+        };
+        /** @description The body of GET and PUT /config/preview.ndi/{id}. */
+        PreviewNDIConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "preview.ndi";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigPreviewNDIPayload"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -6740,7 +6841,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock" | "preview.camera";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock" | "preview.camera" | "preview.ndi";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description One element of AudioNodeListResponse.objects: enough to enumerate every audio.node object's routing, including its program and LTC channel placement, without fetching each one's full payload. programChannels and ltcChannel carry the same meaning here as on ConfigAudioNode. */
@@ -16763,6 +16864,162 @@ export interface operations {
         };
     };
     getPreviewCameraRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPreviewNDISources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewNDISource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id the operator chose: 1 to 64 lowercase letters, digits or hyphens. The tile key is `ndi:<NDI name>`, shared with a discovered source of the same name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewNDIConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putPreviewNDISource: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                /** @description The id the operator chose: 1 to 64 lowercase letters, digits or hyphens. The tile key is `ndi:<NDI name>`, shared with a discovered source of the same name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPreviewNDIPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewNDIConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deletePreviewNDISource: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                /** @description The id the operator chose: 1 to 64 lowercase letters, digits or hyphens. The tile key is `ndi:<NDI name>`, shared with a discovered source of the same name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewNDISourceRevisions: {
         parameters: {
             query?: never;
             header?: never;

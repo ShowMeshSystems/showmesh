@@ -16,7 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// The three preview configuration kinds. Writes need config:write like every
+// The four preview configuration kinds. Writes need config:write like every
 // other kind, and are allowed in show mode because previews are not show
 // configuration. Secrets (gateway token, camera stream URL) are written in the
 // same transaction as the revision and are never returned.
@@ -412,6 +412,147 @@ func mapPreviewCameraResponse(now time.Time, rev store.ConfigRevisionRecord, obj
 	return v1.PreviewCameraConfigResponse{
 		ServerTime: formatTime(now), Kind: config.PreviewCameraConfigKind, ID: obj.ID, Revision: rev.Revision,
 		Payload:                v1.ConfigPreviewCameraPayload{Name: p.Name, Enabled: p.Enabled, URLSet: p.URLSet, URLDisplay: p.URLDisplay},
+		UpdatedAt:              formatTime(obj.UpdatedAt),
+		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
+		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
+		Source:                 rev.Source,
+	}
+}
+
+// --- preview.ndi ---
+
+func (h *handlers) handleListPreviewNDISources(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	objs, err := h.deps.Config.ListConfigObjects(r.Context(), config.PreviewNDIConfigKind)
+	if err != nil {
+		h.writeInternalError(w, now, "list preview.ndi config objects", err)
+		return
+	}
+	out := make([]v1.ConfigObjectSummary, 0, len(objs))
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(r.Context(), config.PreviewNDIConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			h.writeInternalError(w, now, "get active preview.ndi config revision", err)
+			return
+		}
+		p, err := config.DecodePreviewNDIPayload(rev.PayloadJSON)
+		if err != nil {
+			h.writeInternalError(w, now, "decode preview.ndi config payload", err)
+			return
+		}
+		label := p.Label
+		if label == "" {
+			label = p.NDIName
+		}
+		out = append(out, v1.ConfigObjectSummary{
+			ID: obj.ID, Label: label, Show: "", CurrentRevision: obj.CurrentRevision, UpdatedAt: formatTime(obj.UpdatedAt),
+		})
+	}
+	jsonWrite(w, v1.ConfigObjectsListResponse{ServerTime: formatTime(now), Kind: config.PreviewNDIConfigKind, Objects: out})
+}
+
+func (h *handlers) handleGetPreviewNDISource(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	cur, err := h.readActivePreviewConfig(r.Context(), config.PreviewNDIConfigKind, r.PathValue("id"))
+	if err != nil {
+		h.writeInternalError(w, now, "get active preview.ndi config revision", err)
+		return
+	}
+	if !cur.ok {
+		writeProblem(w, h.logger, now, resourceNotFoundProblem("No NDI source has this id. Add it first or check the id."))
+		return
+	}
+	p, err := config.DecodePreviewNDIPayload(cur.rev.PayloadJSON)
+	if err != nil {
+		h.writeInternalError(w, now, "decode preview.ndi config payload", err)
+		return
+	}
+	jsonWrite(w, mapPreviewNDIResponse(now, cur.rev, cur.obj, p))
+}
+
+func (h *handlers) handleGetPreviewNDISourceRevisions(w http.ResponseWriter, r *http.Request) {
+	h.handlePreviewConfigRevisions(w, r, config.PreviewNDIConfigKind, r.PathValue("id"))
+}
+
+func (h *handlers) handlePutPreviewNDISource(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	id := r.PathValue("id")
+	bad := func(msg string) { writeProblem(w, h.logger, now, invalidParameterProblem(msg)) }
+	if verr := config.ValidatePreviewNDIObjectID(id); verr != nil {
+		bad("The NDI source id must be 1 to 64 lowercase letters, digits or hyphens, and cannot start or end with a hyphen.")
+		return
+	}
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+	top, err := decodePreviewPutBody(io.LimitReader(r.Body, maxPreviewConfigRequestBodyBytes+1), "label", "ndiName", "address", "enabled")
+	if err != nil {
+		bad(err.Error())
+		return
+	}
+	cur, err := h.readActivePreviewConfig(r.Context(), config.PreviewNDIConfigKind, id)
+	if err != nil {
+		h.writeInternalError(w, now, "read preview.ndi config", err)
+		return
+	}
+	next := config.PreviewNDIPayload{Enabled: true}
+	if cur.ok {
+		if next, err = config.DecodePreviewNDIPayload(cur.rev.PayloadJSON); err != nil {
+			h.writeInternalError(w, now, "decode preview.ndi config payload", err)
+			return
+		}
+	}
+	for _, f := range []struct {
+		key, name string
+		dst       *string
+	}{{"label", "label", &next.Label}, {"ndiName", "NDI name", &next.NDIName}, {"address", "address", &next.Address}} {
+		raw, ok := top[f.key]
+		if !ok {
+			continue
+		}
+		s, err := decodePreviewString(raw, f.name)
+		if err != nil {
+			bad(err.Error())
+			return
+		}
+		*f.dst = strings.TrimSpace(s)
+	}
+	if raw, ok := top["enabled"]; ok {
+		if isJSONNull(raw) || json.Unmarshal(raw, &next.Enabled) != nil {
+			bad("The enabled setting must be true or false.")
+			return
+		}
+	}
+	if msg := config.PreviewNDIProblem(next); msg != "" {
+		bad(msg)
+		return
+	}
+	payloadJSON, err := config.EncodePreviewNDIPayload(next)
+	if err != nil {
+		h.writeInternalError(w, now, "encode preview.ndi config payload", err)
+		return
+	}
+	rec, revNo, ok := h.writePreviewRevision(w, r, now, config.PreviewNDIConfigKind, id, payloadJSON, precondition, credentialChange{})
+	if !ok {
+		return
+	}
+	jsonWrite(w, mapPreviewNDIResponse(now, rec, previewObjectRecord(config.PreviewNDIConfigKind, id, revNo, now), next))
+}
+
+func (h *handlers) handleDeletePreviewNDISource(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.PreviewNDIConfigKind, nil)
+	h.deps.Previews.Notify()
+}
+
+func mapPreviewNDIResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.PreviewNDIPayload) v1.PreviewNDIConfigResponse {
+	return v1.PreviewNDIConfigResponse{
+		ServerTime: formatTime(now), Kind: config.PreviewNDIConfigKind, ID: obj.ID, Revision: rev.Revision,
+		Payload:                v1.ConfigPreviewNDIPayload{Label: p.Label, NDIName: p.NDIName, Address: p.Address, Enabled: p.Enabled},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
