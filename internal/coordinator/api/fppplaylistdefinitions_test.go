@@ -752,12 +752,12 @@ func TestFPPPlaylistDefinitionIdempotentRepeatStoresNothingAndKeepsFirstProvenan
 // covers review fix item 10: retention orders by received_at DESC (store's
 // pruneFPPPlaylistDefinitions), so a fixed clock gives every unreferenced
 // row the SAME received_at and this test's old count-only assertion
-// ("17 survive") would pass however SQLite happened to break that tie;
-// it would never actually prove the NEWEST 16 are the ones kept. An
-// incrementing clock gives each POST a distinct, later received_at, so
-// the test can name exactly which hashes must survive (the 16 posted
-// LAST) and which must not (the 4 posted first, after the referenced
-// seed).
+// ("18 survive") would pass however SQLite happened to break that tie;
+// it would never actually prove the NEWEST 16 superseded versions are
+// the ones kept. An incrementing clock gives each POST a distinct, later
+// received_at, so the test can name exactly which hashes must survive
+// (the current version and the 16 superseded posted LAST) and which must
+// not (the 3 posted first, after the referenced seed).
 func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testing.T) {
 	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
 	tick := 0
