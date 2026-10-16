@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DISCONNECT_GRACE_MS, ICE_WAIT_MS, SNAPSHOT_INTERVAL_MS, TRACK_WAIT_MS, WEBRTC_RETRY_MS, startFeed, type FeedDeps } from './previewFeed'
+import { DISCONNECT_GRACE_MS, FRAME_CHECK_MS, ICE_WAIT_MS, SNAPSHOT_INTERVAL_MS, TRACK_WAIT_MS, WEBRTC_RETRY_MS, startFeed, type FeedDeps } from './previewFeed'
 
 class FakePeer {
   static all: FakePeer[] = []
@@ -48,6 +48,8 @@ function makeDeps(overrides: Partial<FeedDeps> = {}): FeedDeps & { revoked: stri
       frames.push(onFrame)
       return () => {}
     },
+    framesDecoded: async () => null,
+    now: () => Date.now(),
     revoked,
     frames,
     ...overrides,
@@ -270,5 +272,32 @@ describe('preview feed', () => {
     expect((deps.getSnapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls)
     expect(FakePeer.all).toHaveLength(1)
     expect(deps.revoked).toContain('blob:frame-1')
+  })
+
+  it('reports a frame time for each snapshot', async () => {
+    const deps = makeDeps({ createPeer: null, now: () => 1234 })
+    const onFrame = vi.fn()
+    startFeed('camera:a', { ...handlers(), onFrame }, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onFrame).toHaveBeenCalledWith(1234)
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_INTERVAL_MS)
+    expect(onFrame).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a frame time only while the live stream keeps decoding frames', async () => {
+    let decoded = 10
+    const deps = makeDeps({ framesDecoded: async () => decoded })
+    const onFrame = vi.fn()
+    startFeed('camera:a', { ...handlers(), onFrame }, deps)
+    await vi.advanceTimersByTimeAsync(0)
+    connect(FakePeer.all[0]!)
+    deps.frames[0]!()
+    expect(onFrame).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(FRAME_CHECK_MS)
+    decoded = 20
+    await vi.advanceTimersByTimeAsync(FRAME_CHECK_MS)
+    expect(onFrame).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(FRAME_CHECK_MS * 3)
+    expect(onFrame).toHaveBeenCalledTimes(2)
   })
 })

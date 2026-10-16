@@ -205,8 +205,6 @@ export function Dashboard() {
         )}
       </Section>
 
-      <PreviewWall />
-
       <Section
         id="db-health"
         title="System health"
@@ -239,6 +237,8 @@ export function Dashboard() {
           </p>
         )}
       </Section>
+
+      <PreviewWall />
     </>
   )
 }

@@ -5,12 +5,15 @@ export const TRACK_WAIT_MS = 8000
 export const ICE_WAIT_MS = 2000
 export const WEBRTC_RETRY_MS = 30000
 export const DISCONNECT_GRACE_MS = 5000
+export const FRAME_CHECK_MS = 1000
 
 export type FeedHandlers = {
   /** The live video stream, or null when there is none. */
   onStream: (stream: MediaStream | null) => void
   /** The latest snapshot's object URL, or null when there is none. */
   onSnapshot: (url: string | null) => void
+  /** The time a new picture arrived: each snapshot, and each check that finds the stream decoded more frames. */
+  onFrame?: (at: number) => void
 }
 
 export type FeedDeps = {
@@ -21,6 +24,17 @@ export type FeedDeps = {
   revokeObjectURL: (url: string) => void
   /** Calls onFrame once the stream has decoded a picture. Returns the function that cancels the wait. */
   watchFrame: (stream: MediaStream, onFrame: () => void) => () => void
+  /** Video frames the connection has decoded so far, or null when it cannot say. */
+  framesDecoded: (peer: RTCPeerConnection) => Promise<number | null>
+  now: () => number
+}
+
+async function framesDecodedFromStats(peer: RTCPeerConnection): Promise<number | null> {
+  let decoded: number | null = null
+  ;(await peer.getStats()).forEach((report: { type?: string; kind?: string; framesDecoded?: number }) => {
+    if (report.type === 'inbound-rtp' && report.kind === 'video' && typeof report.framesDecoded === 'number') decoded = report.framesDecoded
+  })
+  return decoded
 }
 
 function watchFrameInVideo(stream: MediaStream, onFrame: () => void): () => void {
@@ -50,6 +64,8 @@ export const defaultFeedDeps: FeedDeps = {
   createObjectURL: (blob) => URL.createObjectURL(blob),
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
   watchFrame: watchFrameInVideo,
+  framesDecoded: framesDecodedFromStats,
+  now: () => Date.now(),
 }
 
 /**
@@ -69,10 +85,14 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
   let pollGen = 0
   let cancelFrameWatch: (() => void) | undefined
   let disconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let frameCheckTimer: ReturnType<typeof setInterval> | undefined
+
+  const frameArrived = () => handlers.onFrame?.(deps.now())
 
   const closePeer = () => {
     clearTimeout(trackTimer)
     clearTimeout(disconnectTimer)
+    clearInterval(frameCheckTimer)
     cancelFrameWatch?.()
     cancelFrameWatch = undefined
     if (peer !== null) {
@@ -95,6 +115,7 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
       dropSnapshot()
       snapshotUrl = deps.createObjectURL(blob)
       handlers.onSnapshot(snapshotUrl)
+      frameArrived()
     } catch {
       // A failed poll keeps the last frame on screen; the tile's state word reports the source.
     }
@@ -135,6 +156,18 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
       })
     })
 
+  const watchDecoding = (pc: RTCPeerConnection) => {
+    let last: number | null = null
+    clearInterval(frameCheckTimer)
+    frameCheckTimer = setInterval(() => {
+      void deps.framesDecoded(pc).then((decoded) => {
+        if (stopped || peer !== pc || decoded === null) return
+        if (last !== null && decoded > last) frameArrived()
+        last = decoded
+      }, () => {})
+    }, FRAME_CHECK_MS)
+  }
+
   const connect = async () => {
     if (stopped) return
     if (deps.createPeer === null) return fallback()
@@ -151,6 +184,8 @@ export function startFeed(key: string, handlers: FeedHandlers, deps: FeedDeps = 
         clearTimeout(retryTimer)
         stopPolling()
         handlers.onStream(stream)
+        frameArrived()
+        watchDecoding(pc)
       }
       pc.ontrack = (event) => {
         if (stopped || peer !== pc || stream !== null) return

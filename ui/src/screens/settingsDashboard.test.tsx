@@ -11,6 +11,7 @@ const stubs = vi.hoisted(() => ({
   getPreviewCamera: vi.fn(),
   putPreviewCamera: vi.fn(),
   deletePreviewCamera: vi.fn(),
+  getPreviewGatewayConfigRevisions: vi.fn(),
 }))
 
 vi.mock('../api', async () => {
@@ -70,6 +71,7 @@ beforeEach(() => {
   stubs.getPreviewCamera.mockResolvedValue(cameraResponse())
   stubs.putPreviewCamera.mockResolvedValue(cameraResponse(2))
   stubs.deletePreviewCamera.mockResolvedValue(undefined)
+  stubs.getPreviewGatewayConfigRevisions.mockResolvedValue({ serverTime: '2026-10-15T12:00:00Z', kind: 'preview.gateway', revisions: [] })
 })
 
 afterEach(() => {
@@ -204,5 +206,54 @@ describe('Settings › Dashboard: cameras', () => {
     expect(stubs.deletePreviewCamera).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove and save' }))
     await waitFor(() => expect(stubs.deletePreviewCamera).toHaveBeenCalledWith('driveway'))
+  })
+})
+
+describe('Settings › Dashboard: layout and partial saves', () => {
+  it('builds each camera as a panel with Remove in its field row and Add a camera after the list', async () => {
+    renderSettings()
+    const remove = await screen.findByRole('button', { name: 'Remove Driveway' })
+    expect(remove.closest('.sm-inline-row')).toContainElement(screen.getByLabelText('Camera id'))
+    const add = screen.getByRole('button', { name: 'Add a camera' })
+    expect(remove.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText(/turns NDI sources/)).toBeNull()
+  })
+
+  it('keeps the camera name as the heading while the row is unsaved', async () => {
+    renderSettings()
+    fireEvent.change(await screen.findByDisplayValue('Driveway'), { target: { value: 'Front drive' } })
+    expect(screen.getByRole('heading', { level: 3, name: 'Driveway' })).toBeInTheDocument()
+    expect(screen.getByText('Unsaved')).toBeInTheDocument()
+  })
+
+  it('labels the enabled switch by what it does', async () => {
+    renderSettings()
+    expect(await screen.findByLabelText('Stream this camera')).toBeChecked()
+    expect(screen.queryByLabelText('Show on the Dashboard')).toBeNull()
+  })
+
+  it('shows the gateway history', async () => {
+    renderSettings()
+    await screen.findByDisplayValue('Driveway')
+    await waitFor(() => expect(stubs.getPreviewGatewayConfigRevisions).toHaveBeenCalled())
+  })
+
+  it('says which part saved when a later part fails, and a retry does not refuse the part that saved', async () => {
+    renderSettings()
+    fireEvent.change(await screen.findByLabelText('Gateway address'), { target: { value: 'http://10.0.0.10:8095' } })
+    fireEvent.change(screen.getByDisplayValue('Driveway'), { target: { value: 'Front drive' } })
+    stubs.putPreviewGatewayConfig.mockImplementation(async () => {
+      stubs.getPreviewGatewayConfig.mockResolvedValue({ ...gatewayResponse(2), payload: { url: 'http://10.0.0.10:8095', tokenSet: true } })
+      return { ...gatewayResponse(2), payload: { url: 'http://10.0.0.10:8095', tokenSet: true } }
+    })
+    stubs.putPreviewCamera.mockRejectedValueOnce(new ApiError('The coordinator could not store the camera. Try again.', 500))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    expect(await screen.findByText('Save failed')).toBeInTheDocument()
+    expect(screen.getByText('Already saved: the gateway. The rest is still unsaved.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    await waitFor(() => expect(stubs.putPreviewCamera).toHaveBeenCalledTimes(2))
+    expect(stubs.putPreviewGatewayConfig).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Stale write')).toBeNull()
   })
 })

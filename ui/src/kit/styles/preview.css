@@ -1,7 +1,7 @@
 /* Live preview tiles: a plain grid of 16:9 frames with a caption under each. */
 .sm-preview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: var(--s-4);
 }
 
@@ -41,12 +41,9 @@
   object-fit: contain;
 }
 
-.sm-preview__none {
+.sm-preview__none,
+.sm-preview__message {
   margin: 0;
-  font: var(--t-meta);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-faint);
 }
 
 .sm-preview__caption {
@@ -58,12 +55,7 @@
 
 .sm-preview__label {
   flex: 1 1 auto;
-  min-width: 0;
   margin: 0;
-  overflow: hidden;
-  font: var(--t-subhead);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sm-preview__handle {
@@ -71,12 +63,6 @@
   cursor: grab;
   color: var(--text-faint);
   user-select: none;
-}
-
-.sm-preview__message {
-  margin: 0;
-  font: var(--t-small);
-  color: var(--text-muted);
 }
 
 .sm-preview__actions {

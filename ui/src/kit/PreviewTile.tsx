@@ -13,13 +13,22 @@ const STATE_WORD: Record<PreviewTileState, { tone: Tone; word: string }> = {
   error: { tone: 'bad', word: 'Error' },
 }
 
+/** A picture with no new frame for this long is marked Stale. */
+export const STALE_FRAME_SECONDS = 10
+
+function frameAgeWords(seconds: number): string {
+  return seconds < 60 ? `Frame ${seconds} s ago` : `Frame ${Math.floor(seconds / 60)} min ago`
+}
+
 type Props = {
   label: string
   state: PreviewTileState
-  /** The coordinator's own sentence for this state: the fact, then the action. */
+  /** The coordinator's own sentence for this state: the fact, then the action. Empty shows none. */
   message: string
   /** The picture. Absent, the frame says no picture is showing. */
   media?: ReactNode
+  /** Whole seconds since the picture last changed; given only while a picture shows. */
+  frameAgeSeconds?: number | undefined
   /** Ref to the picture frame, for an on-screen check. */
   mediaRef?: Ref<HTMLDivElement>
   /** The tile's controls, rendered under the caption. */
@@ -35,20 +44,22 @@ type Props = {
 }
 
 /** One live source: a 16:9 frame, its name, and a state word with the coordinator's sentence under it. */
-export function PreviewTile({ label, state, message, media, mediaRef, actions, handle, dragState, ...drag }: Props) {
-  const { tone, word } = STATE_WORD[state]
+export function PreviewTile({ label, state, message, media, frameAgeSeconds, mediaRef, actions, handle, dragState, ...drag }: Props) {
+  const stale = frameAgeSeconds !== undefined && frameAgeSeconds >= STALE_FRAME_SECONDS
+  const { tone, word } = stale ? { tone: 'warn' as const, word: 'Stale' } : STATE_WORD[state]
   const classes = ['sm-preview', dragState === undefined ? '' : `sm-preview--${dragState}`].filter(Boolean).join(' ')
   return (
     <article className={classes} aria-label={label} {...drag}>
       <div className="sm-preview__frame" ref={mediaRef}>
-        {media ?? <p className="sm-preview__none">No picture</p>}
+        {media ?? <p className="sm-preview__none sm-meta sm-faint">No picture</p>}
       </div>
       <div className="sm-preview__caption">
         {handle}
-        <h3 className="sm-preview__label">{label}</h3>
+        <h3 className="sm-preview__label sm-subhead sm-truncate">{label}</h3>
+        {frameAgeSeconds !== undefined && <span className="sm-small sm-muted">{frameAgeWords(frameAgeSeconds)}</span>}
         <StatusPair tone={tone} label={word} appearance="word" />
       </div>
-      {message !== '' && <p className="sm-preview__message">{message}</p>}
+      {message !== '' && <p className="sm-preview__message sm-small sm-muted">{message}</p>}
       {actions !== undefined && <div className="sm-preview__actions">{actions}</div>}
     </article>
   )

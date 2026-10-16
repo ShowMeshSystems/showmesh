@@ -42,10 +42,17 @@ export function ButtonRule() {
   return <span className="sm-rule-v" aria-hidden="true" />
 }
 
+const REORDER_GLYPHS = {
+  vertical: { back: { word: 'up', glyph: '▲' }, forward: { word: 'down', glyph: '▼' } },
+  horizontal: { back: { word: 'earlier', glyph: '◀' }, forward: { word: 'later', glyph: '▶' } },
+} as const
+
+const LEAVE_GLYPHS = { remove: { word: 'Remove', glyph: '✕' }, hide: { word: 'Hide', glyph: '⊘' } } as const
+
 /**
  * The kit's one reorderable-row control pattern (design guide §6): pair
  * with a `⠿` handle in the row's index column; this renders only the
- * move/remove icon buttons.
+ * move/remove icon buttons. Horizontal suits a grid read left to right.
  */
 export function ReorderButtons({
   itemLabel,
@@ -55,6 +62,8 @@ export function ReorderButtons({
   moveUpReason,
   moveDownReason,
   removeReason,
+  orientation = 'vertical',
+  leave = 'remove',
 }: {
   /** Names the row for its button labels, e.g. "step 2" or the entry's own label. */
   itemLabel: string
@@ -65,17 +74,22 @@ export function ReorderButtons({
   moveUpReason?: string | undefined
   moveDownReason?: string | undefined
   removeReason?: string | undefined
+  orientation?: 'vertical' | 'horizontal'
+  /** Hide takes the item out of view and keeps it; remove deletes it. */
+  leave?: 'remove' | 'hide'
 }) {
+  const { back, forward } = REORDER_GLYPHS[orientation]
+  const out = LEAVE_GLYPHS[leave]
   return (
     <ButtonRow>
-      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} up`} title={moveUpReason} onClick={onMoveUp} disabled={moveUpReason !== undefined}>
-        <span aria-hidden="true">▲</span>
+      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} ${back.word}`} title={moveUpReason} onClick={onMoveUp} disabled={moveUpReason !== undefined}>
+        <span aria-hidden="true">{back.glyph}</span>
       </Button>
-      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} down`} title={moveDownReason} onClick={onMoveDown} disabled={moveDownReason !== undefined}>
-        <span aria-hidden="true">▼</span>
+      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} ${forward.word}`} title={moveDownReason} onClick={onMoveDown} disabled={moveDownReason !== undefined}>
+        <span aria-hidden="true">{forward.glyph}</span>
       </Button>
-      <Button size="icon" variant="quiet" aria-label={`Remove ${itemLabel}`} title={removeReason} onClick={onRemove} disabled={removeReason !== undefined}>
-        <span aria-hidden="true">✕</span>
+      <Button size="icon" variant="quiet" aria-label={`${out.word} ${itemLabel}`} title={removeReason} onClick={onRemove} disabled={removeReason !== undefined}>
+        <span aria-hidden="true">{out.glyph}</span>
       </Button>
     </ButtonRow>
   )

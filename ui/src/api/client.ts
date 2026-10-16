@@ -47,6 +47,8 @@ export interface JsonRequestInit {
   body?: unknown
   /** A config revision sent as `If-Match`, so the coordinator refuses the write if it has moved on. */
   ifMatchRevision?: number
+  /** Sends `If-None-Match: *`, so the coordinator refuses the write if anything is already saved there. */
+  ifNoneMatchAny?: boolean
   /** A plain-text body sent as-is with `textContentType`, for the SDP offer. Takes no JSON encoding. */
   textBody?: string
   textContentType?: string
@@ -357,6 +359,7 @@ export class ApiClient {
     // JsonRequestInit's doc comment for why every caller passes a plain
     // object instead of a pre-encoded BodyInit in the first place.
     if (init.ifMatchRevision !== undefined) headers['If-Match'] = `"${init.ifMatchRevision}"`
+    if (init.ifNoneMatchAny === true) headers['If-None-Match'] = '*'
     let body: string | null = null
     if (init.textBody !== undefined) {
       headers['Content-Type'] = init.textContentType ?? 'text/plain'
@@ -452,8 +455,10 @@ export class ApiClient {
    * script can set or needs to set — this method sends nothing beyond
    * what `request()` already does for every other call.
    */
-  async putJson<T>(path: string, body: unknown, signal: AbortSignal, ifMatchRevision?: number): Promise<T> {
-    const response = await this.request(path, signal, ifMatchRevision === undefined ? { method: 'PUT', body } : { method: 'PUT', body, ifMatchRevision })
+  async putJson<T>(path: string, body: unknown, signal: AbortSignal, ifMatchRevision?: number | 'none'): Promise<T> {
+    const init: JsonRequestInit =
+      ifMatchRevision === undefined ? { method: 'PUT', body } : ifMatchRevision === 'none' ? { method: 'PUT', body, ifNoneMatchAny: true } : { method: 'PUT', body, ifMatchRevision }
+    const response = await this.request(path, signal, init)
     return parseJsonResponse<T>(response)
   }
 

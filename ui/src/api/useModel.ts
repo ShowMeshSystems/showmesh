@@ -1245,6 +1245,14 @@ export function deletePreviewCamera(id: string): Promise<void> {
   return store.deletePreviewCamera(id)
 }
 
-export function putDashboardLayout(payload: ConfigDashboardLayoutPutRequest): Promise<DashboardLayoutConfigResponse> {
-  return store.putDashboardLayout(payload)
+export function getDashboardLayout(): Promise<DashboardLayoutConfigResponse> {
+  return store.getDashboardLayout()
+}
+
+export function putDashboardLayout(payload: ConfigDashboardLayoutPutRequest, ifMatchRevision: number | 'none'): Promise<DashboardLayoutConfigResponse> {
+  return store.putDashboardLayout(payload, ifMatchRevision)
+}
+
+export function getPreviewGatewayConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getPreviewGatewayConfigRevisions()
 }

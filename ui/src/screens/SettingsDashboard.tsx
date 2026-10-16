@@ -4,13 +4,14 @@ import {
   deletePreviewCamera,
   getPreviewCamera,
   getPreviewGatewayConfig,
+  getPreviewGatewayConfigRevisions,
   listConfigObjects,
   putPreviewCamera,
   putPreviewGatewayConfig,
   type PreviewCameraConfigResponse,
   type PreviewGatewayConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Choice, ConfirmDialog, Field, FieldGrid, Input, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, ConfirmDialog, Field, FieldGrid, Input, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave } from '../domain/save'
@@ -26,7 +27,8 @@ type Loaded = {
 
 type Load = { kind: 'loading' } | { kind: 'loaded'; data: Loaded } | { kind: 'failed'; reason: string }
 
-type Outcome = { stale: StaleWrite } | { error: string } | null
+/** A refused save, with what had already saved before it stopped. */
+type Outcome = ({ stale: StaleWrite } | { error: string }) & { saved: string[] }
 
 async function readGateway(): Promise<PreviewGatewayConfigResponse | null> {
   try {
@@ -78,7 +80,7 @@ export function SettingsDashboard() {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmRemoval, setConfirmRemoval] = useState(false)
-  const [outcome, setOutcome] = useState<Outcome>(null)
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -137,51 +139,94 @@ export function SettingsDashboard() {
     return null
   }
 
+  /** Writes each changed part in turn. Every part that saves updates the loaded state at once, so a retry starts from what is stored. */
   const write = async (data: Loaded) => {
-    const gatewayChanged = url.trim() !== (data.gateway?.payload.url ?? '') || token !== ''
-    if (gatewayChanged) {
-      const request = gatewayRequest(url, token)
-      if (data.gateway !== null) {
-        const result = await guardedSave({ loaded: data.gateway, read: getPreviewGatewayConfig, write: () => putPreviewGatewayConfig(request) })
-        if (result.kind === 'stale') return setOutcome({ stale: result })
-        if (result.kind === 'unreadable') return setOutcome({ error: result.reason })
-      } else {
-        const result = await guardedCreate({ read: getPreviewGatewayConfig, write: () => putPreviewGatewayConfig(request) })
-        if (result.kind === 'taken') return setOutcome({ error: 'Someone else set the preview gateway while this page was open. Reload and enter it again.' })
-        if (result.kind === 'unreadable') return setOutcome({ error: result.reason })
+    const stored: Loaded = { gateway: data.gateway, cameras: [...data.cameras] }
+    const saved: string[] = []
+    const savedRows = new Map<number, PreviewCameraConfigResponse>()
+    const deletedIds = new Set<string>()
+    let gatewaySaved = false
+    const result: { refusal: Outcome | null } = { refusal: null }
+    const refuse = (outcome: { stale: StaleWrite } | { error: string }) => {
+      result.refusal = { ...outcome, saved }
+    }
+
+    const run = async () => {
+      const gatewayChanged = url.trim() !== (data.gateway?.payload.url ?? '') || token !== ''
+      if (gatewayChanged) {
+        const request = gatewayRequest(url, token)
+        if (data.gateway !== null) {
+          const result = await guardedSave({ loaded: data.gateway, read: getPreviewGatewayConfig, write: () => putPreviewGatewayConfig(request) })
+          if (result.kind === 'stale') return refuse({ stale: result })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          stored.gateway = result.response
+        } else {
+          const result = await guardedCreate({ read: getPreviewGatewayConfig, write: () => putPreviewGatewayConfig(request) })
+          if (result.kind === 'taken') return refuse({ error: 'Someone else set the preview gateway while this page was open. Reload and enter it again.' })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          stored.gateway = result.response
+        }
+        gatewaySaved = true
+        saved.push('the gateway')
+      }
+      for (const row of removed) {
+        await deletePreviewCamera(row.id)
+        deletedIds.add(row.id)
+        stored.cameras = stored.cameras.filter((camera) => camera.id !== row.id)
+        saved.push(`removing ${row.loaded?.payload.name ?? row.id}`)
+      }
+      for (const row of rows.filter(rowDirty)) {
+        const id = row.id.trim()
+        if (row.loaded === null) {
+          const result = await guardedCreate({ read: () => getPreviewCamera(id), write: () => putPreviewCamera(id, cameraRequest(row)) })
+          if (result.kind === 'taken') return refuse({ error: `A camera with the id ${id} already exists. Choose another id.` })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          savedRows.set(row.key, result.response)
+          stored.cameras.push({ id, response: result.response })
+        } else {
+          const result = await guardedSave({ loaded: row.loaded, read: () => getPreviewCamera(id), write: () => putPreviewCamera(id, cameraRequest(row)) })
+          if (result.kind === 'stale') return refuse({ stale: result })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          savedRows.set(row.key, result.response)
+          stored.cameras = stored.cameras.map((camera) => (camera.id === id ? { id, response: result.response } : camera))
+        }
+        saved.push(row.name.trim())
       }
     }
-    for (const row of removed) {
-      await deletePreviewCamera(row.id)
+
+    try {
+      await run()
+    } catch (err: unknown) {
+      refuse({ error: describeApiError(err) })
     }
-    for (const row of rows.filter(rowDirty)) {
-      const id = row.id.trim()
-      if (row.loaded === null) {
-        const result = await guardedCreate({ read: () => getPreviewCamera(id), write: () => putPreviewCamera(id, cameraRequest(row)) })
-        if (result.kind === 'taken') return setOutcome({ error: `A camera with the id ${id} already exists. Choose another id.` })
-        if (result.kind === 'unreadable') return setOutcome({ error: result.reason })
-      } else {
-        const result = await guardedSave({ loaded: row.loaded, read: () => getPreviewCamera(id), write: () => putPreviewCamera(id, cameraRequest(row)) })
-        if (result.kind === 'stale') return setOutcome({ stale: result })
-        if (result.kind === 'unreadable') return setOutcome({ error: result.reason })
-      }
+    if (result.refusal === null) {
+      setAttempt((n) => n + 1)
+      return
     }
-    setAttempt((n) => n + 1)
+    setOutcome(result.refusal)
+    if (saved.length === 0) return
+    setLoad({ kind: 'loaded', data: stored })
+    if (gatewaySaved) setToken('')
+    setRemoved((list) => list.filter((row) => !deletedIds.has(row.id)))
+    setRows((list) =>
+      list.map((row) => {
+        const response = savedRows.get(row.key)
+        return response === undefined ? row : { ...row, id: row.id.trim(), name: response.payload.name, enabled: response.payload.enabled, url: '', loaded: response }
+      }),
+    )
   }
 
   const save = () => {
     if (load.kind !== 'loaded') return
     const problem = firstProblem()
     if (problem !== null) {
-      setOutcome({ error: problem })
+      setOutcome({ error: problem, saved: [] })
       return
     }
     setConfirmRemoval(false)
     setSaving(true)
     setOutcome(null)
-    write(load.data)
-      .catch((err: unknown) => setOutcome({ error: describeApiError(err) }))
-      .finally(() => setSaving(false))
+    void write(load.data).finally(() => setSaving(false))
   }
 
   const requestSave = () => {
@@ -202,7 +247,7 @@ export function SettingsDashboard() {
         <RuledStrip absence="failed" label="Read failed" fact={load.reason} />
       ) : (
         <>
-          <Section id="st-dash-gateway" title="Preview gateway" detail="The gateway turns NDI sources and cameras into the Dashboard's video tiles.">
+          <Section id="st-dash-gateway" title="Preview gateway">
             {load.data.gateway === null && (
               <RuledStrip absence="unavailable" label="Not configured" fact="No preview gateway is set, so the Dashboard shows no previews. Enter its address and token to turn them on." />
             )}
@@ -220,47 +265,38 @@ export function SettingsDashboard() {
             </FieldGrid>
           </Section>
 
-          <Section
-            id="st-dash-cameras"
-            title="Cameras"
-            detail="A camera's address is stored and never shown again."
-            aside={
-              <Button variant="quiet" size="compact" onClick={addRow}>
-                Add a camera
-              </Button>
-            }
-          >
+          <Section id="st-dash-cameras" title="Cameras" detail="A camera's address is stored and never shown again.">
             {rows.length === 0 ? (
               <RuledStrip absence="empty" label="No cameras" fact="No camera is set. Add one to show its picture on the Dashboard." />
             ) : (
-              rows.map((row) => (
-                <div key={row.key} className="sm-subsection">
-                  <h3 className="sm-subsection__title">
-                    {row.loaded !== null ? row.loaded.payload.name : 'New camera'} {rowDirty(row) && <StatusPair tone="warn" label="Unsaved" />}
-                  </h3>
-                  <FieldGrid>
-                    <Field label="Camera id">
-                      {(props) => <Input {...props} value={row.id} disabled={row.loaded !== null} onChange={(e) => patchRow(row.key, { id: e.target.value })} />}
-                    </Field>
-                    <Field label="Name">
-                      {(props) => <Input {...props} value={row.name} onChange={(e) => patchRow(row.key, { name: e.target.value })} />}
-                    </Field>
-                    <Field
-                      label={row.loaded === null ? 'Address' : 'Set a new address'}
-                      help={row.loaded === null ? undefined : row.loaded.payload.urlSet ? `Stored address ${row.loaded.payload.urlDisplay}` : 'No address is stored. Set one to show this camera.'}
-                    >
-                      {(props) => <Input {...props} type="password" value={row.url} autoComplete="off" onChange={(e) => patchRow(row.key, { url: e.target.value })} />}
-                    </Field>
-                  </FieldGrid>
-                  <Choice type="checkbox" checked={row.enabled} onChange={(e) => patchRow(row.key, { enabled: e.target.checked })} label="Show on the Dashboard" />
-                  <ButtonRow>
-                    <Button variant="quiet" size="compact" aria-label={`Remove ${row.name === '' ? 'this camera' : row.name}`} onClick={() => removeRow(row)}>
-                      Remove camera
-                    </Button>
-                  </ButtonRow>
-                </div>
-              ))
+              <div className="sm-panel sm-stack-4">
+                {rows.map((row) => (
+                  <div key={row.key} className="sm-panel sm-stack-4">
+                    <h3 className="sm-subsection__title">{row.loaded !== null ? row.loaded.payload.name : 'New camera'}</h3>
+                    <div className="sm-inline-row sm-inline-row--end">
+                      <Field label="Camera id">
+                        {(props) => <Input {...props} value={row.id} disabled={row.loaded !== null} onChange={(e) => patchRow(row.key, { id: e.target.value })} className="sm-input--id" />}
+                      </Field>
+                      <Field label="Name">
+                        {(props) => <Input {...props} value={row.name} onChange={(e) => patchRow(row.key, { name: e.target.value })} />}
+                      </Field>
+                      <Field
+                        label={row.loaded === null ? 'Address' : 'Set a new address'}
+                        help={row.loaded === null ? undefined : row.loaded.payload.urlSet ? `Stored address ${row.loaded.payload.urlDisplay}` : 'No address is stored. Set one to show this camera.'}
+                      >
+                        {(props) => <Input {...props} type="password" value={row.url} autoComplete="off" onChange={(e) => patchRow(row.key, { url: e.target.value })} className="sm-input--address" />}
+                      </Field>
+                      <Button variant="quiet" aria-label={`Remove ${row.name === '' ? 'this camera' : row.name}`} onClick={() => removeRow(row)}>
+                        Remove
+                      </Button>
+                      {rowDirty(row) && <StatusPair tone="warn" label="Unsaved" />}
+                    </div>
+                    <Choice type="checkbox" checked={row.enabled} onChange={(e) => patchRow(row.key, { enabled: e.target.checked })} label="Stream this camera" />
+                  </div>
+                ))}
+              </div>
             )}
+            <Button onClick={addRow}>Add a camera</Button>
           </Section>
         </>
       )}
@@ -272,9 +308,14 @@ export function SettingsDashboard() {
         <Button variant="quiet" onClick={reload} disabled={!dirty || saving}>
           Discard changes
         </Button>
+        <div className="sm-push-end">
+          <p className="sm-small sm-faint">Preview gateway</p>
+          <RevisionHistory id="st-dash-gateway-rev" fetch={getPreviewGatewayConfigRevisions} reloadKey={attempt} />
+        </div>
       </ButtonRow>
       {outcome !== null && 'stale' in outcome && <StaleWriteStrip stale={outcome.stale} onReload={reload} />}
       {outcome !== null && 'error' in outcome && <RuledStrip absence="failed" label="Save failed" fact={outcome.error} />}
+      {outcome !== null && outcome.saved.length > 0 && <p className="sm-small sm-muted">Already saved: {outcome.saved.join(', ')}. The rest is still unsaved.</p>}
 
       <ConfirmDialog
         open={confirmRemoval}

@@ -629,6 +629,15 @@ export class ApiStore {
     }
   }
 
+  async getPreviewGatewayConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/preview.gateway/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `PUT /api/v1/config/preview.gateway`. A token left out keeps the stored one. */
   async putPreviewGatewayConfig(request: SchemaConfigPreviewGatewayPutRequest): Promise<SchemaPreviewGatewayConfigResponse> {
     const controller = this.beginSideCall()
@@ -669,11 +678,24 @@ export class ApiStore {
     }
   }
 
-  /** `PUT /api/v1/config/dashboard.layout`: the tile order and the hidden tiles. */
-  async putDashboardLayout(payload: SchemaConfigDashboardLayoutPutRequest): Promise<SchemaDashboardLayoutConfigResponse> {
+  /** `GET /api/v1/config/dashboard.layout`. Throws (404) when no layout has been saved yet. */
+  async getDashboardLayout(): Promise<SchemaDashboardLayoutConfigResponse> {
     const controller = this.beginSideCall()
     try {
-      return await this.client.putJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', payload, controller.signal)
+      return await this.client.getJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/dashboard.layout`: the tile order and the hidden tiles.
+   * A revision is sent as If-Match; 'none' sends If-None-Match for the first save.
+   */
+  async putDashboardLayout(payload: SchemaConfigDashboardLayoutPutRequest, ifMatchRevision: number | 'none'): Promise<SchemaDashboardLayoutConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', payload, controller.signal, ifMatchRevision)
     } finally {
       this.endSideCall(controller)
     }

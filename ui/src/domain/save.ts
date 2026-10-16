@@ -63,13 +63,18 @@ export async function guardedSave<P, R extends Revisioned<P>>(args: {
     const response = await args.write()
     return { kind: 'saved', response }
   }
+  return staleOutcome(args.loaded, current)
+}
+
+/** The refusal for an edit loaded from `loaded` when `current` is what is saved now. A null `loaded` means nothing was saved when the edit began. */
+export function staleOutcome<P>(loaded: Revisioned<P> | null, current: Revisioned<P>): Extract<SaveOutcome<unknown>, { kind: 'stale' }> {
   return {
     kind: 'stale',
-    loadedRevision: args.loaded.revision,
+    loadedRevision: loaded?.revision ?? 0,
     currentRevision: current.revision,
     changedBy: current.createdByPrincipalName,
     changedAt: current.updatedAt,
-    changedFields: changedPayloadFields(args.loaded.payload, current.payload),
+    changedFields: loaded === null ? Object.keys(current.payload as Record<string, unknown>).sort() : changedPayloadFields(loaded.payload, current.payload),
   }
 }
 
