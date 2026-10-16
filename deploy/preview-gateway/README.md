@@ -24,6 +24,16 @@ export SHOWMESH_NDI_RUNTIME_DIR=/opt/ndi
 docker compose up -d --build
 ```
 
+To run a released version instead of building, add the published override:
+
+```sh
+SHOWMESH_RELEASE_VERSION=0.4.0 docker compose \
+  -f docker-compose.yml -f docker-compose.published.yml up -d
+```
+
+With the coordinator's stack, add `-f docker-compose.published.yml` from
+`deploy/` and `--profile preview`.
+
 Then give the coordinator the gateway address and the same token
 (`showmeshctl preview gateway set --url http://<host>:8095 --token-file <file>`).
 
@@ -61,8 +71,8 @@ local network. Address changes after start need a gateway restart.
 The NDI runtime finds sources through avahi-daemon over D-Bus. The image runs
 its own browse-only copies as root and drops to an unprivileged user for the
 gateway, so the host needs no Avahi. If Avahi stops, NDI streams report that
-discovery is not running and the container health check fails; restart the
-container. An NDI source that stops without saying
+discovery is not running, RTSP cameras keep working, and the container stays
+healthy; restart the container to bring NDI discovery back. An NDI source that stops without saying
 goodbye can stay in the source list until its mDNS record expires.
 
 ## Cameras
@@ -83,4 +93,5 @@ Apache-2.0 ShowMesh code is separate from them.
 
 The coordinator is the only client. The routes are in
 [`docs/build/TRACK-PREVIEW-WALL.md`](../../docs/build/TRACK-PREVIEW-WALL.md).
-`GET /healthz` needs no token and is the container health check.
+`GET /healthz` needs no token and is the container health check. It fails
+while the video engine (go2rtc) is not running or has not answered yet.

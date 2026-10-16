@@ -80,10 +80,13 @@ Pushing a `v<VERSION>` tag runs `.github/workflows/release.yml`, which
 verifies the tag agrees with `VERSION` and `CHANGELOG.md` (see "Cutting a
 pre-release" below), then publishes, with no manual step:
 
-- The coordinator and operator UI images on GHCR, tagged with the bare
-  version and the full commit SHA (no `latest` tag):
-  `ghcr.io/showmeshsystems/showmesh-coordinator` and
-  `ghcr.io/showmeshsystems/showmesh-ui`. The coordinator image is built with
+- The coordinator, operator UI and preview gateway images on GHCR, tagged
+  with the bare version and the full commit SHA (no `latest` tag):
+  `ghcr.io/showmeshsystems/showmesh-coordinator`,
+  `ghcr.io/showmeshsystems/showmesh-ui` and
+  `ghcr.io/showmeshsystems/showmesh-preview-gateway`. The gateway image
+  carries the same NDI plugin build as the node agent tarball and never
+  contains the NDI runtime. The coordinator image is built with
   the release version, commit, and build date as its `-ldflags`, so a
   deployed coordinator's `GET /version` reports the real cut instead of
   `version=dev commit=none`.
@@ -123,7 +126,7 @@ from any release:
   three commits after `v0.4.0`. The coordinator's version check reads this as
   a build made after `0.4.0`, and a node and coordinator from the same edge
   build match exactly.
-- Coordinator and operator UI images tagged with that version, with
+- Coordinator, operator UI and preview gateway images tagged with that version, with
   `edge-<short sha>`, and with `edge`, which always names the newest one.
 - The node agent tarballs, the installer, and `SHA256SUMS` on a single GitHub
   prerelease named `edge`, replaced on every build. Its installer downloads

@@ -1,6 +1,7 @@
 # Standalone preview gateway (ADR-060). Run from this directory:
 #   SHOWMESH_PREVIEW_GATEWAY_TOKEN=... docker compose up -d --build
-# See README.md for the NDI runtime mount.
+# A released version runs from the published image with
+# docker-compose.published.yml. See README.md for the NDI runtime mount.
 
 services:
   preview-gateway:

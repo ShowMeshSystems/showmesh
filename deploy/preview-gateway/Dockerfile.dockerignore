@@ -1,6 +1,31 @@
 .git
+.gitignore
+.github
 bin
 dist
 docs
+*.md
 ui
 **/node_modules
+log
+out
+
+# Deployment files hold broker passwords, certificates and environment files.
+# Only what the Dockerfile copies is let back in.
+deploy
+!deploy/node/ndi-plugin/build-ndi-plugin.sh
+!deploy/preview-gateway/avahi-daemon.conf
+!deploy/preview-gateway/entrypoint.sh
+
+.DS_Store
+.vscode
+.idea
+*.test
+*.out
+coverage.*
+
+!go.mod
+!go.sum
+!cmd
+!internal
+!pkg

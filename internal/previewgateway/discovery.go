@@ -83,14 +83,6 @@ func checkAvahi() error {
 
 var errNoAvahi = errors.New("avahi is not running")
 
-// AvahiProblem is the operator message when Avahi is not running, or empty.
-func (d *Discovery) AvahiProblem() string {
-	if d.Avahi() != nil {
-		return msgNoAvahi
-	}
-	return ""
-}
-
 func checkNDIPlugin(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

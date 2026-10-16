@@ -9,8 +9,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// shutdownWait bounds how long Run waits for go2rtc and the listeners to stop.
+const shutdownWait = 12 * time.Second
 
 // Config is the gateway's run-time configuration.
 type Config struct {
@@ -72,25 +76,29 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	sup.OnReady = mgr.Resync
 	feed := &http.Server{Handler: NewFeed(secret, mgr, disc, log).Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = feed.Serve(feedLn) }()
-	defer func() { _ = feed.Close() }()
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	sup.Candidates = cfg.Candidates
 	errc := make(chan error, 2)
+	var workers sync.WaitGroup
+	workers.Add(1)
 	go func() {
-		if err := sup.Run(ctx); err != nil {
+		defer workers.Done()
+		if err := sup.Run(runCtx); err != nil {
 			errc <- err
 		}
 	}()
-	go disc.Loop(ctx)
+	go disc.Loop(runCtx)
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				return
 			case <-t.C:
-				mgr.Retry(ctx)
+				mgr.Retry(runCtx)
 			}
 		}
 	}()
@@ -101,13 +109,29 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { errc <- srv.ListenAndServe() }()
+	var result error
 	select {
-	case err := <-errc:
-		return err
+	case result = <-errc:
 	case <-ctx.Done():
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return srv.Shutdown(sctx)
+	}
+	cancel()
+	sctx, scancel := context.WithTimeout(context.Background(), shutdownWait)
+	defer scancel()
+	if err := srv.Shutdown(sctx); result == nil {
+		result = err
+	}
+	_ = feed.Shutdown(sctx)
+	waitFor(sctx, &workers)
+	return result
+}
+
+// waitFor returns when wg is done or ctx ends.
+func waitFor(ctx context.Context, wg *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 

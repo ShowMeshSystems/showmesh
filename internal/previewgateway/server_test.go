@@ -231,3 +231,43 @@ func TestWebRTCCandidates(t *testing.T) {
 		t.Fatalf("override: %v", o)
 	}
 }
+
+func TestConfigRejectsABadWebRTCPort(t *testing.T) {
+	env := map[string]string{"SHOWMESH_PREVIEW_GATEWAY_TOKEN": "t", "SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT": "9000"}
+	c, err := ConfigFromEnv(func(k string) string { return env[k] })
+	if err != nil || c.WebRTCPort != "9000" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	for _, bad := range []string{"http", "0", "70000"} {
+		env["SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT"] = bad
+		if _, err := ConfigFromEnv(func(k string) string { return env[k] }); err == nil {
+			t.Errorf("port %q accepted", bad)
+		}
+	}
+}
+
+type gatedEngine struct {
+	*fakeEngine
+	ready bool
+}
+
+func (g *gatedEngine) Ready() bool { return g.ready }
+
+func TestHealthzFollowsTheVideoEngineNotAvahi(t *testing.T) {
+	eng := &gatedEngine{fakeEngine: newFakeEngine()}
+	d := NewDiscovery(quietLog())
+	d.Avahi = func() error { return errNoAvahi }
+	srv := NewServer("t", NewManager(eng, d, "http://127.0.0.1:9/x", quietLog()), d, eng)
+	get := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+		return rec
+	}
+	if rec := get(); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "video engine is not running") {
+		t.Fatalf("engine down: %d %q", rec.Code, rec.Body.String())
+	}
+	eng.ready = true
+	if rec := get(); rec.Code != http.StatusOK {
+		t.Fatalf("engine up with Avahi down: %d %q", rec.Code, rec.Body.String())
+	}
+}

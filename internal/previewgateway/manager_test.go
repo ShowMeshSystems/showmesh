@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -296,4 +298,145 @@ func TestDiscoveryLoopFeedsMonitorOutput(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("source never appeared")
+}
+
+type blockingEngine struct {
+	*fakeEngine
+	enter   chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingEngine) Put(ctx context.Context, id, src string) error {
+	b.enter <- struct{}{}
+	<-b.release
+	return b.fakeEngine.Put(ctx, id, src)
+}
+
+func TestSlowEngineDoesNotBlockLookupsOrStatus(t *testing.T) {
+	e := &blockingEngine{fakeEngine: newFakeEngine(), enter: make(chan struct{}, 1), release: make(chan struct{})}
+	m := NewManager(e, &fakeSources{ok: true}, "http://127.0.0.1:9/ndi/sec", quietLog())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); m.Set(context.Background(), []StreamSpec{camB}) }()
+	<-e.enter
+	done := make(chan struct{})
+	go func() {
+		m.Lookup("camera:b")
+		m.NDIName("x")
+		m.NoteResult("camera:b", true)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lookups wait for the engine call")
+	}
+	close(e.release)
+	wg.Wait()
+}
+
+func TestChangedSpecUnderTheSameKeyIsReplaced(t *testing.T) {
+	e := newFakeEngine()
+	m := newTestManager(e, &fakeSources{ok: true})
+	ctx := context.Background()
+	m.Set(ctx, []StreamSpec{ndiA})
+	renamed := ndiA
+	renamed.NDIName = "B (y)"
+	m.Set(ctx, []StreamSpec{renamed})
+	id := streamID(ndiA.Key)
+	if len(e.deletes) != 1 || e.deletes[0] != id || len(e.puts) != 2 {
+		t.Fatalf("a changed ndiName must be deleted then put: deletes=%v puts=%v", e.deletes, e.puts)
+	}
+	if name, _ := m.NDIName(id); name != "B (y)" {
+		t.Fatalf("feed would still serve %q", name)
+	}
+}
+
+func TestUnavailableDiscoveryStatesWhyAndWhatToDo(t *testing.T) {
+	e := newFakeEngine()
+	m := newTestManager(e, &fakeSources{ok: false, msg: msgNoAvahi})
+	m.Set(context.Background(), []StreamSpec{ndiA})
+	st := m.Streams(context.Background())
+	if st[0].State != StateError || st[0].Message != msgNoAvahi {
+		t.Fatalf("%+v", st[0])
+	}
+}
+
+func TestFailedDeleteIsRetriedUntilTheEngineAcceptsIt(t *testing.T) {
+	e := newFakeEngine()
+	m := newTestManager(e, &fakeSources{ok: true})
+	ctx := context.Background()
+	m.Set(ctx, []StreamSpec{camB})
+	id := streamID(camB.Key)
+	e.failDelete = true
+	m.Set(ctx, nil)
+	m.Retry(ctx)
+	if _, held := e.streams[id]; !held {
+		t.Fatal("the engine dropped the stream while it was refusing deletes")
+	}
+	e.failDelete = false
+	m.Retry(ctx)
+	if _, held := e.streams[id]; held {
+		t.Fatal("the stream the gateway no longer wants is still in the engine")
+	}
+	before := len(e.deletes)
+	m.Retry(ctx)
+	if len(e.deletes) != before {
+		t.Fatal("a finished delete was sent again")
+	}
+}
+
+func TestReAddedStreamIsNotDeletedByAnEarlierFailedDelete(t *testing.T) {
+	e := newFakeEngine()
+	m := newTestManager(e, &fakeSources{ok: true})
+	ctx := context.Background()
+	m.Set(ctx, []StreamSpec{camB})
+	e.failDelete = true
+	m.Set(ctx, nil)
+	e.failDelete = false
+	m.Set(ctx, []StreamSpec{camB})
+	m.Retry(ctx)
+	if _, held := e.streams[streamID(camB.Key)]; !held {
+		t.Fatal("a pending delete removed the stream that was added back")
+	}
+}
+
+type countingHandler struct {
+	mu    sync.Mutex
+	warns int
+}
+
+func (h *countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *countingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r.Level >= slog.LevelWarn {
+		h.warns++
+	}
+	return nil
+}
+func (h *countingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *countingHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestPendingStreamsLogOncePerChangeNotPerStreamPerPass(t *testing.T) {
+	h := &countingHandler{}
+	e := newFakeEngine()
+	e.failPut = true
+	m := NewManager(e, &fakeSources{ok: true}, "http://127.0.0.1:9/ndi/sec", slog.New(h))
+	ctx := context.Background()
+	specs := []StreamSpec{camB, {Key: "camera:c", Kind: KindRTSP, URL: "rtsp://h/c"}, {Key: "camera:d", Kind: KindRTSP, URL: "rtsp://h/d"}}
+	m.Set(ctx, specs)
+	for range 5 {
+		m.Retry(ctx)
+	}
+	if h.warns != 1 {
+		t.Fatalf("%d warnings for three stuck streams over six passes, want 1", h.warns)
+	}
+	e.failPut = false
+	m.Retry(ctx)
+	e.failPut = true
+	m.Resync(ctx)
+	if h.warns != 2 {
+		t.Fatalf("%d warnings after the engine recovered and failed again, want 2", h.warns)
+	}
 }

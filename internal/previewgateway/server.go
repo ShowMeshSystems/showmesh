@@ -33,11 +33,9 @@ func NewServer(token string, m *Manager, sources SourceProvider, engine Engine) 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		if h, ok := s.sources.(interface{ AvahiProblem() string }); ok {
-			if msg := h.AvahiProblem(); msg != "" {
-				http.Error(w, msg, http.StatusServiceUnavailable)
-				return
-			}
+		if e, ok := s.engine.(interface{ Ready() bool }); ok && !e.Ready() {
+			http.Error(w, "The video engine is not running. The gateway is restarting it.", http.StatusServiceUnavailable)
+			return
 		}
 		_, _ = io.WriteString(w, "ok\n")
 	})

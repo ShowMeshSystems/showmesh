@@ -9,7 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -67,21 +68,6 @@ func TestProveEngineNeedsRefusalWithoutPasswordAndAcceptanceWithIt(t *testing.T)
 	}
 }
 
-func TestFreeLoopbackAddrAvoidsAnOccupiedPort(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:1984")
-	if err == nil {
-		defer func() { _ = busy.Close() }()
-	}
-	seen := map[string]bool{}
-	for range 5 {
-		a, err := freeLoopbackAddr()
-		if err != nil || !strings.HasPrefix(a, "127.0.0.1:") || a == "127.0.0.1:1984" {
-			t.Fatalf("addr %q, %v", a, err)
-		}
-		seen[a] = true
-	}
-}
-
 func TestEngineLineFaults(t *testing.T) {
 	if engineLineFault(`19:31:56.870 ERR [api] listen error="listen tcp 127.0.0.1:1984: bind: address already in use"`) == nil {
 		t.Error("an API listen failure must end the run")
@@ -100,20 +86,6 @@ func TestCheckWebRTCPortRefusesATakenPort(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	if err := CheckWebRTCPort(strconv.Itoa(port)); err == nil || !strings.Contains(err.Error(), "already in use") {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestConfigRejectsABadWebRTCPort(t *testing.T) {
-	env := map[string]string{"SHOWMESH_PREVIEW_GATEWAY_TOKEN": "t", "SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT": "9000"}
-	c, err := ConfigFromEnv(func(k string) string { return env[k] })
-	if err != nil || c.WebRTCPort != "9000" {
-		t.Fatalf("%+v %v", c, err)
-	}
-	for _, bad := range []string{"http", "0", "70000"} {
-		env["SHOWMESH_PREVIEW_GATEWAY_WEBRTC_PORT"] = bad
-		if _, err := ConfigFromEnv(func(k string) string { return env[k] }); err == nil {
-			t.Errorf("port %q accepted", bad)
-		}
 	}
 }
 
@@ -184,88 +156,104 @@ func TestMinimalEnvLeavesOutTheGatewayToken(t *testing.T) {
 	}
 }
 
-type blockingEngine struct {
-	*fakeEngine
-	enter   chan struct{}
-	release chan struct{}
+func TestFreeLoopbackAddrPicksAFreePort(t *testing.T) {
+	seen := map[string]bool{}
+	for range 5 {
+		a, err := freeLoopbackAddr()
+		if err != nil || !strings.HasPrefix(a, "127.0.0.1:") {
+			t.Fatalf("addr %q, %v", a, err)
+		}
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			t.Fatalf("the picked address %s is not free: %v", a, err)
+		}
+		_ = ln.Close()
+		seen[a] = true
+	}
 }
 
-func (b *blockingEngine) Put(ctx context.Context, id, src string) error {
-	b.enter <- struct{}{}
-	<-b.release
-	return b.fakeEngine.Put(ctx, id, src)
+func writeEngineScript(t *testing.T) (bin, pidFile, cfgFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin, pidFile, cfgFile = filepath.Join(dir, "go2rtc"), filepath.Join(dir, "pid"), filepath.Join(dir, "cfg")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\necho \"$2\" > " + cfgFile + "\nexec sleep 300\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, pidFile, cfgFile
 }
 
-func TestSlowEngineDoesNotBlockLookupsOrStatus(t *testing.T) {
-	e := &blockingEngine{fakeEngine: newFakeEngine(), enter: make(chan struct{}, 1), release: make(chan struct{})}
-	m := NewManager(e, &fakeSources{ok: true}, "http://127.0.0.1:9/ndi/sec", quietLog())
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); m.Set(context.Background(), []StreamSpec{camB}) }()
-	<-e.enter
-	done := make(chan struct{})
-	go func() {
-		m.Lookup("camera:b")
-		m.NDIName("x")
-		m.NoteResult("camera:b", true)
-		close(done)
-	}()
+func waitForFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(b)) != "" {
+			return strings.TrimSpace(string(b))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s never appeared", path)
+	return ""
+}
+
+func TestRunStopsTheEngineAndRemovesItsConfigBeforeReturning(t *testing.T) {
+	bin, pidFile, cfgFile := writeEngineScript(t)
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Skip(err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	cfg := Config{Addr: "127.0.0.1:0", Token: "t", Go2RTCBin: bin, WebRTCPort: port}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- Run(ctx, cfg, quietLog()) }()
+	pid, _ := strconv.Atoi(waitForFile(t, pidFile))
+	cfgPath := waitForFile(t, cfgFile)
+	cancel()
 	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("lookups wait for the engine call")
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return")
 	}
-	close(e.release)
-	wg.Wait()
-}
-
-func TestChangedSpecUnderTheSameKeyIsReplaced(t *testing.T) {
-	e := newFakeEngine()
-	m := newTestManager(e, &fakeSources{ok: true})
-	ctx := context.Background()
-	m.Set(ctx, []StreamSpec{ndiA})
-	renamed := ndiA
-	renamed.NDIName = "B (y)"
-	m.Set(ctx, []StreamSpec{renamed})
-	id := streamID(ndiA.Key)
-	if len(e.deletes) != 1 || e.deletes[0] != id || len(e.puts) != 2 {
-		t.Fatalf("a changed ndiName must be deleted then put: deletes=%v puts=%v", e.deletes, e.puts)
+	if syscall.Kill(pid, 0) == nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("the engine process outlived Run")
 	}
-	if name, _ := m.NDIName(id); name != "B (y)" {
-		t.Fatalf("feed would still serve %q", name)
+	if _, err := os.Stat(filepath.Dir(cfgPath)); !os.IsNotExist(err) {
+		t.Fatalf("the engine's config directory still exists: %v", err)
 	}
 }
 
-func TestUnavailableDiscoveryStatesWhyAndWhatToDo(t *testing.T) {
-	e := newFakeEngine()
-	m := newTestManager(e, &fakeSources{ok: false, msg: msgNoAvahi})
-	m.Set(context.Background(), []StreamSpec{ndiA})
-	st := m.Streams(context.Background())
-	if st[0].State != StateError || st[0].Message != msgNoAvahi {
-		t.Fatalf("%+v", st[0])
-	}
-}
-
-func TestDiscoveryReportsAvahiDown(t *testing.T) {
-	d := NewDiscovery(quietLog())
-	d.Avahi = func() error { return errNoAvahi }
-	if err := d.Available(context.Background()); err != errNoAvahi {
-		t.Fatalf("Available = %v", err)
+func TestEngineClientIsResetOnlyAfterTheReadinessWorkStops(t *testing.T) {
+	bin, _, _ := writeEngineScript(t)
+	sup, client := NewSupervisor(bin, "8555", quietLog())
+	sup.prove = func(context.Context, string, string) bool { return true }
+	var running atomic.Bool
+	entered := make(chan struct{})
+	sup.OnReady = func(ctx context.Context) {
+		running.Store(true)
+		close(entered)
+		<-ctx.Done()
+		time.Sleep(100 * time.Millisecond)
+		running.Store(false)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go d.Loop(ctx)
-	deadline := time.Now().Add(2 * time.Second)
-	for d.Unavailable() == "" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	errc := make(chan error, 1)
+	go func() { errc <- sup.runOnce(ctx) }()
+	<-entered
+	if !client.Ready() {
+		t.Fatal("the client was not pointed at the engine once it was proven")
 	}
 	cancel()
-	if d.Unavailable() != msgNoAvahi || d.AvahiProblem() != msgNoAvahi {
-		t.Fatalf("Unavailable = %q", d.Unavailable())
+	<-errc
+	if running.Load() {
+		t.Fatal("runOnce returned while the readiness work was still running")
 	}
-	srv := NewServer("t", NewManager(newFakeEngine(), d, "http://127.0.0.1:9/x", quietLog()), d, newFakeEngine())
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "Restart the gateway container") {
-		t.Fatalf("healthz %d %q", rec.Code, rec.Body.String())
+	if client.Ready() {
+		t.Fatal("the client still points at an engine that has stopped")
 	}
 }
