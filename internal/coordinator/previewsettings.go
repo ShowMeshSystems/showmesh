@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -15,8 +16,9 @@ import (
 // previewSettingsSource loads the stored preview configuration, the credentials
 // that go with it, and the surfaces and nodes used to label NDI tiles.
 type previewSettingsSource struct {
-	st    *store.Store
-	nodes func(ctx context.Context) ([]inventory.NodeView, error)
+	st     *store.Store
+	nodes  func(ctx context.Context) ([]inventory.NodeView, error)
+	logger *slog.Logger
 }
 
 func (p previewSettingsSource) activePayload(ctx context.Context, kind, id string) (string, bool, error) {
@@ -84,47 +86,64 @@ func (p previewSettingsSource) Load(ctx context.Context) (preview.Settings, erro
 		out.Cameras = append(out.Cameras, preview.Camera{ID: obj.ID, Name: payload.Name, Enabled: payload.Enabled, URL: streamURL})
 	}
 
-	if out.GatewayURL == "" {
-		return out, nil
+	if out.GatewayURL != "" {
+		p.loadLabels(ctx, &out)
 	}
+	return out, nil
+}
+
+// loadLabels fills the surfaces and nodes used to label NDI tiles. A failure
+// here is logged and leaves the labels raw; it never fails the load.
+func (p previewSettingsSource) loadLabels(ctx context.Context, out *preview.Settings) {
 	activeShow, err := p.activeShow(ctx)
 	if err != nil {
-		return out, err
+		p.warn("preview: could not read the active show, tiles keep their raw names", err)
+		return
 	}
 	surfaces, err := p.st.ListConfigObjects(ctx, config.ShowSurfaceConfigKind)
 	if err != nil {
-		return out, fmt.Errorf("list show.surface: %w", err)
+		p.warn("preview: could not list surfaces, tiles keep their raw names", err)
+		return
 	}
 	for _, obj := range surfaces {
 		raw, ok, err := p.activePayload(ctx, config.ShowSurfaceConfigKind, obj.ID)
 		if err != nil {
-			return out, err
+			p.warn("preview: could not read a surface, skipping it", err)
+			continue
 		}
 		if !ok {
 			continue
 		}
 		var sp config.ShowSurfacePayload
 		if err := json.Unmarshal([]byte(raw), &sp); err != nil {
-			return out, fmt.Errorf("decode show.surface %q: %w", obj.ID, err)
+			p.warn("preview: could not decode a surface, skipping it", err)
+			continue
 		}
 		if sp.Show == activeShow && sp.Output.NDI != nil {
 			out.Surfaces = append(out.Surfaces, preview.Surface{NodeID: sp.Node, SurfaceID: obj.ID, SourceName: sp.Output.NDI.SourceName})
 		}
 	}
-	if p.nodes != nil {
-		views, err := p.nodes(ctx)
-		if err != nil {
-			return out, fmt.Errorf("list nodes: %w", err)
-		}
-		for _, v := range views {
-			n := preview.Node{ID: v.NodeID}
-			if v.Hello != nil && v.Hello.Label != "" {
-				n.Names = append(n.Names, v.Hello.Label)
-			}
-			out.Nodes = append(out.Nodes, n)
-		}
+	if p.nodes == nil {
+		return
 	}
-	return out, nil
+	views, err := p.nodes(ctx)
+	if err != nil {
+		p.warn("preview: could not list nodes, NDI host names will not be matched by label", err)
+		return
+	}
+	for _, v := range views {
+		n := preview.Node{ID: v.NodeID}
+		if v.Hello != nil && v.Hello.Label != "" {
+			n.Names = append(n.Names, v.Hello.Label)
+		}
+		out.Nodes = append(out.Nodes, n)
+	}
+}
+
+func (p previewSettingsSource) warn(msg string, err error) {
+	if p.logger != nil {
+		p.logger.Warn(msg, "error", err)
+	}
 }
 
 // activeShow is the id of the active show, or "" when none is set.

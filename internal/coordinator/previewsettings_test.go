@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -63,5 +64,25 @@ func TestPreviewSettingsSourceLoadsConfigurationCredentialsAndSurfaces(t *testin
 	}
 	if len(got.Nodes) != 1 || got.Nodes[0].Names[0] != "Showhost1" {
 		t.Fatalf("nodes = %+v", got.Nodes)
+	}
+}
+
+func TestPreviewSettingsLabelInputsAreBestEffort(t *testing.T) {
+	st, _ := newTestAssetSettingsSyncDeps(t)
+	ctx := context.Background()
+	src := previewSettingsSource{st: st, nodes: func(context.Context) ([]inventory.NodeView, error) {
+		return nil, errors.New("inventory unavailable")
+	}}
+	putPreviewRevision(t, st, config.PreviewGatewayConfigKind, "default", `{"url":"http://gw:8095","tokenSet":false}`)
+	putPreviewRevision(t, st, config.ShowActiveConfigKind, config.ShowActiveObjectID, `{"show":"s"}`)
+	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "broken", `{not json`)
+	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "matrix-main", `{"show":"s","name":"Matrix","node":"node-01","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40,"output":{"transport":"ndi","ndi":{"sourceName":"matrix-main"}}}`)
+
+	got, err := src.Load(ctx)
+	if err != nil {
+		t.Fatalf("a label input failure must not fail the load: %v", err)
+	}
+	if got.GatewayURL != "http://gw:8095" || len(got.Surfaces) != 1 || len(got.Nodes) != 0 {
+		t.Fatalf("settings = %+v", got)
 	}
 }

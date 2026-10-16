@@ -59,7 +59,9 @@ Keys are URL-path-escaped wherever they appear in a path.
 ## Coordinator API (part C)
 
 `GET /api/v1/previews` returns the gateway state and every tile, in layout
-order, with unknown tiles appended in a stable order:
+order. A source not named in the layout is appended at the end, in the order
+the coordinator first saw it (alphabetical only among sources first seen in
+the same pass, such as at startup):
 
 ```json
 {
@@ -76,8 +78,10 @@ order, with unknown tiles appended in a stable order:
 }
 ```
 
-- `gateway.state`: `not_configured`, `reachable`, `unreachable`. With
-  `not_configured`, `tiles` is empty.
+- `gateway.state`: `not_configured`, `connecting` (an address is set and the
+  coordinator has not yet heard from it), `reachable`, `unreachable`. With
+  `not_configured`, `tiles` is empty. An observation made for another address
+  or token counts as none.
 - `tile.state`: `live` (frames arriving), `idle` (nobody watching, so the
   source is not started), `connecting`, `not_found` (the NDI source is no
   longer announced, or the camera refused), `disabled` (camera disabled),
@@ -86,7 +90,7 @@ order, with unknown tiles appended in a stable order:
 - An NDI tile is labelled with a node and surface when the part of its name in
   parentheses equals a `show.surface` `output.ndi.sourceName`. When more than
   one node renders that surface, the host part of the name picks the node,
-  matched case-insensitively against the node's hostname. Otherwise the label
+  matched case-insensitively against the node id or the node's label. Otherwise the label
   is the raw NDI name.
 
 `POST /api/v1/previews/{key}/webrtc`: request body `application/sdp` (the
@@ -97,7 +101,7 @@ gateway.
 Proxied to the gateway. The UI falls back to polling this every 2 s when
 WebRTC fails.
 
-All three are reads. They use the same authentication as other reads. Writes to the three configuration kinds stay allowed in show mode, because previews are not show configuration.
+All three are reads. Every one needs `observation:read`, including video and snapshots. Writes to the three configuration kinds stay allowed in show mode, because previews are not show configuration.
 
 The coordinator sends the gateway the full desired stream set whenever any of
 the three kinds changes, and again every 10 s. Every NDI source the gateway
@@ -108,9 +112,16 @@ reports plus every enabled camera is in the set.
 ```text
 showmeshctl preview list
 showmeshctl preview snapshot <key> -o <file.jpg>
+showmeshctl preview gateway get
 showmeshctl preview gateway set --url <url> --token-file <path>
+showmeshctl preview gateway revisions
+showmeshctl preview camera list
+showmeshctl preview camera get <id>
+showmeshctl preview camera revisions <id>
 showmeshctl preview camera add <id> --name <name> --url-file <path>
 showmeshctl preview camera remove <id>
+showmeshctl preview layout get
+showmeshctl preview layout revisions
 showmeshctl preview layout move <key> --to <index>
 showmeshctl preview layout hide|show <key>
 ```

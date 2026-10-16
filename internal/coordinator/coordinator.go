@@ -719,7 +719,7 @@ func Run() int {
 
 	previewSvc := preview.NewService(previewSettingsSource{st: st, nodes: func(ctx context.Context) ([]inventory.NodeView, error) {
 		return inv.Snapshot(ctx, time.Now())
-	}}, nil, time.Now, logger)
+	}, logger: logger}, nil, time.Now, logger)
 
 	apiDeps := api.Dependencies{
 		Previews:                         previewSvc,
