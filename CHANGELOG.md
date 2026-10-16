@@ -11,6 +11,13 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-15
+
+Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin, and ShowMesh Companion 0.2.0 is the first companion that
+uploads crash reports. Upgrade the coordinator and every node agent together,
+because the `0.x` line makes no compatibility promise between versions.
+
 ### Companion
 
 - A ShowMesh Companion can upload Resolume Arena crash reports to the
@@ -36,11 +43,21 @@ not the public API version (`/api/v1` moves independently).
   `ghcr.io/showmeshsystems/showmesh-preview-gateway`, for amd64 and arm64.
   The NDI runtime is never in the image; mount it from the host.
 
+### Installer
+
+- A render node that also plays audio can be installed in one run: the
+  render role sets up the PTP audio clock when `--ptp-interface` is given or
+  the operator says yes at the new prompt. Render-only installs are unchanged.
+- The coordinator installer can serve the operator UI on port 80 with
+  `--ui-port 80` or at the new prompt, so a browser opens the coordinator with
+  no port. The choice is kept on later runs and can be changed.
+
 ### Releases
 
-- Every merge to `main` publishes an edge build: coordinator and UI images
-  tagged `edge`, and node agent and installer files on the `edge` GitHub
-  prerelease, installed with the same one-line installer from that release.
+- Every merge to `main` publishes an edge build: coordinator, UI and preview
+  gateway images tagged `edge`, and node agent and installer files on the
+  `edge` GitHub prerelease, installed with the same one-line installer from
+  that release.
   Each build reports its version as the last release plus the commits since.
 
 ## 0.3.1 - 2026-10-14
