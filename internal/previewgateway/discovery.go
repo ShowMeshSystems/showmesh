@@ -40,9 +40,11 @@ const (
 )
 
 const (
-	retryDelay      = 5 * time.Second
 	unavailableWait = 10 * time.Second
+	stableRun       = time.Minute
 )
+
+var retryDelay = 5 * time.Second
 
 // Discovery follows gst-device-monitor-1.0, which reports an NDI source when
 // it appears and again when it goes away.
@@ -101,7 +103,7 @@ func runDeviceMonitor(ctx context.Context, w io.Writer) error {
 
 // Loop runs discovery until ctx ends.
 func (d *Discovery) Loop(ctx context.Context) {
-	warned := false
+	warned, restartWarned := false, false
 	for ctx.Err() == nil {
 		if err := d.Available(ctx); err != nil {
 			msg := msgNoNDIRuntime
@@ -126,13 +128,21 @@ func (d *Discovery) Loop(ctx context.Context) {
 		}()
 		mctx, stopMonitor := context.WithCancel(ctx)
 		go d.watchAvahi(mctx, stopMonitor)
+		started := time.Now()
 		err := d.Monitor(mctx, pw)
 		stopMonitor()
 		_ = pw.Close()
 		<-done
 		d.set(false, msgRestarting)
 		if ctx.Err() == nil {
-			d.Log.Warn("NDI discovery stopped. The gateway is restarting it.", "error", err)
+			// A monitor that keeps dying at once is one condition, so it is logged once until a run lasts.
+			if time.Since(started) >= stableRun {
+				restartWarned = false
+			}
+			if !restartWarned {
+				d.Log.Warn("NDI discovery stopped. The gateway is restarting it.", "error", err)
+				restartWarned = true
+			}
 			sleep(ctx, retryDelay)
 		}
 	}
