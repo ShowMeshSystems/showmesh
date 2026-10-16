@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = io.WriteString(w, "ok\n")
 	})
 	mux.HandleFunc("GET /v1/sources", s.auth(s.getSources))
+	mux.HandleFunc("GET /v1/discovery", s.auth(s.getDiscovery))
 	mux.HandleFunc("PUT /v1/streams", s.auth(s.putStreams))
 	mux.HandleFunc("GET /v1/streams", s.auth(s.getStreams))
 	mux.HandleFunc("POST /v1/streams/{key}/webrtc", s.auth(s.postWebRTC))
@@ -76,6 +77,22 @@ func (s *Server) getSources(w http.ResponseWriter, _ *http.Request) {
 		list = []Source{}
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// DiscoveryStatus reports whether NDI discovery works. Message states why not
+// and what to do, and is empty while it runs.
+type DiscoveryStatus struct {
+	Running bool   `json:"running"`
+	Message string `json:"message"`
+}
+
+func (s *Server) getDiscovery(w http.ResponseWriter, _ *http.Request) {
+	_, ok := s.sources.Announced()
+	st := DiscoveryStatus{Running: ok}
+	if !ok {
+		st.Message = s.sources.Unavailable()
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) putStreams(w http.ResponseWriter, r *http.Request) {

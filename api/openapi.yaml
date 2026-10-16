@@ -15771,6 +15771,19 @@ components:
         message:
           type: string
           description: States the fact, then the action. Empty when reachable.
+        ndiDiscovery:
+          type: object
+          description: >-
+            Whether the gateway can find NDI sources. Omitted while the gateway
+            is not reachable or does not report it.
+          required: [state, message]
+          properties:
+            state:
+              type: string
+              enum: [running, not_running]
+            message:
+              type: string
+              description: States the fact, then the action. Empty when running.
         observedAt:
           type: string
           format: date-time
