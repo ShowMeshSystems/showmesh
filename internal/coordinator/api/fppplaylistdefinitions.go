@@ -41,8 +41,8 @@ const maxFPPPlaylistDefinitionRequestBodyBytes = 1048576
 // under the action fpp.publish_playlist_definition."
 const auditActionFPPPublishPlaylistDefinition = "fpp.publish_playlist_definition"
 
-// fppPlaylistDefinitionRetentionKeep is H2 spec §3's own retention bound:
-// "beyond those, the newest 16 per instance are kept."
+// fppPlaylistDefinitionRetentionKeep is H2 spec §3's retention bound on
+// superseded versions; every playlist's current definition is kept regardless.
 const fppPlaylistDefinitionRetentionKeep = 16
 
 func fppPlaylistDefinitionTooLargeProblem() v1.Problem {
@@ -260,8 +260,8 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 
 		// Retention (H2 spec §3), inside the same transaction as the
 		// insert it follows: never evict a hash a stored show.playlist
-		// binding references; beyond those, keep only the newest 16
-		// unreferenced rows for this instance.
+		// binding references or any playlist's current definition; beyond
+		// those, keep only the newest 16 superseded rows for this instance.
 		// tx, not h.deps.Config: this closure already runs inside
 		// AuditedWrite's own transaction, and store.Store's guardNotInTx
 		// refuses a Store-level call made with an in-transaction context
