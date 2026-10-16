@@ -52,12 +52,16 @@ type Manager struct {
 	applyMu sync.Mutex // serialises engine writes
 	mu      sync.Mutex // guards desired and its entries
 	desired map[string]*entry
+	// undeleted holds ids the engine still has but the gateway no longer wants.
+	undeleted map[string]struct{}
+	// lastFailed is the failure count of the previous apply pass; applyMu guards it.
+	lastFailed int
 }
 
 // NewManager builds a Manager. feed is the loopback URL prefix under which
 // the gateway serves each NDI stream's video to go2rtc.
 func NewManager(engine Engine, sources SourceProvider, feed string, log *slog.Logger) *Manager {
-	return &Manager{engine: engine, sources: sources, feed: feed, log: log, now: time.Now, desired: map[string]*entry{}}
+	return &Manager{engine: engine, sources: sources, feed: feed, log: log, now: time.Now, desired: map[string]*entry{}, undeleted: map[string]struct{}{}}
 }
 
 // NDIName returns the NDI source name of the desired NDI stream with this id.
@@ -84,7 +88,6 @@ func (m *Manager) sourceFor(s StreamSpec) string {
 func (m *Manager) Set(ctx context.Context, specs []StreamSpec) {
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
-	var drop []string
 	m.mu.Lock()
 	next := make(map[string]*entry, len(specs))
 	for _, s := range specs {
@@ -93,23 +96,18 @@ func (m *Manager) Set(ctx context.Context, specs []StreamSpec) {
 			if old.spec == s {
 				e.applied, e.failedAt = old.applied, old.failedAt
 			} else if old.applied {
-				drop = append(drop, old.id)
+				m.undeleted[old.id] = struct{}{}
 			}
 		}
 		next[s.Key] = e
 	}
 	for key, old := range m.desired {
-		if _, kept := next[key]; !kept {
-			drop = append(drop, old.id)
+		if _, kept := next[key]; !kept && old.applied {
+			m.undeleted[old.id] = struct{}{}
 		}
 	}
 	m.desired = next
 	m.mu.Unlock()
-	for _, id := range drop {
-		if err := m.engine.Delete(ctx, id); err != nil {
-			m.log.Warn("Removing a stream failed.", "id", id, "error", err)
-		}
-	}
 	m.applyPending(ctx)
 }
 
@@ -128,14 +126,21 @@ func (m *Manager) Resync(ctx context.Context) {
 	for _, e := range m.desired {
 		e.applied = false
 	}
+	clear(m.undeleted)
+	m.lastFailed = 0
 	m.mu.Unlock()
 	m.applyPending(ctx)
 }
 
-// applyPending calls the engine without holding m.mu, so a slow engine never
-// blocks status or lookups. The caller holds applyMu.
+// applyPending removes streams the gateway dropped, then adds those the engine
+// has not accepted. It calls the engine without holding m.mu, so a slow engine
+// never blocks status or lookups. The caller holds applyMu.
 func (m *Manager) applyPending(ctx context.Context) {
 	m.mu.Lock()
+	var gone []string
+	for id := range m.undeleted {
+		gone = append(gone, id)
+	}
 	var pending []*entry
 	for _, e := range m.desired {
 		if !e.applied {
@@ -143,15 +148,49 @@ func (m *Manager) applyPending(ctx context.Context) {
 		}
 	}
 	m.mu.Unlock()
+
+	failed := 0
+	var first error
+	note := func(err error) {
+		if first == nil {
+			first = err
+		}
+		failed++
+	}
+	for _, id := range gone {
+		err := m.engine.Delete(ctx, id)
+		m.mu.Lock()
+		if err == nil || m.hasID(id) {
+			delete(m.undeleted, id)
+		}
+		m.mu.Unlock()
+		if err != nil {
+			note(err)
+		}
+	}
 	for _, e := range pending {
 		if err := m.engine.Put(ctx, e.id, e.source); err != nil {
-			m.log.Warn("Adding a stream failed.", "id", e.id, "error", err)
+			note(err)
 			continue
 		}
 		m.mu.Lock()
 		e.applied = true
 		m.mu.Unlock()
 	}
+	if failed != m.lastFailed && failed > 0 {
+		m.log.Warn("The video engine did not accept some streams. The gateway tries again every few seconds.", "streams", failed, "error", first)
+	}
+	m.lastFailed = failed
+}
+
+// hasID reports whether a desired stream uses this engine id. The caller holds m.mu.
+func (m *Manager) hasID(id string) bool {
+	for _, e := range m.desired {
+		if e.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Lookup returns the engine id and kind for a key.

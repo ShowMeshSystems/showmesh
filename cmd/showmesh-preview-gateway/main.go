@@ -44,16 +44,12 @@ func main() {
 }
 
 func healthcheck() int {
-	addr := os.Getenv("SHOWMESH_PREVIEW_GATEWAY_ADDR")
-	if addr == "" {
-		addr = ":8095"
-	}
-	_, port, err := net.SplitHostPort(addr)
+	u, err := healthURL(os.Getenv("SHOWMESH_PREVIEW_GATEWAY_ADDR"))
 	if err != nil {
 		return 1
 	}
 	c := http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get("http://127.0.0.1:" + port + "/healthz")
+	resp, err := c.Get(u)
 	if err != nil {
 		return 1
 	}
@@ -62,4 +58,20 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// healthURL targets the host the gateway listens on, or loopback when addr
+// names no host or an unspecified one.
+func healthURL(addr string) (string, error) {
+	if addr == "" {
+		addr = ":8095"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz", nil
 }

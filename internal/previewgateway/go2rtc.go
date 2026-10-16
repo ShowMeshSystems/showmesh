@@ -69,6 +69,13 @@ func (c *Go2RTCClient) Configure(addr, password string) {
 	}
 }
 
+// Ready reports whether a proven go2rtc is configured.
+func (c *Go2RTCClient) Ready() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.base != ""
+}
+
 func (c *Go2RTCClient) target() (base, password string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -186,10 +193,8 @@ func isJPEG(b []byte) bool {
 }
 
 // go2rtcConfig keeps every listener except WebRTC off the network. The API
-// listens on loopback and still requires the per-run password, because other
-// processes on a host-networked machine can reach loopback too. go2rtc offers
-// no host candidates of its own, so they are listed here, and STUN is off
-// because previews stay on the local network.
+// still requires the per-run password because other processes on a
+// host-networked machine can reach loopback. STUN is off; candidates are listed.
 func go2rtcConfig(apiAddr, password, webrtcPort string, candidates []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "api:\n  listen: %q\n  username: %q\n  password: %q\n  local_auth: true\n", apiAddr, go2rtcUser, password)
@@ -278,6 +283,8 @@ type Supervisor struct {
 	OnReady func(ctx context.Context)
 
 	client *Go2RTCClient
+	// prove replaces proveEngine in tests.
+	prove func(ctx context.Context, addr, password string) bool
 }
 
 // engineError is a failure that restarting go2rtc will not fix.
@@ -386,12 +393,14 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	cmd := exec.Command(s.Binary, "-config", cfg)
 	cmd.Env = minimalEnv(engineEnvKeys...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 2 * time.Second
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	defer s.client.Configure("", "")
+	defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }()
 	done := make(chan error, 1)
 	go func() { err := cmd.Wait(); _ = pw.Close(); done <- err }()
 	fault := make(chan error, 1)
@@ -405,8 +414,10 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	})
 
 	readyCtx, cancelReady := context.WithCancel(ctx)
-	defer cancelReady()
+	readyDone := make(chan struct{})
+	defer func() { cancelReady(); <-readyDone }()
 	go func() {
+		defer close(readyDone)
 		ready := s.waitReady(readyCtx, apiAddr, password)
 		if readyCtx.Err() != nil {
 			return
@@ -445,12 +456,19 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	}
 }
 
+func (s *Supervisor) proveFn() func(context.Context, string, string) bool {
+	if s.prove != nil {
+		return s.prove
+	}
+	return proveEngine
+}
+
 // waitReady polls until the process on addr proves it is the go2rtc this
 // supervisor started, and reports false if that does not happen in time.
 func (s *Supervisor) waitReady(ctx context.Context, addr, password string) bool {
 	deadline := time.Now().Add(readyTimeout)
 	for ctx.Err() == nil && time.Now().Before(deadline) {
-		if proveEngine(ctx, addr, password) {
+		if s.proveFn()(ctx, addr, password) {
 			return true
 		}
 		select {

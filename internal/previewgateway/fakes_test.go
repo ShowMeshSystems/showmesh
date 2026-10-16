@@ -9,18 +9,19 @@ import (
 )
 
 type fakeEngine struct {
-	mu        sync.Mutex
-	streams   map[string]string
-	puts      []string
-	deletes   []string
-	failPut   bool
-	listErr   error
-	info      map[string]Go2RTCInfo
-	frame     []byte
-	frameErr  error
-	answer    []byte
-	answerErr error
-	lastOffer []byte
+	mu         sync.Mutex
+	streams    map[string]string
+	puts       []string
+	deletes    []string
+	failPut    bool
+	failDelete bool
+	listErr    error
+	info       map[string]Go2RTCInfo
+	frame      []byte
+	frameErr   error
+	answer     []byte
+	answerErr  error
+	lastOffer  []byte
 }
 
 func newFakeEngine() *fakeEngine {
@@ -41,6 +42,9 @@ func (f *fakeEngine) Put(_ context.Context, id, src string) error {
 func (f *fakeEngine) Delete(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failDelete {
+		return errors.New("refused")
+	}
 	delete(f.streams, id)
 	f.deletes = append(f.deletes, id)
 	return nil
