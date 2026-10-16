@@ -152,6 +152,18 @@ http://localhost:8081
 
 This container is a client, not a dependency: the coordinator, the broker, and any running show are unaffected by the `ui` service being stopped, restarted, rebuilt, or removed from `docker-compose.yml` entirely. There is no `depends_on` between them in either direction, and its healthcheck never contacts the coordinator — a coordinator outage shows up as the *application* reporting disconnected, not as this container reporting unhealthy.
 
+## Bridging to a Home Assistant broker
+
+When Home Assistant runs its own MQTT broker, the bundled broker can bridge to it so FPP's `falcon/player/#` topics flow both ways: Home Assistant sees FPP status, and the commands Home Assistant publishes reach FPP. No second client or credential is needed on the ShowMesh side, and the bridge changes no topic grants: the FPP login keeps exactly the access `mosquitto/acl.conf` gives it, so only the FPP status topics it may publish cross over.
+
+```sh
+sudo ./mosquitto/add-home-assistant-bridge.sh --host <home-assistant> --user <login> --password-file <file>
+```
+
+The login is one you create on the Home Assistant broker for this bridge. The script writes `mosquitto/conf.d/home-assistant-bridge.conf`, readable only by the broker, adds an `include_dir` line to `mosquitto.conf`, restarts the broker container (nodes show offline for a few seconds and reconnect on their own), and reports whether the bridge connected. Add `--share-showmesh` to also mirror `showmesh/#` to Home Assistant read-only. `--remove` takes the bridge down. The built-in broker keeps serving the show when the Home Assistant broker is unreachable; the bridge reconnects on its own.
+
+An installer upgrade rewrites `mosquitto.conf` and drops the `include_dir` line until the installer carries this setting itself; run the script again with the same arguments after upgrading.
+
 ## Using an external broker
 
 If you already run Mosquitto (or another MQTT broker) elsewhere on the show network, point the coordinator at it instead of the bundled one:
