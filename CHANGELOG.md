@@ -20,6 +20,22 @@ not the public API version (`/api/v1` moves independently).
   with `showmeshctl companion-reports list` and `get`, without logging into
   the render computer. The coordinator keeps the newest 200 per companion.
 
+### Dashboard
+
+- The Dashboard can show low-rate live previews of render node NDI output,
+  Arena NDI output and RTSP cameras, through a new preview gateway that runs
+  beside the coordinator or on its own host. Nothing in the show depends on
+  it, and losing it only changes what the tiles say.
+- An operator can reorder and hide preview tiles from the Dashboard or with
+  `showmeshctl preview layout`. A new source is added at the end of the grid.
+- Settings has a new Dashboard tab for the gateway address and token and the
+  camera list, and `showmeshctl preview` covers the same settings.
+- A tile whose picture has stopped updating says how old its last frame is
+  and is marked Stale after 10 seconds.
+- The preview gateway is published as its own image,
+  `ghcr.io/showmeshsystems/showmesh-preview-gateway`, for amd64 and arm64.
+  The NDI runtime is never in the image; mount it from the host.
+
 ### Releases
 
 - Every merge to `main` publishes an edge build: coordinator and UI images
