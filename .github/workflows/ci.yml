@@ -940,6 +940,22 @@ jobs:
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
 
+      # The gateway Dockerfile compiles the NDI plugin itself, so this is the
+      # one build that catches a broken plugin stage before a release does.
+      - name: Build the preview gateway image (amd64, no push)
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/preview-gateway/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: false
+          build-args: |
+            VERSION=${{ github.sha }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+
   fpp-plugin-release:
     # Step 9's FPP plugin (cmd/showmesh-fpp-plugin) is fetched onto an FPP
     # host by scripts/fpp_install.sh as a prebuilt, sha256-verified static

@@ -1,4 +1,4 @@
-# Override that runs the coordinator and operator UI from published GHCR
+# Override that runs the coordinator, operator UI and preview gateway from published GHCR
 # images instead of building them from source. See deploy/README.md
 # "Running from published images".
 #
@@ -20,3 +20,7 @@ services:
   ui:
     build: !reset null
     image: ghcr.io/showmeshsystems/showmesh-ui:${SHOWMESH_RELEASE_VERSION:?SHOWMESH_RELEASE_VERSION is required, e.g. SHOWMESH_RELEASE_VERSION=0.1.0. See deploy/README.md.}
+
+  preview-gateway:
+    build: !reset null
+    image: ghcr.io/showmeshsystems/showmesh-preview-gateway:${SHOWMESH_RELEASE_VERSION:?SHOWMESH_RELEASE_VERSION is required, e.g. SHOWMESH_RELEASE_VERSION=0.1.0. See deploy/README.md.}

@@ -23,7 +23,7 @@ jobs:
       - name: Delete old edge image versions
         run: |
           set -euo pipefail
-          for pkg in showmesh-coordinator showmesh-ui; do
+          for pkg in showmesh-coordinator showmesh-ui showmesh-preview-gateway; do
             gh api --paginate "orgs/ShowMeshSystems/packages/container/$pkg/versions" \
               -q '.[] | select(any(.metadata.container.tags[]; startswith("edge-"))) | [.created_at, .id, (.metadata.container.tags | join(","))] | @tsv' \
               | sort -r | tail -n +"$((KEEP + 1))" \

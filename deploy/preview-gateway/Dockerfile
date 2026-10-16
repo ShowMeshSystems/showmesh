@@ -9,9 +9,12 @@
 # the gateway as the unprivileged showmesh user (uid 10001). tini is PID 1 so
 # exited helper processes are reaped.
 
+# CI replaces this stage with the named build context ndi-plugin, a directory
+# holding <arch>/libgstndi.so built by the node agent's plugin jobs.
 FROM debian:trixie AS ndi-plugin
+ARG TARGETARCH
 COPY deploy/node/ndi-plugin/build-ndi-plugin.sh /usr/local/bin/build-ndi-plugin.sh
-RUN /usr/local/bin/build-ndi-plugin.sh /out
+RUN /usr/local/bin/build-ndi-plugin.sh /${TARGETARCH}
 
 FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm AS gateway
 WORKDIR /src
@@ -33,7 +36,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 
 # go2rtc v1.9.14 was published 2026-01-19. The checksums are the sha256 of
 # the release assets, equal to the digests GitHub reports for them.
-FROM debian:trixie-slim AS go2rtc
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS go2rtc
 ARG TARGETARCH
 ARG GO2RTC_VERSION=v1.9.14
 ARG GO2RTC_SHA256_AMD64=32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6
@@ -49,15 +52,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && chmod 0755 /go2rtc
 
 FROM debian:trixie-slim
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ffmpeg \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good \
       gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-      dbus avahi-daemon tini \
+      dbus avahi-daemon libavahi-client3 tini \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home --home-dir /home/showmesh showmesh
 
-COPY --from=ndi-plugin /out/libgstndi.so /usr/local/lib/gstreamer-1.0/libgstndi.so
+COPY --from=ndi-plugin /${TARGETARCH}/libgstndi.so /usr/local/lib/gstreamer-1.0/libgstndi.so
 COPY --from=go2rtc /go2rtc /usr/local/bin/go2rtc
 COPY --from=gateway /out/showmesh-preview-gateway /usr/local/bin/showmesh-preview-gateway
 COPY deploy/preview-gateway/avahi-daemon.conf /etc/showmesh/avahi-daemon.conf
@@ -65,7 +69,6 @@ COPY deploy/preview-gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV GST_PLUGIN_PATH=/usr/local/lib/gstreamer-1.0 \
     GST_REGISTRY=/tmp/gst-registry.bin \
-    LD_LIBRARY_PATH=/opt/ndi \
     SHOWMESH_PREVIEW_GATEWAY_ADDR=:8095
 
 EXPOSE 8095 8555

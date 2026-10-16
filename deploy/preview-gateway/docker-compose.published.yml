@@ -1,0 +1,10 @@
+# Override that runs the gateway from the published GHCR image instead of
+# building it from source. Run from this directory:
+#   SHOWMESH_RELEASE_VERSION=0.4.0 SHOWMESH_PREVIEW_GATEWAY_TOKEN=... \
+#     docker compose -f docker-compose.yml -f docker-compose.published.yml up -d
+# `!reset` needs Docker Compose v2.24.0 or newer.
+
+services:
+  preview-gateway:
+    build: !reset null
+    image: ghcr.io/showmeshsystems/showmesh-preview-gateway:${SHOWMESH_RELEASE_VERSION:?SHOWMESH_RELEASE_VERSION is required, e.g. SHOWMESH_RELEASE_VERSION=0.4.0. See deploy/README.md.}
