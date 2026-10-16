@@ -17,7 +17,7 @@ with a PHC:
   wireplumber, and gstreamer1.0-pipewire (real Debian 13 package names,
   confirmed against the actual `apt` archive, not assumed);
 - it correctly detects the absence of a PHC and falls back to software
-  timestamping, and points PipeWire's node.driver at `clock.id=realtime`
+  timestamping, and points PipeWire's node.driver at `clock.id=monotonic`
   instead of a PHC device;
 - the three roles (`follower`, `grandmaster`, `auto`) produce the
   `clientOnly`/`priority1` combination documented in the script's own
@@ -29,7 +29,7 @@ with a PHC:
   `gmIdentity` and `master_offset` against that same grandmaster;
 - a real PipeWire, started from the exact config the script generates,
   elects the `showmesh-ptp-driver` node (`support.node.driver`, priority
-  210000, `clock.id=realtime`) as a driver in the graph;
+  210000, `clock.id=monotonic`) as a driver in the graph;
 - a `pipewiresink` GStreamer pipeline negotiates against that graph and
   plays without error, into a synthetic `support.null-audio-sink` node
   this bench creates only because the container has no real ALSA card for
@@ -93,7 +93,7 @@ with a PHC:
 
 - hardware timestamping, or `clock.device` against a real `/dev/ptpN` --
   no container has a PHC, so every run here falls back to
-  `clock.id=realtime` and this is the only path exercised;
+  `clock.id=monotonic` and this is the only path exercised;
 - a real ALSA sink actually being rate-matched to the graph driver, or
   WirePlumber's own ALSA monitor actually putting a real sound card's node
   into `showmesh-ptp-driver`'s group or onto the pro-audio profile -- no

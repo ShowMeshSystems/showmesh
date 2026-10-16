@@ -4,7 +4,7 @@
 # 4.5 and 7.2, Track I seam I4 candidate A). Installed by
 # install-ptp-audio.sh to /etc/pipewire/pipewire.conf.d/, templated on
 # @CLOCK_PROPERTY@ (clock.device=/dev/ptpN when this interface has a PHC,
-# clock.id=realtime when it does not -- see that script for which case
+# clock.id=monotonic when it does not -- see that script for which case
 # applied and why) and @NODE_GROUP@ (deploy/node/ptp-audio/ptp-group.conf,
 # shared with 51-showmesh-alsa-rate.conf.template so the two can never
 # name different groups).

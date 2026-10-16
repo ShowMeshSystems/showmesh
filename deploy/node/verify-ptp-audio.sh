@@ -504,6 +504,36 @@ fi
 echo ""
 
 # --- 7. The load-bearing reading: does alsasink ever slave-skew ---
+# --- 6b. the graph actually cycles while a stream plays ---
+# Driver election, port state and an xrun count all read true on a graph
+# that never moves: on a PHC-less node whose driver was clocked from
+# CLOCK_REALTIME, every node sat at rate 0 with the card in XRUN and every
+# check above passed. pw-top's RATE column is the one reading that says the
+# driver is ticking and the card is being fed.
+echo "--- Graph cycling while a stream plays ---"
+if ! command -v pw-top >/dev/null 2>&1 || ! command -v gst-launch-1.0 >/dev/null 2>&1; then
+  err "pw-top or gst-launch-1.0 not found; cannot read the graph rate under load"
+elif ! systemctl is-active --quiet pipewire-showmesh.service 2>/dev/null; then
+  info "skipped: pipewire-showmesh.service is not active"
+else
+  timeout 7 gst-launch-1.0 -q audiotestsrc wave=silence ! audioconvert ! pipewiresink >/dev/null 2>&1 &
+  CYCLE_PID=$!
+  sleep 3
+  CYCLE_TOP="$(timeout 3 pw-top -b -n 2 2>/dev/null || true)"
+  wait "$CYCLE_PID" 2>/dev/null || true
+  CYCLE_RATE="$(echo "$CYCLE_TOP" | awk -v pat="$ALSA_MATCH" '
+    $0 ~ /^S[[:space:]]+ID/ { for (i = 1; i <= NF; i++) if ($i == "RATE") rate_col = i; next }
+    rate_col && $0 ~ pat { rate = $rate_col }
+    END { if (rate != "") print rate; else print "unparsed" }
+  ')"
+  case "$CYCLE_RATE" in
+    unparsed) err "could not read pw-top's RATE column for an ALSA node matching '$ALSA_MATCH' while a stream played" ;;
+    0) bad "the graph is not cycling: pw-top shows RATE 0 for the ALSA node matching '$ALSA_MATCH' while a pipewiresink stream was playing (driver clock mismatch, see PTP-AUDIO.md on clock.id)" ;;
+    *) ok "the graph cycles under load: pw-top shows RATE $CYCLE_RATE for the ALSA node matching '$ALSA_MATCH' while a pipewiresink stream played" ;;
+  esac
+fi
+echo ""
+
 echo "--- Sink slaving behavior (the reading that actually matters) ---"
 if [ "$PLAY_SECONDS" -le 0 ]; then
   info "skipped (--play 0 or default overridden); this is the check that actually proves the rate lock is doing anything, run it before trusting the graph-driver checks above"

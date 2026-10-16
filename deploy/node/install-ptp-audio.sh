@@ -192,7 +192,7 @@ if [ -n "$PHC_INDEX" ]; then
 else
   PHC_DEV=""
   TIMESTAMPING=software
-  echo "install-ptp-audio.sh: no PHC found for $IFACE (no $PHC_SYSFS_DIR, or it has no ptpN entry); ptp4l will use software timestamping. This is expected on a Raspberry Pi 3B+ (LAN7515 USB NIC, RES-019 section 4.6) and on any virtual/container interface. Software timestamping disciplines CLOCK_REALTIME (there is no PHC to discipline instead, RES-019 section 5.1), so PipeWire's node.driver is pointed at clock.id=realtime rather than a PHC device (see the PipeWire config section below): this node is still PTP-disciplined end to end, just through the system clock instead of a hardware clock."
+  echo "install-ptp-audio.sh: no PHC found for $IFACE (no $PHC_SYSFS_DIR, or it has no ptpN entry); ptp4l will use software timestamping. This is expected on a Raspberry Pi 3B+ (LAN7515 USB NIC, RES-019 section 4.6), on consumer Realtek NICs, and on any virtual/container interface. Software timestamping disciplines the system clock (there is no PHC to discipline instead, RES-019 section 5.1), so PipeWire's node.driver is pointed at clock.id=monotonic rather than a PHC device (see the PipeWire config section below): the graph runs on the same oscillator ptp4l slews, never on CLOCK_REALTIME, which PipeWire's ALSA follower cannot be driven from."
 fi
 
 # --- PHC-less node: exactly one writer on CLOCK_REALTIME ---
@@ -394,14 +394,20 @@ mkdir -p "$PIPEWIRE_CONFD" "$WIREPLUMBER_CONFD"
 if [ -n "$PHC_DEV" ]; then
   CLOCK_PROPERTY="clock.device = \"$PHC_DEV\""
 else
-  # No PHC to open, but ptp4l in software-timestamping mode still
-  # disciplines CLOCK_REALTIME (RES-019 section 5.1: "read... from the
-  # clock ptp4l is disciplining when it runs with software timestamping").
-  # clock.id=realtime (RES-019 section 4.5's enum) points the node.driver
-  # at that same disciplined system clock, so this is still real PTP
-  # discipline end to end on a PHC-less host (a Raspberry Pi 3B+), not a
-  # fallback to an undisciplined monotonic clock.
-  CLOCK_PROPERTY="clock.id = realtime"
+  # No PHC to open. The driver must NOT be clocked from CLOCK_REALTIME:
+  # with clock.id=realtime the driver stamps every graph cycle with
+  # realtime nanoseconds, while PipeWire's ALSA follower measures its own
+  # wakeups on CLOCK_MONOTONIC (alsa-pcm.c get_time_ns) and compares the
+  # two in its DLL. The error is the full epoch difference, so the follower
+  # resyncs on every cycle and the card never streams: proven on a
+  # PHC-less production node (M4, PipeWire 1.4.2), where the graph sat at
+  # zero rate with the ALSA device in XRUN from the first start.
+  # CLOCK_MONOTONIC runs on the same oscillator and takes the same
+  # frequency slew ptp4l applies to the system clock on a software-
+  # timestamped follower (adjtimex slews both; only steps differ), so the
+  # graph still follows PTP rate on a PHC-less follower, and a PHC-less
+  # grandmaster's graph runs on the clock it distributes.
+  CLOCK_PROPERTY="clock.id = monotonic"
 fi
 sed -e "s|@CLOCK_PROPERTY@|$CLOCK_PROPERTY|" -e "s|@NODE_GROUP@|$PTP_NODE_GROUP|g" \
   "$TEMPLATE_DIR/10-showmesh-ptp-clock.conf.template" > "$PIPEWIRE_CLOCK_CONF"
@@ -491,7 +497,7 @@ if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
   else
     echo "  ptp4l-showmesh.service: NOT active (systemctl status ptp4l-showmesh.service for why)."
   fi
-  echo "  PipeWire graph clock: $([ -n "$PHC_DEV" ] && echo "configured for $PHC_DEV" || echo "configured for clock.id=realtime (no PHC on $IFACE)"), node.group=$PTP_NODE_GROUP, audio-card-match=$AUDIO_CARD_MATCH. Run verify-ptp-audio.sh to confirm the running graph actually elected this driver for the card, not just that both exist."
+  echo "  PipeWire graph clock: $([ -n "$PHC_DEV" ] && echo "configured for $PHC_DEV" || echo "configured for clock.id=monotonic (no PHC on $IFACE)"), node.group=$PTP_NODE_GROUP, audio-card-match=$AUDIO_CARD_MATCH. Run verify-ptp-audio.sh to confirm the running graph actually elected this driver for the card, not just that both exist."
   if [ -e "$PHC2SYS_UNIT_DEST" ]; then
     if systemctl is-active --quiet phc2sys-showmesh.service; then
       echo "  phc2sys-showmesh.service: active, disciplining $PHC_DEV from this host's system clock (role=grandmaster)."
