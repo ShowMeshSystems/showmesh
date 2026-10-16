@@ -33,7 +33,10 @@ import {
   NotWired,
   NotWiredBanner,
   OneTimeSecret,
+  PreviewGrid,
+  PreviewTile,
   RadioCardList,
+  ReorderButtons,
   RailBadge,
   RuledStrip,
   AbsenceLabel,
@@ -834,6 +837,40 @@ export function Specimen() {
               }
             />
           </Tiles>
+        </SpecSection>
+        <SpecSection
+          number="17 · Preview tile"
+          id="specimen-preview-tile"
+          title="A live source: the picture, its name, and one state word"
+          detail="The frame is always 16:9. The sentence under the caption is the coordinator's own, a tile with no picture says so, and a picture with no new frame for 10 seconds reads Stale."
+        >
+          <PreviewGrid>
+            <PreviewTile label="Camera 1" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={1} />
+            <PreviewTile label="Camera 2" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={14} />
+            <PreviewTile label="Camera 3" state="connecting" message="" />
+            <PreviewTile label="NDI source" state="not_found" message="This source is no longer announced on the network. Check that its sender is running." />
+            <PreviewTile label="Camera 4" state="disabled" message="This camera is turned off. Turn it on to see it here." />
+            <PreviewTile label="Camera 5" state="error" message="The gateway did not accept the camera addresses. Check each address and save again." />
+            <PreviewTile
+              label="Camera 6"
+              state="idle"
+              message=""
+              handle={<span className="sm-preview__handle" aria-hidden="true">⠿</span>}
+              actions={<ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} />}
+            />
+          </PreviewGrid>
+        </SpecSection>
+        <SpecSection
+          number="18 · Reorder buttons"
+          id="specimen-reorder"
+          title="The one reorderable-row pattern, as icon buttons"
+          detail="Vertical for a list, horizontal for a grid read left to right. A grid that keeps its items offers hide in place of remove. A defined reason disables the button and states why."
+        >
+          <div className="sm-stack-4">
+            <ReorderButtons itemLabel="step 2" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} />
+            <ReorderButtons itemLabel="step 1" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveUpReason="Already first." />
+            <ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveDownReason="Already last." />
+          </div>
         </SpecSection>
       </div>
     </div>

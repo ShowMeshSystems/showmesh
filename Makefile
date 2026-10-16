@@ -5,6 +5,7 @@ AGENT       := $(BIN_DIR)/showmesh-agent
 MULTISYNC_PROBE := $(BIN_DIR)/showmesh-multisync-probe
 SHOWMESHCTL := $(BIN_DIR)/showmeshctl
 FPP_PLUGIN  := $(BIN_DIR)/showmesh-fpp-plugin
+PREVIEW_GATEWAY := $(BIN_DIR)/showmesh-preview-gateway
 
 VERSION     ?= dev
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -22,6 +23,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(MULTISYNC_PROBE) ./cmd/showmesh-multisync-probe
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(SHOWMESHCTL) ./cmd/showmeshctl
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(FPP_PLUGIN) ./cmd/showmesh-fpp-plugin
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(PREVIEW_GATEWAY) ./cmd/showmesh-preview-gateway
 
 # The agent built by `build` is CGo-free and therefore carries no audio
 # engine: internal/agent/audio/gstengine compiles to its !cgo variant,
@@ -264,6 +266,15 @@ docker-build:
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-t $(IMAGE):$(VERSION) .
 	$(DOCKER) build -t $(UI_IMAGE):$(VERSION) ./ui
+
+.PHONY: preview-gateway-image
+preview-gateway-image:
+	$(DOCKER) build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f deploy/preview-gateway/Dockerfile \
+		-t showmesh-preview-gateway:$(VERSION) .
 
 .PHONY: docker-run
 docker-run:

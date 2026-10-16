@@ -216,9 +216,9 @@ Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only la
 
 ## Running from published images
 
-`.github/workflows/release.yml` publishes the coordinator and operator UI images to GHCR on every pushed `v<VERSION>` release tag: `ghcr.io/showmeshsystems/showmesh-coordinator` and `ghcr.io/showmeshsystems/showmesh-ui`, each tagged with the bare version (for example `0.1.0`) and the full commit SHA. See [`docs/RELEASING.md`](../docs/RELEASING.md) for what a release tag produces in full, including the node agent packages.
+`.github/workflows/release.yml` publishes three images to GHCR on every pushed `v<VERSION>` release tag: `ghcr.io/showmeshsystems/showmesh-coordinator`, `ghcr.io/showmeshsystems/showmesh-ui` and `ghcr.io/showmeshsystems/showmesh-preview-gateway`, each tagged with the bare version (for example `0.1.0`) and the full commit SHA. See [`docs/RELEASING.md`](../docs/RELEASING.md) for what a release tag produces in full, including the node agent packages.
 
-To run the bundle from a published version instead of building from source, add the `docker-compose.published.yml` override, which replaces both services' `build:` with the matching `image:`:
+To run the bundle from a published version instead of building from source, add the `docker-compose.published.yml` override, which replaces each service's `build:` with the matching `image:` (the preview gateway runs only with `--profile preview`):
 
 ```sh
 make -C .. deploy-up-published SHOWMESH_RELEASE_VERSION=0.1.0

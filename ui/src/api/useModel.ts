@@ -22,6 +22,13 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  ConfigDashboardLayoutPutRequest,
+  ConfigPreviewCameraPutRequest,
+  ConfigPreviewGatewayPutRequest,
+  DashboardLayoutConfigResponse,
+  PreviewCameraConfigResponse,
+  PreviewGatewayConfigResponse,
+  PreviewsResponse,
   AcknowledgeFPPInstanceUUIDChangeResponse,
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPutPayload,
@@ -762,7 +769,8 @@ export function listConfigObjects(
     | 'show.playlist'
     | 'media.playlist'
     | 'night.session'
-    | 'node.clock',
+    | 'node.clock'
+    | 'preview.camera',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -780,6 +788,7 @@ export function listConfigObjects(
     | 'media.playlist'
     | 'night.session'
     | 'node.clock'
+    | 'preview.camera'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
@@ -1201,4 +1210,49 @@ export function putNightSessionActiveConfig(
 
 export function getNightSessionActiveConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getNightSessionActiveConfigRevisions()
+}
+
+// Dashboard video previews: thin pass-throughs, as above.
+export function getPreviews(): Promise<PreviewsResponse> {
+  return store.getPreviews()
+}
+
+export function postPreviewOffer(key: string, offerSdp: string, signal?: AbortSignal): Promise<string> {
+  return store.postPreviewOffer(key, offerSdp, signal)
+}
+
+export function getPreviewSnapshot(key: string, signal?: AbortSignal): Promise<Blob> {
+  return store.getPreviewSnapshot(key, signal)
+}
+
+export function getPreviewGatewayConfig(): Promise<PreviewGatewayConfigResponse> {
+  return store.getPreviewGatewayConfig()
+}
+
+export function putPreviewGatewayConfig(request: ConfigPreviewGatewayPutRequest): Promise<PreviewGatewayConfigResponse> {
+  return store.putPreviewGatewayConfig(request)
+}
+
+export function getPreviewCamera(id: string): Promise<PreviewCameraConfigResponse> {
+  return store.getPreviewCamera(id)
+}
+
+export function putPreviewCamera(id: string, request: ConfigPreviewCameraPutRequest): Promise<PreviewCameraConfigResponse> {
+  return store.putPreviewCamera(id, request)
+}
+
+export function deletePreviewCamera(id: string): Promise<void> {
+  return store.deletePreviewCamera(id)
+}
+
+export function getDashboardLayout(): Promise<DashboardLayoutConfigResponse> {
+  return store.getDashboardLayout()
+}
+
+export function putDashboardLayout(payload: ConfigDashboardLayoutPutRequest, ifMatchRevision: number | 'none'): Promise<DashboardLayoutConfigResponse> {
+  return store.putDashboardLayout(payload, ifMatchRevision)
+}
+
+export function getPreviewGatewayConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getPreviewGatewayConfigRevisions()
 }

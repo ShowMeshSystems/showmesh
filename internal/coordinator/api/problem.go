@@ -92,6 +92,10 @@ const (
 	// because the identical request would succeed at a different moment.
 	ProblemTypeConflict = problemBaseURI + "conflict"
 
+	// ProblemTypePreviewGatewayUnavailable is a 503 from a preview route: no gateway is
+	// configured, it cannot be reached, or it refused the request.
+	ProblemTypePreviewGatewayUnavailable = problemBaseURI + "preview-gateway-unavailable"
+
 	// ProblemTypeInternalError matches the literal handlers.go's
 	// writeInternalError already writes (problemBaseURI +
 	// "internal-error"); handlers.go is owned by a different task in this

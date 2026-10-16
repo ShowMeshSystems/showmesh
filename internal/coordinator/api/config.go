@@ -58,6 +58,8 @@ const maxConfigRequestBodyBytes = 64 * 1024
 // comment), and identity.ScopeConfigWrite is a typed string CONSTANT,
 // which Go does not allow taking the address of directly.
 var scopeConfigWrite = identity.ScopeConfigWrite
+var scopeDashboardWrite = identity.ScopeDashboardWrite
+var scopeObservationRead = identity.ScopeObservationRead
 
 // handleGetFPPEndpointsConfig serves GET /api/v1/config/fpp.endpoints: the
 // active revision and its decoded payload. 404 resourceNotFoundProblem

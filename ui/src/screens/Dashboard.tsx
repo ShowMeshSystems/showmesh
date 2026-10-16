@@ -14,6 +14,7 @@ import {
   Tiles,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { PreviewWall } from './PreviewWall'
 import { SignalsTile } from './SignalsTile'
 import { effectiveServerTimeIso, formatDuration } from '../domain/time'
 import {
@@ -236,6 +237,8 @@ export function Dashboard() {
           </p>
         )}
       </Section>
+
+      <PreviewWall />
     </>
   )
 }

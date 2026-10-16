@@ -3712,6 +3712,231 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/preview.gateway": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active preview.gateway configuration
+         * @description Requires `config:write`. `404` when no revision has ever been saved, which means previews are off. The gateway token is never returned: `tokenSet` reports presence only.
+         */
+        get: operations["getPreviewGatewayConfig"];
+        /**
+         * Write a new preview.gateway configuration revision
+         * @description Requires `config:write`. A partial update: every field is independently optional, and a key absent from the body keeps its stored value. An empty `url` turns previews off. A `null` or empty `token` clears the stored token. A `null` `url` is refused. The token is stored apart from the revision and is never returned. Allowed while show mode is on, because previews are not show configuration. The coordinator sends the gateway its new stream set within seconds of the write.
+         */
+        put: operations["putPreviewGatewayConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.gateway/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * preview.gateway revision history, newest first
+         * @description Requires `config:write`. Metadata only. `200` with an empty array when nothing has been saved.
+         */
+        get: operations["getPreviewGatewayConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.camera": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate preview.camera objects
+         * @description Requires `config:write`. Each summary's `label` is the camera name and `show` is empty, since a camera belongs to no show.
+         */
+        get: operations["listPreviewCameras"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.camera/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The camera id the operator chose: 1 to 64 lowercase letters, digits or hyphens. A tile key for this camera is `camera:<id>`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * One preview.camera object's active revision
+         * @description Requires `config:write`. The stream URL is never returned: `urlSet` reports presence and `urlDisplay` carries scheme, host and port only.
+         */
+        get: operations["getPreviewCamera"];
+        /**
+         * Write a new preview.camera revision
+         * @description Requires `config:write`. A partial update: a key absent from the body keeps its stored value, except that creating a camera requires `name` and `url`. `url` must start with `rtsp://` or `rtsps://`; it is stored apart from the revision, never returned, and `urlDisplay` is computed from it at write time. `enabled` defaults to true on creation. Allowed while show mode is on.
+         */
+        put: operations["putPreviewCamera"];
+        post?: never;
+        /**
+         * Delete a preview.camera object (tombstone)
+         * @description Requires `config:write`. Requires an explicit `{"confirm":true}` body. A tombstone: the revisions stay readable, and the stored stream URL is removed. Optionally carries `If-Match`.
+         */
+        delete: operations["deletePreviewCamera"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/preview.camera/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * preview.camera revision history, newest first
+         * @description Requires `config:write`. Metadata only. `200` with an empty array for an id that has never been saved.
+         */
+        get: operations["getPreviewCameraRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/dashboard.layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active dashboard.layout configuration
+         * @description Requires `observation:read`, always, even when reads are open. `404` when no revision has ever been saved, which means every tile is shown in its default order.
+         */
+        get: operations["getDashboardLayoutConfig"];
+        /**
+         * Write a new dashboard.layout revision
+         * @description Requires `dashboard:write`, which the operator and admin roles hold. A partial update: `previews.order` and `previews.hidden` are each optional, and an absent list keeps its stored value. A list may not repeat a key. Keys that match no tile are kept. An NDI key that is no longer announced still lists a tile with state `not_found`, so a vanished source stays visible. Allowed while show mode is on.
+         */
+        put: operations["putDashboardLayoutConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/dashboard.layout/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * dashboard.layout revision history, newest first
+         * @description Requires `config:write`. Metadata only. `200` with an empty array when nothing has been saved.
+         */
+        get: operations["getDashboardLayoutConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The preview gateway state and every dashboard preview tile
+         * @description Requires `observation:read`, always, even when reads are open. Tiles are in layout order, and a tile the layout does not name is placed after the others in the order it first appeared. With no gateway configured, `gateway.state` is `not_configured` and `tiles` is empty. When a gateway address is set but the coordinator has not yet heard from that address, `gateway.state` is `connecting`; an earlier answer from a different address or token never counts. When the gateway cannot be reached, `gateway.state` is `unreachable`, and the tiles for configured cameras are still listed with state `error`. An NDI tile is labelled with a node and surface when the part of its name in parentheses equals the NDI source name of a surface in the active show; when several nodes render that surface, the host part of the name picks the node. Otherwise the label is the raw NDI name. Neither the camera stream URL nor the gateway token appears here.
+         */
+        get: operations["listPreviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/previews/{key}/webrtc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A tile key, `ndi:<full NDI source name>` or `camera:<camera id>`, escaped as a URL path segment. */
+                key: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange a WebRTC offer for an answer for one tile
+         * @description Requires `observation:read`, always, even when reads are open. It changes nothing the operator configured. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin`. The body is the browser's SDP offer. The coordinator forwards it to the gateway and returns the gateway's SDP answer. Media then flows directly between the browser and the gateway. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it refused the offer.
+         */
+        post: operations["offerPreviewWebRTC"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/previews/{key}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A tile key, escaped as a URL path segment. */
+                key: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The latest frame of one tile as a JPEG
+         * @description Requires `observation:read`, always, even when reads are open. Proxied to the gateway. The operator UI polls this every two seconds when WebRTC fails. `404` when no tile has this key, and `503` with type `https://showmesh.dev/problems/preview-gateway-unavailable` when no gateway is configured, it cannot be reached, or it has no frame for the tile.
+         */
+        get: operations["getPreviewSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5178,8 +5403,134 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "dashboard.layout";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
+        };
+        /** @description The "preview.gateway" kind's payload. `tokenSet` reports presence only: the gateway token never appears on any wire type. An empty `url` means previews are off. */
+        ConfigPreviewGatewayPayload: {
+            url: string;
+            tokenSet: boolean;
+        };
+        /** @description The request body of PUT /config/preview.gateway. Every field is optional; an absent key keeps the stored value. `url` must be an `http://` or `https://` address, or empty to turn previews off. `token` set to `null` or `""` clears the stored token. */
+        ConfigPreviewGatewayPutRequest: {
+            url?: string;
+            token?: string | null;
+        };
+        /** @description The body of GET and PUT /config/preview.gateway. */
+        PreviewGatewayConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "preview.gateway";
+            revision: number;
+            payload: components["schemas"]["ConfigPreviewGatewayPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The "preview.camera" kind's payload. The full stream URL never appears on any wire type. `urlDisplay` is the scheme, host and port only, computed when the URL was written. */
+        ConfigPreviewCameraPayload: {
+            name: string;
+            enabled: boolean;
+            urlSet: boolean;
+            urlDisplay: string;
+        };
+        /** @description The request body of PUT /config/preview.camera/{id}. Every field is optional on an existing camera; creating one requires `name` and `url`. `url` must start with `rtsp://` or `rtsps://`. */
+        ConfigPreviewCameraPutRequest: {
+            name?: string;
+            enabled?: boolean;
+            url?: string;
+        };
+        /** @description The body of GET and PUT /config/preview.camera/{id}. */
+        PreviewCameraConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "preview.camera";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigPreviewCameraPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        ConfigDashboardPreviewLayout: {
+            /** @description Tile keys in display order. */
+            order: string[];
+            /** @description Tile keys the dashboard does not show. */
+            hidden: string[];
+        };
+        /** @description The "dashboard.layout" kind's payload. */
+        ConfigDashboardLayoutPayload: {
+            previews: components["schemas"]["ConfigDashboardPreviewLayout"];
+        };
+        /** @description The request body of PUT /config/dashboard.layout. `previews.order` and `previews.hidden` are each optional; an absent list keeps its stored value. */
+        ConfigDashboardLayoutPutRequest: {
+            previews?: {
+                order?: string[];
+                hidden?: string[];
+            };
+        };
+        /** @description The body of GET and PUT /config/dashboard.layout. */
+        DashboardLayoutConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "dashboard.layout";
+            revision: number;
+            payload: components["schemas"]["ConfigDashboardLayoutPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The coordinator's latest view of the preview gateway. */
+        PreviewGatewayStatus: {
+            /** @enum {string} */
+            state: "not_configured" | "connecting" | "reachable" | "unreachable";
+            /** @description States the fact, then the action. Empty when reachable. */
+            message: string;
+            /** Format: date-time */
+            observedAt: string;
+        };
+        /** @description One tile of the dashboard preview grid. */
+        PreviewTile: {
+            /** @description `ndi:<full NDI source name>` or `camera:<camera id>`. */
+            key: string;
+            /** @enum {string} */
+            kind: "ndi" | "camera";
+            label: string;
+            /** @description Set on an NDI tile matched to a render node. */
+            nodeId?: string;
+            /** @description Set on an NDI tile matched to a surface. */
+            surfaceId?: string;
+            /** @description Set on a camera tile. */
+            cameraId?: string;
+            /**
+             * @description `idle` means nobody is watching, so the source is not started. `not_found` means the NDI source is no longer announced or the camera refused.
+             * @enum {string}
+             */
+            state: "live" | "idle" | "connecting" | "not_found" | "disabled" | "error";
+            /** @description States the fact, then the action. Empty when live or idle. */
+            message: string;
+            hidden: boolean;
+            /** Format: date-time */
+            observedAt: string;
+        };
+        /** @description The body of GET /previews. */
+        PreviewsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            gateway: components["schemas"]["PreviewGatewayStatus"];
+            tiles: components["schemas"]["PreviewTile"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
         ResolumeCompositionWrittenBy: {
@@ -6309,7 +6660,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/fpp-pairing-not-waiting" | "https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed" | "https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/assets-settings-not-stored" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed" | "https://showmesh.dev/problems/enrollment-code-gone" | "https://showmesh.dev/problems/node-enrollment-unavailable";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/preview-gateway-unavailable" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/fpp-pairing-not-waiting" | "https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed" | "https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/assets-settings-not-stored" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed" | "https://showmesh.dev/problems/enrollment-code-gone" | "https://showmesh.dev/problems/node-enrollment-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -6389,7 +6740,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock" | "preview.camera";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description One element of AudioNodeListResponse.objects: enough to enumerate every audio.node object's routing, including its program and LTC channel placement, without fetching each one's full payload. programChannels and ltcChannel carry the same meaning here as on ConfigAudioNode. */
@@ -8591,6 +8942,16 @@ export interface components {
         };
     };
     responses: {
+        /** @description No preview gateway is configured, it cannot be reached, or it refused the request. `type` is `https://showmesh.dev/problems/preview-gateway-unavailable` and `detail` states the fact and then the action. */
+        PreviewGatewayUnavailable: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description The request named an API version (in the `ShowMesh-API-Version` header, or in the path as `/api/vN/...`) that this coordinator does not serve. */
         UnsupportedAPIVersion: {
             headers: {
@@ -16183,6 +16544,426 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewGatewayConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewGatewayConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putPreviewGatewayConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPreviewGatewayPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewGatewayConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewGatewayConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPreviewCameras: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The camera id the operator chose: 1 to 64 lowercase letters, digits or hyphens. A tile key for this camera is `camera:<id>`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewCameraConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putPreviewCamera: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                /** @description The camera id the operator chose: 1 to 64 lowercase letters, digits or hyphens. A tile key for this camera is `camera:<id>`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPreviewCameraPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewCameraConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deletePreviewCamera: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                /** @description The camera id the operator chose: 1 to 64 lowercase letters, digits or hyphens. A tile key for this camera is `camera:<id>`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPreviewCameraRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDashboardLayoutConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardLayoutConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putDashboardLayoutConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigDashboardLayoutPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardLayoutConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDashboardLayoutConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPreviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    offerPreviewWebRTC: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A tile key, `ndi:<full NDI source name>` or `camera:<camera id>`, escaped as a URL path segment. */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description The SDP answer. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/sdp": string;
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["PreviewGatewayUnavailable"];
+        };
+    };
+    getPreviewSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A tile key, escaped as a URL path segment. */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest frame. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["PreviewGatewayUnavailable"];
         };
     };
 }

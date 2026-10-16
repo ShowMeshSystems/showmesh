@@ -1,8 +1,9 @@
 name: Build
 
-# Builds and packages ShowMesh Core for one version: the coordinator and UI
-# images (pushed under every tag in image_tags), both node agent tarballs and
-# the installer, each uploaded as an artifact for the caller to publish.
+# Builds and packages ShowMesh Core for one version: the coordinator, UI and
+# preview gateway images (pushed under every tag in image_tags), both node
+# agent tarballs and the installer, each uploaded as an artifact for the caller
+# to publish.
 # Called by release.yml for a release tag and by edge.yml for every merge to main.
 on:
   workflow_call:
@@ -16,7 +17,7 @@ on:
         type: string
         required: true
       image_tags:
-        description: Space-separated tags for both images.
+        description: Space-separated tags for each image.
         type: string
         required: true
       commit:
@@ -33,6 +34,7 @@ env:
   GO_VERSION: "1.26.9"
   COORDINATOR_IMAGE: ghcr.io/showmeshsystems/showmesh-coordinator
   UI_IMAGE: ghcr.io/showmeshsystems/showmesh-ui
+  PREVIEW_GATEWAY_IMAGE: ghcr.io/showmeshsystems/showmesh-preview-gateway
 
 jobs:
   images:
@@ -162,6 +164,165 @@ jobs:
           name: ndi-plugin-arm64
           path: dist/ndi-plugin/arm64/libgstndi.so
           retention-days: 7
+
+  # The gateway image is built once per architecture on a native runner, each
+  # with that architecture's ndi-plugin artifact as the named build context
+  # that replaces the Dockerfile's plugin stage, then pushed by digest. The
+  # merge job joins the two digests under every tag.
+  preview-gateway-image:
+    needs: [ndi-plugin-amd64, ndi-plugin-arm64]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ndi-plugin-${{ matrix.arch }}
+          path: ndi-plugin/${{ matrix.arch }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Without provenance the pushed digest is the image itself, which the
+      # merge job needs to combine the two architectures into one list.
+      - name: Build and push the preview gateway image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/preview-gateway/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-contexts: ndi-plugin=./ndi-plugin
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.PREVIEW_GATEWAY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ inputs.version }}
+            COMMIT=${{ inputs.commit }}
+            BUILD_DATE=${{ inputs.build_date }}
+
+      - name: The image has the NDI plugin for this architecture and no NDI runtime
+        env:
+          IMAGE: ${{ env.PREVIEW_GATEWAY_IMAGE }}@${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          docker pull "$IMAGE"
+          container="$(docker create "$IMAGE")"
+          docker cp "$container:/usr/local/lib/gstreamer-1.0/libgstndi.so" "$RUNNER_TEMP/libgstndi.so"
+          docker rm "$container"
+          described="$(file -b "$RUNNER_TEMP/libgstndi.so")"
+          echo "$described"
+          case "$ARCH:$described" in
+            amd64:*"ELF 64-bit LSB"*"x86-64"*) ;;
+            arm64:*"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+            *) echo "::error::the image's NDI plugin is not $ARCH: $described" >&2; exit 1 ;;
+          esac
+          found="$(docker run --rm --entrypoint find "$IMAGE" / -xdev -name 'libndi*' -print)"
+          if [ -n "$found" ]; then
+            echo "::error::the image contains NDI runtime files: $found" >&2
+            exit 1
+          fi
+
+      - name: The gateway binary reports this version
+        env:
+          IMAGE: ${{ env.PREVIEW_GATEWAY_IMAGE }}@${{ steps.build.outputs.digest }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euxo pipefail
+          reported="$(docker run --rm --entrypoint /usr/local/bin/showmesh-preview-gateway "$IMAGE" --version)"
+          echo "$reported"
+          case "$reported" in
+            "$VERSION "*) ;;
+            *) echo "::error::the gateway reports '$reported', not version $VERSION" >&2; exit 1 ;;
+          esac
+
+      - name: Keep the digest for the merge job
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-gateway-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  preview-gateway-image-merge:
+    needs: [preview-gateway-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: preview-gateway-digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish one image list under every tag
+        env:
+          TAGS: ${{ inputs.image_tags }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/digests"
+          sources=()
+          for digest in *; do
+            sources+=("${{ env.PREVIEW_GATEWAY_IMAGE }}@sha256:${digest}")
+          done
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "::error::expected one digest per architecture, found ${#sources[@]}" >&2
+            exit 1
+          fi
+          tag_args=()
+          for t in $TAGS; do
+            tag_args+=(-t "${{ env.PREVIEW_GATEWAY_IMAGE }}:${t}")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+
+      - name: Every tag lists both platforms
+        env:
+          TAGS: ${{ inputs.image_tags }}
+        run: |
+          set -euo pipefail
+          for t in $TAGS; do
+            inspected="$(docker buildx imagetools inspect "${{ env.PREVIEW_GATEWAY_IMAGE }}:${t}")"
+            echo "$inspected"
+            for platform in linux/amd64 linux/arm64; do
+              grep -q "Platform: *${platform}\$" <<<"$inspected" || { echo "::error::tag $t does not list $platform" >&2; exit 1; }
+            done
+          done
 
   node-agent-amd64:
     needs: [ndi-plugin-amd64]

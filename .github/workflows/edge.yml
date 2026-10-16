@@ -118,7 +118,7 @@ jobs:
           curl -fsSL https://github.com/${GH_REPO}/releases/download/edge/get-showmesh.sh | sudo bash
           \`\`\`
 
-          Images: \`ghcr.io/showmeshsystems/showmesh-coordinator:${VERSION}\` and \`ghcr.io/showmeshsystems/showmesh-ui:${VERSION}\`, also tagged \`edge-${GITHUB_SHA:0:7}\` and \`edge\`.
+          Images: \`ghcr.io/showmeshsystems/showmesh-coordinator:${VERSION}\`, \`ghcr.io/showmeshsystems/showmesh-ui:${VERSION}\` and \`ghcr.io/showmeshsystems/showmesh-preview-gateway:${VERSION}\`, also tagged \`edge-${GITHUB_SHA:0:7}\` and \`edge\`.
           EOF
           if gh release view edge >/dev/null 2>&1; then
             gh release edit edge --title "Edge ${VERSION}" --notes-file notes.md --prerelease --latest=false

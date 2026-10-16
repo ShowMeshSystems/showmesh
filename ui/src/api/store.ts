@@ -241,6 +241,13 @@ type SchemaShowPlaylistMovePreviewResponse = components['schemas']['ShowPlaylist
 // media.playlist's own read/write response, same aliasing pattern.
 type SchemaConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
 type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
+type SchemaConfigPreviewCameraPutRequest = components['schemas']['ConfigPreviewCameraPutRequest']
+type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreviewGatewayPutRequest']
+type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
+type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
+type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
+type SchemaPreviewsResponse = components['schemas']['PreviewsResponse']
 type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
@@ -565,6 +572,134 @@ export class ApiStore {
   // by calling wakeReadLoop(), deliberately reaching into the read loop's
   // state — see that method's own comment for the real-browser-only
   // defect this exists to fix.
+
+  // -- Dashboard video previews (docs/build/TRACK-PREVIEW-WALL.md).
+
+  /** `GET /api/v1/previews`: the gateway state and every tile, in layout order. */
+  async getPreviews(): Promise<SchemaPreviewsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPreviewsResponse>('/previews', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/previews/{key}/webrtc`: the browser's SDP offer in, the gateway's SDP answer out. */
+  async postPreviewOffer(key: string, offerSdp: string, signal?: AbortSignal): Promise<string> {
+    const controller = this.beginSideCall()
+    const forward = () => controller.abort(signal?.reason)
+    if (signal?.aborted === true) forward()
+    else signal?.addEventListener('abort', forward, { once: true })
+    try {
+      const response = await this.client.request(`/previews/${encodeURIComponent(key)}/webrtc`, controller.signal, {
+        method: 'POST',
+        textBody: offerSdp,
+        textContentType: 'application/sdp',
+      })
+      return await response.text()
+    } finally {
+      signal?.removeEventListener('abort', forward)
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/previews/{key}/snapshot`: the latest frame as a JPEG. */
+  async getPreviewSnapshot(key: string, signal?: AbortSignal): Promise<Blob> {
+    const controller = this.beginSideCall()
+    const forward = () => controller.abort(signal?.reason)
+    if (signal?.aborted === true) forward()
+    else signal?.addEventListener('abort', forward, { once: true })
+    try {
+      const response = await this.client.request(`/previews/${encodeURIComponent(key)}/snapshot`, controller.signal)
+      return await response.blob()
+    } finally {
+      signal?.removeEventListener('abort', forward)
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/preview.gateway`. Throws (404) when nothing has been configured yet. The token is never returned; `payload.tokenSet` reports presence only. */
+  async getPreviewGatewayConfig(): Promise<SchemaPreviewGatewayConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPreviewGatewayConfigResponse>('/config/preview.gateway', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getPreviewGatewayConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/preview.gateway/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/preview.gateway`. A token left out keeps the stored one. */
+  async putPreviewGatewayConfig(request: SchemaConfigPreviewGatewayPutRequest): Promise<SchemaPreviewGatewayConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPreviewGatewayConfigResponse>('/config/preview.gateway', request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/preview.camera/{id}`. Throws (404) when no such camera exists. The URL is never returned; `payload.urlDisplay` is scheme, host and port only. */
+  async getPreviewCamera(id: string): Promise<SchemaPreviewCameraConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPreviewCameraConfigResponse>(`/config/preview.camera/${encodeURIComponent(id)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/preview.camera/{id}`. A URL left out keeps the stored one. */
+  async putPreviewCamera(id: string, request: SchemaConfigPreviewCameraPutRequest): Promise<SchemaPreviewCameraConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPreviewCameraConfigResponse>(`/config/preview.camera/${encodeURIComponent(id)}`, request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/config/preview.camera/{id}`. Always sends `{"confirm":true}`, the server's own required body. */
+  async deletePreviewCamera(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(`/config/preview.camera/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/dashboard.layout`. Throws (404) when no layout has been saved yet. */
+  async getDashboardLayout(): Promise<SchemaDashboardLayoutConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/dashboard.layout`: the tile order and the hidden tiles.
+   * A revision is sent as If-Match; 'none' sends If-None-Match for the first save.
+   */
+  async putDashboardLayout(payload: SchemaConfigDashboardLayoutPutRequest, ifMatchRevision: number | 'none'): Promise<SchemaDashboardLayoutConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaDashboardLayoutConfigResponse>('/config/dashboard.layout', payload, controller.signal, ifMatchRevision)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
 
   private beginSideCall(): AbortController {
     const controller = new AbortController()
@@ -2409,7 +2544,8 @@ export class ApiStore {
       | 'show.playlist'
       | 'media.playlist'
       | 'night.session'
-      | 'node.clock',
+      | 'node.clock'
+      | 'preview.camera',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse>
   // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
@@ -2428,6 +2564,7 @@ export class ApiStore {
       | 'media.playlist'
       | 'night.session'
       | 'node.clock'
+      | 'preview.camera'
       | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

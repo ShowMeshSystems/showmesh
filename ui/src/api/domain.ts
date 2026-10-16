@@ -787,3 +787,19 @@ export function initialModel(): Model {
     weatherDelayFrames: 0,
   }
 }
+
+// Dashboard video previews (ADR-060).
+export type PreviewsResponse = components['schemas']['PreviewsResponse']
+export type PreviewTile = components['schemas']['PreviewTile']
+export type PreviewTileState = PreviewTile['state']
+export type PreviewGateway = components['schemas']['PreviewGatewayStatus']
+export type PreviewGatewayState = PreviewGateway['state']
+export type PreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
+export type ConfigPreviewGatewayPayload = components['schemas']['ConfigPreviewGatewayPayload']
+export type ConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreviewGatewayPutRequest']
+export type PreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+export type ConfigPreviewCameraPayload = components['schemas']['ConfigPreviewCameraPayload']
+export type ConfigPreviewCameraPutRequest = components['schemas']['ConfigPreviewCameraPutRequest']
+export type DashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
+export type ConfigDashboardLayoutPayload = components['schemas']['ConfigDashboardLayoutPayload']
+export type ConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']

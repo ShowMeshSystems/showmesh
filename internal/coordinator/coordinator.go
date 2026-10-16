@@ -42,6 +42,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/preview"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -716,7 +717,12 @@ func Run() int {
 			}
 		})
 
+	previewSvc := preview.NewService(previewSettingsSource{st: st, nodes: func(ctx context.Context) ([]inventory.NodeView, error) {
+		return inv.Snapshot(ctx, time.Now())
+	}, logger: logger}, nil, time.Now, logger)
+
 	apiDeps := api.Dependencies{
+		Previews:                         previewSvc,
 		Releases:                         releaseChecker,
 		ReleaseSettingsEnvVarsSet:        cfg.ReleaseSettingsEnvVarsSet,
 		ReleaseSettingsMigrationDeferred: releaseSettingsMigrationDeferred,
@@ -1520,6 +1526,9 @@ func Run() int {
 
 	spawnBackground(func() {
 		releaseChecker.Run(ctx)
+	})
+	spawnBackground(func() {
+		previewSvc.Run(ctx)
 	})
 
 	// The loops above are running and the listener starts now, so this is

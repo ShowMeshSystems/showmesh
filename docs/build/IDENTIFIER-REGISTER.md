@@ -120,6 +120,9 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
+| `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
+| `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
+| `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -314,6 +317,7 @@ bundles of these (ADR-024).
 | `show:weatherdelay:resume` | shipped | ADR-053 weather delay: resume from a weather delay or clear a cancel night. Separate from `invoke` because starting is safe to grant widely and resuming is not |
 | `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 | `node:enroll` | reserved | ADR-055: minting, listing and cancelling node enrollment codes. Admin role only |
+| `dashboard:write` | shipped | ADR-060: arranging the dashboard preview grid (`dashboard.layout`). Held by the `operator` role and by admin, because the operator arranges the grid; every other preview setting stays behind `config:write` |
 | `companion:report` | shipped | ADR-059: a ShowMesh Companion uploading a file from its own machine (`POST /api/v1/companion-reports`). Held by the `companion` role and by admin |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE

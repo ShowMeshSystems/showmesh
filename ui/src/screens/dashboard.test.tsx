@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FPPInstance, Model, NightSessionState, Node, ResolumeInstance } from '../api'
@@ -7,9 +7,16 @@ import { ModelContext } from '../app/ModelContext'
 import { Dashboard } from './Dashboard'
 import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail } from './dashboardModel'
 
+const previewStubs = vi.hoisted(() => ({ getPreviews: vi.fn(() => new Promise(() => {})) }))
+
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, getCurrentNightSession: () => new Promise(() => {}) }
+  return {
+    ...actual,
+    getCurrentNightSession: () => new Promise(() => {}),
+    getPreviews: previewStubs.getPreviews,
+    getDashboardLayout: () => Promise.reject(new actual.ApiError('No dashboard layout has been saved yet.', 404)),
+  }
 })
 
 const evidence = (state: string) => ({
@@ -125,10 +132,27 @@ function renderDashboard(model: Partial<Model>) {
 describe('Dashboard', () => {
   afterEach(cleanup)
 
-  it('renders the mock’s three blocks, in order, as real headings', () => {
+  it('renders the mock’s three blocks, in order, as real headings, with live previews after them', async () => {
+    previewStubs.getPreviews.mockResolvedValueOnce({
+      serverTime: '2026-10-15T12:00:00Z',
+      gateway: { state: 'reachable', message: '', observedAt: '2026-10-15T12:00:00Z' },
+      tiles: [],
+    })
     renderDashboard({})
+    await screen.findByRole('heading', { level: 2, name: 'Live previews' })
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Readiness', 'Needs you', 'System health'])
+    expect(headings).toEqual(['Readiness', 'Needs you', 'System health', 'Live previews'])
+  })
+
+  it('leaves the live previews out while no gateway is configured', async () => {
+    previewStubs.getPreviews.mockResolvedValueOnce({
+      serverTime: '2026-10-15T12:00:00Z',
+      gateway: { state: 'not_configured', message: 'No preview gateway is set up. Add its address in Settings to see previews.', observedAt: '2026-10-15T12:00:00Z' },
+      tiles: [],
+    })
+    renderDashboard({})
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'Live previews' })).toBeNull())
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Readiness', 'Needs you', 'System health'])
   })
 
   it('says the night session has not reported rather than inventing a verdict', () => {

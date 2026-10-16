@@ -5,8 +5,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
+	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -980,6 +984,12 @@ func TestEveryGETResponseRequiredField(t *testing.T) {
 
 		opKey := "GET " + p
 
+		// A route with no JSON response, such as the snapshot JPEG, has no schema to check.
+		schemaNode, hasContent := responseSchemaNodeForGET(root, p)
+		if !hasContent {
+			continue
+		}
+
 		typeName := ""
 		switch {
 		case getResponseTypeOverrides[opKey] != "":
@@ -998,10 +1008,6 @@ func TestEveryGETResponseRequiredField(t *testing.T) {
 			continue
 		}
 
-		schemaNode, hasContent := responseSchemaNodeForGET(root, p)
-		if !hasContent {
-			continue
-		}
 		checkResponseSchema(root, schemaNode, typeName, p, structs, map[string]bool{}, t, opKey)
 	}
 
@@ -1022,6 +1028,147 @@ func TestEveryGETResponseRequiredField(t *testing.T) {
 		if _, declared := structs[typeName]; !declared {
 			t.Errorf("getResponseTypeOverrides[%q] names Go type %q which cmd/showmeshctl does not declare",
 				opKey, typeName)
+		}
+	}
+}
+
+// uiGetPathPattern finds the path literal of a read the operator UI issues through its API client.
+var uiGetPathPattern = regexp.MustCompile("getJson[^(]*\\(\\s*['\"`](/(?:[A-Za-z0-9_.\\-/]|\\$\\{[^}]*\\})+)")
+
+var uiInterpolation = regexp.MustCompile(`\$\{[^}]*\}`)
+
+// uiGetPaths returns, in openapi spelling, every path the UI reads with a GET,
+// mapped to the first file that reads it.
+func uiGetPaths(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir("../../ui/src", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "generated" || d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if (!strings.HasSuffix(p, ".ts") && !strings.HasSuffix(p, ".tsx")) || strings.Contains(p, ".test.") {
+			return nil
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for _, m := range uiGetPathPattern.FindAllStringSubmatch(string(raw), -1) {
+			path := uiInterpolation.ReplaceAllString(m[1], "{id}")
+			// An interpolation glued to a word is a query string, not a segment.
+			if i := strings.Index(path, "{id}"); i > 0 && path[i-1] != '/' {
+				path = path[:i]
+			}
+			if _, seen := out[path]; !seen {
+				out[path] = p
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanning ui/src: %v", err)
+	}
+	return out
+}
+
+// isPreviewRoute reports whether an openapi path belongs to the dashboard video previews.
+func isPreviewRoute(p string) bool {
+	return strings.HasPrefix(p, "/previews") || strings.HasPrefix(p, "/config/preview.") || strings.HasPrefix(p, "/config/dashboard.layout")
+}
+
+// previewReadVerbs names the showmeshctl command that shows what each preview
+// read of the UI shows. A write command that reads a revision first does not count.
+var previewReadVerbs = map[string][]string{
+	"/previews":                         {"list"},
+	"/config/preview.gateway":           {"gateway", "get"},
+	"/config/preview.gateway/revisions": {"gateway", "revisions"},
+	"/config/preview.camera/{id}":       {"camera", "get", "driveway"},
+	"/config/preview.camera":            {"camera", "list"},
+	"/config/dashboard.layout":          {"layout", "get"},
+}
+
+// TestEveryPreviewReadTheUIMakesHasACLIVerb fails when the UI reads a preview
+// route that no read command of showmeshctl requests. It runs each command
+// against a recording server, so a verb that is missing or reads another route fails.
+func TestEveryPreviewReadTheUIMakesHasACLIVerb(t *testing.T) {
+	all := uiGetPaths(t)
+	if len(all) < 10 {
+		t.Fatalf("found only %d UI reads in ui/src; the scan is almost certainly broken", len(all))
+	}
+	var uiPreview []string
+	for p := range all {
+		if isPreviewRoute(p) {
+			uiPreview = append(uiPreview, p)
+		}
+	}
+	if len(uiPreview) < 3 {
+		t.Fatalf("found only %d preview reads in ui/src (%v); the scan is almost certainly broken", len(uiPreview), uiPreview)
+	}
+	for _, p := range uiPreview {
+		if _, ok := previewReadVerbs[p]; !ok {
+			t.Errorf("the UI reads GET %s (%s) but previewReadVerbs names no showmeshctl command for it; add a read verb and list it", p, all[p])
+		}
+	}
+
+	for p, verb := range previewReadVerbs {
+		ts, seen := previewServer(t, http.StatusOK, http.StatusOK)
+		if code, _, errOut := runPreview(t, ts, verb...); code != exitOK {
+			t.Errorf("preview %v for GET %s exited %d: %s", verb, p, code, errOut)
+			continue
+		}
+		want := openAPISegments(p)
+		got := false
+		for _, r := range *seen {
+			if r.method == http.MethodGet && segmentsCompatible(pathShapeFromFlat(r.path), want) {
+				got = true
+			}
+		}
+		if !got {
+			t.Errorf("preview %v never requested GET %s", verb, p)
+		}
+	}
+}
+
+// previewSchemaTypes names the Go type that decodes each preview schema.
+var previewSchemaTypes = map[string]string{
+	"PreviewsResponse":              "previewsResponse",
+	"PreviewGatewayStatus":          "previewGatewayStatus",
+	"PreviewTile":                   "previewTile",
+	"PreviewGatewayConfigResponse":  "previewGatewayConfigResponse",
+	"ConfigPreviewGatewayPayload":   "previewGatewayPayload",
+	"PreviewCameraConfigResponse":   "previewCameraConfigResponse",
+	"ConfigPreviewCameraPayload":    "previewCameraPayload",
+	"DashboardLayoutConfigResponse": "previewLayoutResponse",
+	"ConfigDashboardLayoutPayload":  "previewLayoutPayload",
+	"ConfigDashboardPreviewLayout":  "previewLayoutTiles",
+}
+
+// TestPreviewResponsesDecodeEveryProperty checks optional properties too, which
+// the required-field walk above cannot see, so a tile never loses its node or camera.
+func TestPreviewResponsesDecodeEveryProperty(t *testing.T) {
+	root := loadOpenAPIDocGeneric(t)
+	structs := collectPackageStructs(t)
+	for schemaName, goType := range previewSchemaTypes {
+		schema := resolveMapNode(root, resolvePointer(root, "#/components/schemas/"+schemaName), 0)
+		if schema == nil {
+			t.Errorf("api/openapi.yaml has no schema %s", schemaName)
+			continue
+		}
+		fields, ok := jsonFieldsFor(goType, structs, map[string]bool{})
+		if !ok {
+			t.Errorf("cmd/showmeshctl declares no type %s for %s", goType, schemaName)
+			continue
+		}
+		for prop := range asMap(schema["properties"]) {
+			if _, has := fields[prop]; !has {
+				t.Errorf("%s.%s has no field on %s, so showmeshctl drops it", schemaName, prop, goType)
+			}
 		}
 	}
 }
