@@ -199,11 +199,15 @@ operator-edited state that a re-run must avoid touching.
    `deploy/node/ptp-audio/ptp-group.conf` (`showmesh-ptp` by default),
    clocked from `clock.device=/dev/ptpN` when a PHC was found or
    `clock.id=monotonic` when it was not, and `default.clock.rate=48000` to
-   match the sound card's native rate. Never `clock.id=realtime`: PipeWire's
+   match the sound card's native rate. Not `clock.id=realtime`: PipeWire's
    ALSA follower measures its own wakeups on `CLOCK_MONOTONIC` and compares
-   them with the driver's cycle time, so a realtime-clocked driver makes it
-   resync every cycle and the card never streams. Found on a PHC-less
-   production node with PipeWire 1.4.2, where the graph sat at zero rate.
+   them with the driver's cycle time, so the driver belongs on that clock.
+   The clock choice is necessary, not sufficient: on one PHC-less
+   production node (MOTU M4 over USB, Realtek NIC, PipeWire 1.4.2) the
+   card could not follow any `support.node.driver` with any clock and the
+   graph sat at zero rate with the card in XRUN. That node runs the card
+   self-clocked until the cause is found. Always run `verify-ptp-audio.sh`
+   after installing; its graph-cycling check is what catches this.
 
    **`node.group` is not optional decoration.** PipeWire/WirePlumber elect
    a driver *within* a node.group, not graph-wide: a sound card's own

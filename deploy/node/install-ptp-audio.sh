@@ -394,19 +394,20 @@ mkdir -p "$PIPEWIRE_CONFD" "$WIREPLUMBER_CONFD"
 if [ -n "$PHC_DEV" ]; then
   CLOCK_PROPERTY="clock.device = \"$PHC_DEV\""
 else
-  # No PHC to open. The driver must NOT be clocked from CLOCK_REALTIME:
-  # with clock.id=realtime the driver stamps every graph cycle with
-  # realtime nanoseconds, while PipeWire's ALSA follower measures its own
-  # wakeups on CLOCK_MONOTONIC (alsa-pcm.c get_time_ns) and compares the
-  # two in its DLL. The error is the full epoch difference, so the follower
-  # resyncs on every cycle and the card never streams: proven on a
-  # PHC-less production node (M4, PipeWire 1.4.2), where the graph sat at
-  # zero rate with the ALSA device in XRUN from the first start.
+  # No PHC to open. The driver is clocked from CLOCK_MONOTONIC, not
+  # CLOCK_REALTIME: PipeWire's ALSA follower measures its own wakeups on
+  # CLOCK_MONOTONIC (alsa-pcm.c get_time_ns) and compares them with the
+  # driver's cycle time, so the driver's clock must be the same clock.
   # CLOCK_MONOTONIC runs on the same oscillator and takes the same
   # frequency slew ptp4l applies to the system clock on a software-
   # timestamped follower (adjtimex slews both; only steps differ), so the
   # graph still follows PTP rate on a PHC-less follower, and a PHC-less
   # grandmaster's graph runs on the clock it distributes.
+  # This choice alone does not make every card follow: on one PHC-less
+  # production node (M4 over USB, PipeWire 1.4.2) the card could not follow
+  # any support.node.driver with any clock and had to drive itself. Run
+  # verify-ptp-audio.sh after this script; its graph-cycling check is the
+  # reading that tells the two apart.
   CLOCK_PROPERTY="clock.id = monotonic"
 fi
 sed -e "s|@CLOCK_PROPERTY@|$CLOCK_PROPERTY|" -e "s|@NODE_GROUP@|$PTP_NODE_GROUP|g" \
