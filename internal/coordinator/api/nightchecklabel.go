@@ -10,6 +10,7 @@ var nightCheckLabels = map[string]string{
 	"resting:background-audio-nodes-defaulted":     "Background audio nodes",
 	"resting:background-audio-bed-target-coverage": "Background audio files on every node",
 	"resting:background-audio-bed-program-ltc":     "Background audio sync",
+	nightBackgroundAudioItemTargetsName:            "Background audio nodes for each track",
 	"resting:asset-duration":                       "Resting sequence length",
 	"announcement-assets":                          "Announcement audio files",
 	"announcement-policy-enforceable":              "Announcements over background audio",
@@ -30,6 +31,8 @@ var nightCheckLabels = map[string]string{
 var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{"resting:background-audio-item-transition:", "Background audio track changes on "},
 	{"resting:background-audio-output-capabilities:", "Background audio output on "},
+	{nightBackgroundAudioNodeSetupPrefix, "Background audio settings on "},
+	{nightShowCueAudioTargetsPrefix, "Cue audio nodes in playlist "},
 	{"audio:alignment:", "Audio alignment on "},
 	{nightCatalogCurrentCheckPrefix + ":", "Cue list on "},
 	{nightParticipationCheckPrefix + ":fpp:", "FPP "},
