@@ -987,7 +987,7 @@ const compositionLevelUnavailableReason = "This Arena build does not report this
 // either term (see this section's own top comment). fieldLabel names the
 // term the same way every other [ReadinessTermInput] in this file does.
 func compositionLevelReadinessTerm(fieldLabel string) ReadinessTermInput {
-	return ReadinessTermInput{UnknownReason: fieldLabel + ": " + compositionLevelUnavailableReason}
+	return ReadinessTermInput{UnknownReason: compositionLevelUnavailableReason}
 }
 
 // compositionNameObservation builds resolume.composition.name's

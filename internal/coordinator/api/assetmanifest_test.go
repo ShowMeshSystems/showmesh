@@ -262,7 +262,7 @@ func TestNodeAssetManifestUnknownReportIncomplete(t *testing.T) {
 	if decoded.Manifest.State != "unknown" {
 		t.Fatalf("state = %q, want %q; body: %s", decoded.Manifest.State, "unknown", body)
 	}
-	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "asset directory could not be opened") {
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "could not list all of its files") {
 		t.Errorf("reason should carry the agent's own text, got %v", decoded.Manifest.Reason)
 	}
 }
@@ -427,10 +427,10 @@ func TestNodeAssetManifestNotReadyStatesKnownFetchFailure(t *testing.T) {
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, wantReason) {
-		t.Fatalf("reason = %v, want it to contain the node's own recorded failure reason %q", decoded.Manifest.Reason, wantReason)
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "last download failed") {
+		t.Fatalf("reason = %v, want it to say the last download failed (%q)", decoded.Manifest.Reason, wantReason)
 	}
-	if decoded.Manifest.Reason != nil && !containsAll(*decoded.Manifest.Reason, "missing 1 expected asset") {
+	if decoded.Manifest.Reason != nil && !containsAll(*decoded.Manifest.Reason, "1 file is missing") {
 		t.Errorf("reason = %q, want it to still name the underlying missing-asset verdict too, not replace it", *decoded.Manifest.Reason)
 	}
 }
@@ -454,7 +454,7 @@ func TestNodeAssetManifestNotReadyOmitsFetchFailureWhenNoneRecorded(t *testing.T
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "last failed to fetch") {
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "The last download failed") {
 		t.Fatalf("reason = %q, want it NOT to claim a fetch failure when none is on record", *decoded.Manifest.Reason)
 	}
 }
@@ -482,7 +482,7 @@ func TestNodeAssetManifestNotReadyStatesSyncDisabled(t *testing.T) {
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "contentBaseUrl") {
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "content base URL") {
 		t.Fatalf("reason = %v, want it to name the disabled asset sync (ContentBaseURL defaults to empty)", decoded.Manifest.Reason)
 	}
 }
@@ -512,7 +512,7 @@ func TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled(t *testing.T)
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "contentBaseUrl") {
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "content base URL") {
 		t.Fatalf("reason = %q, want it NOT to mention the disabled-sync note when ContentBaseURL is set", *decoded.Manifest.Reason)
 	}
 }
@@ -658,8 +658,8 @@ func TestNodeAssetManifestVerdictAbsentStatesKnownLastFetchFailure(t *testing.T)
 	if v.LastFetch == nil {
 		t.Fatalf("verdicts[0].lastFetch = nil, want the known failure; body: %s", body)
 	}
-	if v.LastFetch.State != "failed" || v.LastFetch.FailureReason == nil || *v.LastFetch.FailureReason != wantReason {
-		t.Errorf("verdicts[0].lastFetch = %+v, want state=failed failureReason=%q", v.LastFetch, wantReason)
+	if v.LastFetch.State != "failed" || v.LastFetch.FailureReason == nil || *v.LastFetch.FailureReason != assetFetchFailedNote {
+		t.Errorf("verdicts[0].lastFetch = %+v, want state=failed failureReason=%q", v.LastFetch, assetFetchFailedNote)
 	}
 	if decoded.Manifest.LastSyncPassAt == nil {
 		t.Errorf("manifest.lastSyncPassAt = nil, want the sync service's own last-pass time")

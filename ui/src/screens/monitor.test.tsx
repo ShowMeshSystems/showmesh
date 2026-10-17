@@ -207,7 +207,7 @@ describe('Monitor · Fleet', () => {
     fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
     const inspector = screen.getByRole('dialog')
     expect(within(inspector).getByRole('heading', { name: 'barn-player', level: 2 })).toBeInTheDocument()
-    expect(within(inspector).getByText('FPP player · healthy as FPP reports')).toBeInTheDocument()
+    expect(within(inspector).getByText('FPP · healthy as FPP reports')).toBeInTheDocument()
     expect(within(inspector).getByText('Bindings held')).toBeInTheDocument()
     expect(within(inspector).getByRole('link', { name: 'Open Live Control' })).toHaveAttribute('href', '/control')
   })
@@ -245,7 +245,7 @@ describe('Monitor · Fleet', () => {
       '2026-08-28T21:07:00Z',
     )
     expect(fleetSummary(rows)).toContain('2 resources')
-    expect(fleetSummary(rows)).toContain('1 node, 1 FPP player, 0 Resolume instances')
+    expect(fleetSummary(rows)).toContain('1 node, 1 FPP, 0 Resolume instances')
   })
 
   it('keeps operator actions and system events in one stream, with the scope caveat', () => {
@@ -285,7 +285,7 @@ describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
 
   it('reads as loading before either fetch resolves', () => {
     const inspector = openInspector()
-    expect(inspector.getByText("Reading this host's fallback program.")).toBeInTheDocument()
+    expect(inspector.getByText("Reading the fallback program on this FPP.")).toBeInTheDocument()
   })
 
   it('says the coordinator does not support fallback programs on a 404 for the list', async () => {
@@ -297,7 +297,7 @@ describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
   it('says no fallback program exists for a host absent from the list', async () => {
     fallbackStubs.listFallbackPrograms = () => Promise.resolve({ serverTime: '2026-09-01T00:00:00Z', programs: [] })
     const inspector = openInspector()
-    await waitFor(() => expect(inspector.getByText('No fallback program exists for this host.')).toBeInTheDocument())
+    await waitFor(() => expect(inspector.getByText('No fallback program exists for this FPP.')).toBeInTheDocument())
   })
 
   it('says this device may not read fallback programs on a 403 for the host read, keeping the list metadata visible', async () => {
