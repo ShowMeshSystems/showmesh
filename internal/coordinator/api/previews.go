@@ -107,10 +107,14 @@ func mapPreviewsResponse(now time.Time, ov preview.Overview) v1.PreviewsResponse
 			State: t.State, Message: t.Message, Hidden: t.Hidden, ObservedAt: formatTime(t.ObservedAt),
 		})
 	}
+	var discovery *v1.PreviewNDIDiscovery
+	if d := ov.Gateway.NDIDiscovery; d != nil {
+		discovery = &v1.PreviewNDIDiscovery{State: d.State, Message: d.Message}
+	}
 	return v1.PreviewsResponse{
 		ServerTime: formatTime(now),
 		Gateway: v1.PreviewGatewayStatus{
-			State: ov.Gateway.State, Message: ov.Gateway.Message, ObservedAt: formatTime(ov.Gateway.ObservedAt),
+			State: ov.Gateway.State, Message: ov.Gateway.Message, NDIDiscovery: discovery, ObservedAt: formatTime(ov.Gateway.ObservedAt),
 		},
 		Tiles: tiles,
 	}
