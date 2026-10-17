@@ -721,7 +721,7 @@ func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInt
 
 // catalogEntry returns catalog's entry for cueID, if any.
 func catalogEntry(catalog assetsync.Catalog, cueID string) (cuecatalog.Entry, bool) {
-	for _, e := range catalog.Entries {
+	for _, e := range catalog.AllEntries() {
 		if e.CueID == cueID {
 			return e, true
 		}
@@ -741,8 +741,9 @@ func hasAnyOutput(entry cuecatalog.Entry) bool {
 // HeldState.KnownCueRevisions] compares a tuple's CueID/CueRevision
 // against.
 func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
-	out := make(map[string]int64, len(catalog.Entries))
-	for _, e := range catalog.Entries {
+	all := catalog.AllEntries()
+	out := make(map[string]int64, len(all))
+	for _, e := range all {
 		out[e.CueID] = e.CueRevision
 	}
 	return out

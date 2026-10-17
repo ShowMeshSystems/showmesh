@@ -115,8 +115,8 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 	if err != nil {
 		return obs
 	}
-	catalogCueIDs := make(map[string]bool, len(catalog.Entries))
-	for _, e := range catalog.Entries {
+	catalogCueIDs := make(map[string]bool, len(catalog.Entries)+1)
+	for _, e := range catalog.AllEntries() {
 		catalogCueIDs[e.CueID] = true
 	}
 

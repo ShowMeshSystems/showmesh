@@ -77,7 +77,7 @@ func UnusedAssetsForNode(ctx context.Context, st *store.Store, showID string, m 
 // synchronously, before any command reaches a node.
 func CuesReferencingAsset(catalog Catalog, contentHash string) []string {
 	var out []string
-	for _, e := range catalog.Entries {
+	for _, e := range catalog.AllEntries() {
 		if e.Outputs.Render != nil && containsHash(e.Outputs.Render.AssetHashes, contentHash) {
 			out = append(out, e.CueID)
 			continue

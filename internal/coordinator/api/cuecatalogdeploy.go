@@ -276,7 +276,7 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 	}
 
 	raw, err := json.Marshal(cueCatalogDeployWireParams{
-		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.Entries,
+		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.AllEntries(),
 	})
 	if err != nil {
 		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("encode cuecatalog.deploy params: %w", err)}

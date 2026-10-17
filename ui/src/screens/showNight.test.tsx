@@ -1568,7 +1568,7 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const helpText = /sets how long the resting cycle runs/
+    const helpText = /sets how long resting runs/
     const sequenceSelect = await screen.findByLabelText('Resting sequence')
     const describedBy = sequenceSelect.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()

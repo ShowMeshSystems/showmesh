@@ -43,6 +43,8 @@ var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{nightCheckPrefixResting + ":asset-exact-variant:", "Resting sequence file on FPP for "},
 	{nightCheckPrefixEndOfNight + ":asset-exact-variant:", "End of night sequence file on FPP for "},
 	{"show:playlist-present:", "Show playlist "},
+	{nightRestingRenderCheckPrefix, "Resting sequence on "},
+	{nightCheckPrefixEndOfNight + ":render:", "Resting sequence in end of night playlist "},
 }
 
 // nightCheckLabel is the plain name an operator reads for a readiness check.

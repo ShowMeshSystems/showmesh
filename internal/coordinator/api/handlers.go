@@ -253,6 +253,13 @@ type handlers struct {
 	// this without blocking and never waits for it to appear.
 	nightFirstCueStageResult map[string][]string
 
+	// nightRestingRenderWG owns every resting render dispatch goroutine, and
+	// nightRestingRenderMu guards nightRestingRenders, keyed by
+	// nightRestingRenderKey. In-memory: a restart sends once more.
+	nightRestingRenderWG sync.WaitGroup
+	nightRestingRenderMu sync.Mutex
+	nightRestingRenders  map[string]*nightRestingRender
+
 	// assetBlobMu orders an asset upload's blob write against a delete's
 	// blob removal for the same content hash (assets.go). An upload holds
 	// the read lock from before AssetBackend.Put until its own metadata

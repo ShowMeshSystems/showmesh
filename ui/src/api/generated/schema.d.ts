@@ -7910,6 +7910,7 @@ export interface components {
             fppInstanceId: string;
             playlist: string;
             endOfNightPlaylist: string;
+            /** @description The resting sequence. Its length, read from the copy on target, sets how long resting runs. Any render node that has this sequence draws it during resting; target does not choose render nodes. */
             timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
             endOfNightRepeat: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
@@ -7998,6 +7999,7 @@ export interface components {
             fppInstanceId: string;
             playlist: string;
             endOfNightPlaylist?: string;
+            /** @description The resting sequence. Its length, read from the copy on target, sets how long resting runs. Any render node that has this sequence draws it during resting; target does not choose render nodes. */
             timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
             endOfNightRepeat?: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
@@ -8617,7 +8619,7 @@ export interface components {
             ltc?: components["schemas"]["CueCatalogLTCOutput"];
             announcement?: components["schemas"]["CueCatalogAnnouncementOutput"];
         };
-        /** @description One Cue's row in a resolved catalog (Track H seam H3). triggers is the sorted, de-duplicated list of FPP sequence filenames that start this Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it receives a MultiSync START packet naming one of these filenames. Resolved from every bound fpp-runner show.playlist entry naming this Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own resolved render output filename when it has one. Always present, an empty array when there is no trigger yet. */
+        /** @description One Cue's row in a resolved catalog (Track H seam H3). triggers is the sorted, de-duplicated list of FPP sequence filenames that start this Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it receives a MultiSync START packet naming one of these filenames. Resolved from every bound fpp-runner show.playlist entry naming this Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own resolved render output filename when it has one. Always present, an empty array when there is no trigger yet. A render node that holds the active night session's resting sequence also has one entry whose cueId is "resting:" followed by the sequence id (ADR-061). It is not a Cue: it has only a render output, cueRevision 1, and no triggers. */
         CueCatalogEntry: {
             cueId: string;
             cueRevision: number;

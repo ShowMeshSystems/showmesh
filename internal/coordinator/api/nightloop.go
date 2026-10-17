@@ -90,6 +90,7 @@ func (l *NightLoop) Run(ctx context.Context) {
 			l.inFlight <- struct{}{} // wait for any in-flight tick to release.
 			if l.h != nil {
 				l.h.nightFirstCueStageWG.Wait()
+				l.h.nightRestingRenderWG.Wait()
 				// A lights write is bounded by its own timeout, so this never
 				// waits on a dead player longer than that.
 				l.h.lights().waitFor(nightLightsGainTimeout + time.Second)
@@ -188,6 +189,7 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	case nightStateStopped:
 		h.nightAdvancePowerOff(ctx, now, rec)
 	}
+	h.nightAdvanceRestingRender(ctx, now, rec)
 
 	// Track F seam F5: resting.backgroundAudio runs for the WHOLE resting
 	// presentation, not on one state's own tick alone - preshow and
