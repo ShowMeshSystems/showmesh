@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -23,12 +25,14 @@ const (
 	maxStreamBody = 1 << 20
 )
 
-// StreamSpec is one desired stream as the coordinator sends it.
+// StreamSpec is one desired stream as the coordinator sends it. NDIAddress,
+// when set, is the sender's host:port, so the source need not be announced.
 type StreamSpec struct {
-	Key     string `json:"key"`
-	Kind    string `json:"kind"`
-	NDIName string `json:"ndiName,omitempty"`
-	URL     string `json:"url,omitempty"`
+	Key        string `json:"key"`
+	Kind       string `json:"kind"`
+	NDIName    string `json:"ndiName,omitempty"`
+	NDIAddress string `json:"ndiAddress,omitempty"`
+	URL        string `json:"url,omitempty"`
 }
 
 // ParseStreams decodes and validates a desired stream set.
@@ -60,6 +64,11 @@ func ParseStreams(r io.Reader) ([]StreamSpec, error) {
 		case KindNDI:
 			if err := ValidateNDIName(s.NDIName); err != nil {
 				return nil, problemf("Stream %q: %s", s.Key, err)
+			}
+			if s.NDIAddress != "" {
+				if err := ValidateNDIAddress(s.NDIAddress); err != nil {
+					return nil, problemf("Stream %q: %s", s.Key, err)
+				}
 			}
 		case KindRTSP:
 			if err := ValidateRTSPURL(s.URL); err != nil {
@@ -107,6 +116,23 @@ func ValidateNDIName(name string) error {
 		return problem("The NDI name has a quote or backslash. Rename the NDI source.")
 	case name != strings.TrimSpace(name):
 		return problem("The NDI name starts or ends with a space. Use the name the sender announces.")
+	}
+	return nil
+}
+
+// ValidateNDIAddress accepts one host:port with no characters that could end a
+// GStreamer property value.
+func ValidateNDIAddress(addr string) error {
+	const msg = "The NDI address must be host:port, such as 10.0.20.15:5961."
+	if len(addr) > maxNDIName || !utf8.ValidString(addr) || hasControl(addr) || strings.ContainsAny(addr, " \t\"\\") {
+		return problem(msg)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return problem(msg)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return problem(msg)
 	}
 	return nil
 }

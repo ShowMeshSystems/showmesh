@@ -246,6 +246,8 @@ type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreview
 type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
 type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
 type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaConfigPreviewNDIPutRequest = components['schemas']['ConfigPreviewNDIPutRequest']
+type SchemaPreviewNDIConfigResponse = components['schemas']['PreviewNDIConfigResponse']
 type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
 type SchemaPreviewsResponse = components['schemas']['PreviewsResponse']
 type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
@@ -673,6 +675,36 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       await this.client.deleteJson(`/config/preview.camera/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/preview.ndi/{id}`. Throws (404) when no such NDI source exists. */
+  async getPreviewNDI(id: string): Promise<SchemaPreviewNDIConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPreviewNDIConfigResponse>(`/config/preview.ndi/${encodeURIComponent(id)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/preview.ndi/{id}`. A field left out keeps its stored value. */
+  async putPreviewNDI(id: string, request: SchemaConfigPreviewNDIPutRequest): Promise<SchemaPreviewNDIConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPreviewNDIConfigResponse>(`/config/preview.ndi/${encodeURIComponent(id)}`, request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/config/preview.ndi/{id}`. Always sends `{"confirm":true}`, the server's own required body. */
+  async deletePreviewNDI(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(`/config/preview.ndi/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -2545,7 +2577,8 @@ export class ApiStore {
       | 'media.playlist'
       | 'night.session'
       | 'node.clock'
-      | 'preview.camera',
+      | 'preview.camera'
+      | 'preview.ndi',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse>
   // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
@@ -2565,6 +2598,7 @@ export class ApiStore {
       | 'night.session'
       | 'node.clock'
       | 'preview.camera'
+      | 'preview.ndi'
       | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

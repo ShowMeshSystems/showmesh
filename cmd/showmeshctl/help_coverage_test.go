@@ -80,10 +80,11 @@ var helpCoverageDispatchExtras = map[string][]string{
 	"cmdAudioSession": {
 		"apply", "prepare", "start", "pause", "resume", "seek", "advance", "stop", "clear",
 	},
-	// cmdPreviewGateway, cmdPreviewCamera and cmdPreviewLayout (cmd_preview.go)
+	// cmdPreviewGateway, cmdPreviewCamera, cmdPreviewNDI and cmdPreviewLayout (cmd_preview.go)
 	// check args[0] against their verbs with if statements, not a switch.
 	"cmdPreviewGateway": {"set"},
 	"cmdPreviewCamera":  {"add", "remove"},
+	"cmdPreviewNDI":     {"add", "remove"},
 	"cmdPreviewLayout":  {"move", "hide", "show"},
 }
 

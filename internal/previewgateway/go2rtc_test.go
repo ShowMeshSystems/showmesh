@@ -150,7 +150,7 @@ func TestMinimalEnvLeavesOutTheGatewayToken(t *testing.T) {
 	if env := minimalEnv("NOT_SET_ANYWHERE"); env == nil {
 		t.Error("an empty environment must not be nil, which would inherit everything")
 	}
-	cmd, err := gstreamerCommand(context.Background(), "A (x)")
+	cmd, err := gstreamerCommand(context.Background(), "A (x)", "")
 	if err != nil || contains(cmd.Env, "SHOWMESH_PREVIEW_GATEWAY_TOKEN=s3cret-token") || cmd.Env == nil {
 		t.Errorf("gst-launch environment: %v %v", cmd.Env, err)
 	}
