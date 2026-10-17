@@ -326,6 +326,12 @@ export function fppDetail(instances: readonly FPPInstance[]): string {
   return parts.join(' · ')
 }
 
+export function resolumeDetail(counts: FleetCounts): string {
+  if (counts.resolumeTotal === 0) return 'none configured'
+  const unhealthy = counts.resolumeTotal - counts.resolumeHealthy
+  return unhealthy === 0 ? 'all healthy' : `${unhealthy} not healthy`
+}
+
 /**
  * One offline node moves the whole fleet's freshness, so the tile's count
  * is misread without naming where the staleness sits.
