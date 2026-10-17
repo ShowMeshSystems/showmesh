@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  ApiError,
   deleteShowAction,
   deleteShowMacro,
   getMacroRun,
@@ -9,6 +10,7 @@ import {
   getShowActionRevisions,
   getShowMacro,
   getShowMacroRevisions,
+  getResolumeComposition,
   invokeAction,
   listAssets,
   listConfigObjects,
@@ -31,6 +33,7 @@ import {
   type MacroRun,
   type MacroRunSummary,
   type ResolumeAction,
+  type ResolumeCompositionResponse,
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
@@ -43,6 +46,7 @@ import { formatClock } from '../domain/time'
 import { randomUUIDv4 } from '../api/uuid'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchActionBindings, fetchShowActions, fetchShowContents, fetchShowMacros } from './showsData'
+import { clipOptions, columnOptions, deckOptions, layerOptions, selectedClip } from './resolumeRefOptions'
 import { AudioNodesResolutionField, useShowAudioNodes, type ShowAudioNodesState } from './audioNodesField'
 import {
   actionIntegrationLabel,
@@ -1287,6 +1291,7 @@ function buildResolumeTarget(value: ResolumeTargetValue, actionsState: ResolumeA
     }
     ref[param.name] = raw
   }
+  if (value.action === 'launchClip' && ref.persistent !== true && ref.deck === undefined) blockReason ??= 'A deck is required unless the clip is persistent.'
   return { target: { integration: 'resolume', action: value.action, ref }, blockReason }
 }
 
@@ -1467,6 +1472,7 @@ function ResolumeTarget({
   onChange: (value: ResolumeTargetValue) => void
   actionsState: ResolumeActionsState
 }) {
+  const composition = useStoredComposition()
   if (actionsState.kind === 'loading') {
     return (
       <div className="sm-inspector__group">
@@ -1484,6 +1490,9 @@ function ResolumeTarget({
     )
   }
   const selected = actionsState.actions.find((a) => a.name === value.action) ?? null
+  const comp = composition.kind === 'loaded' ? composition.value : null
+  const persistent = value.ref.persistent === 'true'
+  const setRef = (patch: Record<string, string>) => onChange({ ...value, ref: { ...value.ref, ...patch } })
   return (
     <div className="sm-inspector__group">
       <p className="sm-eyebrow sm-flat">resolume target</p>
@@ -1499,36 +1508,146 @@ function ResolumeTarget({
           </Select>
         )}
       </Field>
+      {selected !== null && selected.params.some((p) => p.kind === 'string') && composition.kind === 'loading' && (
+        <RuledStrip absence="loading" label="Reading" fact="Reading the stored Resolume composition." />
+      )}
+      {selected !== null && selected.params.some((p) => p.kind === 'string') && composition.kind === 'none' && (
+        <RuledStrip absence="unavailable" label="No composition" fact="No Resolume composition is stored, so names are typed by hand." detail="Upload one in Settings › Resolume to pick from lists." />
+      )}
+      {selected !== null && selected.params.some((p) => p.kind === 'string') && composition.kind === 'failed' && (
+        <RuledStrip absence="failed" label="Read failed" fact={composition.reason} detail="Names are typed by hand until the composition loads." />
+      )}
       {selected !== null &&
         (selected.params.length === 0 ? (
           <p className="sm-small sm-faint">This action names no reference: nothing else to fill in.</p>
         ) : (
-          selected.params.map((param) =>
-            param.kind === 'bool' ? (
-              <Choice
-                key={param.name}
-                type="checkbox"
-                label={param.name}
-                checked={(value.ref[param.name] ?? '') === 'true'}
-                onChange={(e) => onChange({ ...value, ref: { ...value.ref, [param.name]: e.target.checked ? 'true' : 'false' } })}
-              />
-            ) : (
-              <Field key={param.name} label={param.name} help={param.required ? undefined : 'Optional.'}>
+          [...selected.params].sort((a, b) => refParamOrder(a.name) - refParamOrder(b.name)).map((param) => {
+            if (param.kind === 'bool') {
+              return (
+                <Choice
+                  key={param.name}
+                  type="checkbox"
+                  label={param.name}
+                  checked={(value.ref[param.name] ?? '') === 'true'}
+                  onChange={(e) => {
+                    const checked = e.target.checked ? 'true' : 'false'
+                    if (param.name === 'persistent') setRef({ persistent: checked, deck: '', clip: '', layer: '' })
+                    else setRef({ [param.name]: checked })
+                  }}
+                />
+              )
+            }
+            if (param.name === 'deck' && persistent) return null
+            const help = resolumeParamHelp(selected.name, param.name, param.required)
+            const current = value.ref[param.name] ?? ''
+            if (comp !== null && param.kind === 'string' && param.name === 'clip') {
+              const options = clipOptions(comp, value.ref.deck ?? '', persistent)
+              const chosen = selectedClip(options, current, value.ref.layer ?? '')
+              const needsDeck = !persistent && (value.ref.deck ?? '') === ''
+              return (
+                <Field key={param.name} label={param.name} help={help}>
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={chosen?.key ?? (current === '' ? '' : STALE_REF)}
+                      disabled={needsDeck}
+                      onChange={(e) => {
+                        const option = options.find((o) => o.key === e.target.value)
+                        setRef(option === undefined ? { clip: '', layer: '' } : { clip: option.clip, layer: option.layer })
+                      }}
+                    >
+                      <option value="">{needsDeck ? 'Select a deck first' : 'Select a clip'}</option>
+                      {chosen === undefined && current !== '' && <option value={STALE_REF}>{`${current} · not in the stored composition`}</option>}
+                      {options.map((o) => (
+                        <option key={o.key} value={o.key} disabled={o.disabled}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              )
+            }
+            const options =
+              comp === null || param.kind !== 'string'
+                ? null
+                : param.name === 'deck'
+                  ? deckOptions(comp)
+                  : param.name === 'layer'
+                    ? layerOptions(comp)
+                    : param.name === 'column'
+                      ? columnOptions(comp, value.ref.deck ?? '')
+                      : null
+            if (options !== null) {
+              const known = options.some((o) => o.value === current)
+              const needsDeck = param.name === 'column' && (value.ref.deck ?? '') === ''
+              return (
+                <Field key={param.name} label={param.name} help={help}>
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={current}
+                      disabled={needsDeck}
+                      onChange={(e) => setRef(param.name === 'deck' ? { deck: e.target.value, clip: '', column: '' } : { [param.name]: e.target.value })}
+                    >
+                      <option value="">{needsDeck ? 'Select a deck first' : param.required || param.name !== 'layer' ? `Select a ${param.name}` : 'None'}</option>
+                      {!known && current !== '' && <option value={current}>{`${current} · not in the stored composition`}</option>}
+                      {options.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              )
+            }
+            return (
+              <Field key={param.name} label={param.name} help={help}>
                 {(props) => (
                   <Input
                     {...props}
                     className="sm-data"
                     type={param.kind === 'number' ? 'number' : 'text'}
-                    value={value.ref[param.name] ?? ''}
-                    onChange={(e) => onChange({ ...value, ref: { ...value.ref, [param.name]: e.target.value } })}
+                    value={current}
+                    onChange={(e) => setRef({ [param.name]: e.target.value })}
                   />
                 )}
               </Field>
-            ),
-          )
+            )
+          })
         ))}
     </div>
   )
+}
+
+const STALE_REF = '\u0000stale'
+
+type StoredComposition = { kind: 'loading' } | { kind: 'none' } | { kind: 'failed'; reason: string } | { kind: 'loaded'; value: ResolumeCompositionResponse }
+
+function useStoredComposition(): StoredComposition {
+  const [state, setState] = useState<StoredComposition>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    getResolumeComposition()
+      .then((value) => !cancelled && setState({ kind: 'loaded', value }))
+      .catch((err: unknown) => !cancelled && setState(err instanceof ApiError && err.status === 404 ? { kind: 'none' } : { kind: 'failed', reason: describeApiError(err) }))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+// A deck comes before the clip or column it narrows.
+function refParamOrder(name: string): number {
+  return name === 'deck' ? 0 : 1
+}
+
+function resolumeParamHelp(action: string, param: string, required: boolean): string | undefined {
+  if (action === 'launchClip' && param === 'deck') return 'Required unless the clip is persistent.'
+  if (action === 'launchClip' && param === 'layer') return 'Optional. Only needed when two clips in the deck share a name, and picking a clip fills it.'
+  return required ? undefined : 'Optional.'
 }
 
 function AudioTarget({
