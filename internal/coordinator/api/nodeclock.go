@@ -116,6 +116,13 @@ func (h *handlers) handlePutNodeClock(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	if verr, err := h.checkNodeClockAgainstNode(r.Context(), now, id, payload); err != nil {
+		h.writeInternalError(w, now, "read node.clock node evidence", err)
+		return
+	} else if verr != nil {
+		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
 
 	payloadJSON, err := config.EncodeNodeClockPayload(payload)
 	if err != nil {
