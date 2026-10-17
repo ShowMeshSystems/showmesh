@@ -113,9 +113,23 @@ type lastWrite struct {
 }
 
 type fppState struct {
-	reading  *Reading
-	write    *lastWrite
+	reading *Reading
+	write   *lastWrite
+	// recent holds this FPP's own writes, newest last, so an older one that
+	// lands late is never mistaken for a change made on the FPP.
+	recent   []*lastWrite
 	inflight bool
+}
+
+// ownWrite reports whether target stamped at changedAt is one of this FPP's
+// recent own writes landing: in flight, failed (it may still land) or done.
+func (st *fppState) ownWrite(target int, changedAt time.Time) bool {
+	for _, w := range st.recent {
+		if w.target == target && (w.doneAt.IsZero() || !changedAt.After(w.doneAt.Add(ownWriteSlack))) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reconciler holds the desired ceiling and brings every FPP to it.
@@ -339,7 +353,7 @@ func (r *Reconciler) adoptLocked(ctx context.Context, endpoints []Endpoint) {
 		if r.desired != nil && (target == r.desired.TargetPercent || !changedAt.After(r.desired.ChangedAt)) {
 			continue
 		}
-		if w := st.write; w != nil && w.err == nil && w.target == target && !changedAt.After(w.doneAt.Add(ownWriteSlack)) {
+		if st.ownWrite(target, changedAt) {
 			continue
 		}
 		if best == nil || changedAt.After(bestAt) {
@@ -383,6 +397,13 @@ func (r *Reconciler) launchLocked(ctx context.Context, ep Endpoint, st *fppState
 	st.inflight = true
 	st.write = &lastWrite{target: desired.TargetPercent, forChange: desired.ChangedAt, sentAt: now}
 	w := st.write
+	kept := st.recent[:0]
+	for _, old := range st.recent {
+		if old.doneAt.IsZero() || now.Sub(old.doneAt) < 3*r.opts.PollInterval {
+			kept = append(kept, old)
+		}
+	}
+	st.recent = append(kept, w)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()

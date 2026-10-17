@@ -28,7 +28,7 @@ import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
-import { DisplayBrightnessPlayerReadout, DisplayBrightnessSection } from './DisplayBrightness'
+import { DisplayBrightnessPlayerReadout } from './DisplayBrightness'
 import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
 import { SettingsReleaseCheck } from './SystemVersions'
 import { brightnessReadout, CHANNEL_RANGES_FORM_ERROR, formatChannelRanges, normalizePairingCode, pairingSentence, parseChannelRanges, type SignalFact } from './fppPairingModel'
@@ -378,8 +378,6 @@ export function SettingsConnections() {
         )}
         {fppOutcome !== null && 'error' in fppOutcome && <RuledStrip absence="failed" label="Save failed" fact={fppOutcome.error} />}
       </Section>
-
-      <DisplayBrightnessSection />
 
       <Section id="st-res" title="Resolume">
         {resolumeLoad.kind === 'loading' ? (

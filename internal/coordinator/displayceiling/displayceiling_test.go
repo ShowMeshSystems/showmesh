@@ -358,3 +358,30 @@ func TestAdoptionCarriesTheFadeEnd(t *testing.T) {
 		t.Fatalf("fade end = %v, want %v", g.store.rec.FadeEndsAt, want)
 	}
 }
+
+// A write of the old ceiling that lands after the operator's newer change,
+// seen by a poll after the newer write has been launched, is still our own.
+func TestAnEarlierOwnWriteLandingLateIsNotAdopted(t *testing.T) {
+	g := newRig(t, "a")
+	g.setDesired(50, t0.Add(-time.Minute))
+	g.r.Observe(g.newPlugin("a", 20, t0.Add(-time.Hour), 0))
+	if w := g.step(); len(w) != 1 || w[0].target != 50 { // W50
+		t.Fatalf("writes = %+v, want W50", w)
+	}
+	g.now = g.now.Add(200 * time.Millisecond)
+	if _, err := g.r.Set(context.Background(), 60, 0, ChangedByOperator, "p1", ""); err != nil {
+		t.Fatal(err)
+	}
+	// W50 lands on the FPP after the 60 was set; a poll before W60 lands still reads 20.
+	g.now = g.now.Add(200 * time.Millisecond)
+	g.r.Observe(g.newPlugin("a", 20, t0.Add(-time.Hour), 0))
+	if w := g.step(); len(w) != 1 || w[0].target != 60 { // W60 replaces the latest write
+		t.Fatalf("writes = %+v, want W60", w)
+	}
+	g.now = g.now.Add(300 * time.Millisecond)
+	g.r.Observe(g.newPlugin("a", 50, t0.Add(300*time.Millisecond), 0))
+	g.step()
+	if g.store.rec.TargetPercent != 60 {
+		t.Fatalf("desired = %+v, want the operator's 60 kept", g.store.rec)
+	}
+}

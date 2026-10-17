@@ -108,6 +108,7 @@ const { SettingsConnections } = await import('./SettingsConnections')
 const { SettingsDelivery } = await import('./SettingsDelivery')
 const { SettingsRecovery } = await import('./SettingsRecovery')
 const { SettingsWeatherDelay } = await import('./SettingsWeatherDelay')
+const { SettingsBrightness } = await import('./SettingsBrightness')
 const { SettingsAudioDefaults } = await import('./SettingsAudioDefaults')
 const { SettingsNodeRouting } = await import('./SettingsNodeRouting')
 const { SettingsMode } = await import('./SettingsMode')
@@ -141,6 +142,7 @@ function settingsTree(path: string, model: Partial<Model> = {}) {
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
               <Route path="weather-delay" element={<SettingsWeatherDelay />} />
+              <Route path="brightness" element={<SettingsBrightness />} />
               <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
               <Route path="node-routing" element={<SettingsNodeRouting />} />
               <Route path="mode" element={<SettingsMode />} />
@@ -172,12 +174,13 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(11)
+    expect(tabs).toHaveLength(12)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
       'Render recovery',
       'Weather delay',
+      'Brightness',
       'Dashboard',
       'Appearance',
       'Audio defaults',
@@ -589,21 +592,22 @@ describe('Settings › Connections › FPP instance detail', () => {
     }
   }
 
-  function connectionsWithBrightness(doc: unknown, scopes = ['config:write', 'fpp:command']) {
+  function brightnessTabWith(doc: unknown, scopes = ['config:write', 'fpp:command']) {
     stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPPairing = () => Promise.resolve(pairingNone())
     stubs.getFPPBrightness = () => Promise.resolve(doc)
-    renderAt('/settings/connections', { session: signedIn(scopes) })
+    renderAt('/settings/brightness', { session: signedIn(scopes) })
   }
 
   it('shows one display ceiling with every player reported ceiling and following state', async () => {
-    connectionsWithBrightness(brightnessDoc())
+    brightnessTabWith(brightnessDoc())
     const slider = await screen.findByLabelText('Display ceiling')
     await waitFor(() => expect(slider).toHaveValue('60'))
     expect(slider).toBeEnabled()
-    expect(screen.getByRole('heading', { name: 'Display brightness' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Ceiling' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'FPP players' })).toBeInTheDocument()
     expect(screen.getByText(/60%, set by operator-1 at/)).toBeInTheDocument()
     for (const word of ['Following', 'Catching up', 'Plugin too old', 'Not reporting']) expect(screen.getByText(word)).toBeInTheDocument()
     expect(screen.getByText('The player yard-remote is at 100% and is being set to 60%.')).toBeInTheDocument()
@@ -611,7 +615,7 @@ describe('Settings › Connections › FPP instance detail', () => {
   })
 
   it('says when no display ceiling has been set and still lets one be set', async () => {
-    connectionsWithBrightness(brightnessDoc({ ceiling: null }))
+    brightnessTabWith(brightnessDoc({ ceiling: null }))
     const slider = await screen.findByLabelText('Display ceiling')
     expect(slider).toBeEnabled()
     expect(screen.getAllByText('Not set').length).toBeGreaterThan(0)
@@ -619,7 +623,7 @@ describe('Settings › Connections › FPP instance detail', () => {
   })
 
   it('disables the display ceiling with the reason when fpp:command is missing', async () => {
-    connectionsWithBrightness(brightnessDoc(), ['config:write'])
+    brightnessTabWith(brightnessDoc(), ['config:write'])
     const slider = await screen.findByLabelText('Display ceiling')
     expect(slider).toBeDisabled()
     expect(slider.getAttribute('title')).toMatch(/fpp:command/)
@@ -632,7 +636,7 @@ describe('Settings › Connections › FPP instance detail', () => {
     })
     const putFPPBrightnessCeiling = vi.fn().mockReturnValueOnce(first).mockResolvedValue(brightnessDoc())
     stubs.putFPPBrightnessCeiling = putFPPBrightnessCeiling
-    connectionsWithBrightness(brightnessDoc())
+    brightnessTabWith(brightnessDoc())
 
     const slider = await screen.findByLabelText('Display ceiling')
     fireEvent.change(screen.getByLabelText('Fade'), { target: { value: '30' } })
@@ -652,7 +656,7 @@ describe('Settings › Connections › FPP instance detail', () => {
 
   it("renders the coordinator's refusal as a failed strip", async () => {
     stubs.putFPPBrightnessCeiling = vi.fn(() => Promise.reject(new Error('The brightness 101% is outside 0 to 100. Send a value from 0 to 100.')))
-    connectionsWithBrightness(brightnessDoc())
+    brightnessTabWith(brightnessDoc())
     const slider = await screen.findByLabelText('Display ceiling')
     fireEvent.change(slider, { target: { value: '55' } })
     await sleep(300)
@@ -662,7 +666,7 @@ describe('Settings › Connections › FPP instance detail', () => {
   it('refuses a fade that is not whole seconds in range before writing', async () => {
     const putFPPBrightnessCeiling = vi.fn(() => Promise.resolve(brightnessDoc()))
     stubs.putFPPBrightnessCeiling = putFPPBrightnessCeiling
-    connectionsWithBrightness(brightnessDoc())
+    brightnessTabWith(brightnessDoc())
     const slider = await screen.findByLabelText('Display ceiling')
     fireEvent.change(screen.getByLabelText('Fade'), { target: { value: '90000' } })
     expect(await screen.findByText('Enter whole seconds from 0 to 86400.')).toBeInTheDocument()
@@ -670,11 +674,28 @@ describe('Settings › Connections › FPP instance detail', () => {
     expect(putFPPBrightnessCeiling).not.toHaveBeenCalled()
   })
 
-  it('shows the player state from the display ceiling in the drawer', async () => {
-    connectionsWithBrightness(brightnessDoc())
+  it('shows the player state from the display ceiling in the drawer, with a link to the Brightness tab', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
+    stubs.getFPPBrightness = () => Promise.resolve(brightnessDoc())
+    renderAt('/settings/connections', { session: signedIn(['config:write', 'fpp:command']) })
     await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
     openDetail()
     expect(await screen.findByText(/The display brightness is 60%/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Change it on the Brightness tab' })).toHaveAttribute('href', '/settings/brightness')
+  })
+
+  it('keeps the display ceiling off the Connections tab', async () => {
+    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPBrightness = () => Promise.resolve(brightnessDoc())
+    renderAt('/settings/connections', { session: signedIn(['config:write', 'fpp:command']) })
+    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
+    expect(screen.queryByLabelText('Display ceiling')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Display brightness' })).toBeNull()
   })
 
   async function openExcludedRanges(observations: ReturnType<typeof makeEvidence>[], scopes = ['config:write', 'fpp:command']) {
