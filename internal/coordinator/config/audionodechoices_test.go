@@ -148,3 +148,20 @@ func TestResolveAudioRoutingChoicesKeepsTheNodesRawReasonOutOfOperatorCopy(t *te
 		t.Errorf("DiscoveryDetail = %q, want the raw reason kept for diagnosis", c.DiscoveryDetail)
 	}
 }
+
+// TestResolveAudioRoutingChoicesPartialNamesTheOutputToCheck proves a
+// partial discovery caused by one output tells the operator which output,
+// and still offers no choices from the incomplete list.
+func TestResolveAudioRoutingChoicesPartialNamesTheOutputToCheck(t *testing.T) {
+	ev := AudioRoutingEvidence{Advertised: true, Live: true, Reported: true, IncompleteReason: "the output hw:CARD=PCH,DEV=0 did not open: busy", IncompleteRoute: "hw:CARD=PCH,DEV=0", Outputs: []AudioOutputEvidence{m4Inventory}}
+	c := ResolveAudioRoutingChoices("node-a", ev, nil, nil)
+	if c.Discovery != AudioRoutingDiscoveryPartial || len(c.Routes) != 0 {
+		t.Fatalf("discovery=%q routes=%d, want partial with no choices", c.Discovery, len(c.Routes))
+	}
+	if !strings.Contains(c.Reason, "hw:CARD=PCH,DEV=0") || strings.Contains(c.Reason, "busy") {
+		t.Errorf("reason = %q, want the output named and the node's raw error left out", c.Reason)
+	}
+	if !c.ManualEntry.Allowed {
+		t.Error("manual entry refused, want it still allowed on a partial discovery")
+	}
+}
