@@ -142,6 +142,30 @@ func (c *Client) Sources(ctx context.Context) ([]Source, error) {
 	return out, nil
 }
 
+// DiscoveryStatus is the gateway's report on NDI discovery.
+type DiscoveryStatus struct {
+	Running bool   `json:"running"`
+	Message string `json:"message"`
+}
+
+// Discovery reports whether the gateway's NDI discovery works. It returns nil
+// from a gateway too old to report it.
+func (c *Client) Discovery(ctx context.Context) (*DiscoveryStatus, error) {
+	data, _, err := c.do(ctx, gatewayRequestTimeout, http.MethodGet, "/v1/discovery", "", nil)
+	var ge *GatewayError
+	if errors.As(err, &ge) && ge.Status == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out DiscoveryStatus
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("preview gateway discovery reply: %w", err)
+	}
+	return &out, nil
+}
+
 // PutStreams replaces the gateway's desired stream set.
 func (c *Client) PutStreams(ctx context.Context, streams []Stream) error {
 	if streams == nil {

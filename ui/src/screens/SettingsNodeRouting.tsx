@@ -97,6 +97,7 @@ const DISCOVERY_LABEL: Record<AudioRoutingChoicesResponse['discovery'], string> 
 type NodeState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AudioNodeConfigResponse }
+  | { kind: 'notfound' }
   | { kind: 'failed'; reason: string }
 
 function parseChannels(raw: string): number[] {
@@ -131,6 +132,7 @@ export function SettingsNodeRouting() {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   const [nodesState, setNodesState] = useState<NodesState>({ kind: 'loading' })
+  const [nodesAttempt, setNodesAttempt] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // node.clock is a separate config kind from audio.node (RES-019, ADR-039):
   // a node can carry a PTP clock configuration without ever advertising audio
@@ -138,10 +140,6 @@ export function SettingsNodeRouting() {
   // picker above rather than reused from `selectedId`.
   const [nodeClockObjectsState, setNodeClockObjectsState] = useState<NodeClockObjectsState>({ kind: 'loading' })
   const [clockNodeId, setClockNodeId] = useState('')
-  // Only committed to `clockNodeId` on blur/Enter: a GET fired per keystroke
-  // would fire once per character typed, and a partial id that fails the id
-  // syntax check would flash a read-failed strip mid-typing.
-  const [newClockNodeIdDraft, setNewClockNodeIdDraft] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -157,7 +155,7 @@ export function SettingsNodeRouting() {
     return () => {
       cancelled = true
     }
-  }, [])
+  },[nodesAttempt])
 
   useEffect(() => {
     let cancelled = false
@@ -174,11 +172,16 @@ export function SettingsNodeRouting() {
     }
   }, [])
 
-  const commitNewClockNodeId = () => {
-    const trimmed = newClockNodeIdDraft.trim()
-    if (trimmed === '') return
-    setClockNodeId(trimmed)
-  }
+  // A node that reports audio outputs but has nothing saved is offered too, so
+  // the first routing for a node can be created from its own report.
+  const unconfiguredAudioNodes =
+    nodesState.kind === 'loaded' ? model.nodes.filter((n) => hasAudioCapability(n) && !nodesState.nodes.some((s) => s.id === n.nodeId)) : []
+  const shownId = selectedId ?? unconfiguredAudioNodes[0]?.nodeId ?? null
+
+  // Only nodes the coordinator knows and that have no clock settings yet, so a
+  // mistyped or invented node id cannot be set up.
+  const clocklessNodes =
+    nodeClockObjectsState.kind === 'loaded' ? model.nodes.filter((n) => !nodeClockObjectsState.objects.some((o) => o.id === n.nodeId)) : []
 
   return (
     <>
@@ -190,14 +193,14 @@ export function SettingsNodeRouting() {
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for configured audio nodes." />
         ) : nodesState.kind === 'failed' ? (
           <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
-        ) : nodesState.nodes.length === 0 ? (
-          <RuledStrip absence="empty" label="None" fact="No audio nodes." />
+        ) : nodesState.nodes.length === 0 && unconfiguredAudioNodes.length === 0 ? (
+          <RuledStrip absence="empty" label="None" fact="No node reports audio outputs, and none has audio routing saved." />
         ) : (
           <Field label="Audio node">
             {(props) => (
               <Select
                 {...props}
-                value={selectedId ?? ''}
+                value={shownId ?? ''}
                 onChange={(e) => setSelectedId(e.target.value)}
               >
                 {nodesState.nodes.map((summary) => {
@@ -209,17 +212,26 @@ export function SettingsNodeRouting() {
                     </option>
                   )
                 })}
+                {unconfiguredAudioNodes.map((node) => (
+                  <option key={node.nodeId} value={node.nodeId}>
+                    {node.nodeId}, not set up
+                  </option>
+                ))}
               </Select>
             )}
           </Field>
         )}
       </Section>
 
-      {selectedId !== null && (
+      {shownId !== null && (
         <NodeRoutingForm
-          key={`audio:${selectedId}`}
-          nodeId={selectedId}
+          key={`audio:${shownId}`}
+          nodeId={shownId}
           saveGate={gate}
+          onCreated={(id) => {
+            setSelectedId(id)
+            setNodesAttempt((n) => n + 1)
+          }}
           onDeleted={(id) => {
             setNodesState((prev) => (prev.kind !== 'loaded' ? prev : { kind: 'loaded', nodes: prev.nodes.filter((n) => n.id !== id) }))
             setSelectedId((prev) => (prev === id ? null : prev))
@@ -252,20 +264,21 @@ export function SettingsNodeRouting() {
             </Field>
           )
         )}
-        <Field label="New node id">
+        <Field label="Set up a node">
           {(props) => (
-            <Input
+            <Select
               {...props}
-              value={newClockNodeIdDraft}
-              onChange={(e) => setNewClockNodeIdDraft(e.target.value)}
-              onBlur={commitNewClockNodeId}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commitNewClockNodeId()
-                }
-              }}
-            />
+              value={clocklessNodes.some((n) => n.nodeId === clockNodeId) ? clockNodeId : ''}
+              disabled={clocklessNodes.length === 0}
+              onChange={(e) => setClockNodeId(e.target.value)}
+            >
+              <option value="">{clocklessNodes.length === 0 ? 'Every node already has clock settings' : 'Select a node…'}</option>
+              {clocklessNodes.map((n) => (
+                <option key={n.nodeId} value={n.nodeId}>
+                  {n.nodeId}
+                </option>
+              ))}
+            </Select>
           )}
         </Field>
       </Section>
@@ -275,7 +288,7 @@ export function SettingsNodeRouting() {
   )
 }
 
-function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; saveGate: ScopeGateResult; onDeleted: (id: string) => void }) {
+function NodeRoutingForm({ nodeId, saveGate, onDeleted, onCreated }: { nodeId: string; saveGate: ScopeGateResult; onDeleted: (id: string) => void; onCreated: (id: string) => void }) {
   const model = useModelContext()
   const node = model.nodes.find((n) => n.nodeId === nodeId) ?? null
   const programRoutes = node !== null ? advertisedRoutes(node, 'audio.output.local') : null
@@ -330,6 +343,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
     : manualRefusal !== null
       ? 'choices'
       : (modeOverride ?? defaultRoutingEntryMode(choices))
+  const pipewireOutputs = choices?.routes.filter((r) => r.source === 'pipewire') ?? []
   const routeChoice = entryMode === 'choices' ? (choices?.routes.find((r) => r.route === programRoute) ?? null) : null
 
   const removeNode = () => {
@@ -368,7 +382,12 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         setDirty(false)
       })
       .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setState({ kind: 'notfound' })
+          return
+        }
+        setState({ kind: 'failed', reason: describeApiError(err) })
       })
     return () => {
       cancelled = true
@@ -464,52 +483,82 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
     setSaveError(null)
   }
 
+  const buildPayload = (base: ConfigAudioNode): ConfigAudioNode => {
+    // Starts from the payload this edit was loaded from and overrides only
+    // the fields this form manages, so a field it does not manage survives.
+    const payload: ConfigAudioNode = {
+      ...base,
+      programRoute,
+      programChannels,
+      role,
+      sinkBackend,
+    }
+    if (ltcOn) {
+      payload.ltcRoute = programRoute
+      payload.ltcChannel = Number(ltcChannelText)
+    } else {
+      delete payload.ltcRoute
+      delete payload.ltcChannel
+    }
+    if (role === 'zone') payload.zone = zone
+    else delete payload.zone
+    if (sinkBackend === 'pipewiresink' && pipewireTargetNode.trim() !== '') payload.pipewireTargetNode = pipewireTargetNode
+    else delete payload.pipewireTargetNode
+    if (outputLatencyMethod === 'unmeasured') {
+      delete payload.outputLatency
+    } else {
+      payload.outputLatency = {
+        valueUs: Number(outputLatencyValueUsText),
+        method: outputLatencyMethod,
+        measuredAt: outputLatencyMeasuredAt,
+        reference: outputLatencyReference,
+        confidence: outputLatencyConfidence,
+        configuration: outputLatencyConfiguration,
+      }
+    }
+    return payload
+  }
+
+  const create = () => {
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedCreate({
+      read: () => getAudioNode(nodeId),
+      write: () => putAudioNode(nodeId, buildPayload({} as ConfigAudioNode)),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'created') {
+          setState({ kind: 'loaded', response: outcome.response })
+          setDirty(false)
+          setAttempt((n) => n + 1)
+          onCreated(nodeId)
+          return
+        }
+        if (outcome.kind === 'taken') {
+          setSaveError(`Routing for ${nodeId} was saved by someone else while you were editing. Reload the page to see it.`)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
   const save = () => {
-    if (state.kind !== 'loaded' || !canSave) return
+    if (!canSave) return
+    if (state.kind === 'notfound') {
+      create()
+      return
+    }
+    if (state.kind !== 'loaded') return
     setSaving(true)
     setSaveError(null)
     setStale(null)
     guardedSave({
       loaded: state.response,
       read: () => getAudioNode(nodeId),
-      // Starts from the payload this edit was loaded from and overrides only
-      // the fields this form manages, rather than assembling a payload from
-      // scratch: a field this screen does not manage (or does not manage
-      // yet) survives the edit instead of being silently dropped, the same
-      // pattern used elsewhere for a full-replacement PUT.
-      write: () => {
-        const payload: ConfigAudioNode = {
-          ...state.response.payload,
-          programRoute,
-          programChannels,
-          role,
-          sinkBackend,
-        }
-        if (ltcOn) {
-          payload.ltcRoute = programRoute
-          payload.ltcChannel = Number(ltcChannelText)
-        } else {
-          delete payload.ltcRoute
-          delete payload.ltcChannel
-        }
-        if (role === 'zone') payload.zone = zone
-        else delete payload.zone
-        if (sinkBackend === 'pipewiresink' && pipewireTargetNode.trim() !== '') payload.pipewireTargetNode = pipewireTargetNode
-        else delete payload.pipewireTargetNode
-        if (outputLatencyMethod === 'unmeasured') {
-          delete payload.outputLatency
-        } else {
-          payload.outputLatency = {
-            valueUs: Number(outputLatencyValueUsText),
-            method: outputLatencyMethod,
-            measuredAt: outputLatencyMeasuredAt,
-            reference: outputLatencyReference,
-            confidence: outputLatencyConfidence,
-            configuration: outputLatencyConfiguration,
-          }
-        }
-        return putAudioNode(nodeId, payload)
-      },
+      write: () => putAudioNode(nodeId, buildPayload(state.response.payload)),
     })
       .then((outcome) => {
         if (outcome.kind === 'saved') {
@@ -534,9 +583,11 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
   if (state.kind === 'failed') {
     return <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
   }
+  const isNew = state.kind === 'notfound'
 
   return (
     <>
+      {isNew && <RuledStrip absence="empty" label="Not set up" fact={`${nodeId} has no audio routing yet. Choose its output below and save to set it up.`} />}
       <Section id="st-role" title="Role">
         <div className="sm-grid sm-form-column">
           <Segmented
@@ -586,9 +637,15 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                     {...props}
                     value={programRoute}
                     onChange={(e) => {
+                      const picked = choices.routes.find((r) => r.route === e.target.value)
                       setProgramRoute(e.target.value)
                       setProgramChannelsText('')
                       setLtcChannelText('')
+                      if (picked !== undefined) {
+                        // A PipeWire output plays only through PipeWire, aimed at that output.
+                        setSinkBackend(picked.source === 'pipewire' ? 'pipewiresink' : 'alsasink')
+                        setPipewireTargetNode(picked.source === 'pipewire' ? picked.route : '')
+                      }
                       setDirty(true)
                     }}
                   >
@@ -685,16 +742,37 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
           />
           {sinkBackend === 'pipewiresink' && (
             <Field label="PipeWire target node">
-              {(props) => (
-                <Input
-                  {...props}
-                  value={pipewireTargetNode}
-                  onChange={(e) => {
-                    setPipewireTargetNode(e.target.value)
-                    setDirty(true)
-                  }}
-                />
-              )}
+              {(props) =>
+                pipewireOutputs.length > 0 ? (
+                  <Select
+                    {...props}
+                    value={pipewireTargetNode}
+                    onChange={(e) => {
+                      setPipewireTargetNode(e.target.value)
+                      setDirty(true)
+                    }}
+                  >
+                    <option value="">PipeWire's default output</option>
+                    {pipewireTargetNode !== '' && !pipewireOutputs.some((r) => r.route === pipewireTargetNode) && (
+                      <option value={pipewireTargetNode}>{pipewireTargetNode}, no longer reported by this node</option>
+                    )}
+                    {pipewireOutputs.map((r) => (
+                      <option key={r.route} value={r.route} title={r.route}>
+                        {routeName(r.route, r.shortName)}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    {...props}
+                    value={pipewireTargetNode}
+                    onChange={(e) => {
+                      setPipewireTargetNode(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )
+              }
             </Field>
           )}
         </div>
@@ -898,12 +976,16 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         >
           {saving ? 'Saving…' : 'Save routing'}
         </Button>
-        <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
-          Discard changes
-        </Button>
-        <div className="sm-push-end">
-          <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} />
-        </div>
+        {!isNew && (
+          <>
+            <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
+              Discard changes
+            </Button>
+            <div className="sm-push-end">
+              <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} />
+            </div>
+          </>
+        )}
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -916,7 +998,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
-      <DeletePanel
+      {!isNew && <DeletePanel
         title="Delete this node"
         confirmNoun="the node's own id"
         confirmValue={nodeId}
@@ -928,7 +1010,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
         onDelete={removeNode}
       >
         <p className="sm-small sm-muted">Show actions and cues that target this node will report a missing target.</p>
-      </DeletePanel>
+      </DeletePanel>}
     </>
   )
 }

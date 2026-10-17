@@ -63,7 +63,10 @@ type AudioRoutingEvidence struct {
 	Malformed        bool
 	Complete         bool
 	IncompleteReason string
-	Outputs          []AudioOutputEvidence
+	// IncompleteRoute names the one output the node could not check, or is
+	// empty when the cause was not a single output.
+	IncompleteRoute string
+	Outputs         []AudioOutputEvidence
 }
 
 // AudioRoutingChoices is one node's resolved routing choices.
@@ -158,7 +161,7 @@ func ResolveAudioRoutingChoices(nodeID string, ev AudioRoutingEvidence, current 
 		out.Reason = "This node's output list could not be read. Enter channels by hand, or restart ShowMesh on the node."
 	case !ev.Complete:
 		out.Discovery = AudioRoutingDiscoveryPartial
-		out.Reason = "This node could not check all its audio outputs. Enter channels by hand, or restart ShowMesh on the node."
+		out.Reason = partialDiscoveryReason(ev.IncompleteRoute)
 		out.DiscoveryDetail = ev.IncompleteReason
 	}
 
@@ -173,6 +176,13 @@ func ResolveAudioRoutingChoices(nodeID string, ev AudioRoutingEvidence, current 
 		out.Current = resolveAudioRoutingCurrent(*current, out)
 	}
 	return out
+}
+
+func partialDiscoveryReason(route string) string {
+	if route == "" {
+		return "This node could not check all its audio outputs. Enter channels by hand, or restart ShowMesh on the node."
+	}
+	return fmt.Sprintf("This node could not open its output %s. Check that interface and restart ShowMesh on the node, or enter channels by hand.", route)
 }
 
 func programLTCHolder(nodeID string, otherRoles map[string]string) string {

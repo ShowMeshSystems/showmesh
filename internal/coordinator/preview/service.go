@@ -23,6 +23,9 @@ const (
 	GatewayReachable     = "reachable"
 	GatewayUnreachable   = "unreachable"
 
+	NDIDiscoveryRunning    = "running"
+	NDIDiscoveryNotRunning = "not_running"
+
 	KindNDI    = "ndi"
 	KindCamera = "camera"
 
@@ -49,6 +52,7 @@ const (
 	msgNDIDisabled   = "This NDI source is turned off. Turn it on to see it here."
 	msgTileError     = "The preview could not start. Check the gateway log."
 	msgCameraRefused = "The gateway did not accept the camera addresses. Check each address and save again."
+	msgNoDiscovery   = "NDI discovery is not running. Check the preview gateway log."
 )
 
 var (
@@ -115,11 +119,32 @@ type SettingsSource interface {
 	Load(ctx context.Context) (Settings, error)
 }
 
-// GatewayStatus is the coordinator's latest view of the gateway.
+// GatewayStatus is the coordinator's latest view of the gateway. NDIDiscovery
+// is nil when the gateway is not reachable or does not report it.
 type GatewayStatus struct {
-	State      string
-	Message    string
-	ObservedAt time.Time
+	State        string
+	Message      string
+	NDIDiscovery *NDIDiscovery
+	ObservedAt   time.Time
+}
+
+// NDIDiscovery is whether the gateway can find NDI sources.
+type NDIDiscovery struct {
+	State   string
+	Message string
+}
+
+func ndiDiscovery(d *DiscoveryStatus) *NDIDiscovery {
+	switch {
+	case d == nil:
+		return nil
+	case d.Running:
+		return &NDIDiscovery{State: NDIDiscoveryRunning}
+	case d.Message == "":
+		return &NDIDiscovery{State: NDIDiscoveryNotRunning, Message: msgNoDiscovery}
+	default:
+		return &NDIDiscovery{State: NDIDiscoveryNotRunning, Message: d.Message}
+	}
 }
 
 // Tile is one dashboard preview tile.
@@ -343,13 +368,18 @@ func (s *Service) Reconcile(ctx context.Context) {
 		fail(err)
 		return
 	}
+	discovery, err := c.Discovery(ctx)
+	if err != nil {
+		fail(err)
+		return
+	}
 	byKey := make(map[string]StreamState, len(states))
 	for _, st := range states {
 		byKey[st.Key] = st
 	}
 	s.record(cfg, observation{
 		gateway: id,
-		status:  GatewayStatus{State: GatewayReachable, ObservedAt: now},
+		status:  GatewayStatus{State: GatewayReachable, NDIDiscovery: ndiDiscovery(discovery), ObservedAt: now},
 		sources: sources,
 		streams: byKey,
 

@@ -90,6 +90,47 @@ func fppDefinitionFixture(instanceUUID, playlistHash, name string, capturedAt ti
 	}
 }
 
+// A repeat of a hash already held is reported as not inserted, but its
+// receipt time moves forward: an FPP playlist put back to an earlier
+// version is current again, and the newest-received rule must pick it.
+func TestPutFPPPlaylistDefinitionRepeatMovesReceiptForward(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-old", "P", time.Unix(100, 0))); err != nil {
+		t.Fatalf("put old: %v", err)
+	}
+	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-new", "P", time.Unix(200, 0))); err != nil {
+		t.Fatalf("put new: %v", err)
+	}
+	inserted, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-old", "P", time.Unix(300, 0)))
+	if err != nil {
+		t.Fatalf("repeat old: %v", err)
+	}
+	if inserted {
+		t.Fatal("repeat reported inserted = true, want false")
+	}
+	got, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", "hash-old")
+	if err != nil {
+		t.Fatalf("get old: %v", err)
+	}
+	if !got.ReceivedAt.Equal(time.Unix(300, 0).UTC()) {
+		t.Errorf("ReceivedAt = %v, want the repeat's time %v", got.ReceivedAt, time.Unix(300, 0).UTC())
+	}
+
+	// An older repeat never moves a receipt backwards.
+	if _, err := st.PutFPPPlaylistDefinition(ctx, fppDefinitionFixture("instance-1", "hash-old", "P", time.Unix(50, 0))); err != nil {
+		t.Fatalf("stale repeat: %v", err)
+	}
+	got, err = st.GetFPPPlaylistDefinition(ctx, "instance-1", "hash-old")
+	if err != nil {
+		t.Fatalf("get old again: %v", err)
+	}
+	if !got.ReceivedAt.Equal(time.Unix(300, 0).UTC()) {
+		t.Errorf("ReceivedAt after a stale repeat = %v, want unchanged %v", got.ReceivedAt, time.Unix(300, 0).UTC())
+	}
+}
+
 func TestPutFPPPlaylistDefinitionInsertsAndReportsInserted(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()

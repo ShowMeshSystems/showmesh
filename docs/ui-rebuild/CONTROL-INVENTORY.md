@@ -91,7 +91,7 @@ lifecycle and the two notices are the candidates with no home.
 | Entries: add, remove, move up, move down (max entries enforced) | `config:write` | `putShowPlaylist` |
 | Mismatch policy choice, safe cue reference | `config:write` | same payload |
 | ShowMesh audio enable | `config:write` | same payload |
-| Re-import | `config:write` | FPP import |
+| Update from FPP (resend, review, move in one flow) | `config:write`, `fpp:command` for the resend | FPP import |
 | Revision history | `config:write` | `getShowPlaylistRevisions` |
 | **Playlist readiness** (folded in, D-003): readiness verdicts, FPP instance reconciliation, two Recheck buttons | `config:write` | `getFPPPlaylistReadiness`, `getFPPPlaylistEntryReconciliation` |
 | **FPP playlist definitions** (folded in, D-003): definition detail and entries | — | `getFPPPlaylistDefinition`, `getFPPPlaylistDefinitionEntries` |

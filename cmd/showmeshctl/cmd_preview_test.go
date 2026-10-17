@@ -129,7 +129,7 @@ func TestPreviewListPrintsGatewayAndTiles(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"gateway: reachable", "ndi:NODE-01 (matrix-main)", "node-01 · matrix-main", "camera:driveway", "yes", "The camera did not answer."} {
+	for _, want := range []string{"gateway: reachable", "ndi discovery: unknown", "ndi:NODE-01 (matrix-main)", "node-01 · matrix-main", "camera:driveway", "yes", "The camera did not answer."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
 		}
@@ -428,5 +428,24 @@ func TestPreviewNDIListAndRemove(t *testing.T) {
 	del := (*seen)[len(*seen)-1]
 	if del.method != http.MethodDelete || del.path != "/api/v1/config/preview.ndi/far-barn" || del.body != `{"confirm":true}` {
 		t.Fatalf("request = %+v", del)
+	}
+}
+
+func TestPreviewListPrintsWhyNDIDiscoveryIsNotRunning(t *testing.T) {
+	const body = `{"serverTime":"2026-10-15T12:00:00Z","gateway":{"state":"reachable","message":"","ndiDiscovery":{"state":"not_running","message":"The NDI runtime is named libndi.so. Rename or link it to libndi.so.6."},"observedAt":"2026-10-15T12:00:00Z"},"tiles":[]}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(ts.Close)
+	code, out, errOut := runPreview(t, ts, "list")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"ndi discovery: not_running", "Rename or link it to libndi.so.6."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
 	}
 }

@@ -43,7 +43,10 @@ The image does not contain the NDI runtime ([ADR-010](../../docs/decisions/ADR-0
 Download the NDI SDK for Linux from NDI, copy `libndi.so.6` for the host's
 architecture into a directory such as `/opt/ndi`, and set
 `SHOWMESH_NDI_RUNTIME_DIR` to that directory. Without it the gateway still
-serves RTSP cameras, and NDI streams report that NDI is not available.
+serves RTSP cameras, and NDI streams report that NDI is not available. The
+GStreamer NDI plugin opens only `libndi.so.6` or `libndi.so.5`. If the file
+has another name, such as `libndi.so`, the Dashboard says so: rename it or add
+a link with `ln -s libndi.so libndi.so.6` in that directory.
 
 ## Settings
 

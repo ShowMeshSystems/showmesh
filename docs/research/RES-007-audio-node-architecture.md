@@ -2,7 +2,7 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#45-audio-engine) · [Audio Engine specification](../architecture/AUDIO-ENGINE.md) · [Tracker](README.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [Resolume SMPTE research](RES-001-resolume-smpte-behavior.md)
 
-Status: bench partially run · Risk: critical · Verification: **split: L2 for recorded GStreamer graph/pipeline behaviour, on two platforms (C0a-1 et al., a Debian container, 2026-08-18; the `gstengine` phase 1 spike and the libltc-cgo LTC branch, macOS arm64, 2026-08-20); L0 for everything hardware- or device-dependent**
+Status: bench partially run · Risk: critical · Verification: **split: L2 for recorded GStreamer graph/pipeline behaviour, on two platforms (C0a-1 et al., a Debian container, 2026-08-18; the `gstengine` phase 1 spike and the libltc-cgo LTC branch, macOS arm64, 2026-08-20); L0 for everything hardware- or device-dependent, except the PipeWire output path and its rate lock, L2 on real interfaces 2026-10-09**
 
 ## Decision to make
 
@@ -161,6 +161,14 @@ The SM-69 design named in the subsection above is now implemented: `internal/age
 **Two further real-time-rate defects were found and measured the same way the R4 fade-tolerance and R5 gap findings above were: by running the pipeline and reading numbers back, not by reasoning about GStreamer's documented behaviour.** A permanent silent keep-alive pad added to keep `interleave` from stalling with no branch connected caused every later-joining branch to start mid-file, because the shared aggregator clock runs from pipeline start: measured at 25s of engine uptime, a `Start` at position 0 read back a position of 29.4s. A fade anchored to that same shared clock, rather than to the branch's own pad offset, then completed with the wrong gain and the wrong timing: a 400ms fade to 0.25 left the gain at 1.0, completing 14.5s late on a 15s-old engine. Both are fixed with per-branch pad offsets; both are recorded here because they are facts about `interleave`'s clock behaviour under a late-joining branch, independent of LTC, and would recur in any future branch type added to this pipeline shape.
 
 **This moves nothing hardware-dependent off L0.** Every gate behind these measurements runs against `fakesink`; no sound was produced or heard. Real ALSA, real multichannel hardware, channel discreteness, drift, and program-to-LTC alignment on a physical interface remain untouched, and interface selection (SM-74) is still open. This evidence is further confidence about the GStreamer/libltc graph on macOS arm64, not Linux evidence and not physical-interface evidence, and it does not supersede or extend the C0a-1/C1a/C2 Debian-container measurements above, which stay on their own platform.
+
+### PipeWire is a required dependency of the audio node (ruled 2026-09-11, measured 2026-09-12 and 2026-10-09)
+
+The PipeWire-versus-raw-ALSA question above is answered for the output path: the audio node requires PipeWire. The owner ruled this on 2026-09-11 when choosing RES-019's candidate A, and the agent ships with it (`pipewiresink` as the output backend, a PipeWire driver node clocked from the PTP hardware clock, the interface as a rate-matched follower). ShowMesh code does not touch samples.
+
+**Measured on real interfaces (L2):** on 2026-09-12 a MOTU M4 (Debian, Intel NIC with a hardware clock) and a Focusrite Scarlett Solo (Raspberry Pi, software timestamping) both followed the PTP-clocked driver at 48 kHz, with `alsasink` out of the signal path. On 2026-10-09 the two nodes held each other for an hour at `22313e54`: readings on the same track moved by at most 2.8 ms over 50 minutes, with no seek. Recordings were two-channel loopback captures on the M4.
+
+**Still open:** an audible check of the rate trim on program material, and Resolume holding LTC through it. Both are owner listening tests. A node whose clock setting is wrong runs its engine on GStreamer's default clock, which stops the PipeWire graph; that is a configuration defect being fixed separately, not evidence against the dependency.
 
 ## Decision, fallback, and revalidation
 

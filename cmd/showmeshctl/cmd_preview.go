@@ -27,9 +27,27 @@ type previewsResponse struct {
 }
 
 type previewGatewayStatus struct {
-	State      string    `json:"state"`
-	Message    string    `json:"message"`
-	ObservedAt time.Time `json:"observedAt"`
+	State        string               `json:"state"`
+	Message      string               `json:"message"`
+	NDIDiscovery *previewNDIDiscovery `json:"ndiDiscovery,omitempty"`
+	ObservedAt   time.Time            `json:"observedAt"`
+}
+
+type previewNDIDiscovery struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
+}
+
+// printNDIDiscovery prints unknown, never running, when the gateway did not report it.
+func printNDIDiscovery(w io.Writer, d *previewNDIDiscovery) {
+	if d == nil {
+		_, _ = fmt.Fprintln(w, "ndi discovery: unknown")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "ndi discovery: %s\n", d.State)
+	if d.Message != "" {
+		_, _ = fmt.Fprintf(w, "               %s\n", d.Message)
+	}
 }
 
 type previewTile struct {
@@ -244,6 +262,9 @@ func cmdPreviewList(args []string, stdout, stderr io.Writer, clock func() time.T
 	_, _ = fmt.Fprintf(stdout, "gateway: %s\n", resp.Gateway.State)
 	if resp.Gateway.Message != "" {
 		_, _ = fmt.Fprintf(stdout, "         %s\n", resp.Gateway.Message)
+	}
+	if resp.Gateway.State == "reachable" {
+		printNDIDiscovery(stdout, resp.Gateway.NDIDiscovery)
 	}
 	if len(resp.Tiles) == 0 {
 		return exitOK

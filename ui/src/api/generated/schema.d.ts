@@ -746,7 +746,7 @@ export interface paths {
         };
         /**
          * The program and LTC choices a node's own reported outputs support
-         * @description Requires `config:write`. Resolved live from the node's current `audio.output.local` advertisement (its `outputs`, `discoveryComplete` and `discoveryIncompleteReason` attributes) and never stored. `routes` is non-empty only when `discovery` is `available`: a node that is offline (`stale`), reported an unreadable list (`failed`), checked only some outputs (`partial`), predates channel reporting (`not_reported`) or reports no outputs (`absent`) offers no choices, and `reason` says why. Channels are offered only up to what the node proved: `channelBasis` `inventory` is the full count its PipeWire graph reports, `atLeast` is a floor an ALSA probe achieved. LTC choices are on the same output as the program group and exclude its channels, each exclusion listed in `conflicts`. `manualEntry` says whether hand-typed channels are still accepted by PUT /config/audio.node/{id}. `current` reports the stored placement against these choices and never changes it. `clock.verification` is `same_interface` when LTC leaves the program interface, `operator_confirmed` when a local clock override is stored, and `no_ltc` on a program-only node.
+         * @description Requires `config:write`. Resolved live from the node's current `audio.output.local` advertisement (its `outputs`, `discoveryComplete`, `discoveryIncompleteReason` and `discoveryIncompleteRoute` attributes) and never stored. `routes` is non-empty only when `discovery` is `available`: a node that is offline (`stale`), reported an unreadable list (`failed`), checked only some outputs (`partial`, whose `reason` names the output when one output was the cause), predates channel reporting (`not_reported`) or reports no outputs (`absent`) offers no choices, and `reason` says why. Channels are offered only up to what the node proved: `channelBasis` `inventory` is the full count its PipeWire graph reports, `atLeast` is a floor an ALSA probe achieved. LTC choices are on the same output as the program group and exclude its channels, each exclusion listed in `conflicts`. `manualEntry` says whether hand-typed channels are still accepted by PUT /config/audio.node/{id}. `current` reports the stored placement against these choices and never changes it. `clock.verification` is `same_interface` when LTC leaves the program interface, `operator_confirmed` when a local clock override is stored, and `no_ltc` on a program-only node.
          */
         get: operations["getAudioRoutingChoices"];
         put?: never;
@@ -5599,6 +5599,13 @@ export interface components {
             state: "not_configured" | "connecting" | "reachable" | "unreachable";
             /** @description States the fact, then the action. Empty when reachable. */
             message: string;
+            /** @description Whether the gateway can find NDI sources. Omitted while the gateway is not reachable or does not report it. */
+            ndiDiscovery?: {
+                /** @enum {string} */
+                state: "running" | "not_running";
+                /** @description States the fact, then the action. Empty when running. */
+                message: string;
+            };
             /** Format: date-time */
             observedAt: string;
         };

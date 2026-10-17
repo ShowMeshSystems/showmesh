@@ -263,12 +263,13 @@ func TestPwDumpEnumeratorRealNodes(t *testing.T) {
 	}
 }
 
-// TestCandidateDevicesExcludesVirtualNames proves null/default are never
-// presented as a candidate route even when real hardware is also present,
+// TestCandidateDevicesExcludesVirtualNames proves null/default and the bare
+// card-less sysdefault are never presented as a candidate route even when
+// real hardware is also present,
 // and that a second alias of the SAME card ("sysdefault:CARD=PCH") is
 // collapsed into its direct "hw:" entry rather than counted separately.
 func TestCandidateDevicesExcludesVirtualNames(t *testing.T) {
-	got := CandidateDevices([]string{"null", "default", "hw:CARD=PCH,DEV=0", "sysdefault:CARD=PCH"}, true)
+	got := CandidateDevices([]string{"null", "default", "sysdefault", "hw:CARD=PCH,DEV=0", "sysdefault:CARD=PCH"}, true)
 	want := []string{"hw:CARD=PCH,DEV=0"}
 	if len(got) != len(want) {
 		t.Fatalf("CandidateDevices = %v, want %v", got, want)

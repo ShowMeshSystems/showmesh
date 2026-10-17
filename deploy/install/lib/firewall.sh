@@ -18,7 +18,7 @@ firewall_configured_port() {
 }
 
 # firewall_node_ports KIND prints "proto|port|label" lines, one per port
-# group, for a render or audio node.
+# group, for a render, audio or render-audio node.
 firewall_node_ports() {
   local kind="$1" http_port sync_port
   http_port="$(firewall_configured_port "$AGENT_ENV" SHOWMESH_FPPCONNECT_LISTEN_ADDR 80)"
@@ -30,7 +30,7 @@ firewall_node_ports() {
   printf 'udp|5004|AES67 RTP\n'
   printf 'udp|9875|AES67 SAP\n'
   printf 'udp|5353|mDNS\n'
-  if [ "$kind" = render ]; then
+  if [ "$kind" != audio ]; then
     printf 'tcp|5959-5999|NDI\n'
     printf 'udp|5959-5999|NDI\n'
   fi
@@ -53,12 +53,12 @@ firewall_coordinator_ports() {
 }
 
 # firewall_ports_for_role ROLE KIND prints the port groups the installed role
-# needs. KIND is the node half (render or audio); unused for other roles.
+# needs. KIND is the node half (render, audio or render-audio); unused for other roles.
 firewall_ports_for_role() {
   local role="$1" kind="$2"
   case "$role" in
     coordinator) firewall_coordinator_ports ;;
-    render|audio) firewall_node_ports "$role" ;;
+    render|audio|render-audio) firewall_node_ports "$role" ;;
     coordinator-node)
       firewall_coordinator_ports
       firewall_node_ports "$kind"
@@ -71,6 +71,7 @@ firewall_role_words() {
     coordinator) printf 'coordinator' ;;
     render) printf 'render node' ;;
     audio) printf 'audio node' ;;
+    render-audio) printf 'audio and render node' ;;
     coordinator-node) printf 'coordinator and node' ;;
   esac
 }
@@ -301,7 +302,7 @@ firewall_install_host_table() {
 }
 
 # firewall_setup ROLE KIND is showmesh-install's one hook into this file.
-# KIND is the node half of a coordinator-node install (render or audio);
+# KIND is the node half of a coordinator-node install (render, audio or render-audio);
 # pass "" for every other role.
 firewall_setup() {
   local role="$1" kind="${2:-}"

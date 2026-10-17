@@ -26,6 +26,7 @@ type fakeGateway struct {
 	snapshots  []string
 	down       bool
 	refuseRTSP bool
+	discovery  *DiscoveryStatus
 	redirect   string
 	slow       time.Duration
 	srv        *httptest.Server
@@ -57,6 +58,16 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /v1/streams", func(w http.ResponseWriter, r *http.Request) { g.reply(w, r, g.states) })
+	mux.HandleFunc("GET /v1/discovery", func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		d := g.discovery
+		g.mu.Unlock()
+		if d == nil {
+			http.NotFound(w, r)
+			return
+		}
+		g.reply(w, r, d)
+	})
 	mux.HandleFunc("POST /v1/streams/{key}/webrtc", func(w http.ResponseWriter, r *http.Request) {
 		if !g.authorized(w, r) {
 			return
@@ -594,5 +605,47 @@ func TestHandAddedNDISourcesBecomeStreamsAndTiles(t *testing.T) {
 	}
 	if tile := tileByKey(t, ov, "ndi:SPARE (Out)"); tile.State != TileDisabled || tile.Label != "Spare" || tile.Message != msgNDIDisabled {
 		t.Fatalf("disabled tile = %+v", tile)
+	}
+}
+
+func TestOverviewReportsNDIDiscoveryOnlyWhenTheGatewaySaysSo(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	svc := newTestService(&staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}})
+	discovery := func() *NDIDiscovery {
+		t.Helper()
+		svc.Reconcile(context.Background())
+		ov, err := svc.Overview(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ov.Gateway.NDIDiscovery
+	}
+
+	if d := discovery(); d != nil {
+		t.Fatalf("an older gateway without the route reported %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{Message: "The NDI runtime is named libndi.so. Rename or link it to libndi.so.6."}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryNotRunning || d.Message != "The NDI runtime is named libndi.so. Rename or link it to libndi.so.6." {
+		t.Fatalf("not running: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryNotRunning || d.Message != msgNoDiscovery {
+		t.Fatalf("not running without a reason: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{Running: true}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryRunning || d.Message != "" {
+		t.Fatalf("running: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.down = true
+	gw.mu.Unlock()
+	if d := discovery(); d != nil {
+		t.Fatalf("an unreachable gateway reported %+v", d)
 	}
 }

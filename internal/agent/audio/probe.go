@@ -146,9 +146,20 @@ func ProbeOutput(ctx context.Context, device string, requestedChannels, requeste
 
 func genericProbeReason(out string, exitedZero bool) string {
 	if !exitedZero {
-		return "gst-launch-1.0 did not exit cleanly: " + lastNonEmptyLine(out)
+		return "gst-launch-1.0 did not exit cleanly: " + probeErrorLine(out)
 	}
 	return "gst-launch-1.0 exited cleanly but never reported reaching PLAYING"
+}
+
+// probeErrorLine prefers gst-launch-1.0's first "ERROR:" line, which names
+// the cause; its last line is always "Freeing pipeline ..." and says nothing.
+func probeErrorLine(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if msg, ok := strings.CutPrefix(strings.TrimSpace(line), "ERROR: "); ok {
+			return strings.TrimSpace(msg)
+		}
+	}
+	return lastNonEmptyLine(out)
 }
 
 func lastNonEmptyLine(s string) string {

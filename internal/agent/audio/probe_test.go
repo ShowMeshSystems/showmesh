@@ -109,6 +109,31 @@ func TestProbeOutputReportsBusyDistinctFromUnavailable(t *testing.T) {
 	}
 }
 
+// The reason names gst-launch's ERROR line, not its last line, which is
+// always "Freeing pipeline ...", as a real busy sysdefault probe showed.
+func TestProbeOutputReasonNamesTheErrorNotTheLastLine(t *testing.T) {
+	fakeGstLaunch(t)
+	withProbeRunner(t, func(ctx context.Context, path string, argv []string) (string, bool) {
+		return "Setting pipeline to PAUSED ...\n" +
+			"ERROR: from element /GstPipeline:pipeline0/GstAlsaSink:alsasink0: Device 'sysdefault' is busy\n" +
+			"Additional debug info:\n" +
+			"../ext/alsa/gstalsasink.c(913): gst_alsasink_open (): /GstPipeline:pipeline0/GstAlsaSink:alsasink0:\n" +
+			"Device 'sysdefault' is busy\n" +
+			"ERROR: pipeline doesn't want to preroll.\n" +
+			"Failed to set pipeline to PAUSED.\n" +
+			"Setting pipeline to NULL ...\n" +
+			"Freeing pipeline ...\n", false
+	})
+
+	got := ProbeOutput(context.Background(), "sysdefault", 0, 0)
+	if got.Available {
+		t.Fatal("ProbeOutput.Available = true, want false")
+	}
+	if !strings.Contains(got.Reason, "Device 'sysdefault' is busy") || strings.Contains(got.Reason, "Freeing pipeline") {
+		t.Errorf("ProbeOutput.Reason = %q, want the ERROR line, not the final Freeing line", got.Reason)
+	}
+}
+
 func TestProbeOutputUnavailableWhenNeverReachedPlaying(t *testing.T) {
 	fakeGstLaunch(t)
 	withProbeRunner(t, func(ctx context.Context, path string, argv []string) (string, bool) {
