@@ -414,6 +414,9 @@ export function Specimen() {
               <Button>Fire and hold the bed</Button>
             </NotWired>
           </ButtonRow>
+          <Tiles>
+            <StatTile label="Enclosure temperature" value="" detail="No source reports this yet." notWired />
+          </Tiles>
           <Callout>
             Amber, not red: nothing has failed. The tag rides on the control, and the control is forced disabled.
           </Callout>

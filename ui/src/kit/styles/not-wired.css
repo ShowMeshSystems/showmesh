@@ -71,3 +71,8 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+/* The stamp standing in for a tile's value. */
+.sm-tile__nowire {
+  display: inline-block;
+}
