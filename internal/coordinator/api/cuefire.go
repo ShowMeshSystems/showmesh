@@ -213,7 +213,8 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 		// at the shared instant.
 		if nodeID, reason, ok := firstConfirmedUnalignedReason(nodes); ok {
 			aligned = false
-			unalignedReason = fmt.Sprintf("node %q confirmed but did not honor the shared start instant: %s", nodeID, reason)
+			h.logWarn("cue activation: node did not honor the shared start time", "node", nodeID, "reason", reason)
+			unalignedReason = fmt.Sprintf("Node %s did not start at the shared time. It started when the command arrived.", nodeID)
 			scheduledAtNs = nil
 		}
 	}
@@ -257,7 +258,7 @@ func cueActivateWireOutcome(o cueActivationDispatchOutcome) v1.CueActivationNode
 	case o.Dispatched && o.Confirmed:
 		return v1.CueActivationNodeOutcome{
 			NodeID: o.NodeID, Dispatched: true, Confirmed: true, Outcome: outcomeWordConfirmed,
-			UnalignedReason:         o.UnalignedReason,
+			UnalignedReason:         cueNodeUnalignedSentence(o.UnalignedReason),
 			StartTrigger:            o.StartTrigger,
 			TriggerSequenceFilename: o.TriggerSequenceFilename,
 			TriggerArrivalNs:        o.TriggerArrivalNs,
@@ -269,10 +270,10 @@ func cueActivateWireOutcome(o cueActivationDispatchOutcome) v1.CueActivationNode
 	case o.Dispatched:
 		return v1.CueActivationNodeOutcome{
 			NodeID: o.NodeID, Dispatched: true, Outcome: outcomeWordUnconfirmed,
-			OutcomeReason: "no confirmed result arrived from this node before the deadline",
+			OutcomeReason: "This node did not confirm in time. Check that the node is online.",
 		}
 	default:
-		return v1.CueActivationNodeOutcome{NodeID: o.NodeID, Outcome: outcomeWordFailed, OutcomeReason: "no outcome was recorded for this node"}
+		return v1.CueActivationNodeOutcome{NodeID: o.NodeID, Outcome: outcomeWordFailed, OutcomeReason: "No result was recorded for this node. Check that the node is online."}
 	}
 }
 
@@ -287,4 +288,13 @@ func firstConfirmedUnalignedReason(nodes []v1.CueActivationNodeOutcome) (nodeID,
 		}
 	}
 	return "", "", false
+}
+
+// cueNodeUnalignedSentence replaces a node's own reason, which names agent
+// internals, with one sentence an operator can act on.
+func cueNodeUnalignedSentence(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return "This node started when the command arrived, not at the shared time."
 }

@@ -9,7 +9,6 @@ package audiosched
 
 import (
 	"fmt"
-	"strings"
 )
 
 // Readiness is one target node's audio.session.prepare result, decoded
@@ -209,12 +208,5 @@ func pickClock(readiness []Readiness) (Readiness, error) {
 // and its tests share one wording for the one outcome an operator is most
 // likely to misread as success.
 func DescribeUnscheduled(err error) string {
-	var reason string
-	if err != nil {
-		reason = err.Error()
-	}
-	if strings.TrimSpace(reason) == "" {
-		reason = "no reason was reported"
-	}
-	return "started on arrival, NOT aligned to a shared instant: " + reason
+	return "The nodes started when the command arrived, not at one shared time. Check that the audio node clocks agree."
 }

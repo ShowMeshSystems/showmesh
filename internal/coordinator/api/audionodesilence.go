@@ -300,7 +300,7 @@ func (h *handlers) executeAudioNodeSilenceDispatch(ctx context.Context, now time
 			result := v1.AudioNodeSilenceResult{
 				CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: audioNodeSilenceAction,
 				NodeID:  in.NodeID,
-				Outcome: "unconfirmable", Reason: "no result received from the node before the deadline",
+				Outcome: "unconfirmable", Reason: "The node did not answer in time. Check that the node is online.",
 				Sessions:     []v1.AudioNodeSilenceSessionResult{},
 				DispatchedAt: formatTime(dispatchedAt),
 			}

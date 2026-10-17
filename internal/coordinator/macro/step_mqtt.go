@@ -212,10 +212,10 @@ func resolveMQTTPayload(expect config.ShowActionMQTTExpect, payload []byte) step
 		}
 		if !b {
 			return stepResult{outcome: outcomeFailed, outcomeState: mqttStateNegativeAnswer,
-				outcomeReason: "the external system reported false"}
+				outcomeReason: "The other system answered no."}
 		}
 		return stepResult{outcome: outcomeConfirmed, outcomeState: mqttStateConfirmed,
-			outcomeReason: "the external system reported true"}
+			outcomeReason: "The other system answered yes."}
 
 	case config.MQTTExpectKindNumber:
 		var f float64
@@ -231,7 +231,7 @@ func resolveMQTTPayload(expect config.ShowActionMQTTExpect, payload []byte) step
 			}
 		}
 		return stepResult{outcome: outcomeConfirmed, outcomeState: mqttStateConfirmed,
-			outcomeReason: fmt.Sprintf("the external system reported %v", f)}
+			outcomeReason: fmt.Sprintf("The other system answered %v.", f)}
 
 	case config.MQTTExpectKindText:
 		if !utf8.Valid(payload) {

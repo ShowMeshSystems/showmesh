@@ -478,14 +478,14 @@ export function describeAudioSessionOutcome(result: AudioSessionCommandResult, a
     return {
       tone: 'good',
       label: result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1),
-      detail: `${action} dispatched.${replaySuffix}${attributionSuffix}`,
+      detail: `${action} sent.${replaySuffix}${attributionSuffix}`,
     }
   }
   if (result.outcome === 'unconfirmable') {
     return {
       tone: 'warn',
-      label: 'Dispatched',
-      detail: `${action}: dispatched. This node cannot confirm it. ${result.reason}`.trim() + replaySuffix + attributionSuffix,
+      label: 'Sent',
+      detail: `${action} sent. This node cannot confirm it. ${result.reason}`.trim() + replaySuffix + attributionSuffix,
     }
   }
   return {
@@ -586,7 +586,7 @@ export function describeAlignedStart(result: AlignedAudioStartResult): CommandOu
     return {
       tone: 'bad',
       label: 'Refused',
-      detail: `Aligned start: ${worst.nodeId} reported ${worst.outcome}${worst.reason === '' ? '' : ` (${worst.reason})`}.`,
+      detail: `Aligned start: ${worst.nodeId} reported ${worst.outcome}.${worst.reason === '' ? '' : ` ${worst.reason}`}`,
     }
   }
   if (!result.aligned || result.selection === null) {
