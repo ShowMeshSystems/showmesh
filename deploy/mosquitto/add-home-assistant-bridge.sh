@@ -5,17 +5,9 @@
 # publishes reach FPP. The bridge is a Mosquitto bridge, so no second client,
 # container or credential on the ShowMesh side is needed.
 #
-# What it writes, under $COORDINATOR_DIR/mosquitto (default
-# /opt/showmesh/coordinator/mosquitto):
-#   conf.d/home-assistant-bridge.conf   the bridge, readable by the broker only
-#   mosquitto.conf                      gains one `include_dir conf.d` line
-#
-# Until the installer carries this setting, an upgrade rewrites mosquitto.conf
-# and drops the include_dir line; the bridge file itself is kept. Run this
-# script again after an upgrade, with the same arguments, to restore it.
-#
-# The bridge changes topic access for nobody: Mosquitto does not apply the
-# local ACL to its own bridges, and the FPP login keeps the grants in acl.conf.
+# It writes $COORDINATOR_DIR/mosquitto/conf.d/home-assistant-bridge.conf
+# (default /opt/showmesh/coordinator), readable by the broker only. The
+# shipped mosquitto.conf includes conf.d, and an installer upgrade keeps it.
 set -eu
 
 COORDINATOR_DIR="${COORDINATOR_DIR:-/opt/showmesh/coordinator}"
@@ -124,6 +116,7 @@ if [ "$REMOVE" = yes ]; then
   exit 0
 fi
 
+grep -qx "$INCLUDE_LINE" "$MQ_DIR/mosquitto.conf" || die "this coordinator's broker settings are too old to load the bridge. Run showmesh-install to upgrade the coordinator, then run this again."
 [ -n "$HA_HOST" ] || { usage >&2; die "--host is required."; }
 [ -n "$HA_USER" ] || { usage >&2; die "--user is required."; }
 case "$HA_PORT" in ''|*[!0-9]*) die "--port must be a number." ;; esac
@@ -167,7 +160,7 @@ notification_topic \$SYS/broker/connection/$BRIDGE_NAME/state
 try_private true
 bridge_protocol_version mqttv311
 
-# FPP status and FPP commands, in both directions.
+# Every FPP topic in both directions: status, commands and set/ requests.
 topic falcon/player/# both 0
 # FPP's Home Assistant discovery announcements, when FPP publishes them here.
 topic homeassistant/# out 0
@@ -180,11 +173,6 @@ chgrp "$MQ_GID" "$tmp" 2>/dev/null || true
 chmod 0640 "$tmp"
 mv -f "$tmp" "$BRIDGE_FILE"
 say "Wrote $BRIDGE_FILE."
-
-if ! grep -qx "$INCLUDE_LINE" "$MQ_DIR/mosquitto.conf"; then
-  printf '\n# Drop-in settings, such as the Home Assistant bridge. Added by add-home-assistant-bridge.sh.\n%s\n' "$INCLUDE_LINE" >> "$MQ_DIR/mosquitto.conf"
-  say "Added '$INCLUDE_LINE' to mosquitto.conf."
-fi
 
 restart_broker
 [ "$RESTART" = yes ] && wait_for_bridge

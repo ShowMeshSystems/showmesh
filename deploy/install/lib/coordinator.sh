@@ -53,7 +53,7 @@ coord_install_docker() {
 coord_install_bundle() {
   step "Placing the coordinator bundle in $COORDINATOR_DIR"
   local src="$BUNDLE_DIR/coordinator" f
-  mkdir -p "$COORDINATOR_DIR/mosquitto"
+  mkdir -p "$COORDINATOR_DIR/mosquitto/conf.d"
   for f in docker-compose.yml docker-compose.published.yml; do
     install -m 0644 "$src/$f" "$COORDINATOR_DIR/$f"
   done
@@ -63,7 +63,8 @@ coord_install_bundle() {
   for f in generate-credentials.sh add-agent-credential.sh add-home-assistant-bridge.sh run-with-reload.sh; do
     install -m 0755 "$src/mosquitto/$f" "$COORDINATOR_DIR/mosquitto/$f"
   done
-  ok "bundle files updated; .env and broker logins are kept"
+  install -m 0644 "$src/mosquitto/conf.d/README" "$COORDINATOR_DIR/mosquitto/conf.d/README"
+  ok "bundle files updated; .env, broker logins and broker drop-ins such as the Home Assistant bridge are kept"
 }
 
 coord_choose_broker() {
@@ -137,6 +138,8 @@ apply_broker_config_ownership() {
   chmod 2755 "$dir"
   if [ -f "$dir/passwd" ]; then chown 65532:1883 "$dir/passwd"; chmod 0640 "$dir/passwd"; fi
   if [ -f "$dir/acl.generated.conf" ]; then chown 65532:1883 "$dir/acl.generated.conf"; chmod 0644 "$dir/acl.generated.conf"; fi
+  chown root:1883 "$dir/conf.d"
+  chmod 2750 "$dir/conf.d"
   return 0
 }
 

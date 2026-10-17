@@ -55,6 +55,7 @@ check "the broker accepts the coordinator's login" "in_box 'grep -q \"ok: the br
 check "Docker Compose is at least 2.24" "in_box 'grep -Eq \"with Compose 2\\.(2[4-9]|[3-9][0-9])\" /tmp/install-0.0.0-bench1.log'"
 check ".env carries the release and broker settings" "in_box 'cd /opt/showmesh/coordinator && grep -qx SHOWMESH_RELEASE_VERSION=0.0.0-bench1 .env && grep -qx SHOWMESH_BROKER_MODE=builtin .env && grep -q ^SHOWMESH_NODE_BROKER_URL=tcp://.*:1883\$ .env && grep -q ^SHOWMESH_PUBLIC_URL=http://.*:8080\$ .env && [ \$(stat -c %a .env) = 600 ]'"
 check "the broker files belong to the coordinator's uid" "in_box '[ \$(stat -c %u:%g:%a /opt/showmesh/coordinator/mosquitto/passwd) = 65532:1883:640 ] && [ \$(stat -c %a /opt/showmesh/coordinator/mosquitto) = 2755 ]'"
+check "the broker's drop-in directory is readable by the broker only" "in_box '[ \$(stat -c %u:%g:%a /opt/showmesh/coordinator/mosquitto/conf.d) = 0:1883:2750 ]'"
 check "showmeshctl signs in as the administrator" "in_box 'showmeshctl principal list | grep -q bench-admin'"
 check "the coordinator is announced as _showmesh._tcp" "in_box 'grep -q _showmesh._tcp /etc/avahi/services/showmesh.service && grep -q \"<port>8080</port>\" /etc/avahi/services/showmesh.service'"
 check "the given address is what nodes are told" "in_box 'grep -qx SHOWMESH_PUBLIC_URL=http://192.0.2.44:8080 /opt/showmesh/coordinator/.env && grep -qx SHOWMESH_NODE_BROKER_URL=tcp://192.0.2.44:1883 /opt/showmesh/coordinator/.env'"
@@ -113,8 +114,12 @@ check "a coordinator that does not answer refuses the upgrade" "[ $? -ne 0 ] && 
 in_box 'cp /root/ctl.env.orig /etc/showmesh/showmeshctl.env'
 
 in_box 'showmeshctl assets settings set --content-base-url http://192.0.2.99:8080 >/dev/null 2>&1'
+in_box 'echo bench-pass > /root/ha-pass && /opt/showmesh/coordinator/mosquitto/add-home-assistant-bridge.sh --host 192.0.2.1 --user bench --password-file /root/ha-pass --no-restart >/dev/null'
 run_install 0.0.0-bench2 --yes
 check "upgrade succeeds with no options" "[ $? -eq 0 ]"
+check "an upgrade keeps the Home Assistant bridge" "in_box 'grep -qx \"address 192.0.2.1:1883\" /opt/showmesh/coordinator/mosquitto/conf.d/home-assistant-bridge.conf && grep -qx \"include_dir /mosquitto/config/conf.d\" /opt/showmesh/coordinator/mosquitto/mosquitto.conf'"
+check "the upgraded broker loads the bridge" "in_box 'cd /opt/showmesh/coordinator && docker compose -f docker-compose.yml -f docker-compose.published.yml restart mosquitto >/dev/null 2>&1 && sleep 3 && docker compose -f docker-compose.yml -f docker-compose.published.yml logs mosquitto | grep -q \"Connecting bridge home-assistant (192.0.2.1:1883)\"'"
+in_box '/opt/showmesh/coordinator/mosquitto/add-home-assistant-bridge.sh --remove --no-restart >/dev/null'
 check "an upgrade leaves a changed content base URL alone" "in_box 'showmeshctl assets settings get --output json | grep -Eq \"contentBaseUrl\\\"?: *\\\"http://192.0.2.99:8080\\\"\" && grep -q \"the content base URL is already saved and was left as it is\" /tmp/install-0.0.0-bench2.log'"
 check "upgrade runs the bench2 images" "in_box 'cd /opt/showmesh/coordinator && docker compose -f docker-compose.yml -f docker-compose.published.yml ps --format \"{{.Image}}\" | grep -c 0.0.0-bench2 | grep -qx 2'"
 check "upgrade keeps the administrator token" "in_box 'grep -q \"showmeshctl already signs in as an administrator\" /tmp/install-0.0.0-bench2.log'"

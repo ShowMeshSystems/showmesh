@@ -640,6 +640,14 @@ an FPP publisher role limited to FPP's own status topics, with no access to any
 FPP's MQTT output on upgrade, and decision 10's own reopening condition below
 would be met by the topology ADR-008 recommends.
 
+**Amended 2026-10-17: the FPP role is wide, not limited to status topics.** The
+FPP login may subscribe to any topic and publish anything under `falcon/player/`
+and `homeassistant/`, so FPP's full topic set, its Home Assistant discovery
+announcements and its `set/` requests all reach a bridged Home Assistant broker.
+The owner ruled the narrow role unhelpful: a show network is dedicated and
+isolated, and nothing on it needs hiding from FPP. Accepted: any FPP player, or
+anyone holding the shared FPP login, can command any FPP player on the broker.
+
 **Broker credentials are generated per deployment at first run, never shipped in
 `deploy/`.** A credential set authored into the bundle would be identical in
 every installation, making the ACL decorative, which is the failure ADR-021

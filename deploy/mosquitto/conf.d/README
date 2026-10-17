@@ -1,0 +1,2 @@
+# Mosquitto loads only *.conf files from this directory. add-home-assistant-bridge.sh
+# writes its bridge here, and an installer upgrade keeps whatever is here.
