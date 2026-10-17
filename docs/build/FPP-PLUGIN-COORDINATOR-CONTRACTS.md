@@ -760,6 +760,9 @@ Response body, every field always present:
 | `weatherGateClosed` | boolean | True while the weather gate holds output at zero (section 2.5). `effectiveOutput` is then 0 whatever the ceiling and gain read. |
 | `updatedAtMillis` | number | The plugin's clock, in milliseconds, at the moment the snapshot was taken. |
 | `excludedRanges` | array | The channel ranges no ceiling changes, each `{"startChannel", "channelCount"}` with a 1-based start. Empty when nothing is excluded. A plugin older than section 2.7 omits it. |
+| `ceilingTarget` | integer | The ceiling's target, 0 to 100: where a fade in progress is going, or the ceiling itself when nothing fades. A plugin older than section 2.8 omits it. |
+| `ceilingFadeEndMillis` | number | The plugin's clock when the ceiling fade in progress ends, or `0` when the ceiling is not fading. A plugin older than section 2.8 omits it. |
+| `ceilingChangedAtMillis` | number | The plugin's clock when the ceiling was last deliberately set, by the FPP action (which the plugin page fader, FPP scheduler entries and the coordinator all use) or by a peer's state adopted over MultiSync, which carries the peer's time. `0` when it never has been. A restart's safe-ceiling settle and a restore from the plugin's persisted state leave it unchanged. A plugin older than section 2.8 omits it. |
 
 Example: `{"schemaVersion":1,"ceiling":60,"transitionGain":75,"effectiveOutput":45,"fadeActive":false,"weatherGateClosed":false,"updatedAtMillis":1790000000000}`
 
@@ -813,6 +816,56 @@ channel 8388608 or overlaps another. It then reads section 2.6's route for up
 to three seconds and reports confirmed only when the plugin holds the same
 channels. A `404` from the write is reported as a plugin too old to exclude
 channels.
+
+
+### 2.8 One ceiling for every FPP
+
+[ADR-062](../decisions/ADR-062-brightness-is-one-setting-for-every-fpp.md):
+the display has one brightness ceiling, held by the coordinator, and every FPP
+in `fpp.endpoints` follows it.
+
+**Desired state.** The coordinator persists one record: `targetPercent`
+(0 to 100), the fade end time or none, `changedAt` on the coordinator's clock,
+and who set it (an operator principal, or the FPP instance id it was adopted
+from). Until the first record exists the coordinator writes no ceiling.
+
+**Each poll of section 2.6, per FPP:**
+
+1. Correct the plugin's times to the coordinator's clock:
+   `offset = receivedAt - updatedAtMillis`, and
+   `changedAt' = ceilingChangedAtMillis + offset`. Both correction terms come
+   from the same response.
+2. When the plugin reports `ceilingChangedAtMillis` greater than 0,
+   `ceilingTarget` differs from the desired target, and `changedAt'` is later
+   than the desired `changedAt`, the FPP's ceiling becomes the desired one:
+   target `ceilingTarget`, fade end `ceilingFadeEndMillis + offset` when it is
+   nonzero, `changedAt = changedAt'`, set by that instance. When several FPPs
+   qualify from the same round of polls, the latest `changedAt'` wins.
+3. Otherwise, when `ceilingTarget` (or, from a plugin that omits it, `ceiling`
+   while `fadeActive` is false) differs from the desired target, the
+   coordinator invokes `ShowMesh: Set Brightness Ceiling` on that FPP with the
+   desired target and, while the desired fade has not ended, the remaining
+   whole seconds of it, rounded up; otherwise `0`. A write to one FPP is not
+   repeated sooner than one poll interval after the previous attempt.
+4. An FPP that reports no brightness (section 2.6's `404`) is reported as not
+   following, with no write.
+
+A plugin that omits `ceilingChangedAtMillis` is written to under rule 3 and
+never adopted from under rule 2.
+
+**The plugin's side.** The plugin stamps `ceilingChangedAtMillis` in
+`BrightnessEngine::setCeiling` and when `adoptState` changes the ceiling's
+target or fade, taking the adopted state's `stateChangedAtMillis`. It persists
+the field with the rest of its brightness state. It sends its full state over
+MultiSync with `MultiSync::SendPluginData` from its worker thread whenever the
+state's revision changes and when it starts, only while FPP has MultiSync
+enabled, never from `modifyChannelData`. A remote, which cannot send, still
+receives and adopts.
+
+**Transition gain.** The night session's fades, a lighting cue's gain and the
+manual transition-gain write go to every FPP in `fpp.endpoints`, each with
+section 2.2's body and its own `requestId`. One FPP refusing or unreachable
+does not stop the writes to the others.
 
 ## 3. Playlist definition publication
 
