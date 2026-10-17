@@ -198,8 +198,16 @@ operator-edited state that a re-run must avoid touching.
    exact value), `node.group` set to the value in
    `deploy/node/ptp-audio/ptp-group.conf` (`showmesh-ptp` by default),
    clocked from `clock.device=/dev/ptpN` when a PHC was found or
-   `clock.id=realtime` when it was not, and `default.clock.rate=48000` to
-   match the sound card's native rate.
+   `clock.id=monotonic` when it was not, and `default.clock.rate=48000` to
+   match the sound card's native rate. Not `clock.id=realtime`: PipeWire's
+   ALSA follower measures its own wakeups on `CLOCK_MONOTONIC` and compares
+   them with the driver's cycle time, so the driver belongs on that clock.
+   The clock choice is necessary, not sufficient: on one PHC-less
+   production node (MOTU M4 over USB, Realtek NIC, PipeWire 1.4.2) the
+   card could not follow any `support.node.driver` with any clock and the
+   graph sat at zero rate with the card in XRUN. That node runs the card
+   self-clocked until the cause is found. Always run `verify-ptp-audio.sh`
+   after installing; its graph-cycling check is what catches this.
 
    **`node.group` is not optional decoration.** PipeWire/WirePlumber elect
    a driver *within* a node.group, not graph-wide: a sound card's own
@@ -436,7 +444,7 @@ now reads `node.driver-id` instead of a node's own `node.driver` flag
 
 `bench/ptp-node` (see its own README) proved, on two Debian 13
 containers with no PHC: real package installation, correct PHC/no-PHC
-detection and the `clock.id=realtime` fallback, all three roles producing
+detection and the `clock.id=monotonic` fallback, all three roles producing
 the documented `clientOnly`/`priority1` values, a real `ptp4l` reaching
 MASTER (grandmaster role, alone on the wire and with a follower present)
 and SLAVE (follower role, with `pmc`-reported grandmaster identity and

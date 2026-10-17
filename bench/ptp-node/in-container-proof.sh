@@ -10,7 +10,7 @@
 #    software timestamping only, since no container has a PHC;
 #  - a real PipeWire + WirePlumber pair, started from the exact generated
 #    config, elects the showmesh-ptp-driver node as a driver in the graph,
-#    clocked from clock.id=realtime (the no-PHC case);
+#    clocked from clock.id=monotonic (the no-PHC case);
 #  - a pipewiresink GStreamer pipeline plays into that graph without error;
 #  - the node.group election mechanism itself: a synthetic sink node
 #    placed in the same node.group as showmesh-ptp-driver (deploy/node/
@@ -70,10 +70,10 @@ if grep -q 'time_stamping software' /etc/showmesh/ptp4l.conf; then
 else
   echo "FAIL: expected software timestamping in a container with no PHC"; exit 1
 fi
-if grep -q 'clock.id = realtime' /etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf; then
-  echo "OK: PipeWire clock config correctly fell back to clock.id=realtime (no PHC)"
+if grep -q 'clock.id = monotonic' /etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf; then
+  echo "OK: PipeWire clock config correctly fell back to clock.id=monotonic (no PHC)"
 else
-  echo "FAIL: expected clock.id=realtime in the PipeWire driver config"; exit 1
+  echo "FAIL: expected clock.id=monotonic in the PipeWire driver config (clock.id=realtime stalls PipeWire's ALSA follower)"; exit 1
 fi
 case "$ROLE" in
   follower)
