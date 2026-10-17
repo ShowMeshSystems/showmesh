@@ -22538,6 +22538,31 @@ components:
         online, a missing item-transition capability reads `failed`
         immediately, even during that same post-connect window.
 
+        Every node the background audio resolves to also gets
+        `resting:background-audio-node-setup:<node>`, which fails when
+        that node has no `audio.node` object or no longer finds its
+        program route, because such a node confirms every command and
+        plays to no connected output. When the show's `audioNodes`
+        decide where background audio plays,
+        `resting:background-audio-item-targets` warns about each item
+        whose own target node is not among them.
+
+        Each show playlist of this session's show gets
+        `show:cue-audio-targets:<playlistId>`, the same audio routing
+        rule as the playlist readiness conditions `audio-target-unbound`,
+        `audio-target-unresolved` and `audio-ltc-emitter-ambiguous`.
+        `catalog:node-catalog-stale:<node>` also fails when a node's
+        resolved cue list gives a cue timecode without its audio, since
+        the node refuses every such activation.
+
+        Every configured `audio.node` also gets `audio:clock:<nodeId>`,
+        which fails when the node plays through PipeWire
+        (`node.audio.engine.sink_backend` is `pipewiresink`) on
+        GStreamer's default clock (`node.audio.engine.clock_source` is
+        `default`). That node stalls the whole PipeWire graph and plays
+        nothing while its engine still reports usable. It is
+        `not_verifiable` while the node has not reported both signals.
+
         It also checks every configured `audio.node` object's measured
         program-to-LTC alignment against `audio.settings`'
         `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded`
