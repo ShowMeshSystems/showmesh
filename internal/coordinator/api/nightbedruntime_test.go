@@ -886,20 +886,39 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsP
 
 // TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile
 // proves a listed node with no way to receive a copy fails, naming the
-// node and the item: neither node-a nor node-b (this bed's only declared
-// targets) has any registered row for bg-1/bg-2, and node-c's own row is
-// never consulted because it is not a listed target.
+// node and the item: no node has any upload of bg-1 or bg-2.
 func TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile(t *testing.T) {
-	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-c", "asset-2")
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
 	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthFailed() {
-		t.Fatalf("health = %v, want failed (no listed target has a registered copy)", check.health)
+		t.Fatalf("health = %v, want failed (no node has an upload of either file)", check.health)
 	}
 	if !reasonMentionsAll(nightCheckText(check), "node-a", "node-b", "bg-1", "bg-2") {
 		t.Fatalf("reason = %q, want it to name both nodes and both items", nightCheckText(check))
+	}
+}
+
+// TestNightCheckBackgroundAudioBedTargetCoverage_BorrowsFromUnlistedNode
+// proves an upload made only for a node outside the bed's list still
+// covers every listed node.
+func TestNightCheckBackgroundAudioBedTargetCoverage_BorrowsFromUnlistedNode(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putActiveShowForTest(t, st, "halloween")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-c", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-c", "asset-2")
+	for _, node := range []string{"node-a", "node-b"} {
+		putNodeInventoryForTest(t, st, node, testNow,
+			store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "asset-1.mp3", SizeBytes: 12345},
+			store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+		)
+	}
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("health = %v, reason = %q, want healthy (node-c's uploads cover both listed nodes)", check.health, nightCheckText(check))
 	}
 }
 

@@ -186,8 +186,8 @@ const SHOW_SOURCE: AssetVerdictSource = { kind: 'show', registeredTarget: '', re
 
 /**
  * Every node expected to hold `asset`, or that a fresh verdict names for
- * it: a node-targeted or show-wide row is expected directly from the
- * asset's own fields, evidence or not, and renders Unknown rather than
+ * it: a node-targeted or show-wide non-audio row is expected directly from
+ * the asset's own fields, evidence or not, and renders Unknown rather than
  * being silently dropped when that node has no fresh report; a borrowed
  * (cue_copy/bed_copy) copy is knowable only through another node's own
  * fresh verdict naming this exact assetId, so it appears only when one
@@ -202,7 +202,8 @@ function nodeEntriesForAsset(
   const nodeIds = new Set<string>()
   if (asset.targetKind === 'node') {
     nodeIds.add(asset.target)
-  } else {
+  } else if (asset.mediaType !== 'audio') {
+    // Show-wide audio goes only to audio nodes, which their own verdicts name below.
     for (const n of declaredNodes) nodeIds.add(n.nodeId)
   }
   for (const [nodeId, byAsset] of verdictIndex) {

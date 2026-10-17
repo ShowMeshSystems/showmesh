@@ -21789,7 +21789,7 @@ components:
         show-config-not-implemented). show/sequence/target are the same
         asset identity night.session's own background-audio items resolve
         against (ADR-028); show must equal the playlist's own show.
-      required: [kind, show, sequence, target]
+      required: [kind, show, sequence]
       properties:
         kind:
           type: string
@@ -21803,6 +21803,10 @@ components:
         target:
           type: string
           minLength: 1
+          description: >-
+            Optional. Names one node's own upload of the file. Omitted, the
+            item is the sequence's audio, and each playing node uses its
+            own upload, then the show-wide upload, then another node's.
     ConfigMediaPlaylist:
       type: object
       description: >-
@@ -21965,7 +21969,7 @@ components:
         operator-visible (pinned against pkg/audio.PlaylistItem on Track
         C's branch, Track F seam F1): unlike position in the array, it
         survives a reorder. Must be unique within the list.
-      required: [itemId, show, sequence, target]
+      required: [itemId, show, sequence]
       properties:
         itemId:
           type: string
@@ -21980,7 +21984,12 @@ components:
           type: string
           minLength: 1
           description: >-
-            Which registered copy of the file this item uses. When the
+            Optional. Omitted, the item is the sequence's audio: it plays on
+            the bed's own targets, or on the show's audioNodes when the bed
+            names none, and each node uses its own upload, then the
+            show-wide upload, then another node's. Saving such an item is
+            refused when neither list names a node. When present, this
+            names which registered copy of the file this item uses. When the
             bed's own targets (ADR-049) is absent or empty, this also
             decides where the item plays: items are not required to
             share one target, and every distinct target among them is
@@ -23127,7 +23136,7 @@ components:
           format: date-time
     NightBackgroundAudioPlanItem:
       type: object
-      required: [position, itemId, show, sequence, target]
+      required: [position, itemId, show, sequence]
       properties:
         position:
           type: integer
@@ -23140,7 +23149,9 @@ components:
           type: string
         target:
           type: string
-          description: The audio node that holds this item's file.
+          description: >-
+            The audio node that holds this item's file. Absent when the
+            item names only its sequence.
     NightBackgroundAudioPlan:
       type: object
       description: >-

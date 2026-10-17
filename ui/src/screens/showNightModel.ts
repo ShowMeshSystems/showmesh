@@ -514,7 +514,7 @@ export function plannedBackgroundAudio(audio: NightBackgroundAudio): PlannedBack
       { label: 'Transition', value: transition },
     ],
     nodes: plan.nodes.join(', '),
-    items: plan.items.map((item) => ({ key: `${item.position}:${item.itemId}`, position: item.position, sequence: item.sequence, target: item.target, itemId: item.itemId })),
+    items: plan.items.map((item) => ({ key: `${item.position}:${item.itemId}`, position: item.position, sequence: item.sequence, target: item.target ?? 'Each node', itemId: item.itemId })),
   }
 }
 
