@@ -26,6 +26,7 @@ type fakeGateway struct {
 	snapshots  []string
 	down       bool
 	refuseRTSP bool
+	discovery  *DiscoveryStatus
 	redirect   string
 	slow       time.Duration
 	srv        *httptest.Server
@@ -57,6 +58,16 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /v1/streams", func(w http.ResponseWriter, r *http.Request) { g.reply(w, r, g.states) })
+	mux.HandleFunc("GET /v1/discovery", func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		d := g.discovery
+		g.mu.Unlock()
+		if d == nil {
+			http.NotFound(w, r)
+			return
+		}
+		g.reply(w, r, d)
+	})
 	mux.HandleFunc("POST /v1/streams/{key}/webrtc", func(w http.ResponseWriter, r *http.Request) {
 		if !g.authorized(w, r) {
 			return
@@ -542,5 +553,99 @@ func TestSlowSnapshotAndOfferTimeOutWithoutMarkingTheGatewayUnreachable(t *testi
 	ov, err := svc.Overview(context.Background())
 	if err != nil || ov.Gateway.State != GatewayReachable {
 		t.Fatalf("gateway state = %q, %v", ov.Gateway.State, err)
+	}
+}
+
+func TestHandAddedNDISourcesBecomeStreamsAndTiles(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.sources = []Source{{Name: "NODE-01 (matrix-main)"}, {Name: "ARENA (Composition)"}}
+	src := &staticSettings{s: Settings{
+		GatewayURL: gw.srv.URL, Token: "tok",
+		Surfaces: []Surface{{NodeID: "node-01", SurfaceID: "matrix-main", SourceName: "matrix-main"}},
+		NDISources: []NDISource{
+			{ID: "far", Label: "Far barn", Name: "BARN-02 (Composition)", Address: "10.0.20.15:5961", Enabled: true},
+			{ID: "arena", Label: "Arena main", Name: "ARENA (Composition)", Enabled: true},
+			{ID: "node", Label: "Ignored for a node", Name: "NODE-01 (matrix-main)", Address: "10.0.20.16:5961", Enabled: true},
+			{ID: "off", Label: "Spare", Name: "SPARE (Out)", Enabled: false},
+		},
+	}}
+	svc := newTestService(src)
+	svc.Reconcile(context.Background())
+
+	want := []Stream{
+		{Key: "ndi:ARENA (Composition)", Kind: "ndi", NDIName: "ARENA (Composition)"},
+		{Key: "ndi:BARN-02 (Composition)", Kind: "ndi", NDIName: "BARN-02 (Composition)", NDIAddress: "10.0.20.15:5961"},
+		{Key: "ndi:NODE-01 (matrix-main)", Kind: "ndi", NDIName: "NODE-01 (matrix-main)", NDIAddress: "10.0.20.16:5961"},
+	}
+	got := gw.lastPut()
+	if len(got) != len(want) {
+		t.Fatalf("streams = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("stream %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	ov, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ov.Tiles) != 4 {
+		t.Fatalf("a hand-added source with a discovered name must share one tile: %+v", ov.Tiles)
+	}
+	if tile := tileByKey(t, ov, "ndi:ARENA (Composition)"); tile.Label != "Arena main" {
+		t.Fatalf("arena label = %q", tile.Label)
+	}
+	if tile := tileByKey(t, ov, "ndi:BARN-02 (Composition)"); tile.Label != "Far barn" || tile.State == TileNotFound {
+		t.Fatalf("unannounced hand-added tile = %+v", tile)
+	}
+	if tile := tileByKey(t, ov, "ndi:NODE-01 (matrix-main)"); tile.Label != "node-01 · matrix-main" || tile.NodeID != "node-01" {
+		t.Fatalf("node match must win over the hand-added label: %+v", tile)
+	}
+	if tile := tileByKey(t, ov, "ndi:SPARE (Out)"); tile.State != TileDisabled || tile.Label != "Spare" || tile.Message != msgNDIDisabled {
+		t.Fatalf("disabled tile = %+v", tile)
+	}
+}
+
+func TestOverviewReportsNDIDiscoveryOnlyWhenTheGatewaySaysSo(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	svc := newTestService(&staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}})
+	discovery := func() *NDIDiscovery {
+		t.Helper()
+		svc.Reconcile(context.Background())
+		ov, err := svc.Overview(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ov.Gateway.NDIDiscovery
+	}
+
+	if d := discovery(); d != nil {
+		t.Fatalf("an older gateway without the route reported %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{Message: "The NDI runtime is named libndi.so. Rename or link it to libndi.so.6."}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryNotRunning || d.Message != "The NDI runtime is named libndi.so. Rename or link it to libndi.so.6." {
+		t.Fatalf("not running: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryNotRunning || d.Message != msgNoDiscovery {
+		t.Fatalf("not running without a reason: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.discovery = &DiscoveryStatus{Running: true}
+	gw.mu.Unlock()
+	if d := discovery(); d == nil || d.State != NDIDiscoveryRunning || d.Message != "" {
+		t.Fatalf("running: %+v", d)
+	}
+	gw.mu.Lock()
+	gw.down = true
+	gw.mu.Unlock()
+	if d := discovery(); d != nil {
+		t.Fatalf("an unreachable gateway reported %+v", d)
 	}
 }

@@ -59,10 +59,10 @@ func TestNDISourceIsALoopbackFeedNotACommand(t *testing.T) {
 	if src != want {
 		t.Fatalf("source = %q", src)
 	}
-	if name, ok := m.NDIName(streamID("k")); !ok || name != "A (x) y" {
-		t.Fatalf("NDIName = %q, %v", name, ok)
+	if name, _, ok := m.NDISource(streamID("k")); !ok || name != "A (x) y" {
+		t.Fatalf("NDISource = %q, %v", name, ok)
 	}
-	if _, ok := m.NDIName(streamID("other")); ok {
+	if _, _, ok := m.NDISource(streamID("other")); ok {
 		t.Fatal("unknown id resolved")
 	}
 }
@@ -322,7 +322,7 @@ func TestSlowEngineDoesNotBlockLookupsOrStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		m.Lookup("camera:b")
-		m.NDIName("x")
+		m.NDISource("x")
 		m.NoteResult("camera:b", true)
 		close(done)
 	}()
@@ -347,7 +347,7 @@ func TestChangedSpecUnderTheSameKeyIsReplaced(t *testing.T) {
 	if len(e.deletes) != 1 || e.deletes[0] != id || len(e.puts) != 2 {
 		t.Fatalf("a changed ndiName must be deleted then put: deletes=%v puts=%v", e.deletes, e.puts)
 	}
-	if name, _ := m.NDIName(id); name != "B (y)" {
+	if name, _, _ := m.NDISource(id); name != "B (y)" {
 		t.Fatalf("feed would still serve %q", name)
 	}
 }
@@ -438,5 +438,27 @@ func TestPendingStreamsLogOncePerChangeNotPerStreamPerPass(t *testing.T) {
 	m.Resync(ctx)
 	if h.warns != 2 {
 		t.Fatalf("%d warnings after the engine recovered and failed again, want 2", h.warns)
+	}
+}
+
+func TestNDIStreamWithAnAddressNeedsNoAnnouncement(t *testing.T) {
+	e := newFakeEngine()
+	src := &fakeSources{ok: false, names: map[string]bool{}, msg: msgNoAvahi}
+	m := newTestManager(e, src)
+	spec := StreamSpec{Key: "ndi:A (x)", Kind: KindNDI, NDIName: "A (x)", NDIAddress: "10.0.20.15:5961"}
+	m.Set(context.Background(), []StreamSpec{spec})
+	if name, addr, ok := m.NDISource(streamID(spec.Key)); !ok || name != "A (x)" || addr != "10.0.20.15:5961" {
+		t.Fatalf("NDISource = %q %q %v", name, addr, ok)
+	}
+	for _, st := range m.Streams(context.Background()) {
+		if st.Key == spec.Key && (st.State == StateNotFound || st.State == StateError) {
+			t.Fatalf("a source reached by address was judged by discovery: %+v", st)
+		}
+	}
+	moved := spec
+	moved.NDIAddress = "10.0.20.16:5961"
+	m.Set(context.Background(), []StreamSpec{moved})
+	if len(e.deletes) != 1 {
+		t.Fatalf("a changed address must replace the stream: deletes=%v", e.deletes)
 	}
 }

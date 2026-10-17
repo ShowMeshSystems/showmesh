@@ -53,17 +53,18 @@ coord_install_docker() {
 coord_install_bundle() {
   step "Placing the coordinator bundle in $COORDINATOR_DIR"
   local src="$BUNDLE_DIR/coordinator" f
-  mkdir -p "$COORDINATOR_DIR/mosquitto"
+  mkdir -p "$COORDINATOR_DIR/mosquitto/conf.d"
   for f in docker-compose.yml docker-compose.published.yml; do
     install -m 0644 "$src/$f" "$COORDINATOR_DIR/$f"
   done
   for f in mosquitto.conf acl.conf; do
     install -m 0644 "$src/mosquitto/$f" "$COORDINATOR_DIR/mosquitto/$f"
   done
-  for f in generate-credentials.sh add-agent-credential.sh run-with-reload.sh; do
+  for f in generate-credentials.sh add-agent-credential.sh add-home-assistant-bridge.sh run-with-reload.sh; do
     install -m 0755 "$src/mosquitto/$f" "$COORDINATOR_DIR/mosquitto/$f"
   done
-  ok "bundle files updated; .env and broker logins are kept"
+  install -m 0644 "$src/mosquitto/conf.d/README" "$COORDINATOR_DIR/mosquitto/conf.d/README"
+  ok "bundle files updated; .env, broker logins and broker drop-ins such as the Home Assistant bridge are kept"
 }
 
 coord_choose_broker() {
@@ -137,6 +138,8 @@ apply_broker_config_ownership() {
   chmod 2755 "$dir"
   if [ -f "$dir/passwd" ]; then chown 65532:1883 "$dir/passwd"; chmod 0640 "$dir/passwd"; fi
   if [ -f "$dir/acl.generated.conf" ]; then chown 65532:1883 "$dir/acl.generated.conf"; chmod 0644 "$dir/acl.generated.conf"; fi
+  chown root:1883 "$dir/conf.d"
+  chmod 2750 "$dir/conf.d"
   return 0
 }
 
@@ -433,6 +436,71 @@ coord_fpp_event_feed() {
   esac
 }
 
+# coord_home_assistant sets up, keeps or removes the built-in broker's bridge to Home Assistant's broker.
+coord_home_assistant() {
+  local script="$COORDINATOR_DIR/mosquitto/add-home-assistant-bridge.sh"
+  local bridge="$COORDINATOR_DIR/mosquitto/conf.d/home-assistant-bridge.conf"
+  local host="$OPT_HA_HOST" user="$OPT_HA_USER" pass="" port=1883 log flags=()
+  if [ "$BROKER_MODE" != "builtin" ]; then
+    [ -z "$host" ] && [ "$OPT_HA_REMOVE" -eq 0 ] && return 0
+    warn "The Home Assistant bridge needs the built-in broker, so it was not set up. Bridge your own broker to Home Assistant instead."
+    return 0
+  fi
+  log="$(run_tmp)"
+  if [ "$OPT_HA_REMOVE" -eq 1 ]; then
+    step "Taking down the Home Assistant bridge"
+    if [ ! -f "$bridge" ]; then ok "there is no Home Assistant bridge to take down"; return 0; fi
+    run_step "removing the bridge and restarting the broker" "$log" "$script" --remove ||
+      { warn "The Home Assistant bridge could not be removed. Run: sudo $script --remove"; return 0; }
+    ok "the Home Assistant bridge is gone; nodes reconnect to the broker on their own"
+    return 0
+  fi
+  if [ -z "$host" ]; then
+    if [ -f "$bridge" ]; then
+      ok "the Home Assistant bridge is kept as it is"
+      return 0
+    fi
+    can_prompt || return 0
+    printf '\n'
+    confirm "Bridge the built-in broker to Home Assistant's MQTT broker, so Home Assistant sees and commands FPP?" n || return 0
+    ask host "Home Assistant broker address, for example 192.168.1.20 or 192.168.1.20:1883" ""
+    [ -n "$host" ] || { info "No address was given, so no Home Assistant bridge was set up."; return 0; }
+    confirm "Also show ShowMesh node state to Home Assistant, read-only?" n && OPT_HA_SHARE=1
+  fi
+  step "Bridging the built-in broker to Home Assistant"
+  if [[ "$host" == *:* ]]; then
+    port="${host##*:}"
+    host="${host%:*}"
+  fi
+  if [ -z "$user" ]; then
+    can_prompt || need_answer "the login for Home Assistant's broker" "--home-assistant-username <login>"
+    ask user "Login on Home Assistant's broker" ""
+    [ -n "$user" ] || fail "The bridge needs a login on Home Assistant's broker." "showmesh-install --home-assistant $host --home-assistant-username <login>"
+  fi
+  if [ -n "$OPT_HA_PASSWORD_FILE" ]; then
+    [ -r "$OPT_HA_PASSWORD_FILE" ] || fail "There is no readable file at $OPT_HA_PASSWORD_FILE." "showmesh-install --home-assistant-password-file <file>"
+    pass="$(head -n 1 "$OPT_HA_PASSWORD_FILE")"
+  elif can_prompt; then
+    ask_secret pass "Password for $user on Home Assistant's broker"
+  else
+    need_answer "the password for Home Assistant's broker" "--home-assistant-password-file <file>"
+  fi
+  [ -n "$pass" ] || fail "The password for $user on Home Assistant's broker is empty." "showmesh-install --home-assistant-password-file <file>"
+  [ "$OPT_HA_SHARE" -eq 1 ] && flags+=(--share-showmesh)
+  info "The broker restarts to load the bridge. Nodes show offline for a few seconds and reconnect on their own."
+  # The password reaches the script through its environment, never its command line.
+  if ! HA_MQTT_PASSWORD="$pass" run_step "writing the bridge and restarting the broker" "$log" \
+    "$script" --host "$host" --port "$port" --user "$user" "${flags[@]}"; then
+    warn "The Home Assistant bridge could not be set up. $(tail -n 1 "$log") Run the installer again with --home-assistant to retry."
+    return 0
+  fi
+  if grep -q "is connected" "$log"; then
+    ok "Home Assistant's broker at $host:$port is bridged; FPP topics reach it"
+  else
+    warn "The bridge to Home Assistant's broker at $host:$port is set up but not connected. Check the address and login, then run the installer again with --home-assistant."
+  fi
+}
+
 coord_advertise() {
   step "Announcing the coordinator on the network"
   install -d -m 0755 /etc/avahi/services
@@ -465,6 +533,7 @@ run_coordinator_role() {
   coord_asset_settings
   coord_check_broker
   coord_fpp_event_feed
+  coord_home_assistant
   coord_advertise
 }
 

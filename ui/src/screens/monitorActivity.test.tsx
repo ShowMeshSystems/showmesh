@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuditEntry, Event, Model, SessionResponse } from '../api'
@@ -116,10 +116,12 @@ describe('Monitor · Activity', () => {
   it('puts the severity on what happened, never on the source', () => {
     renderScreen({ events: [event({ severity: 'critical' })] })
     const cells = [...document.querySelectorAll('tbody tr td')]
-    const summaryCell = cells[1]
-    const sourceCell = cells[2]
-    expect(summaryCell?.querySelector('.sm-status')).not.toBeNull()
-    expect(summaryCell?.textContent).toContain('Critical')
+    const summaryCell = cells[2]
+    const stateCell = cells[1]
+    const sourceCell = cells[3]
+    expect(stateCell?.querySelector('.sm-status')).not.toBeNull()
+    expect(stateCell?.textContent).toContain('Critical')
+    expect(summaryCell?.querySelector('.sm-status')).toBeNull()
     // The source is who reported it, not a health verdict about that reporter.
     expect(sourceCell?.querySelector('.sm-status')).toBeNull()
     expect(sourceCell?.textContent).toBe('coordinator')
@@ -129,6 +131,56 @@ describe('Monitor · Activity', () => {
     renderScreen({ events: [event({ severity: 'informational' })] })
     const cells = [...document.querySelectorAll('tbody tr td')]
     expect(cells[1]?.querySelector('.sm-status')).toBeNull()
+  })
+
+  it('keeps What happened in the same column whether or not a row has a state', () => {
+    renderScreen({ events: [event({ severity: 'critical', seq: 3 as never }), event({ severity: 'informational', summary: 'Plain note' })] })
+    const rows = [...document.querySelectorAll('tbody tr')]
+    expect(rows).toHaveLength(2)
+    for (const row of rows) expect(row.querySelectorAll('td')).toHaveLength(4)
+    const summaries = rows.map((row) => row.querySelectorAll('td')[2]?.textContent)
+    expect(summaries).toContain('Plain note')
+  })
+
+  it('loads older operator actions with the audit cursor and appends them', async () => {
+    listAudit
+      .mockResolvedValueOnce({ serverTime: '', order: 'desc', oldestRetainedId: 1, entries: [auditEntry({ id: 5, action: 'first.page' })] })
+      .mockResolvedValueOnce({ serverTime: '', order: 'desc', oldestRetainedId: 1, entries: [auditEntry({ id: 1, action: 'older.page' })] })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await screen.findByText(/first.page/)
+    fireEvent.click(screen.getByRole('button', { name: 'Load older operator actions' }))
+    await screen.findByText(/older.page/)
+    expect(listAudit).toHaveBeenLastCalledWith({ order: 'desc', before: 5, limit: 100 })
+    expect(screen.getByText(/first.page/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Load older operator actions' })).not.toBeInTheDocument()
+  })
+
+  it('offers no load more when the oldest retained entry is already shown', async () => {
+    listAudit.mockResolvedValue({ serverTime: '', order: 'desc', oldestRetainedId: 5, entries: [auditEntry({ id: 5 })] })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await screen.findByText(/night.start-night/)
+    expect(screen.queryByRole('button', { name: 'Load older operator actions' })).not.toBeInTheDocument()
+  })
+
+  it('filters by type and keeps system events visible without audit permission', async () => {
+    listAudit.mockResolvedValue({ serverTime: '', order: 'desc', oldestRetainedId: 1, entries: [auditEntry()] })
+    renderScreen({ events: [event()], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await screen.findByText(/night.start-night/)
+    fireEvent.change(screen.getByLabelText('Show'), { target: { value: 'event' } })
+    expect(screen.queryByText(/night.start-night/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Projector strike refused/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Show'), { target: { value: 'audit' } })
+    expect(screen.getByText(/night.start-night/)).toBeInTheDocument()
+    expect(screen.queryByText(/Projector strike refused/)).not.toBeInTheDocument()
+  })
+
+  it('filters by text over what happened and says when nothing matches', () => {
+    renderScreen({ events: [event(), event({ seq: 9 as never, summary: 'Fan speed normal' })], snapshotReceivedAt: Date.now(), session: null })
+    fireEvent.change(screen.getByLabelText('Search what happened'), { target: { value: 'fan' } })
+    expect(screen.getByText('Fan speed normal')).toBeInTheDocument()
+    expect(screen.queryByText(/Projector strike/)).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Search what happened'), { target: { value: 'zzz' } })
+    expect(screen.getByText(/No loaded activity matches/)).toBeInTheDocument()
   })
 
   it('never renders a retention gap when the stream reports none', () => {

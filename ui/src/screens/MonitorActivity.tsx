@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AuditEntry, listAudit, type Model } from '../api'
-import { Notice, RuledStrip, Section, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Field, FieldGrid, Input, Notice, RuledStrip, Section, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { MonitorHead } from './Monitor'
 import { mergedActivityRows } from './monitorModel'
+
+const PAGE_SIZE = 100
+
+type TypeFilter = 'all' | 'event' | 'audit'
 
 type AuditState =
   | { kind: 'denied'; reason: string }
@@ -12,16 +16,22 @@ type AuditState =
   | { kind: 'loaded'; entries: AuditEntry[]; receivedAt: number }
   | { kind: 'failed'; reason: string; entries: AuditEntry[]; receivedAt: number | null }
 
+type AuditFeed = { state: AuditState; hasMore: boolean; loadingMore: boolean; moreError: string | null; loadMore: () => void }
+
 /**
  * The operator-action half of the merged stream. `entries` carries the
  * last successful read even after a later failure, per the "a refresh
  * failure retains the last known state" rule.
  */
-function useAuditEntries(model: Model): AuditState {
+function useAuditEntries(model: Model): AuditFeed {
   const scope = evaluateScope(model.session, model.sessionFetchFailed, 'audit:read')
   const scopeReason = scope.allowed ? null : scope.reason
   const [state, setState] = useState<AuditState>(scope.allowed ? { kind: 'loading' } : { kind: 'denied', reason: scopeReason ?? '' })
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [moreError, setMoreError] = useState<string | null>(null)
   const lastGood = useRef<{ entries: AuditEntry[]; receivedAt: number } | null>(null)
+  const loaded = useRef<AuditEntry[]>([])
 
   useEffect(() => {
     if (!scope.allowed) {
@@ -29,10 +39,12 @@ function useAuditEntries(model: Model): AuditState {
       return
     }
     let cancelled = false
-    listAudit({ order: 'desc', limit: 100 })
+    listAudit({ order: 'desc', limit: PAGE_SIZE })
       .then((response) => {
         if (cancelled) return
+        loaded.current = response.entries
         lastGood.current = { entries: response.entries, receivedAt: Date.now() }
+        setHasMore(olderExists(response.entries, response.oldestRetainedId))
         setState({ kind: 'loaded', entries: response.entries, receivedAt: Date.now() })
       })
       .catch((err: unknown) => {
@@ -49,14 +61,42 @@ function useAuditEntries(model: Model): AuditState {
     }
   }, [scope.allowed, scopeReason])
 
-  return state
+  const loadMore = useCallback(() => {
+    const last = loaded.current[loaded.current.length - 1]
+    if (last === undefined) return
+    setLoadingMore(true)
+    setMoreError(null)
+    listAudit({ order: 'desc', before: last.id, limit: PAGE_SIZE })
+      .then((response) => {
+        loaded.current = [...loaded.current, ...response.entries]
+        lastGood.current = { entries: loaded.current, receivedAt: Date.now() }
+        setHasMore(olderExists(loaded.current, response.oldestRetainedId))
+        setState({ kind: 'loaded', entries: loaded.current, receivedAt: Date.now() })
+      })
+      .catch((err: unknown) => setMoreError(describeApiError(err)))
+      .finally(() => setLoadingMore(false))
+  }, [])
+
+  return { state, hasMore, loadingMore, moreError, loadMore }
+}
+
+function olderExists(entries: readonly AuditEntry[], oldestRetainedId: number | null): boolean {
+  const last = entries[entries.length - 1]
+  return last !== undefined && oldestRetainedId !== null && last.id > oldestRetainedId
 }
 
 export function MonitorActivity() {
   const model = useModelContext()
-  const audit = useAuditEntries(model)
+  const feed = useAuditEntries(model)
+  const audit = feed.state
   const auditEntries = audit.kind === 'loaded' || audit.kind === 'failed' ? audit.entries : []
-  const rows = mergedActivityRows(model.events, auditEntries)
+  const allRows = mergedActivityRows(model.events, auditEntries)
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
+  const [search, setSearch] = useState('')
+  const needle = search.trim().toLowerCase()
+  const rows = allRows.filter(
+    (row) => (typeFilter === 'all' || row.origin === typeFilter) && (needle === '' || row.summary.toLowerCase().includes(needle)),
+  )
 
   return (
     <>
@@ -95,7 +135,26 @@ export function MonitorActivity() {
           />
         )}
 
-        {rows.length === 0 ? (
+        {allRows.length > 0 && (
+          <FieldGrid>
+            <Field label="Show">
+              {(props) => (
+                <Select {...props} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}>
+                  <option value="all">System events and operator actions</option>
+                  <option value="event">System events only</option>
+                  <option value="audit">Operator actions only</option>
+                </Select>
+              )}
+            </Field>
+            <Field label="Search what happened">
+              {(props) => <Input {...props} type="search" value={search} onChange={(e) => setSearch(e.target.value)} />}
+            </Field>
+          </FieldGrid>
+        )}
+
+        {allRows.length > 0 && rows.length === 0 ? (
+          <RuledStrip absence="empty" label="No match" fact="No loaded activity matches the filter. Clear the search or load older activity." />
+        ) : rows.length === 0 ? (
           <RuledStrip
             absence={model.snapshotReceivedAt === null ? 'loading' : 'empty'}
             label={model.snapshotReceivedAt === null ? 'Reading' : 'Empty'}
@@ -104,10 +163,11 @@ export function MonitorActivity() {
         ) : (
           <>
             <TableWrap label="Activity, scrollable">
-              <Table minWidth={520}>
+              <Table minWidth={640}>
                 <thead>
                   <tr>
                     <th scope="col">Time</th>
+                    <th scope="col">State</th>
                     <th scope="col">What happened</th>
                     <th scope="col">Source</th>
                   </tr>
@@ -116,10 +176,8 @@ export function MonitorActivity() {
                   {rows.map((row) => (
                     <tr key={row.key}>
                       <td className="sm-data">{row.time}</td>
-                      <td>
-                        {row.state !== null && <StatusPair tone={row.tone} label={row.state} />}
-                        {row.summary}
-                      </td>
+                      <td>{row.state !== null && <StatusPair tone={row.tone} label={row.state} />}</td>
+                      <td>{row.summary}</td>
                       <td>{row.source}</td>
                     </tr>
                   ))}
@@ -127,6 +185,15 @@ export function MonitorActivity() {
               </Table>
             </TableWrap>
           </>
+        )}
+
+        {feed.moreError !== null && <RuledStrip absence="failed" label="Older activity unread" fact={feed.moreError} />}
+        {feed.hasMore && (
+          <ButtonRow>
+            <Button onClick={feed.loadMore} disabled={feed.loadingMore}>
+              {feed.loadingMore ? 'Loading older activity' : 'Load older operator actions'}
+            </Button>
+          </ButtonRow>
         )}
       </Section>
     </>

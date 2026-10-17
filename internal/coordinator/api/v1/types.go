@@ -1619,6 +1619,28 @@ type PreviewCameraConfigResponse struct {
 	Source                 string                     `json:"source"`
 }
 
+// ConfigPreviewNDIPayload is the "preview.ndi" kind's payload: one NDI source
+// added by hand. Address is host:port, or empty to find the source by name.
+type ConfigPreviewNDIPayload struct {
+	Label   string `json:"label"`
+	NDIName string `json:"ndiName"`
+	Address string `json:"address"`
+	Enabled bool   `json:"enabled"`
+}
+
+// PreviewNDIConfigResponse is the body of GET and PUT /config/preview.ndi/{id}.
+type PreviewNDIConfigResponse struct {
+	ServerTime             string                  `json:"serverTime"`
+	Kind                   string                  `json:"kind"`
+	ID                     string                  `json:"id"`
+	Revision               int64                   `json:"revision"`
+	Payload                ConfigPreviewNDIPayload `json:"payload"`
+	UpdatedAt              string                  `json:"updatedAt"`
+	CreatedByPrincipalID   *string                 `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                 `json:"createdByPrincipalName"`
+	Source                 string                  `json:"source"`
+}
+
 // ConfigDashboardPreviewLayout is the tile order and hidden tiles of the preview grid.
 type ConfigDashboardPreviewLayout struct {
 	Order  []string `json:"order"`
@@ -1643,10 +1665,18 @@ type DashboardLayoutConfigResponse struct {
 }
 
 // PreviewGatewayStatus is the coordinator's view of the preview gateway.
+// NDIDiscovery is omitted while it is not known.
 type PreviewGatewayStatus struct {
-	State      string `json:"state"`
-	Message    string `json:"message"`
-	ObservedAt string `json:"observedAt"`
+	State        string               `json:"state"`
+	Message      string               `json:"message"`
+	NDIDiscovery *PreviewNDIDiscovery `json:"ndiDiscovery,omitempty"`
+	ObservedAt   string               `json:"observedAt"`
+}
+
+// PreviewNDIDiscovery is whether the preview gateway can find NDI sources.
+type PreviewNDIDiscovery struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
 }
 
 // PreviewTile is one tile of the dashboard preview grid. NodeID and SurfaceID

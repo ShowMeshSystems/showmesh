@@ -23,6 +23,9 @@ const (
 	GatewayReachable     = "reachable"
 	GatewayUnreachable   = "unreachable"
 
+	NDIDiscoveryRunning    = "running"
+	NDIDiscoveryNotRunning = "not_running"
+
 	KindNDI    = "ndi"
 	KindCamera = "camera"
 
@@ -46,8 +49,10 @@ const (
 	msgNDIGone       = "This source is no longer announced on the network. Check that its sender is running."
 	msgCameraGone    = "The camera did not answer. Check its address and that it is on."
 	msgDisabled      = "This camera is turned off. Turn it on to see it here."
+	msgNDIDisabled   = "This NDI source is turned off. Turn it on to see it here."
 	msgTileError     = "The preview could not start. Check the gateway log."
 	msgCameraRefused = "The gateway did not accept the camera addresses. Check each address and save again."
+	msgNoDiscovery   = "NDI discovery is not running. Check the preview gateway log."
 )
 
 var (
@@ -68,6 +73,15 @@ type Camera struct {
 	Name    string
 	Enabled bool
 	URL     string
+}
+
+// NDISource is one stored preview.ndi object: an NDI source added by hand.
+type NDISource struct {
+	ID      string
+	Label   string
+	Name    string
+	Address string
+	Enabled bool
 }
 
 // Surface is one show.surface that renders to NDI.
@@ -94,6 +108,7 @@ type Settings struct {
 	GatewayURL string
 	Token      string
 	Cameras    []Camera
+	NDISources []NDISource
 	Layout     Layout
 	Surfaces   []Surface
 	Nodes      []Node
@@ -104,11 +119,32 @@ type SettingsSource interface {
 	Load(ctx context.Context) (Settings, error)
 }
 
-// GatewayStatus is the coordinator's latest view of the gateway.
+// GatewayStatus is the coordinator's latest view of the gateway. NDIDiscovery
+// is nil when the gateway is not reachable or does not report it.
 type GatewayStatus struct {
-	State      string
-	Message    string
-	ObservedAt time.Time
+	State        string
+	Message      string
+	NDIDiscovery *NDIDiscovery
+	ObservedAt   time.Time
+}
+
+// NDIDiscovery is whether the gateway can find NDI sources.
+type NDIDiscovery struct {
+	State   string
+	Message string
+}
+
+func ndiDiscovery(d *DiscoveryStatus) *NDIDiscovery {
+	switch {
+	case d == nil:
+		return nil
+	case d.Running:
+		return &NDIDiscovery{State: NDIDiscoveryRunning}
+	case d.Message == "":
+		return &NDIDiscovery{State: NDIDiscoveryNotRunning, Message: msgNoDiscovery}
+	default:
+		return &NDIDiscovery{State: NDIDiscoveryNotRunning, Message: d.Message}
+	}
 }
 
 // Tile is one dashboard preview tile.
@@ -250,10 +286,27 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
+// handAdded maps each enabled hand-added NDI name to its source. The first by id wins a repeated name.
+func handAdded(cfg Settings) map[string]NDISource {
+	out := make(map[string]NDISource, len(cfg.NDISources))
+	for _, src := range cfg.NDISources {
+		if _, dup := out[src.Name]; src.Enabled && !dup {
+			out[src.Name] = src
+		}
+	}
+	return out
+}
+
 func desiredStreams(cfg Settings, sources []Source) []Stream {
-	out := make([]Stream, 0, len(sources)+len(cfg.Cameras))
+	out := make([]Stream, 0, len(sources)+len(cfg.Cameras)+len(cfg.NDISources))
+	manual := handAdded(cfg)
 	for _, src := range sources {
-		out = append(out, Stream{Key: KeyPrefixNDI + src.Name, Kind: "ndi", NDIName: src.Name})
+		if _, ok := manual[src.Name]; !ok {
+			out = append(out, Stream{Key: KeyPrefixNDI + src.Name, Kind: "ndi", NDIName: src.Name})
+		}
+	}
+	for name, src := range manual {
+		out = append(out, Stream{Key: KeyPrefixNDI + name, Kind: "ndi", NDIName: name, NDIAddress: src.Address})
 	}
 	for _, cam := range cfg.Cameras {
 		if cam.Enabled && cam.URL != "" {
@@ -315,13 +368,18 @@ func (s *Service) Reconcile(ctx context.Context) {
 		fail(err)
 		return
 	}
+	discovery, err := c.Discovery(ctx)
+	if err != nil {
+		fail(err)
+		return
+	}
 	byKey := make(map[string]StreamState, len(states))
 	for _, st := range states {
 		byKey[st.Key] = st
 	}
 	s.record(cfg, observation{
 		gateway: id,
-		status:  GatewayStatus{State: GatewayReachable, ObservedAt: now},
+		status:  GatewayStatus{State: GatewayReachable, NDIDiscovery: ndiDiscovery(discovery), ObservedAt: now},
 		sources: sources,
 		streams: byKey,
 
@@ -443,8 +501,12 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 	announced := make(map[string]bool, len(o.sources))
 	byKey := map[string]Tile{}
 
+	manual := handAdded(cfg)
 	ndiTile := func(name string) Tile {
 		label, nodeID, surfaceID := labelNDI(name, cfg.Surfaces, cfg.Nodes)
+		if src, ok := manual[name]; ok && nodeID == "" && strings.TrimSpace(src.Label) != "" {
+			label = src.Label
+		}
 		return Tile{Key: KeyPrefixNDI + name, Kind: KindNDI, Label: label, NodeID: nodeID, SurfaceID: surfaceID, ObservedAt: at}
 	}
 	for _, src := range o.sources {
@@ -453,9 +515,29 @@ func (s *Service) tiles(cfg Settings, o observation) []Tile {
 		applyStreamState(&t, o, msgNDIGone)
 		byKey[t.Key] = t
 	}
+	for name := range manual {
+		if announced[name] {
+			continue
+		}
+		t := ndiTile(name)
+		applyStreamState(&t, o, msgNDIGone)
+		byKey[t.Key] = t
+	}
+	for _, src := range cfg.NDISources {
+		key := KeyPrefixNDI + src.Name
+		if _, shown := byKey[key]; shown || src.Enabled {
+			continue
+		}
+		t := ndiTile(src.Name)
+		if strings.TrimSpace(src.Label) != "" && t.NodeID == "" {
+			t.Label = src.Label
+		}
+		t.State, t.Message = TileDisabled, msgNDIDisabled
+		byKey[key] = t
+	}
 	for _, key := range append(append([]string{}, cfg.Layout.Order...), cfg.Layout.Hidden...) {
 		name, ok := strings.CutPrefix(key, KeyPrefixNDI)
-		if !ok || announced[name] {
+		if _, shown := byKey[key]; !ok || shown {
 			continue
 		}
 		t := ndiTile(name)

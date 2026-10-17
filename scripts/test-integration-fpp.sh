@@ -296,6 +296,7 @@ echo "test-integration-fpp: starting $MOSQUITTO_IMAGE as $FPP_MOSQUITTO_CONTAINE
 docker create --name "$FPP_MOSQUITTO_CONTAINER" \
   -p "${FPP_MOSQUITTO_PORT}:1883" \
   -v "$ROOT_DIR/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+  -v "$ROOT_DIR/deploy/mosquitto/conf.d:/mosquitto/config/conf.d:ro" \
   "$MOSQUITTO_IMAGE" >/dev/null
 
 TMP_FPP_SEED_PASSWD="$(mktemp)"

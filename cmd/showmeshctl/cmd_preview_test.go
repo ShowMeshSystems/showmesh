@@ -31,6 +31,8 @@ const previewGatewayJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"preview
 
 const previewCameraJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.camera","id":"driveway","revision":1,"payload":{"name":"Driveway","enabled":true,"urlSet":true,"urlDisplay":"rtsp://192.168.1.20:37379","url":"rtsp://LEAKED-URL/stream"},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`
 
+const previewNDIJSON = `{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.ndi","id":"far-barn","revision":2,"payload":{"label":"Far barn","ndiName":"BARN-02 (Composition)","address":"10.0.20.15:5961","enabled":true},"updatedAt":"2026-10-15T12:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"ada","source":"api"}`
+
 // previewServer plays the coordinator for every preview command. layoutStatus 404 means no layout is stored.
 func previewServer(t *testing.T, layoutStatus int, snapshotStatus int) (*httptest.Server, *[]previewReq) {
 	t.Helper()
@@ -71,6 +73,12 @@ func previewServer(t *testing.T, layoutStatus int, snapshotStatus int) (*httptes
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/config/preview.gateway":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(previewGatewayJSON))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/config/preview.ndi":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"serverTime":"2026-10-15T12:00:00Z","kind":"preview.ndi","objects":[{"id":"far-barn","label":"Far barn","show":"","currentRevision":2,"updatedAt":"2026-10-15T11:00:00Z"}]}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/config/preview.ndi/") && r.Method != http.MethodDelete:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(previewNDIJSON))
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/config/preview.camera/"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(previewCameraJSON))
@@ -121,7 +129,7 @@ func TestPreviewListPrintsGatewayAndTiles(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"gateway: reachable", "ndi:NODE-01 (matrix-main)", "node-01 · matrix-main", "camera:driveway", "yes", "The camera did not answer."} {
+	for _, want := range []string{"gateway: reachable", "ndi discovery: unknown", "ndi:NODE-01 (matrix-main)", "node-01 · matrix-main", "camera:driveway", "yes", "The camera did not answer."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
 		}
@@ -379,5 +387,65 @@ func TestPreviewLayoutWorksBeforeAnyLayoutIsSaved(t *testing.T) {
 	put := lastPut(t, seen)
 	if put.body != `{"previews":{"hidden":["ndi:ARENA (Composition)"]}}` || put.ifMatch != "" {
 		t.Fatalf("PUT = %+v", put)
+	}
+}
+
+func TestPreviewNDIAddSendsOnlyWhatIsPassed(t *testing.T) {
+	ts, seen := previewServer(t, http.StatusOK, http.StatusOK)
+	code, out, errOut := runPreview(t, ts, "ndi", "add", "far-barn", "--ndi-name", "BARN-02 (Composition)", "--label", "Far barn", "--address", "10.0.20.15:5961")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	put := lastPut(t, seen)
+	var body map[string]any
+	_ = json.Unmarshal([]byte(put.body), &body)
+	if put.path != "/api/v1/config/preview.ndi/far-barn" || body["ndiName"] != "BARN-02 (Composition)" || body["label"] != "Far barn" || body["address"] != "10.0.20.15:5961" || len(body) != 3 {
+		t.Fatalf("request = %+v", put)
+	}
+	for _, want := range []string{"far-barn", "Far barn", "BARN-02 (Composition)", "10.0.20.15:5961"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if code, _, _ := runPreview(t, ts, "ndi", "add", "far-barn", "--address", ""); code != exitOK || lastPut(t, seen).body != `{"address":""}` {
+		t.Fatalf("clearing the address: exit %d body %s", code, lastPut(t, seen).body)
+	}
+	if code, _, _ := runPreview(t, ts, "ndi", "add", "far-barn"); code != exitUsage {
+		t.Fatalf("no changes exit = %d, want usage", code)
+	}
+}
+
+func TestPreviewNDIListAndRemove(t *testing.T) {
+	ts, seen := previewServer(t, http.StatusOK, http.StatusOK)
+	code, out, errOut := runPreview(t, ts, "ndi", "list")
+	if code != exitOK || !strings.Contains(out, "far-barn") || !strings.Contains(out, "Far barn") {
+		t.Fatalf("list: exit %d out %q err %q", code, out, errOut)
+	}
+	code, out, errOut = runPreview(t, ts, "ndi", "remove", "far-barn")
+	if code != exitOK || !strings.Contains(out, "far-barn removed") {
+		t.Fatalf("remove: exit %d out %q err %q", code, out, errOut)
+	}
+	del := (*seen)[len(*seen)-1]
+	if del.method != http.MethodDelete || del.path != "/api/v1/config/preview.ndi/far-barn" || del.body != `{"confirm":true}` {
+		t.Fatalf("request = %+v", del)
+	}
+}
+
+func TestPreviewListPrintsWhyNDIDiscoveryIsNotRunning(t *testing.T) {
+	const body = `{"serverTime":"2026-10-15T12:00:00Z","gateway":{"state":"reachable","message":"","ndiDiscovery":{"state":"not_running","message":"The NDI runtime is named libndi.so. Rename or link it to libndi.so.6."},"observedAt":"2026-10-15T12:00:00Z"},"tiles":[]}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(ts.Close)
+	code, out, errOut := runPreview(t, ts, "list")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"ndi discovery: not_running", "Rename or link it to libndi.so.6."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
 	}
 }

@@ -596,7 +596,7 @@ export function LiveControl() {
               <Button
                 variant="danger"
                 size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
+                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired}
                 title={
                   !emergencyGate.allowed
                     ? emergencyGate.reason

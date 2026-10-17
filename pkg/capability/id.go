@@ -55,6 +55,10 @@ var knownIDs = map[ID]struct{}{
 	"timecode.ltc.observe":  {},
 	"process.supervise":     {},
 
+	// A node's network interfaces and PTP hardware clocks, reported so
+	// node.clock settings name a real network interface.
+	"clock.ptp": {},
+
 	// An audio output's granular playback abilities, reserved 2026-08-30
 	// so ValidateItemTransitionSupport and the
 	// resting:background-audio-output-capabilities readiness check have

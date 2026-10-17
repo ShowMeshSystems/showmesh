@@ -43,7 +43,10 @@ The image does not contain the NDI runtime ([ADR-010](../../docs/decisions/ADR-0
 Download the NDI SDK for Linux from NDI, copy `libndi.so.6` for the host's
 architecture into a directory such as `/opt/ndi`, and set
 `SHOWMESH_NDI_RUNTIME_DIR` to that directory. Without it the gateway still
-serves RTSP cameras, and NDI streams report that NDI is not available.
+serves RTSP cameras, and NDI streams report that NDI is not available. The
+GStreamer NDI plugin opens only `libndi.so.6` or `libndi.so.5`. If the file
+has another name, such as `libndi.so`, the Dashboard says so: rename it or add
+a link with `ln -s libndi.so libndi.so.6` in that directory.
 
 ## Settings
 
@@ -73,7 +76,9 @@ its own browse-only copies as root and drops to an unprivileged user for the
 gateway, so the host needs no Avahi. If Avahi stops, NDI streams report that
 discovery is not running, RTSP cameras keep working, and the container stays
 healthy; restart the container to bring NDI discovery back. An NDI source that stops without saying
-goodbye can stay in the source list until its mDNS record expires.
+goodbye can stay in the source list until its mDNS record expires. Discovery
+does not reach a sender on another subnet or VLAN; add it in Settings >
+Dashboard with its NDI name and `host:port` address.
 
 ## Cameras
 

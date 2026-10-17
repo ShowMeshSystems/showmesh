@@ -1,4 +1,4 @@
-type Option<T extends string> = { value: T; label: string }
+type Option<T extends string> = { value: T; label: string; /** This segment alone goes inert; say why in reason. */ disabled?: boolean; reason?: string }
 
 type Props<T extends string> = {
   label: string
@@ -19,9 +19,10 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
           type="button"
           className="sm-segmented__item"
           aria-pressed={option.value === value}
-          disabled={disabled}
+          disabled={disabled || option.disabled}
+          title={option.disabled ? option.reason : undefined}
           onClick={() => {
-            if (!disabled) onChange(option.value)
+            if (!disabled && !option.disabled) onChange(option.value)
           }}
         >
           {option.label}

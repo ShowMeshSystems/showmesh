@@ -86,6 +86,25 @@ func (p previewSettingsSource) Load(ctx context.Context) (preview.Settings, erro
 		out.Cameras = append(out.Cameras, preview.Camera{ID: obj.ID, Name: payload.Name, Enabled: payload.Enabled, URL: streamURL})
 	}
 
+	ndis, err := p.st.ListConfigObjects(ctx, config.PreviewNDIConfigKind)
+	if err != nil {
+		return out, fmt.Errorf("list preview.ndi: %w", err)
+	}
+	for _, obj := range ndis {
+		raw, ok, err := p.activePayload(ctx, config.PreviewNDIConfigKind, obj.ID)
+		if err != nil {
+			return out, err
+		}
+		if !ok {
+			continue
+		}
+		payload, err := config.DecodePreviewNDIPayload(raw)
+		if err != nil {
+			return out, err
+		}
+		out.NDISources = append(out.NDISources, preview.NDISource{ID: obj.ID, Label: payload.Label, Name: payload.NDIName, Address: payload.Address, Enabled: payload.Enabled})
+	}
+
 	if out.GatewayURL != "" {
 		p.loadLabels(ctx, &out)
 	}

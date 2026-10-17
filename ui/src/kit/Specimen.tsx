@@ -19,9 +19,11 @@ import {
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
   ConfirmDialog,
+  WindowDialog,
   ConnectionPill,
   CopyButton,
   DefinitionStrip,
+  RevisionDiff,
   DeletePanel,
   Drawer,
   Field,
@@ -154,6 +156,7 @@ export function Specimen() {
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [windowOpen, setWindowOpen] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
   const [sliderValue, setSliderValue] = useState(72)
@@ -342,6 +345,30 @@ export function Specimen() {
             value={radioCardValue}
             onChange={setRadioCardValue}
           />
+          <RadioCardList
+            label="Timecode channel"
+            help="A channel another choice already uses is shown greyed, with the reason."
+            options={[
+              { value: '1', title: 'Channel 1', desc: 'Program audio uses this channel.', disabled: true },
+              { value: '2', title: 'Channel 2', desc: 'Program audio uses this channel.', disabled: true },
+              { value: '3', title: 'Channel 3' },
+              { value: '4', title: 'Channel 4' },
+            ]}
+            value="3"
+            onChange={() => {}}
+          />
+          <Segmented
+            label="Clock source"
+            value="external"
+            options={[
+              { value: 'external', label: "This node's PTP service" },
+              { value: 'managed', label: 'ShowMesh starts its own PTP', disabled: true, reason: 'This node already runs its own PTP service.' },
+            ]}
+            onChange={() => {}}
+          />
+          <p className="sm-small sm-muted">
+            A segment that cannot be chosen goes inert on its own, and the screen states why beside the control.
+          </p>
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="The ruled strip is the default. The blanking plate is for a whole region that cannot render.">
@@ -414,6 +441,9 @@ export function Specimen() {
               <Button>Fire and hold the bed</Button>
             </NotWired>
           </ButtonRow>
+          <Tiles>
+            <StatTile label="Enclosure temperature" value="" detail="No source reports this yet." notWired />
+          </Tiles>
           <Callout>
             Amber, not red: nothing has failed. The tag rides on the control, and the control is forced disabled.
           </Callout>
@@ -842,12 +872,12 @@ export function Specimen() {
           number="17 · Preview tile"
           id="specimen-preview-tile"
           title="A live source: the picture, its name, and one state word"
-          detail="The frame is always 16:9. The sentence under the caption is the coordinator's own, a tile with no picture says so, and a picture with no new frame for 10 seconds reads Stale."
+          detail="The enlarge icon on Camera 3 opens the tile in a window, closed by the X, Escape or a click outside. The frame is always 16:9. The sentence under the caption is the coordinator's own, a tile with no picture says so, and a picture with no new frame for 10 seconds reads Stale."
         >
           <PreviewGrid>
             <PreviewTile label="Camera 1" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={1} />
             <PreviewTile label="Camera 2" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={14} />
-            <PreviewTile label="Camera 3" state="connecting" message="" />
+            <PreviewTile label="Camera 3" state="connecting" message="" onEnlarge={() => setWindowOpen(true)} />
             <PreviewTile label="NDI source" state="not_found" message="This source is no longer announced on the network. Check that its sender is running." />
             <PreviewTile label="Camera 4" state="disabled" message="This camera is turned off. Turn it on to see it here." />
             <PreviewTile label="Camera 5" state="error" message="The gateway did not accept the camera addresses. Check each address and save again." />
@@ -859,6 +889,9 @@ export function Specimen() {
               actions={<ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} />}
             />
           </PreviewGrid>
+          <WindowDialog open={windowOpen} title="Camera 3" onClose={() => setWindowOpen(false)}>
+            <PreviewTile label="Camera 3" state="connecting" message="" />
+          </WindowDialog>
         </SpecSection>
         <SpecSection
           number="18 · Reorder buttons"
@@ -871,6 +904,22 @@ export function Specimen() {
             <ReorderButtons itemLabel="step 1" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveUpReason="Already first." />
             <ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveDownReason="Already last." />
           </div>
+        </SpecSection>
+        <SpecSection
+          number="19 · Version changes"
+          id="specimen-revision-diff"
+          title="A version says what changed from the one before it"
+          detail="A flat list of changed field paths with before and after. Long values are cut at 80 characters. The first version says it has nothing before it."
+        >
+          <RevisionDiff
+            revision={3}
+            changes={[
+              { path: 'label', kind: 'changed', before: 'Winter Ridge', after: 'Winter Ridge 2' },
+              { path: 'steps[2].name', kind: 'added', before: null, after: 'Blackout' },
+              { path: 'note', kind: 'removed', before: 'Old note', after: null },
+            ]}
+          />
+          <RevisionDiff revision={1} changes={null} />
         </SpecSection>
       </div>
     </div>

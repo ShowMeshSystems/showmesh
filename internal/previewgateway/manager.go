@@ -64,16 +64,16 @@ func NewManager(engine Engine, sources SourceProvider, feed string, log *slog.Lo
 	return &Manager{engine: engine, sources: sources, feed: feed, log: log, now: time.Now, desired: map[string]*entry{}, undeleted: map[string]struct{}{}}
 }
 
-// NDIName returns the NDI source name of the desired NDI stream with this id.
-func (m *Manager) NDIName(id string) (string, bool) {
+// NDISource returns the NDI source name and address of the desired NDI stream with this id.
+func (m *Manager) NDISource(id string) (name, address string, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.desired {
 		if e.id == id && e.spec.Kind == KindNDI {
-			return e.spec.NDIName, true
+			return e.spec.NDIName, e.spec.NDIAddress, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func (m *Manager) sourceFor(s StreamSpec) string {
@@ -263,7 +263,7 @@ func (m *Manager) classify(e entry, gi Go2RTCInfo, announced map[string]bool, di
 	if producerBytes(gi) > 0 && m.now().Sub(e.advancedAt) < stallAfter {
 		return StateLive, ""
 	}
-	if e.spec.Kind == KindNDI {
+	if e.spec.Kind == KindNDI && e.spec.NDIAddress == "" {
 		if !discoveryOK {
 			msg := m.sources.Unavailable()
 			if msg == "" {

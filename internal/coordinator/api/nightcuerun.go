@@ -147,7 +147,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 	var gain nightGainResult
 	if fade != nil && fade.BeforeAction {
 		gain = h.nightApplyLightingFade(ctx, cueName, target, *fade, idemKey)
-		h.nightLightsYieldToAcceptedCue(rec, target, gain)
+		h.nightLightsYieldToAcceptedCue(rec, gain)
 	}
 
 	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, dispatchRevision)
@@ -158,7 +158,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 
 	if fade != nil && !fade.BeforeAction {
 		gain = h.nightApplyLightingFade(ctx, cueName, target, *fade, idemKey)
-		h.nightLightsYieldToAcceptedCue(rec, target, gain)
+		h.nightLightsYieldToAcceptedCue(rec, gain)
 	}
 
 	if h.hookAfterDispatch(cueName) {

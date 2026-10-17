@@ -395,6 +395,7 @@ func startIsolatedAudioBroker(t *testing.T) {
 		"--name", containerName,
 		"-p", fmt.Sprintf("%d:1883", port),
 		"-v", root+"/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro",
+		"-v", root+"/deploy/mosquitto/conf.d:/mosquitto/config/conf.d:ro",
 		isolatedAudioBrokerImage,
 	).CombinedOutput()
 	if err != nil {

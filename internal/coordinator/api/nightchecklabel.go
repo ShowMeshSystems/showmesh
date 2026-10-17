@@ -10,6 +10,7 @@ var nightCheckLabels = map[string]string{
 	"resting:background-audio-nodes-defaulted":     "Background audio nodes",
 	"resting:background-audio-bed-target-coverage": "Background audio files on every node",
 	"resting:background-audio-bed-program-ltc":     "Background audio sync",
+	nightBackgroundAudioItemTargetsName:            "Background audio nodes for each track",
 	"resting:asset-duration":                       "Resting sequence length",
 	"announcement-assets":                          "Announcement audio files",
 	"announcement-policy-enforceable":              "Announcements over background audio",
@@ -30,7 +31,10 @@ var nightCheckLabels = map[string]string{
 var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{"resting:background-audio-item-transition:", "Background audio track changes on "},
 	{"resting:background-audio-output-capabilities:", "Background audio output on "},
+	{nightBackgroundAudioNodeSetupPrefix, "Background audio settings on "},
+	{nightShowCueAudioTargetsPrefix, "Cue audio nodes in playlist "},
 	{"audio:alignment:", "Audio alignment on "},
+	{nightAudioClockCheckPrefix, "Audio clock on "},
 	{nightCatalogCurrentCheckPrefix + ":", "Cue list on "},
 	{nightParticipationCheckPrefix + ":fpp:", "FPP "},
 	{nightParticipationCheckPrefix + ":resolume:", "Resolume "},
@@ -39,6 +43,8 @@ var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{nightCheckPrefixResting + ":asset-exact-variant:", "Resting sequence file on FPP for "},
 	{nightCheckPrefixEndOfNight + ":asset-exact-variant:", "End of night sequence file on FPP for "},
 	{"show:playlist-present:", "Show playlist "},
+	{nightRestingRenderCheckPrefix, "Resting sequence on "},
+	{nightCheckPrefixEndOfNight + ":render:", "Resting sequence in end of night playlist "},
 }
 
 // nightCheckLabel is the plain name an operator reads for a readiness check.

@@ -116,6 +116,11 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			// unbound one is always the one named, matching this
 			// function's own doc comment on deterministic ordering.
 			for _, target := range out.targets {
+				if !containsID(declared, target) && out.resolvedFrom == config.AudioNodeResolutionShow {
+					return ReadinessAudioTargetUnbound, fmt.Sprintf(
+						"Cue %s sends its %s to node %s, which the show lists as an audio node but has no audio settings. Change the show's audio nodes or set up the node.",
+						entry.Cue, out.name, target), nil, nil
+				}
 				if !containsID(declared, target) {
 					return ReadinessAudioTargetUnbound, fmt.Sprintf(
 						"Cue %s sends its %s to node %s, which is not set up for audio. Set up the node or change the cue.",
@@ -158,6 +163,12 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 		}
 	}
 	return "", "", warnings, nil
+}
+
+// AudioTargetReadiness is condition 10 on its own, for the night readiness
+// check, which reads it per show playlist rather than from a full report.
+func AudioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, []string, error) {
+	return audioTargetReadiness(ctx, st, logger, p)
 }
 
 // programLTCAndDefault returns the installation's program+ltc node

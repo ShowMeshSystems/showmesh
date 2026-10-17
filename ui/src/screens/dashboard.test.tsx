@@ -5,7 +5,7 @@ import type { FPPInstance, Model, NightSessionState, Node, ResolumeInstance } fr
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Dashboard } from './Dashboard'
-import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail } from './dashboardModel'
+import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail, resolumeDetail } from './dashboardModel'
 
 const previewStubs = vi.hoisted(() => ({ getPreviews: vi.fn(() => new Promise(() => {})) }))
 
@@ -133,7 +133,7 @@ function renderDashboard(model: Partial<Model>) {
 describe('Dashboard', () => {
   afterEach(cleanup)
 
-  it('renders the mock’s three blocks, in order, as real headings, with live previews after them', async () => {
+  it('renders the original three blocks, then the overview blocks, in order, as real headings, with live previews after them', async () => {
     previewStubs.getPreviews.mockResolvedValueOnce({
       serverTime: '2026-10-15T12:00:00Z',
       gateway: { state: 'reachable', message: '', observedAt: '2026-10-15T12:00:00Z' },
@@ -142,7 +142,7 @@ describe('Dashboard', () => {
     renderDashboard({})
     await screen.findByRole('heading', { level: 2, name: 'Live previews' })
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Readiness', 'Needs you', 'System health', 'Live previews'])
+    expect(headings).toEqual(['Readiness', 'Needs you', 'System health', 'Show now', 'SMPTE timecode', 'Temperatures', 'Live previews'])
   })
 
   it('leaves the live previews out while no gateway is configured', async () => {
@@ -153,7 +153,7 @@ describe('Dashboard', () => {
     })
     renderDashboard({})
     await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'Live previews' })).toBeNull())
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Readiness', 'Needs you', 'System health'])
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Readiness', 'Needs you', 'System health', 'Show now', 'SMPTE timecode', 'Temperatures'])
   })
 
   it('says the night session has not reported rather than inventing a verdict', () => {
@@ -293,6 +293,15 @@ describe('Dashboard', () => {
     expect(counts.nodesOnline).toBe(1)
     expect(counts.nodesUnknown).toBe(1)
     expect(nodesDetail(counts)).toBe('1 unknown')
+  })
+
+  it('reports Resolume health from the real counts', () => {
+    const base = { nodesTotal: 0, nodesOnline: 0, nodesUnknown: 0 } as never
+    const detail = (total: number, healthy: number) =>
+      resolumeDetail({ ...(base as object), resolumeTotal: total, resolumeHealthy: healthy } as never)
+    expect(detail(0, 0)).toBe('none configured')
+    expect(detail(1, 0)).toBe('1 not healthy')
+    expect(detail(2, 2)).toBe('all healthy')
   })
 
   it('counts signals by their evidence state', () => {

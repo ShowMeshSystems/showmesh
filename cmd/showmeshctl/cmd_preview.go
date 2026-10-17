@@ -27,9 +27,27 @@ type previewsResponse struct {
 }
 
 type previewGatewayStatus struct {
-	State      string    `json:"state"`
-	Message    string    `json:"message"`
-	ObservedAt time.Time `json:"observedAt"`
+	State        string               `json:"state"`
+	Message      string               `json:"message"`
+	NDIDiscovery *previewNDIDiscovery `json:"ndiDiscovery,omitempty"`
+	ObservedAt   time.Time            `json:"observedAt"`
+}
+
+type previewNDIDiscovery struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
+}
+
+// printNDIDiscovery prints unknown, never running, when the gateway did not report it.
+func printNDIDiscovery(w io.Writer, d *previewNDIDiscovery) {
+	if d == nil {
+		_, _ = fmt.Fprintln(w, "ndi discovery: unknown")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "ndi discovery: %s\n", d.State)
+	if d.Message != "" {
+		_, _ = fmt.Fprintf(w, "               %s\n", d.Message)
+	}
 }
 
 type previewTile struct {
@@ -123,6 +141,8 @@ func cmdPreview(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		return cmdPreviewGateway(rest, stdout, stderr, clock)
 	case "camera":
 		return cmdPreviewCamera(rest, stdout, stderr, clock)
+	case "ndi":
+		return cmdPreviewNDI(rest, stdout, stderr, clock)
 	case "layout":
 		return cmdPreviewLayout(rest, stdout, stderr, clock)
 	default:
@@ -133,7 +153,7 @@ func cmdPreview(args []string, stdout, stderr io.Writer, clock func() time.Time)
 }
 
 func printPreviewUsage(w io.Writer) {
-	_, _ = fmt.Fprint(w, `usage: showmeshctl preview <list|snapshot|gateway|camera|layout> [flags]
+	_, _ = fmt.Fprint(w, `usage: showmeshctl preview <list|snapshot|gateway|camera|ndi|layout> [flags]
 
 The dashboard's video previews. A tile key is "ndi:<NDI source name>" or
 "camera:<camera id>"; "preview list" shows every key.
@@ -151,6 +171,12 @@ Subcommands:
   camera add <id> --name <name> --url-file <path>
                                          add or change a camera (requires config:write)
   camera remove <id>                     remove a camera (requires config:write)
+  ndi list                               list the NDI sources added by hand
+  ndi get <id>                           show one NDI source added by hand
+  ndi revisions <id>                     list one NDI source's saved changes, newest first
+  ndi add <id> --ndi-name <name> [--label <label>] [--address <host:port>]
+                                         add or change an NDI source (requires config:write)
+  ndi remove <id>                        remove an NDI source (requires config:write)
   layout get                             show the saved tile order and hidden tiles
   layout revisions                       list the layout's saved changes, newest first
   layout move <key> --to <index>         move a tile; index counts from 0 (requires dashboard:write)
@@ -236,6 +262,9 @@ func cmdPreviewList(args []string, stdout, stderr io.Writer, clock func() time.T
 	_, _ = fmt.Fprintf(stdout, "gateway: %s\n", resp.Gateway.State)
 	if resp.Gateway.Message != "" {
 		_, _ = fmt.Fprintf(stdout, "         %s\n", resp.Gateway.Message)
+	}
+	if resp.Gateway.State == "reachable" {
+		printNDIDiscovery(stdout, resp.Gateway.NDIDiscovery)
 	}
 	if len(resp.Tiles) == 0 {
 		return exitOK

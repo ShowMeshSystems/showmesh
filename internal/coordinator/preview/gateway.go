@@ -27,13 +27,14 @@ type Source struct {
 	Address string `json:"address"`
 }
 
-// Stream is one entry of the desired stream set. NDIName is set for kind "ndi",
-// URL for kind "rtsp".
+// Stream is one entry of the desired stream set. NDIName, and NDIAddress for a
+// source added by hand with an address, are set for kind "ndi"; URL for kind "rtsp".
 type Stream struct {
-	Key     string `json:"key"`
-	Kind    string `json:"kind"`
-	NDIName string `json:"ndiName,omitempty"`
-	URL     string `json:"url,omitempty"`
+	Key        string `json:"key"`
+	Kind       string `json:"kind"`
+	NDIName    string `json:"ndiName,omitempty"`
+	NDIAddress string `json:"ndiAddress,omitempty"`
+	URL        string `json:"url,omitempty"`
 }
 
 // StreamState is the gateway's report on one stream.
@@ -139,6 +140,30 @@ func (c *Client) Sources(ctx context.Context) ([]Source, error) {
 		return nil, fmt.Errorf("preview gateway sources reply: %w", err)
 	}
 	return out, nil
+}
+
+// DiscoveryStatus is the gateway's report on NDI discovery.
+type DiscoveryStatus struct {
+	Running bool   `json:"running"`
+	Message string `json:"message"`
+}
+
+// Discovery reports whether the gateway's NDI discovery works. It returns nil
+// from a gateway too old to report it.
+func (c *Client) Discovery(ctx context.Context) (*DiscoveryStatus, error) {
+	data, _, err := c.do(ctx, gatewayRequestTimeout, http.MethodGet, "/v1/discovery", "", nil)
+	var ge *GatewayError
+	if errors.As(err, &ge) && ge.Status == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out DiscoveryStatus
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("preview gateway discovery reply: %w", err)
+	}
+	return &out, nil
 }
 
 // PutStreams replaces the gateway's desired stream set.

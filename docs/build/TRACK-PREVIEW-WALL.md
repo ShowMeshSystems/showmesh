@@ -44,6 +44,18 @@ The full RTSP URL is a credential field `url`. `urlDisplay` is scheme, host
 and port only, computed by the coordinator at write time. A URL must be
 `rtsp://` or `rtsps://`.
 
+**`preview.ndi`**, operator-chosen id. An NDI source added by hand, for a
+sender discovery cannot reach, such as one on another subnet or VLAN.
+
+```json
+{ "label": "Far barn", "ndiName": "BARN-02 (Composition)",
+  "address": "10.0.20.15:5961", "enabled": true }
+```
+
+`ndiName` is required. `address` is `host:port` or empty, and is not a
+credential. Its tile key is `ndi:<ndiName>`, so a source that is also
+discovered shows as one tile. A node and surface label wins over `label`.
+
 **`dashboard.layout`**, `default` singleton.
 
 ```json
@@ -82,6 +94,9 @@ the same pass, such as at startup):
   coordinator has not yet heard from it), `reachable`, `unreachable`. With
   `not_configured`, `tiles` is empty. An observation made for another address
   or token counts as none.
+- `gateway.ndiDiscovery`: `{"state": "running|not_running", "message": "..."}`
+  from the gateway's `GET /v1/discovery`. Omitted while the gateway is not
+  reachable or is too old to report it, never filled in as running.
 - `tile.state`: `live` (frames arriving), `idle` (nobody watching, so the
   source is not started), `connecting`, `not_found` (the NDI source is no
   longer announced, or the camera refused), `disabled` (camera disabled),
@@ -101,11 +116,12 @@ gateway.
 Proxied to the gateway. The UI falls back to polling this every 2 s when
 WebRTC fails.
 
-All three are reads. Every one needs `observation:read`, including video and snapshots. Writes to the three configuration kinds stay allowed in show mode, because previews are not show configuration.
+All three are reads. Every one needs `observation:read`, including video and snapshots. Writes to the preview configuration kinds stay allowed in show mode, because previews are not show configuration.
 
 The coordinator sends the gateway the full desired stream set whenever any of
-the three kinds changes, and again every 10 s. Every NDI source the gateway
-reports plus every enabled camera is in the set.
+the preview kinds changes, and again every 10 s. Every NDI source the gateway
+reports, every enabled `preview.ndi` source, and every enabled camera is in
+the set.
 
 ## showmeshctl (part C)
 
@@ -120,6 +136,11 @@ showmeshctl preview camera get <id>
 showmeshctl preview camera revisions <id>
 showmeshctl preview camera add <id> --name <name> --url-file <path>
 showmeshctl preview camera remove <id>
+showmeshctl preview ndi list
+showmeshctl preview ndi get <id>
+showmeshctl preview ndi revisions <id>
+showmeshctl preview ndi add <id> --ndi-name <name> [--label <label>] [--address <host:port>]
+showmeshctl preview ndi remove <id>
 showmeshctl preview layout get
 showmeshctl preview layout revisions
 showmeshctl preview layout move <key> --to <index>
@@ -141,8 +162,14 @@ error if that port is taken.
 
 - `GET /v1/sources`: NDI sources currently announced,
   `[{"name": "NODE-01 (matrix-main)", "address": "192.168.130.22:5961"}]`.
+- `GET /v1/discovery`: whether NDI discovery works, `{"running": false,
+  "message": "..."}`. `message` states why not and what to do, and is empty
+  while it runs. Discovery is not running while the runtime directory has
+  neither `libndi.so.6` nor `libndi.so.5`, or while the device monitor keeps
+  failing at start.
 - `PUT /v1/streams`: replaces the desired set. The body is an array of
-  `{"key": "...", "kind": "ndi", "ndiName": "..."}` or
+  `{"key": "...", "kind": "ndi", "ndiName": "...", "ndiAddress": "host:port"}`
+  (`ndiAddress` optional) or
   `{"key": "...", "kind": "rtsp", "url": "rtsp://..."}`. This is idempotent,
   and an unchanged entry is not restarted.
 - `GET /v1/streams`: `[{"key": "...", "state": "live|idle|connecting|not_found|error", "message": "...", "consumers": 0}]`.
@@ -153,7 +180,9 @@ An NDI stream is a GStreamer pipeline the gateway builds itself:
 `ndisrc ndi-name=<name> bandwidth=lowest`, scaled to 640×360, rated to
 10 fps, encoded H.264 (`x264enc tune=zerolatency speed-preset=ultrafast`).
 The NDI name is passed as one argument after validation and is never
-interpolated into a shell string. A camera stream is go2rtc's own RTSP source.
+interpolated into a shell string. A stream with `ndiAddress` adds
+`url-address=<host:port>`, so it is reached directly and need not be
+announced. A camera stream is go2rtc's own RTSP source.
 
 ## Verification
 

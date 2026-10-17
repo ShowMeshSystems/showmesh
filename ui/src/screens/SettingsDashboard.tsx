@@ -2,27 +2,33 @@ import { useEffect, useState } from 'react'
 import {
   ApiError,
   deletePreviewCamera,
+  deletePreviewNDI,
   getPreviewCamera,
+  getPreviewNDI,
   getPreviewGatewayConfig,
   getPreviewGatewayConfigRevisions,
   listConfigObjects,
   putPreviewCamera,
   putPreviewGatewayConfig,
+  putPreviewNDI,
   type PreviewCameraConfigResponse,
   type PreviewGatewayConfigResponse,
+  type PreviewNDIConfigResponse,
 } from '../api'
 import { Button, ButtonRow, Choice, ConfirmDialog, Field, FieldGrid, Input, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
-import { cameraDraftError, cameraRequest, gatewayRequest, gatewayUrlError } from './previewSettingsModel'
+import { cameraDraftError, cameraRequest, gatewayRequest, gatewayUrlError, ndiDraftError, ndiRequest } from './previewSettingsModel'
 
 type CameraRow = { key: number; id: string; name: string; enabled: boolean; url: string; loaded: PreviewCameraConfigResponse | null }
+type NDIRow = { key: number; id: string; label: string; ndiName: string; address: string; enabled: boolean; loaded: PreviewNDIConfigResponse | null }
 
 type Loaded = {
   gateway: PreviewGatewayConfigResponse | null
   cameras: { id: string; response: PreviewCameraConfigResponse }[]
+  ndis: { id: string; response: PreviewNDIConfigResponse }[]
 }
 
 type Load = { kind: 'loading' } | { kind: 'loaded'; data: Loaded } | { kind: 'failed'; reason: string }
@@ -50,6 +56,33 @@ async function readCameras(): Promise<Loaded['cameras']> {
   return Promise.all(ids.map(async (id) => ({ id, response: await getPreviewCamera(id) })))
 }
 
+async function readNDISources(): Promise<Loaded['ndis']> {
+  let ids: string[]
+  try {
+    ids = (await listConfigObjects('preview.ndi')).objects.map((object) => object.id)
+  } catch (err: unknown) {
+    if (err instanceof ApiError && err.status === 404) return []
+    throw err
+  }
+  return Promise.all(ids.map(async (id) => ({ id, response: await getPreviewNDI(id) })))
+}
+
+function ndiRowsFrom(ndis: Loaded['ndis'], firstKey: number): NDIRow[] {
+  return ndis.map((ndi, index) => ({ key: firstKey + index, id: ndi.id, ...ndi.response.payload, loaded: ndi.response }))
+}
+
+function ndiRowDirty(row: NDIRow): boolean {
+  if (row.loaded === null) return true
+  const p = row.loaded.payload
+  return row.label !== p.label || row.ndiName !== p.ndiName || row.address !== p.address || row.enabled !== p.enabled
+}
+
+function ndiRowName(row: NDIRow): string {
+  const p = row.loaded?.payload
+  if (p === undefined) return 'New NDI source'
+  return p.label !== '' ? p.label : p.ndiName
+}
+
 function rowsFrom(cameras: Loaded['cameras']): CameraRow[] {
   return cameras.map((camera, index) => ({
     key: index,
@@ -66,7 +99,15 @@ function rowDirty(row: CameraRow): boolean {
   return row.name !== row.loaded.payload.name || row.enabled !== row.loaded.payload.enabled || row.url !== ''
 }
 
-/** Settings › Dashboard: the preview gateway and the cameras the Dashboard shows. */
+function removalTitle(cameras: CameraRow[], ndis: NDIRow[]): string {
+  const only = [...cameras.map((row) => row.name), ...ndis.map(ndiRowName)]
+  if (only.length === 1) return `Remove ${only[0] ?? 'this item'}?`
+  if (ndis.length === 0) return `Remove ${cameras.length} cameras?`
+  if (cameras.length === 0) return `Remove ${ndis.length} NDI sources?`
+  return `Remove ${cameras.length} cameras and ${ndis.length} NDI sources?`
+}
+
+/** Settings › Dashboard: the preview gateway, the cameras and the NDI sources added by hand. */
 export function SettingsDashboard() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -76,6 +117,8 @@ export function SettingsDashboard() {
   const [token, setToken] = useState('')
   const [rows, setRows] = useState<CameraRow[]>([])
   const [removed, setRemoved] = useState<CameraRow[]>([])
+  const [ndiRows, setNDIRows] = useState<NDIRow[]>([])
+  const [removedNDI, setRemovedNDI] = useState<NDIRow[]>([])
   const [nextKey, setNextKey] = useState(0)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -85,15 +128,17 @@ export function SettingsDashboard() {
   useEffect(() => {
     let cancelled = false
     setLoad({ kind: 'loading' })
-    Promise.all([readGateway(), readCameras()])
-      .then(([gateway, cameras]) => {
+    Promise.all([readGateway(), readCameras(), readNDISources()])
+      .then(([gateway, cameras, ndis]) => {
         if (cancelled) return
-        setLoad({ kind: 'loaded', data: { gateway, cameras } })
+        setLoad({ kind: 'loaded', data: { gateway, cameras, ndis } })
         setUrl(gateway?.payload.url ?? '')
         setToken('')
         setRows(rowsFrom(cameras))
         setRemoved([])
-        setNextKey(cameras.length)
+        setNDIRows(ndiRowsFrom(ndis, cameras.length))
+        setRemovedNDI([])
+        setNextKey(cameras.length + ndis.length)
         setDirty(false)
       })
       .catch((err: unknown) => {
@@ -126,6 +171,23 @@ export function SettingsDashboard() {
     setDirty(true)
   }
 
+  const patchNDIRow = (key: number, patch: Partial<NDIRow>) => {
+    setNDIRows(ndiRows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
+    setDirty(true)
+  }
+
+  const removeNDIRow = (row: NDIRow) => {
+    setNDIRows(ndiRows.filter((r) => r.key !== row.key))
+    if (row.loaded !== null) setRemovedNDI([...removedNDI, row])
+    setDirty(true)
+  }
+
+  const addNDIRow = () => {
+    setNDIRows([...ndiRows, { key: nextKey, id: '', label: '', ndiName: '', address: '', enabled: true, loaded: null }])
+    setNextKey(nextKey + 1)
+    setDirty(true)
+  }
+
   const firstProblem = (): string | null => {
     const urlProblem = gatewayUrlError(url)
     if (urlProblem !== null) return urlProblem
@@ -136,15 +198,24 @@ export function SettingsDashboard() {
       if (problem !== null) return problem
       if (isNew) takenIds.push(row.id.trim())
     }
+    const takenNDIIds = ndiRows.filter((row) => row.loaded !== null).map((row) => row.id)
+    for (const row of ndiRows) {
+      const isNew = row.loaded === null
+      const problem = ndiDraftError(row, isNew ? 'new' : 'edit', isNew ? takenNDIIds : [])
+      if (problem !== null) return problem
+      if (isNew) takenNDIIds.push(row.id.trim())
+    }
     return null
   }
 
   /** Writes each changed part in turn. Every part that saves updates the loaded state at once, so a retry starts from what is stored. */
   const write = async (data: Loaded) => {
-    const stored: Loaded = { gateway: data.gateway, cameras: [...data.cameras] }
+    const stored: Loaded = { gateway: data.gateway, cameras: [...data.cameras], ndis: [...data.ndis] }
     const saved: string[] = []
     const savedRows = new Map<number, PreviewCameraConfigResponse>()
+    const savedNDIRows = new Map<number, PreviewNDIConfigResponse>()
     const deletedIds = new Set<string>()
+    const deletedNDIIds = new Set<string>()
     let gatewaySaved = false
     const result: { refusal: Outcome | null } = { refusal: null }
     const refuse = (outcome: { stale: StaleWrite } | { error: string }) => {
@@ -192,6 +263,29 @@ export function SettingsDashboard() {
         }
         saved.push(row.name.trim())
       }
+      for (const row of removedNDI) {
+        await deletePreviewNDI(row.id)
+        deletedNDIIds.add(row.id)
+        stored.ndis = stored.ndis.filter((ndi) => ndi.id !== row.id)
+        saved.push(`removing ${ndiRowName(row)}`)
+      }
+      for (const row of ndiRows.filter(ndiRowDirty)) {
+        const id = row.id.trim()
+        if (row.loaded === null) {
+          const result = await guardedCreate({ read: () => getPreviewNDI(id), write: () => putPreviewNDI(id, ndiRequest(row)) })
+          if (result.kind === 'taken') return refuse({ error: `An NDI source with the id ${id} already exists. Choose another id.` })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          savedNDIRows.set(row.key, result.response)
+          stored.ndis.push({ id, response: result.response })
+        } else {
+          const result = await guardedSave({ loaded: row.loaded, read: () => getPreviewNDI(id), write: () => putPreviewNDI(id, ndiRequest(row)) })
+          if (result.kind === 'stale') return refuse({ stale: result })
+          if (result.kind === 'unreadable') return refuse({ error: result.reason })
+          savedNDIRows.set(row.key, result.response)
+          stored.ndis = stored.ndis.map((ndi) => (ndi.id === id ? { id, response: result.response } : ndi))
+        }
+        saved.push(row.label.trim() !== '' ? row.label.trim() : row.ndiName.trim())
+      }
     }
 
     try {
@@ -214,6 +308,13 @@ export function SettingsDashboard() {
         return response === undefined ? row : { ...row, id: row.id.trim(), name: response.payload.name, enabled: response.payload.enabled, url: '', loaded: response }
       }),
     )
+    setRemovedNDI((list) => list.filter((row) => !deletedNDIIds.has(row.id)))
+    setNDIRows((list) =>
+      list.map((row) => {
+        const response = savedNDIRows.get(row.key)
+        return response === undefined ? row : { ...row, id: row.id.trim(), ...response.payload, loaded: response }
+      }),
+    )
   }
 
   const save = () => {
@@ -230,7 +331,7 @@ export function SettingsDashboard() {
   }
 
   const requestSave = () => {
-    if (removed.length > 0) setConfirmRemoval(true)
+    if (removed.length + removedNDI.length > 0) setConfirmRemoval(true)
     else save()
   }
 
@@ -298,6 +399,40 @@ export function SettingsDashboard() {
             )}
             <Button onClick={addRow}>Add a camera</Button>
           </Section>
+
+          <Section id="st-dash-ndi" title="NDI sources" detail="Add a source that discovery cannot find, such as one on another network.">
+            {ndiRows.length === 0 ? (
+              <RuledStrip absence="empty" label="No NDI sources" fact="No NDI source is added by hand. Discovered sources still show on the Dashboard." />
+            ) : (
+              <div className="sm-panel sm-stack-4">
+                {ndiRows.map((row) => (
+                  <div key={row.key} className="sm-panel sm-stack-4">
+                    <h3 className="sm-subsection__title">{ndiRowName(row)}</h3>
+                    <div className="sm-inline-row sm-inline-row--end">
+                      <Field label="Source id">
+                        {(props) => <Input {...props} value={row.id} disabled={row.loaded !== null} onChange={(e) => patchNDIRow(row.key, { id: e.target.value })} className="sm-input--id" />}
+                      </Field>
+                      <Field label="Label">
+                        {(props) => <Input {...props} value={row.label} onChange={(e) => patchNDIRow(row.key, { label: e.target.value })} />}
+                      </Field>
+                      <Field label="NDI name">
+                        {(props) => <Input {...props} value={row.ndiName} onChange={(e) => patchNDIRow(row.key, { ndiName: e.target.value })} />}
+                      </Field>
+                      <Field label="Address" help="Optional host:port. Leave it empty to find the source by name.">
+                        {(props) => <Input {...props} value={row.address} onChange={(e) => patchNDIRow(row.key, { address: e.target.value })} className="sm-input--address" />}
+                      </Field>
+                      <Button variant="quiet" aria-label={`Remove ${row.loaded === null ? 'this NDI source' : ndiRowName(row)}`} onClick={() => removeNDIRow(row)}>
+                        Remove
+                      </Button>
+                      {ndiRowDirty(row) && <StatusPair tone="warn" label="Unsaved" />}
+                    </div>
+                    <Choice type="checkbox" checked={row.enabled} onChange={(e) => patchNDIRow(row.key, { enabled: e.target.checked })} label="Stream this source" />
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button onClick={addNDIRow}>Add an NDI source</Button>
+          </Section>
         </>
       )}
 
@@ -319,8 +454,12 @@ export function SettingsDashboard() {
 
       <ConfirmDialog
         open={confirmRemoval}
-        title={removed.length === 1 ? `Remove ${removed[0]?.name ?? 'this camera'}?` : `Remove ${removed.length} cameras?`}
-        detail="Their tiles leave the Dashboard and their stored addresses are deleted. Add a camera again to bring it back."
+        title={removalTitle(removed, removedNDI)}
+        detail={
+          removedNDI.length === 0
+            ? 'Their tiles leave the Dashboard and their stored addresses are deleted. Add a camera again to bring it back.'
+            : 'Their tiles leave the Dashboard unless discovery still finds them. Add them again to bring them back.'
+        }
         confirmLabel="Remove and save"
         busy={saving}
         onConfirm={save}

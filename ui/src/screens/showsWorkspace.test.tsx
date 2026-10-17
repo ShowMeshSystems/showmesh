@@ -208,7 +208,7 @@ describe('Shows workspace shell', () => {
     fireEvent.change(showInstance, { target: { value: 'barn-player' } })
     expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()
     expect(within(screen.getByRole('combobox', { name: 'Resting sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
-    expect(within(screen.getByRole('combobox', { name: 'Resting target' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Read the length from' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
   })
 
   it('authors the complete transition and background-audio controls from real Show inventory', async () => {
@@ -311,14 +311,15 @@ describe('Shows · Playlists tab', () => {
     await screen.findByRole('button', { name: 'Save playlist' })
     await waitFor(() => expect(screen.queryByText('FPP\u2019s playlist changed at', { exact: false })).not.toBeInTheDocument())
     expect(screen.queryByText("FPP's playlist changed")).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Review changes' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update from FPP' })).toBeInTheDocument()
     cleanup()
 
     stubs.getShowPlaylistDefinitionMovePreview = () => Promise.resolve(answer(true))
     renderWorkspace()
     await openPlaylistRow('Main Show')
     await waitFor(() => expect(screen.getByText("FPP's playlist changed")).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Review changes' })).toBeInTheDocument()
+    expect(screen.getByText(/Update to review the changes/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update from FPP' })).toBeInTheDocument()
   })
 
   it('folds playlist readiness into this tab and states the failing condition, never fabricating ready', async () => {

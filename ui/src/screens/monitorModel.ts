@@ -177,6 +177,8 @@ export type ActivityRow = {
   time: string
   summary: string
   source: string
+  /** Whether the row is a system event or an operator action. */
+  origin: 'event' | 'audit'
   /** The state word, only when there is one worth showing. Colour never travels alone. */
   state: string | null
   tone: Tone
@@ -674,6 +676,7 @@ function eventRow(event: Event): TimedRow {
     time: formatClock(at) ?? 'unrecorded',
     summary: event.summary,
     source: event.source,
+    origin: 'event',
     state: event.severity === 'informational' ? null : SEVERITY_LABEL[event.severity],
     tone: SEVERITY_TONE[event.severity],
     atMs: parseIsoMs(at) ?? 0,
@@ -710,6 +713,7 @@ function auditRow(entry: AuditEntry): TimedRow {
     time: formatClock(entry.timestamp) ?? 'unrecorded',
     summary: auditSummary(entry),
     source: entry.principalName,
+    origin: 'audit',
     state: outcome?.label ?? null,
     tone: outcome?.tone ?? 'pending',
     atMs: parseIsoMs(entry.timestamp) ?? 0,
@@ -724,5 +728,5 @@ function auditRow(entry: AuditEntry): TimedRow {
 export function mergedActivityRows(events: readonly Event[], audit: readonly AuditEntry[]): ActivityRow[] {
   const rows = [...events.map(eventRow), ...audit.map(auditRow)]
   rows.sort((a, b) => b.atMs - a.atMs)
-  return rows.map((row) => ({ key: row.key, time: row.time, summary: row.summary, source: row.source, state: row.state, tone: row.tone }))
+  return rows.map((row) => ({ key: row.key, time: row.time, summary: row.summary, source: row.source, origin: row.origin, state: row.state, tone: row.tone }))
 }

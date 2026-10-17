@@ -167,11 +167,6 @@ type handlers struct {
 	// comment. Nil in production.
 	fppDefinitionRepublisher fppDefinitionRepublisher
 
-	// fppCeilingWriter substitutes the brightness ceiling write - see
-	// [fppBrightnessCeilingWriter] (fppbrightnessceiling.go). Nil in
-	// production; only a test ever sets it.
-	fppCeilingWriter fppBrightnessCeilingWriter
-
 	// fppExcludedRangesWriter substitutes the excluded ranges write. Nil
 	// in production.
 	fppExcludedRangesWriter fppBrightnessExcludedRangesWriter
@@ -252,6 +247,13 @@ type handlers struct {
 	// staging for that entry has not finished yet - the launch step reads
 	// this without blocking and never waits for it to appear.
 	nightFirstCueStageResult map[string][]string
+
+	// nightRestingRenderWG owns every resting render dispatch goroutine, and
+	// nightRestingRenderMu guards nightRestingRenders, keyed by
+	// nightRestingRenderKey. In-memory: a restart sends once more.
+	nightRestingRenderWG sync.WaitGroup
+	nightRestingRenderMu sync.Mutex
+	nightRestingRenders  map[string]*nightRestingRender
 
 	// assetBlobMu orders an asset upload's blob write against a delete's
 	// blob removal for the same content hash (assets.go). An upload holds

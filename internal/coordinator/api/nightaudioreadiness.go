@@ -341,7 +341,11 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 			reason: "The show has no audio nodes set, so background audio plays on the default node. Set the show's audio nodes.",
 		})
 	}
+	if check, ok := nightCheckBackgroundAudioItemTargets(resolved, resolvedNodeIDs, resolvedFrom); ok {
+		checks = append(checks, check)
+	}
 	for _, nodeID := range resolvedNodeIDs {
+		checks = append(checks, h.nightCheckBackgroundAudioNodeSetup(ctx, now, nodeID))
 		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, resolved))
 		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, resolved))
 	}

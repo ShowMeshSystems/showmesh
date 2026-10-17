@@ -303,7 +303,7 @@ run_node_role() {
   node_install_packages
   node_fetch_agent
   node_preflight
-  [ "$kind" = "render" ] && render_install_ndi_plugin
+  [ "$kind" != "audio" ] && render_install_ndi_plugin
   if node_is_enrolled && [ "$OPT_REENROLL" -eq 0 ]; then
     NODE_ID="$(env_get "$AGENT_ENV" SHOWMESH_NODE_ID)"
     API_TOKEN="$(env_get "$AGENT_ENV" SHOWMESH_AGENT_API_TOKEN)"
@@ -321,8 +321,9 @@ run_node_role() {
   [ -n "$COORDINATOR_URL" ] && before="$(node_started_at "$NODE_ID" "$API_TOKEN")"
   node_install_agent
   case "$kind" in
-    render) render_ndi_runtime; audio_setup_ptp n ;;
-    audio) audio_setup_ptp y ;;
+    render) render_ndi_runtime; [ -z "$OPT_PTP_INTERFACE" ] || audio_setup_ptp ;;
+    audio) audio_setup_ptp ;;
+    render-audio) render_ndi_runtime; audio_setup_ptp ;;
   esac
   if [ -z "$COORDINATOR_URL" ]; then
     warn "This node has no coordinator address saved, so the installer cannot check that it reports in. Save one with: showmesh-install --coordinator http://<address>:8080"

@@ -39,7 +39,8 @@ curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v<versi
 | Role | What it does | Finishes when |
 | --- | --- | --- |
 | `coordinator` | Installs `docker.io`, `docker-cli` and `docker-compose` from Debian (trixie ships Compose 2.26), places the bundle in `/opt/showmesh/coordinator`, runs `generate-credentials.sh` for the built-in broker or records an external one, writes `.env`, starts the published images, creates the first administrator with the coordinator's `bootstrap` subcommand (or `create-admin` when bootstrap was already claimed), issues it a token, installs `showmeshctl` with a wrapper that reads `/etc/showmesh/showmeshctl.env`, saves the built-in broker and the coordinator's login as the `fpp.mqtt` configuration when none is saved yet (its host map is left for the operator), and writes `/etc/avahi/services/showmesh.service`. | `/healthz` answers, the administrator token reads `/api/v1/nodes`, and the broker accepts the coordinator's login. |
-| `render`, `audio` | Installs the runtime packages, downloads and checks the node agent tarball, runs `preflight.sh --runtime-only`, redeems the enrollment code, writes the returned values into `/etc/showmesh/agent.env` (every other line kept), and runs the package's `install.sh`. A render node installs the packaged NDI plugin and offers the NDI runtime step. An audio node offers `install-ptp-audio.sh`. A render node that also plays audio runs it too when `--ptp-interface` is given, or when the operator says yes at the prompt, which defaults to no. | `GET /api/v1/nodes/<nodeId>` with the node's token shows `controlPlane.state` `online` with a `startedAt` other than the one seen before the agent started. |
+| `render`, `audio` | Installs the runtime packages, downloads and checks the node agent tarball, runs `preflight.sh --runtime-only`, redeems the enrollment code, writes the returned values into `/etc/showmesh/agent.env` (every other line kept), and runs the package's `install.sh`. A render node installs the packaged NDI plugin and offers the NDI runtime step. An audio node offers `install-ptp-audio.sh`. A render node runs it only when `--ptp-interface` is given. | `GET /api/v1/nodes/<nodeId>` with the node's token shows `controlPlane.state` `online` with a `startedAt` other than the one seen before the agent started. |
+| `render-audio` | The render role, then the audio node's `install-ptp-audio.sh` step. This is "Audio and render node on this machine" in the role prompt. | As `render`, `audio`. |
 | `coordinator-node` | The coordinator role, then `showmeshctl node enroll <node-id>` against itself, then the node role with that code. | Both of the above. |
 
 A second run upgrades in place. It keeps `.env`, broker logins, the
@@ -65,7 +66,27 @@ exist so every question has an unattended answer: `--address`,
 `--ui-port`, `--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
 `--ptp-interface`, `--ptp-domain`, `--ptp-role`, `--audio-card` and
 `--agent-package` (a node agent tarball on disk, for a build that has no
-release).
+release), and the `--home-assistant` options below.
+
+## Home Assistant bridge
+
+A coordinator on the built-in broker can bridge it to Home Assistant's MQTT
+broker, so Home Assistant sees every FPP topic and FPP's discovery
+announcements, and its commands reach FPP. An interactive run asks once, when
+no bridge exists, and defaults to no. Unattended:
+
+```sh
+sudo showmesh-install --home-assistant 192.168.1.20 --home-assistant-username showmesh \
+  --home-assistant-password-file /root/ha-password
+```
+
+The login is one you create on Home Assistant's broker. `--home-assistant HOST:PORT`
+sets a port other than 1883, `--home-assistant-share-showmesh` also shows
+ShowMesh node state to Home Assistant read-only, and `--no-home-assistant` takes
+the bridge down. Setting it up restarts the broker, so nodes show offline for a
+few seconds. The bridge lives in `/opt/showmesh/coordinator/mosquitto/conf.d/`,
+which upgrades keep, so a later run with no options leaves it as it is. Running
+again with `--home-assistant` replaces it.
 
 ## Operator UI port
 

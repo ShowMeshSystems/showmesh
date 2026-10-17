@@ -14,6 +14,7 @@ import {
   Tiles,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { DashboardOverview } from './DashboardOverview'
 import { PreviewWall } from './PreviewWall'
 import { SignalsTile } from './SignalsTile'
 import { effectiveServerTimeIso, formatDuration } from '../domain/time'
@@ -23,6 +24,7 @@ import {
   fppDetail,
   nodesDetail,
   partitionAttentionItems,
+  resolumeDetail,
   staleSignalLeader,
   nextStartVerdict,
   showInProgress,
@@ -226,7 +228,7 @@ export function Dashboard() {
           <StatTile
             label="Resolume"
             value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
-            detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
+            detail={resolumeDetail(counts)}
             to="/settings/resolume"
           />
           <SignalsTile counts={counts.signals} />
@@ -237,6 +239,8 @@ export function Dashboard() {
           </p>
         )}
       </Section>
+
+      <DashboardOverview session={session} />
 
       <PreviewWall />
     </>

@@ -5,6 +5,8 @@ import { Section } from './Blocks'
 import { RuledStrip } from './StateBlocks'
 import { StatusPair } from './Status'
 import { Button } from './Button'
+import { RevisionDiff } from './RevisionDiff'
+import { diffPayloads, type FieldChange } from './diffPayloads'
 
 type Props = {
   /** Bound to whatever object this history belongs to, e.g. `() => getShowRevisions(id)`. */
@@ -25,8 +27,8 @@ type Props = {
    * screen into it without a matching mock.
    */
   mode?: 'compact' | 'list'
-  /** Optional full-payload reader owned by the editor; history itself only fetches metadata. */
-  onSelect?: (revision: ConfigRevisionMeta) => void
+  /** Reads one version's full payload. When given, each list row gets a View version button that shows what changed. */
+  fetchRevision?: (revision: number) => Promise<{ payload: unknown }>
 }
 
 type LoadState = 'loading' | 'failed' | ConfigRevisionMeta[]
@@ -36,7 +38,7 @@ type LoadState = 'loading' | 'failed' | ConfigRevisionMeta[]
  * not the D-014 stale-write guard, which re-reads the object itself to
  * detect a moved revision; this reads the revision LIST.
  */
-export function RevisionHistory({ fetch, reloadKey, title = 'History', id = 'st-rev', mode = 'compact', onSelect }: Props) {
+export function RevisionHistory({ fetch, reloadKey, title = 'History', id = 'st-rev', mode = 'compact', fetchRevision }: Props) {
   const [state, setState] = useState<LoadState>('loading')
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export function RevisionHistory({ fetch, reloadKey, title = 'History', id = 'st-
     ) : mode === 'compact' ? (
       <CompactSummary revisions={state} />
     ) : (
-      <RevisionList revisions={state} {...(onSelect === undefined ? {} : { onSelect })} />
+      <RevisionList revisions={state} {...(fetchRevision === undefined ? {} : { fetchRevision })} />
     )
 
   if (mode === 'compact') return body
@@ -89,19 +91,51 @@ function CompactSummary({ revisions }: { revisions: ConfigRevisionMeta[] }) {
   )
 }
 
-function RevisionList({ revisions, onSelect }: { revisions: ConfigRevisionMeta[]; onSelect?: (revision: ConfigRevisionMeta) => void }) {
+type Viewing = { revision: number; changes: FieldChange[] | null } | 'loading' | 'failed'
+
+function RevisionList({ revisions, fetchRevision }: { revisions: ConfigRevisionMeta[]; fetchRevision?: (revision: number) => Promise<{ payload: unknown }> }) {
+  const [open, setOpen] = useState<{ revision: number; viewing: Viewing } | null>(null)
+
+  const view = (rev: ConfigRevisionMeta) => {
+    if (fetchRevision === undefined) return
+    if (open?.revision === rev.revision) {
+      setOpen(null)
+      return
+    }
+    const previous = Math.max(0, ...revisions.map((r) => r.revision).filter((n) => n < rev.revision))
+    setOpen({ revision: rev.revision, viewing: 'loading' })
+    Promise.all([fetchRevision(rev.revision), previous === 0 ? Promise.resolve(null) : fetchRevision(previous)])
+      .then(([current, before]) => {
+        const viewing: Viewing = { revision: rev.revision, changes: before === null ? null : diffPayloads(before.payload, current.payload) }
+        setOpen((now) => (now?.revision === rev.revision ? { revision: rev.revision, viewing } : now))
+      })
+      .catch(() => setOpen((now) => (now?.revision === rev.revision ? { revision: rev.revision, viewing: 'failed' } : now)))
+  }
+
   return (
     <div>
-      {revisions.map((rev) => (
-        <div key={rev.revision} className="sm-inline-row sm-stack-3">
-          <StatusPair tone={rev.active ? 'good' : 'pending'} label={rev.active ? `Active · ${rev.revision}` : String(rev.revision)} />
-          <p className="sm-small sm-muted">
-            {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'an unknown user'}
-            {rev.note !== '' && `. ${rev.note}`}
-          </p>
-          {onSelect !== undefined && <Button variant="quiet" onClick={() => onSelect(rev)}>View version</Button>}
-        </div>
-      ))}
+      {revisions.map((rev) => {
+        const viewing = open?.revision === rev.revision ? open.viewing : null
+        return (
+          <div key={rev.revision} className="sm-stack-3">
+            <div className="sm-inline-row">
+              <StatusPair tone={rev.active ? 'good' : 'pending'} label={rev.active ? `Active · ${rev.revision}` : String(rev.revision)} />
+              <p className="sm-small sm-muted">
+                {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'an unknown user'}
+                {rev.note !== '' && `. ${rev.note}`}
+              </p>
+              {fetchRevision !== undefined && (
+                <Button variant="quiet" aria-expanded={viewing !== null} onClick={() => view(rev)}>
+                  {viewing === null ? 'View version' : 'Hide version'}
+                </Button>
+              )}
+            </div>
+            {viewing === 'loading' && <RuledStrip absence="loading" label="Reading" fact={`Reading version ${rev.revision}.`} />}
+            {viewing === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={`Version ${rev.revision} could not be read.`} />}
+            {viewing !== null && typeof viewing === 'object' && <RevisionDiff revision={viewing.revision} changes={viewing.changes} />}
+          </div>
+        )
+      })}
     </div>
   )
 }
