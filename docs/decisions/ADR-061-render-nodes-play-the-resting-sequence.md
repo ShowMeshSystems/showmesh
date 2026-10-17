@@ -110,13 +110,16 @@ does today. Night readiness lists, per render node, whether it will draw the
 resting sequence, and a node that will not is informational, never degraded or
 failed.
 
-### 8. The resting sequence field says what it selects
+### 8. The night session editor says what each field selects
 
-The operator-facing label for `resting.timelineAsset` is "Resting sequence",
-not "Resting target". Once this decision is built, its help text says, in one
-or two sentences, that the selected sequence sets how long resting runs and is
-drawn by any render node that has it. The API field names do not change. The
-OpenAPI description of `timelineAsset` is updated to state both roles.
+The night session editor has two fields for `resting.timelineAsset`. "Resting
+sequence" picks the sequence. The second field, formerly "Resting target",
+picks the copy the length is read from and is labelled "Read the length from",
+so it no longer reads as a render target. Once this decision is built, the
+"Resting sequence" help text says, in one or two sentences, that the sequence
+sets how long resting runs and is drawn by any render node that has it. The API
+field names do not change. The OpenAPI description of `timelineAsset` is
+updated to state both roles.
 
 ## Consequences
 
