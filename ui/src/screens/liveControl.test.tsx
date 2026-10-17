@@ -691,7 +691,7 @@ describe('Live Control', () => {
     await renderAnnouncements()
     fireEvent.click(screen.getAllByRole('button', { name: 'Fire' })[0]!)
     expect(await screen.findByText('Aligned')).toBeInTheDocument()
-    expect(screen.getByText(/same shared instant/)).toBeInTheDocument()
+    expect(screen.getByText(/same shared time/)).toBeInTheDocument()
   })
 
   it('shows a multi-node Fire as unaligned with the concrete reason, never a synchronized success it did not reach', async () => {
@@ -1268,7 +1268,7 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
 
     expect(await within(region).findByText('Invalid JSON')).toBeInTheDocument()
-    expect(within(region).getByText(/Not sent\. The payload is not valid JSON/)).toBeInTheDocument()
+    expect(within(region).getByText(/Not sent\. The text is not valid JSON/)).toBeInTheDocument()
     expect(stubs.applyAudioSession).not.toHaveBeenCalled()
   })
 

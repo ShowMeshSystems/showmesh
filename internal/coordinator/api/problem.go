@@ -718,8 +718,8 @@ func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string
 		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",
-			instanceID, signal, reason, fppIfBusyReplace),
+			"Cannot tell whether %s is busy because its %s is out of date. Retry, or send ifBusy=%s to start anyway.",
+			instanceID, fppSignalName(signal), fppIfBusyReplace),
 	}
 }
 
@@ -746,8 +746,8 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 		Title:  "Start Playlist refused: a different playlist is currently playing",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"%q is playing %q, so this was refused (ifBusy=%q). Send ifBusy=%q to replace it, or wait.",
-			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
+			"%s is playing %s, so the start was refused. Send ifBusy=%s to replace it, or wait.",
+			instanceID, currentlyPlaying, fppIfBusyReplace),
 	}
 }
 

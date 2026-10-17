@@ -80,7 +80,7 @@ const actionInvokeOutcomePendingReason = "this invocation has not yet resolved, 
 // a fresh command row carries between insertion and resolution: a pending
 // result must state a real reason, never an empty string a racing replay
 // could observe.
-const actionInvokePendingOutcomeReason = "this invocation has not resolved yet: it is still being sent or is waiting for confirmation"
+const actionInvokePendingOutcomeReason = "The action is still being sent or is waiting for confirmation. Check again in a moment."
 
 // actionInvokeResolvedNoStoredReason is the canned, non-blank OutcomeReason
 // substituted for a resolved invocation whose stored reason is empty.
@@ -518,7 +518,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		resolvedAt = h.now()
 		switch {
 		case err != nil:
-			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "The action was not sent because of a ShowMesh error. Try again.", nil, resolvedAt
 		case problem != nil:
 			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
 		case out.DispatchFailed:
@@ -534,7 +534,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		result, err := h.deps.ResolumeActions.Dispatch(ctx, target.Action, target.Ref, dispatchedNow)
 		resolvedAt = h.now()
 		if err != nil {
-			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "The action was not sent because of a ShowMesh error. Try again.", nil, resolvedAt
 		}
 		return mapResolumeOutcomeWord(result.Outcome), "", result.Reason, result.DispatchedAt, resolvedAt
 
@@ -586,7 +586,7 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		resolvedAt = h.now()
 		switch {
 		case err != nil:
-			return outcomeWordFailed, "", "this action was not sent because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "The action was not sent because of a ShowMesh error. Try again.", nil, resolvedAt
 		case problem != nil:
 			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
 		}
