@@ -1600,7 +1600,7 @@ func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.S
 		if rec.Hello == nil {
 			continue
 		}
-		gone := goneRoutes(rec.Hello.Capabilities)
+		gone := GoneAudioRoutes(rec.Hello.Capabilities)
 		if gone[payload.ProgramRoute] {
 			warnings = append(warnings, fmt.Sprintf(
 				"Node %s no longer reports its program interface %s. Reconnect it or pick another route in Node routing.",
@@ -1615,9 +1615,9 @@ func audioRouteMissingReadiness(ctx context.Context, st *store.Store, p config.S
 	return warnings, nil
 }
 
-// goneRoutes is the set of routes caps lists under audio.output.local's
+// GoneAudioRoutes is the set of routes caps lists under audio.output.local's
 // missingRoutes attribute.
-func goneRoutes(caps capability.Set) map[string]bool {
+func GoneAudioRoutes(caps capability.Set) map[string]bool {
 	c, ok := caps.Lookup("audio.output.local")
 	if !ok {
 		return nil

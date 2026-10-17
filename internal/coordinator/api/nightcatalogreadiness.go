@@ -111,6 +111,11 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 	if !catalog.HasAnyOutput() {
 		return nightReadinessCheck{}, false
 	}
+	if cues := nightCatalogLTCWithoutAudio(catalog.Entries); len(cues) > 0 {
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+			"Node %s gets timecode but no audio for %s, so it will refuse those cues. Send the cues' audio to node %s.",
+			nodeID, nightNames(cues), nodeID)}, true
+	}
 
 	status, _, _, err := fppreconcile.NodeCatalogAckStatus(ctx, h.deps.AssetManifests, nodeID, catalog.Revision)
 	if err != nil {
