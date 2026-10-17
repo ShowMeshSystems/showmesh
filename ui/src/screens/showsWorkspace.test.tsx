@@ -208,7 +208,7 @@ describe('Shows workspace shell', () => {
     fireEvent.change(showInstance, { target: { value: 'barn-player' } })
     expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()
     expect(within(screen.getByRole('combobox', { name: 'Resting sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
-    expect(within(screen.getByRole('combobox', { name: 'Resting target' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Read the length from' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
   })
 
   it('authors the complete transition and background-audio controls from real Show inventory', async () => {
