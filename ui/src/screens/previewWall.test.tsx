@@ -280,6 +280,26 @@ describe('PreviewWall', () => {
     expect(screen.getByRole('heading', { level: 3, name: 'A' })).toBeInTheDocument()
   })
 
+  it('says why NDI discovery is not running, and says nothing while it is unknown or running', async () => {
+    const message = 'The NDI runtime is named libndi.so. Rename or link it to libndi.so.6.'
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')], { ndiDiscovery: { state: 'not_running', message } }))
+    renderWall()
+    await screen.findByText('NDI not running')
+    expect(screen.getByText(message)).toBeInTheDocument()
+    cleanup()
+
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')]))
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    expect(screen.queryByText('NDI not running')).toBeNull()
+    cleanup()
+
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')], { ndiDiscovery: { state: 'running', message: '' } }))
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    expect(screen.queryByText('NDI not running')).toBeNull()
+  })
+
   it('shows a connecting gateway as a neutral state with no sentence on the tiles', async () => {
     const message = 'Connecting to the preview gateway. Previews appear when it answers.'
     stubs.getPreviews.mockResolvedValue(

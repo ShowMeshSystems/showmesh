@@ -82,6 +82,9 @@ the same pass, such as at startup):
   coordinator has not yet heard from it), `reachable`, `unreachable`. With
   `not_configured`, `tiles` is empty. An observation made for another address
   or token counts as none.
+- `gateway.ndiDiscovery`: `{"state": "running|not_running", "message": "..."}`
+  from the gateway's `GET /v1/discovery`. Omitted while the gateway is not
+  reachable or is too old to report it, never filled in as running.
 - `tile.state`: `live` (frames arriving), `idle` (nobody watching, so the
   source is not started), `connecting`, `not_found` (the NDI source is no
   longer announced, or the camera refused), `disabled` (camera disabled),
@@ -141,6 +144,11 @@ error if that port is taken.
 
 - `GET /v1/sources`: NDI sources currently announced,
   `[{"name": "NODE-01 (matrix-main)", "address": "192.168.130.22:5961"}]`.
+- `GET /v1/discovery`: whether NDI discovery works, `{"running": false,
+  "message": "..."}`. `message` states why not and what to do, and is empty
+  while it runs. Discovery is not running while the runtime directory has
+  neither `libndi.so.6` nor `libndi.so.5`, or while the device monitor keeps
+  failing at start.
 - `PUT /v1/streams`: replaces the desired set. The body is an array of
   `{"key": "...", "kind": "ndi", "ndiName": "..."}` or
   `{"key": "...", "kind": "rtsp", "url": "rtsp://..."}`. This is idempotent,
