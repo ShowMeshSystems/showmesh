@@ -109,6 +109,7 @@ export type {
   // Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
   ConfigNodeClock,
   NodeClockConfigResponse,
+  NodeResponse,
   FPPInstance,
   // The pending-instanceUuid-change acknowledgement.
   FPPInstanceUUIDChange,
@@ -409,6 +410,7 @@ export {
   startAudioAlignmentRun,
   getAudioAlignmentRun,
   stopAudioAlignmentRun,
+  getNode,
   getNodeClock,
   putNodeClock,
   getNodeClockConfigRevisions,

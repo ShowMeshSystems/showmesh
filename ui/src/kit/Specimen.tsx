@@ -342,6 +342,30 @@ export function Specimen() {
             value={radioCardValue}
             onChange={setRadioCardValue}
           />
+          <RadioCardList
+            label="Timecode channel"
+            help="A channel another choice already uses is shown greyed, with the reason."
+            options={[
+              { value: '1', title: 'Channel 1', desc: 'Program audio uses this channel.', disabled: true },
+              { value: '2', title: 'Channel 2', desc: 'Program audio uses this channel.', disabled: true },
+              { value: '3', title: 'Channel 3' },
+              { value: '4', title: 'Channel 4' },
+            ]}
+            value="3"
+            onChange={() => {}}
+          />
+          <Segmented
+            label="Clock source"
+            value="external"
+            options={[
+              { value: 'external', label: "This node's PTP service" },
+              { value: 'managed', label: 'ShowMesh starts its own PTP', disabled: true, reason: 'This node already runs its own PTP service.' },
+            ]}
+            onChange={() => {}}
+          />
+          <p className="sm-small sm-muted">
+            A segment that cannot be chosen goes inert on its own, and the screen states why beside the control.
+          </p>
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="The ruled strip is the default. The blanking plate is for a whole region that cannot render.">
