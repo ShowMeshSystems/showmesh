@@ -529,7 +529,7 @@ func (h *handlers) weatherDelaySetGatesOnAllInstances(ctx context.Context, now t
 		h.logWarn("weather delay: failed to list configured FPP instances; no gate could be dispatched", "error", err)
 		return []v1.WeatherDelayTargetOutcome{{
 			InstanceID: emergencyStopInstanceListUnavailableID, TargetKind: v1.WeatherDelayTargetKindGate,
-			Outcome: "failed", OutcomeReason: fmt.Sprintf("could not list configured FPP instances: %v", err),
+			Outcome: "failed", OutcomeReason: "The FPP list could not be read, so no weather gate was changed. Check the weather gate on each FPP.",
 		}}
 	}
 	if len(endpoints) == 0 {
@@ -557,20 +557,28 @@ func (h *handlers) weatherDelaySetOneGate(ctx context.Context, now time.Time, ep
 
 	client, err := fppcommand.New(ep.URL, fppcommand.Options{Timeout: weatherDelayFPPClientTimeout})
 	if err != nil {
-		return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "failed", OutcomeReason: err.Error()}
+		h.logWarn("weather delay: building FPP client failed", "instance", ep.ID, "error", err)
+		return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "failed", OutcomeReason: weatherGateFailedReason}
 	}
 	outcome, err := client.SetWeatherGate(reqCtx, closed, revision)
 	dispatchedAt := formatTime(now)
 	if err != nil {
 		if errors.Is(err, fppcommand.ErrWeatherGateUnsupported) {
 			h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{supported: false, observedAt: now})
-			return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "refused", OutcomeReason: "This player cannot be held dark by ShowMesh.", DispatchedAt: &dispatchedAt}
+			return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "refused", OutcomeReason: "This FPP cannot be held dark by ShowMesh. Update the ShowMesh plugin on it.", DispatchedAt: &dispatchedAt}
 		}
-		return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "failed", OutcomeReason: err.Error(), DispatchedAt: &dispatchedAt}
+		h.logWarn("weather delay: gate write failed", "instance", ep.ID, "error", err)
+		return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "failed", OutcomeReason: weatherGateFailedReason, DispatchedAt: &dispatchedAt}
 	}
 	h.deps.WeatherDelayGateCache.setGate(ep.ID, weatherDelayGateStatus{
 		closed: outcome.Closed, supported: true, effectiveOutputPercent: outcome.EffectiveOutputPercent, observedAt: now,
 	})
-	reason := fmt.Sprintf("gate closed=%v, effective output %d%%", outcome.Closed, outcome.EffectiveOutputPercent)
+	state := "open"
+	if outcome.Closed {
+		state = "closed"
+	}
+	reason := fmt.Sprintf("The weather gate is %s. FPP output is %d%%.", state, outcome.EffectiveOutputPercent)
 	return v1.WeatherDelayTargetOutcome{InstanceID: ep.ID, TargetKind: v1.WeatherDelayTargetKindGate, Outcome: "confirmed", OutcomeReason: reason, DispatchedAt: &dispatchedAt}
 }
+
+const weatherGateFailedReason = "FPP did not accept the weather gate. Check that FPP is running."

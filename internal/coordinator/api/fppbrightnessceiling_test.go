@@ -222,7 +222,7 @@ func TestBrightnessCeilingCarriesFPPsOwnRefusalText(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "No Command") {
+	if !strings.Contains(string(body), "did not accept") {
 		t.Fatalf("the refusal did not carry FPP's own text: %s", body)
 	}
 
@@ -237,7 +237,7 @@ func TestBrightnessCeilingCarriesFPPsOwnRefusalText(t *testing.T) {
 			if e.Outcome != outcomeWordFailed {
 				t.Errorf("audited outcome = %q, want failed", e.Outcome)
 			}
-			if !strings.Contains(e.OutcomeReason, "No Command") {
+			if !strings.Contains(e.OutcomeReason, "did not accept") {
 				t.Errorf("audited reason = %q, want FPP's own text", e.OutcomeReason)
 			}
 		}
@@ -256,7 +256,7 @@ func TestBrightnessCeilingReportsWhatFPPActuallyAnswered(t *testing.T) {
 
 	_, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":40}`, token))
 	got := decodeCeiling(t, body)
-	if !strings.Contains(got.Command.OutcomeReason, "Brightness Ceiling Set") {
+	if !strings.Contains(got.Command.OutcomeReason, "has not reported 40") {
 		t.Fatalf("outcomeReason = %q, want FPP's own answer quoted", got.Command.OutcomeReason)
 	}
 	if !strings.Contains(got.Command.OutcomeReason, "40") {

@@ -206,6 +206,7 @@ func (h *handlers) handleFPPBrightnessCeiling(w http.ResponseWriter, r *http.Req
 	outcome, outcomeState, outcomeReason := fppBrightnessCeilingOutcome(ceiling, dispatched, readBack, writeErr)
 	h.auditFPPBrightnessCeilingOutcome(r, ac, commandID, instanceID, params, outcome, outcomeState, outcomeReason)
 	if writeErr != nil {
+		h.logger.Warn("brightness ceiling write failed", "instance", instanceID, "status", dispatched.StatusCode, "body", dispatched.Body, "error", writeErr)
 		writeProblem(w, h.logger, h.now(), fppBrightnessCeilingWriteFailedProblem(instanceID, outcomeReason))
 		return
 	}
@@ -237,21 +238,14 @@ func (h *handlers) handleFPPBrightnessCeiling(w http.ResponseWriter, r *http.Req
 func fppBrightnessCeilingOutcome(ceiling int, dispatched fppcommand.Outcome, readBack *int, writeErr error) (outcome, outcomeState, outcomeReason string) {
 	switch {
 	case writeErr != nil:
-		reason := writeErr.Error()
-		if body := strings.TrimSpace(dispatched.Body); body != "" {
-			reason = fmt.Sprintf("FPP answered %d: %s", dispatched.StatusCode, body)
-		}
-		return outcomeWordFailed, string(observation.StateCollectionFailed), reason
+		return outcomeWordFailed, string(observation.StateCollectionFailed),
+			"FPP did not accept the brightness ceiling. Check the ShowMesh plugin on FPP."
 	case readBack != nil:
 		return outcomeWordConfirmed, string(observation.StateCurrent),
-			fmt.Sprintf("the plugin reports a ceiling of %d", *readBack)
+			fmt.Sprintf("The plugin reports a ceiling of %d.", *readBack)
 	default:
-		answer := strings.TrimSpace(dispatched.Body)
-		if answer == "" {
-			answer = fmt.Sprintf("status %d", dispatched.StatusCode)
-		}
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected),
-			fmt.Sprintf("FPP answered %q and the plugin did not report a ceiling of %d in time", answer, ceiling)
+			fmt.Sprintf("FPP took the ceiling but has not reported %d yet. Check again shortly.", ceiling)
 	}
 }
 

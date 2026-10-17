@@ -177,9 +177,9 @@ func resolveMQTTActionPayload(expect config.ShowActionMQTTExpect, payload []byte
 			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateMalformedPayload, OutcomeReason: "the response payload was not a valid JSON boolean"}
 		}
 		if !b {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: "the external system reported false"}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: "The other system answered no."}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: "the external system reported true"}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: "The other system answered yes."}
 
 	case config.MQTTExpectKindNumber:
 		var f float64
@@ -192,7 +192,7 @@ func resolveMQTTActionPayload(expect config.ShowActionMQTTExpect, payload []byte
 				return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: fmt.Sprintf("the response number %v did not equal the expected value %s", f, *expect.Value)}
 			}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: fmt.Sprintf("the external system reported %v", f)}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: fmt.Sprintf("The other system answered %v.", f)}
 
 	case config.MQTTExpectKindText:
 		if !utf8.Valid(payload) {

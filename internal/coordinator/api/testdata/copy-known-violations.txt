@@ -170,10 +170,6 @@ capital	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 full-stop	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 hex	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 length	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
-capital	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
-full-stop	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
-joined	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
-vocabulary	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
 full-stop	problem enrollment-code-gone in writeEnrollmentError
 capital	problem forbidden in readAnyGuard
 full-stop	problem forbidden in readAnyGuard
@@ -187,25 +183,12 @@ vocabulary	problem forbidden in requireScope
 capital	problem forbidden in writeGuard
 full-stop	problem forbidden in writeGuard
 vocabulary	problem forbidden in writeGuard
-capital	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-full-stop	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-joined	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-quoted-name	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-full-stop	problem fpp-brightness-excluded-ranges-write-failed in handleFPPBrightnessExcludedRanges
 full-stop	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 go-error	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 joined	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 length	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 quoted-name	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 capital	problem fpp-start-playlist-busy in handleFPPCommand
-quoted-name	problem fpp-start-playlist-busy in handleFPPCommand
-kind-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
-length	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
-quoted-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
-capital	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-full-stop	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-joined	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-quoted-name	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
 capital	problem interlock-shutdown-phase-requires-override in handlePutNightSession
 quoted-name	problem interlock-shutdown-phase-requires-override in handlePutNightSession
 capital	problem internal-error in writeInternalError
@@ -722,33 +705,16 @@ kind-name	v1.ActionBindingsResponse bindings[].reason
 quoted-name	v1.ActionBindingsResponse bindings[].reason
 capital	v1.ActionInvocationResponse result.outcomeReason
 full-stop	v1.ActionInvocationResponse result.outcomeReason
-kind-name	v1.ActionInvocationResponse result.outcomeReason
-quoted-name	v1.ActionInvocationResponse result.outcomeReason
 capital	v1.AssetManifestResponse nodes[].reason
 full-stop	v1.AssetManifestResponse nodes[].reason
 capital	v1.AudioNodeSilenceResponse command.reason
 full-stop	v1.AudioNodeSilenceResponse command.reason
 kind-name	v1.AudioNodeSilenceResponse command.reason
 quoted-name	v1.AudioNodeSilenceResponse command.reason
-capital	v1.AudioSessionCommandResponse command.reason
-full-stop	v1.AudioSessionCommandResponse command.reason
-quoted-name	v1.AudioSessionCommandResponse command.reason
-vocabulary	v1.AudioSessionCommandResponse command.reason
 capital	v1.AuditResponse entries[].outcomeReason
 full-stop	v1.AuditResponse entries[].outcomeReason
 capital	v1.CueActivateResponse nodes[].outcomeReason
 full-stop	v1.CueActivateResponse nodes[].outcomeReason
-capital	v1.CueActivateResponse nodes[].unalignedReason
-full-stop	v1.CueActivateResponse nodes[].unalignedReason
-go-error	v1.CueActivateResponse nodes[].unalignedReason
-joined	v1.CueActivateResponse nodes[].unalignedReason
-length	v1.CueActivateResponse nodes[].unalignedReason
-quoted-name	v1.CueActivateResponse nodes[].unalignedReason
-capital	v1.CueActivateResponse unalignedReason
-full-stop	v1.CueActivateResponse unalignedReason
-joined	v1.CueActivateResponse unalignedReason
-length	v1.CueActivateResponse unalignedReason
-quoted-name	v1.CueActivateResponse unalignedReason
 capital	v1.CueCatalogDeployResponse command.reason
 full-stop	v1.CueCatalogDeployResponse command.reason
 capital	v1.CurrentRunsResponse runs[].reconciliation.reason
@@ -758,30 +724,17 @@ full-stop	v1.EmergencyStopResponse result.followUps[].outcomeReason
 capital	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
 full-stop	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
 go-error	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
-joined	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
 kind-name	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
 quoted-name	v1.EmergencyStopResponse result.stopOutcomes[].outcomeReason
 capital	v1.EventRecordedEvent event.summary
 full-stop	v1.EventRecordedEvent event.summary
 capital	v1.EventsResponse events[].summary
 full-stop	v1.EventsResponse events[].summary
-capital	v1.FPPBrightnessCeilingResponse command.outcomeReason
-full-stop	v1.FPPBrightnessCeilingResponse command.outcomeReason
-quoted-name	v1.FPPBrightnessCeilingResponse command.outcomeReason
-full-stop	v1.FPPBrightnessExcludedRangesResponse command.outcomeReason
 capital	v1.FPPChangedEvent instance.observations[].reason
 full-stop	v1.FPPChangedEvent instance.observations[].reason
 go-error	v1.FPPChangedEvent instance.observations[].reason
 capital	v1.FPPChangedEvent instance.showParticipation.reason
 full-stop	v1.FPPChangedEvent instance.showParticipation.reason
-capital	v1.FPPCommandResponse command.outcomeReason
-full-stop	v1.FPPCommandResponse command.outcomeReason
-go-error	v1.FPPCommandResponse command.outcomeReason
-joined	v1.FPPCommandResponse command.outcomeReason
-kind-name	v1.FPPCommandResponse command.outcomeReason
-length	v1.FPPCommandResponse command.outcomeReason
-quoted-name	v1.FPPCommandResponse command.outcomeReason
-vocabulary	v1.FPPCommandResponse command.outcomeReason
 capital	v1.FPPInstanceResponse instance.observations[].reason
 full-stop	v1.FPPInstanceResponse instance.observations[].reason
 vocabulary	v1.FPPInstanceResponse instance.observations[].reason
@@ -806,9 +759,6 @@ full-stop	v1.MacroRunResponse run.steps[].command.reason
 joined	v1.MacroRunResponse run.steps[].command.reason
 capital	v1.MacroRunResponse run.steps[].outcomeReason
 full-stop	v1.MacroRunResponse run.steps[].outcomeReason
-capital	v1.NightCommandResponse session.cues.cues[].reason
-full-stop	v1.NightCommandResponse session.cues.cues[].reason
-kind-name	v1.NightCommandResponse session.cues.cues[].reason
 capital	v1.NightSessionResponse session.cues.cues[].reason
 full-stop	v1.NightSessionResponse session.cues.cues[].reason
 vocabulary	v1.NightSessionResponse session.cues.cues[].reason
@@ -919,10 +869,6 @@ capital	v1.StreamReset reason
 full-stop	v1.StreamReset reason
 capital	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 full-stop	v1.WeatherDelayActionResponse result.targets[].outcomeReason
-go-error	v1.WeatherDelayActionResponse result.targets[].outcomeReason
-joined	v1.WeatherDelayActionResponse result.targets[].outcomeReason
-kind-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
-quoted-name	v1.WeatherDelayActionResponse result.targets[].outcomeReason
 
 # Deprecated v1 fields kept for the additive-only rule.
 sentences	v1.NightCommandResponse session.readiness.checks[].reason

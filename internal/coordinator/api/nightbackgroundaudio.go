@@ -2553,7 +2553,7 @@ func (h *handlers) nightPrepareBedAndSchedule(ctx context.Context, now time.Time
 	}
 	sel, selErr := audiosched.Select(readings, settings.PreparedStartDeliveryBoundMs+int(behind.Milliseconds()), settings.PreparedStartMarginMs)
 	if selErr != nil {
-		h.logWarn("night loop: background audio: no shared start time could be picked", "reason", audiosched.DescribeUnscheduled(selErr))
+		h.logWarn("night loop: background audio: no shared start time could be picked", "error", selErr)
 		return nightBedScheduleResult{UnalignedReason: nightBedNoSharedStartReason, prepares: prepares}
 	}
 	return nightBedScheduleResult{Aligned: true, ScheduledAtNs: sel.ScheduledAtNs, ClockNodeID: sel.ClockNodeID, prepares: prepares}

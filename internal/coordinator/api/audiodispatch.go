@@ -397,6 +397,7 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	result.Reason = audioWireReason(pkgaudio.Outcome(result.Outcome), result.Reason)
 	jsonWrite(w, v1.AudioSessionCommandResponse{ServerTime: formatTime(h.now()), Command: result})
 }
 
@@ -599,7 +600,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 			result := v1.AudioSessionCommandResult{
 				CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 				NodeID: in.NodeID, SessionID: in.SessionID,
-				Outcome: "unconfirmable", Reason: "no result received from the node before the deadline",
+				Outcome: "unconfirmable", Reason: "The node did not answer in time. Check that the node is online.",
 				DispatchedAt: formatTime(dispatchedAt),
 			}
 			outcomeDegraded := h.writeBestEffortAuditBounded(bgCtx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
@@ -938,4 +939,22 @@ func (h *handlers) nowNotBefore(start time.Time) time.Time {
 		return t
 	}
 	return start
+}
+
+// audioWireReason replaces the node's own reason, which names agent
+// internals, with one sentence an operator can act on. A good outcome keeps
+// no reason.
+func audioWireReason(outcome pkgaudio.Outcome, reason string) string {
+	if reason == "" {
+		return reason
+	}
+	switch outcome {
+	case pkgaudio.OutcomeRefused:
+		return "The node refused the command. Check the audio settings on the node."
+	case pkgaudio.OutcomeFailed:
+		return "The node could not carry out the command. Check the audio output on the node."
+	case pkgaudio.OutcomeUnconfirmable:
+		return "The node did not confirm the command. Check that audio is playing."
+	}
+	return reason
 }

@@ -162,6 +162,7 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 	outcome, writeErr := write(ctx, baseURL, targetPercent, fadeSeconds, requestID)
 	h.auditFPPTransitionGainOutcome(r, ac, commandID, instanceID, auditParams, outcome, writeErr)
 	if writeErr != nil {
+		h.logger.Warn("transition gain write failed", "instance", instanceID, "error", writeErr)
 		writeProblem(w, h.logger, h.now(), fppTransitionGainWriteFailedProblem(instanceID, writeErr))
 		return
 	}

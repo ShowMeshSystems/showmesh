@@ -734,8 +734,8 @@ func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string
 		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",
-			instanceID, signal, reason, fppIfBusyReplace),
+			"Cannot tell whether %s is busy because its %s is out of date. Retry, or send ifBusy=%s to start anyway.",
+			instanceID, fppSignalName(signal), fppIfBusyReplace),
 	}
 }
 
@@ -762,8 +762,8 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 		Title:  "Start Playlist refused: a different playlist is currently playing",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"%q is playing %q, so this was refused (ifBusy=%q). Send ifBusy=%q to replace it, or wait.",
-			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
+			"%s is playing %s, so the start was refused. Send ifBusy=%s to replace it, or wait.",
+			instanceID, currentlyPlaying, fppIfBusyReplace),
 	}
 }
 
@@ -777,7 +777,7 @@ func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Proble
 		Type:   ProblemTypeFPPTransitionGainWriteFailed,
 		Title:  "FPP transition gain write failed",
 		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the brightness transition gain write to FPP instance %q did not take: %v", instanceID, err),
+		Detail: fmt.Sprintf("FPP did not accept the transition gain for %s. Check the ShowMesh plugin on FPP.", instanceID),
 	}
 }
 
@@ -842,7 +842,7 @@ func fppBrightnessCeilingWriteFailedProblem(instanceID, reason string) v1.Proble
 		Type:   ProblemTypeFPPBrightnessCeilingWriteFailed,
 		Title:  "FPP brightness ceiling write failed",
 		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %s", instanceID, reason),
+		Detail: reason,
 	}
 }
 
