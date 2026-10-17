@@ -173,6 +173,9 @@ export function PreviewWall() {
     >
       {gatewayState === 'unreachable' && <RuledStrip absence="failed" label="Gateway unreachable" fact={data.gateway.message} />}
       {gatewayState === 'connecting' && <RuledStrip absence="loading" label="Connecting" fact={data.gateway.message} />}
+      {gatewayState === 'reachable' && data.gateway.ndiDiscovery?.state === 'not_running' && (
+        <RuledStrip absence="failed" label="NDI not running" fact={data.gateway.ndiDiscovery.message} />
+      )}
       {showHiddenList && hidden.length > 0 && (
         <div className="sm-panel sm-stack-4" role="group" aria-label="Hidden tiles">
           {hidden.map((tile) => (
@@ -197,6 +200,7 @@ export function PreviewWall() {
             <PreviewWallTile
               key={tile.key}
               tile={tile}
+              enlargeable
               withMessage={gatewayState === 'reachable'}
               handle={gate.allowed ? <span className="sm-preview__handle" aria-hidden="true">⠿</span> : undefined}
               actions={

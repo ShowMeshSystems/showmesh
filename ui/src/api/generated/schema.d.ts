@@ -5557,6 +5557,13 @@ export interface components {
             state: "not_configured" | "connecting" | "reachable" | "unreachable";
             /** @description States the fact, then the action. Empty when reachable. */
             message: string;
+            /** @description Whether the gateway can find NDI sources. Omitted while the gateway is not reachable or does not report it. */
+            ndiDiscovery?: {
+                /** @enum {string} */
+                state: "running" | "not_running";
+                /** @description States the fact, then the action. Empty when running. */
+                message: string;
+            };
             /** Format: date-time */
             observedAt: string;
         };

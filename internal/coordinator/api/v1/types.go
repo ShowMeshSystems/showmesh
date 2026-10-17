@@ -1632,10 +1632,18 @@ type DashboardLayoutConfigResponse struct {
 }
 
 // PreviewGatewayStatus is the coordinator's view of the preview gateway.
+// NDIDiscovery is omitted while it is not known.
 type PreviewGatewayStatus struct {
-	State      string `json:"state"`
-	Message    string `json:"message"`
-	ObservedAt string `json:"observedAt"`
+	State        string               `json:"state"`
+	Message      string               `json:"message"`
+	NDIDiscovery *PreviewNDIDiscovery `json:"ndiDiscovery,omitempty"`
+	ObservedAt   string               `json:"observedAt"`
+}
+
+// PreviewNDIDiscovery is whether the preview gateway can find NDI sources.
+type PreviewNDIDiscovery struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
 }
 
 // PreviewTile is one tile of the dashboard preview grid. NodeID and SurfaceID

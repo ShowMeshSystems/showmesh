@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type Model, type PreviewTile, type PreviewsResponse, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
@@ -88,6 +88,26 @@ afterEach(() => {
 })
 
 describe('PreviewWall', () => {
+  it('opens a tile large from its enlarge icon and closes it with the X, Escape, or a click outside', async () => {
+    stubs.getPreviews.mockResolvedValue(response([tile('cam-1', 'Front gate')]))
+    renderWall()
+    const open = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Enlarge Front gate' }))
+      return screen.getByRole('dialog', { name: 'Front gate' })
+    }
+    let dialog = await open()
+    expect(stubs.startFeed).toHaveBeenCalledTimes(2)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await open()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    dialog = await open()
+    expect(dialog).toBeInTheDocument()
+    fireEvent.click(document.querySelector('.sm-window-scrim') as Element)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('renders nothing while no gateway is configured', async () => {
     stubs.getPreviews.mockResolvedValue(response([], { state: 'not_configured' }))
     const { container } = renderWall()
@@ -278,6 +298,26 @@ describe('PreviewWall', () => {
     expect(screen.getAllByText(MSG_UNREACHABLE)).toHaveLength(1)
     expect(screen.getAllByText('Error')).toHaveLength(2)
     expect(screen.getByRole('heading', { level: 3, name: 'A' })).toBeInTheDocument()
+  })
+
+  it('says why NDI discovery is not running, and says nothing while it is unknown or running', async () => {
+    const message = 'The NDI runtime is named libndi.so. Rename or link it to libndi.so.6.'
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')], { ndiDiscovery: { state: 'not_running', message } }))
+    renderWall()
+    await screen.findByText('NDI not running')
+    expect(screen.getByText(message)).toBeInTheDocument()
+    cleanup()
+
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')]))
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    expect(screen.queryByText('NDI not running')).toBeNull()
+    cleanup()
+
+    stubs.getPreviews.mockResolvedValue(response([tile('camera:a', 'A')], { ndiDiscovery: { state: 'running', message: '' } }))
+    renderWall()
+    await screen.findByRole('heading', { level: 3, name: 'A' })
+    expect(screen.queryByText('NDI not running')).toBeNull()
   })
 
   it('shows a connecting gateway as a neutral state with no sentence on the tiles', async () => {
