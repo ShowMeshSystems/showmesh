@@ -1688,7 +1688,7 @@ describe('Settings › Node routing', () => {
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('audio-node-01'))
       await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Audio node' })).not.toBeInTheDocument())
-      expect(screen.getByText('No audio nodes.')).toBeInTheDocument()
+      expect(screen.getByText('No node reports audio outputs, and none has audio routing saved.')).toBeInTheDocument()
     })
 
     it('renders the coordinator’s refusal verbatim and keeps the node open when the delete is refused', async () => {
@@ -1939,6 +1939,31 @@ describe('Settings › Node routing › choices from the node', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
     await waitFor(() => expect(sent).not.toBeNull())
     expect(sent).toMatchObject({ sinkBackend: 'pipewiresink', pipewireTargetNode: M4 })
+  })
+
+  it('sets up the first routing for a node that reports audio outputs but has none saved', async () => {
+    stubs.listConfigObjects = (kind: string) => Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind, objects: [] })
+    let sent: Record<string, unknown> | null = null
+    stubs.getAudioNode = () => (sent === null ? notConfigured('Nothing is saved for audio.node "audio-node-01" yet. Save one to create it.') : Promise.resolve(stored(sent)))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-28T21:00:00Z', kind: 'audio.node', revisions: [] })
+    stubs.getAudioRoutingChoices = () => Promise.resolve(choices({ routes: [{ ...m4Route, shortName: 'M4' }] }))
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [reportingNode([M4])] } as unknown as Partial<Model>)
+
+    expect(await screen.findByRole('option', { name: 'audio-node-01, not set up' })).toBeInTheDocument()
+    expect(await screen.findByText(/audio-node-01 has no audio routing yet/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete node' })).not.toBeInTheDocument()
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Output' }), { target: { value: M4 } })
+    fireEvent.click(screen.getByRole('radio', { name: /Channels 1 and 2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Program' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ programRoute: M4, programChannels: [1, 2], role: 'program', sinkBackend: 'pipewiresink', pipewireTargetNode: M4 })
+    expect(await screen.findByRole('option', { name: /^audio-node-01, / })).toBeInTheDocument()
   })
 
   it('explains stale discovery and keeps the manual fields, with no choices offered', async () => {
