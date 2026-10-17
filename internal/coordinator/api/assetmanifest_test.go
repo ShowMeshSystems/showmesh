@@ -454,7 +454,7 @@ func TestNodeAssetManifestNotReadyOmitsFetchFailureWhenNoneRecorded(t *testing.T
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "last failed to fetch") {
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "The last download failed") {
 		t.Fatalf("reason = %q, want it NOT to claim a fetch failure when none is on record", *decoded.Manifest.Reason)
 	}
 }

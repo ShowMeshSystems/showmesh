@@ -992,7 +992,7 @@ func TestAssetSyncSurvivesContentEndpointUnreachable(t *testing.T) {
 	// on its own MQTT round trip, not on the sync tick that dispatched it.
 	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
 		r := nodeManifest(t, coord, token, nodeID).Reason
-		return r != nil && strings.Contains(*r, "last failed to fetch")
+		return r != nil && strings.Contains(*r, "The last download failed")
 	}, "manifest reason to state the node's own asset.fetch failure, not merely that the asset is missing")
 
 	// recordFetchFailure writes its in-memory record BEFORE appending the
