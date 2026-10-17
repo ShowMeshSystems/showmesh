@@ -163,6 +163,8 @@ jobs:
     env:
       ENGINE_PKG: github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine
       API_PKG: github.com/showmeshsystems/showmesh/internal/coordinator/api
+      # The three API shards compile the same test binary, so they share one cache.
+      CACHE_GROUP: ${{ startsWith(matrix.part, 'api-') && 'api' || matrix.part }}
     steps:
       # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26 or newer,
       # so every job that compiles the agent's cgo backend runs on Debian 13
@@ -208,7 +210,32 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
-          cache: true
+          # The steps below cache per leg group, because setup-go's own key
+          # changes only with go.sum and so never refreshes the build cache.
+          cache: false
+
+      - name: Find the Go cache directories
+        id: gocache
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        run: |
+          {
+            echo "build=$(go env GOCACHE)"
+            echo "mod=$(go env GOMODCACHE)"
+            echo "day=$(date -u +%Y-%m-%d)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Go build cache
+        id: gocache_restore
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.gocache.outputs.build }}
+            ${{ steps.gocache.outputs.mod }}
+          key: go-race-${{ matrix.go-version }}-${{ env.CACHE_GROUP }}-${{ hashFiles('go.sum') }}-${{ steps.gocache.outputs.day }}
+          restore-keys: |
+            go-race-${{ matrix.go-version }}-${{ env.CACHE_GROUP }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ matrix.go-version }}-${{ env.CACHE_GROUP }}-
 
       - name: Download dependencies
         if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
@@ -261,7 +288,7 @@ jobs:
           {{end}}' ./internal/agent/audio/gstengine \
             | grep -q '^engine_real_integration_test.go$' \
             || { echo "the engine's cgo test files are not being built." >&2; exit 1; }
-          go test -race ./internal/agent/audio/gstengine/...
+          go test -race -count=1 ./internal/agent/audio/gstengine/...
 
       - name: Test the coordinator API (race detector, one shard)
         id: test_api
@@ -286,7 +313,7 @@ jobs:
           fi
           echo "shard $shard of $shards runs $(echo "$mine" | wc -l) of $total tests."
           # 20m is about twice this package's whole race run before sharding.
-          go test -race -timeout=20m -run "^($(echo "$mine" | paste -sd '|' -))\$" "$API_PKG"
+          go test -race -count=1 -timeout=20m -run "^($(echo "$mine" | paste -sd '|' -))\$" "$API_PKG"
         env:
           MATRIX_PART: ${{ matrix.part }}
 
@@ -310,7 +337,7 @@ jobs:
           # 20m is about four times the slowest remaining package's race run,
           # internal/coordinator/store at about 3.5 minutes.
           # shellcheck disable=SC2086
-          go test -race -timeout=20m $rest
+          go test -race -count=1 -timeout=20m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
         id: build_cgo
@@ -359,6 +386,21 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      - name: Save the Go build cache
+        # Only main saves, once a day per group: pull requests read main's
+        # cache without adding entries that would evict other workflows'.
+        if: >-
+          !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+          && steps.gocache_restore.outputs.cache-hit != 'true'
+          && (!startsWith(matrix.part, 'api-') || startsWith(matrix.part, 'api-1-'))
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.gocache.outputs.build }}
+            ${{ steps.gocache.outputs.mod }}
+          key: ${{ steps.gocache_restore.outputs.cache-primary-key }}
 
       - name: "Suite results (this log names which suites ran and which failed)"
         if: always()
