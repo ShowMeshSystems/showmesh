@@ -94,6 +94,7 @@ echo "test-integration-fppmqtt: starting $MOSQUITTO_IMAGE as $CONTAINER_NAME on 
 docker create --name "$CONTAINER_NAME" \
   -p "${HOST_PORT}:1883" \
   -v "$ROOT_DIR/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+  -v "$ROOT_DIR/deploy/mosquitto/conf.d:/mosquitto/config/conf.d:ro" \
   "$MOSQUITTO_IMAGE" >/dev/null
 
 TMP_SEED_PASSWD="$(mktemp)"

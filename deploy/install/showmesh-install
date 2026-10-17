@@ -50,6 +50,16 @@ With no options it asks what this machine is and walks you through it.
   --broker-username NAME    the external broker's login
   --broker-password PASS    the external broker's password
   --broker-password-file F  a file holding the external broker's password
+  --home-assistant HOST[:PORT]
+                            bridge the built-in broker to Home Assistant's MQTT broker,
+                            so Home Assistant sees and commands FPP
+  --home-assistant-username NAME
+                            the login the bridge uses on Home Assistant's broker
+  --home-assistant-password-file F
+                            a file holding that login's password
+  --home-assistant-share-showmesh
+                            also show ShowMesh node state to Home Assistant, read-only
+  --no-home-assistant       take the Home Assistant bridge down
   --address ADDRESS         the address nodes use to reach this coordinator (default: detected)
   --ui-port PORT            the operator UI's port, for example 80 (default 8081, or the saved one)
   --admin-name NAME         the first administrator's name, for an unattended coordinator install
@@ -77,6 +87,7 @@ EOF
 OPT_ROLE=""; OPT_COORDINATOR=""; OPT_CODE=""; OPT_REENROLL=0; OPT_NDI=""; OPT_SKIP_NDI=0
 OPT_BROKER=""; OPT_BROKER_URL=""; OPT_BROKER_PASSWORD_FILE=""; OPT_ADDRESS=""; OPT_UI_PORT=""; OPT_ADMIN_NAME=""; OPT_ADMIN_PASSWORD_FILE=""
 OPT_NODE_ROLE=""; OPT_NODE_ID=""; OPT_PTP_INTERFACE=""; OPT_PTP_DOMAIN=""; OPT_PTP_ROLE=""
+OPT_HA_HOST=""; OPT_HA_USER=""; OPT_HA_PASSWORD_FILE=""; OPT_HA_SHARE=0; OPT_HA_REMOVE=0
 OPT_AUDIO_CARD=""; OPT_AGENT_PACKAGE=""; OPT_FIREWALL=""; OPT_YES=0; OPT_FORCE=0; OPT_PARTY=0; PARTY_EGG=""
 unset OPT_BROKER_USERNAME OPT_BROKER_PASSWORD
 
@@ -100,6 +111,11 @@ while [ "$#" -gt 0 ]; do
     --broker-username) need_value "$@"; OPT_BROKER_USERNAME="$2"; shift ;;
     --broker-password) need_value "$@"; OPT_BROKER_PASSWORD="$2"; shift ;;
     --broker-password-file) need_value "$@"; OPT_BROKER_PASSWORD_FILE="$2"; shift ;;
+    --home-assistant) need_value "$@"; OPT_HA_HOST="$2"; shift ;;
+    --home-assistant-username) need_value "$@"; OPT_HA_USER="$2"; shift ;;
+    --home-assistant-password-file) need_value "$@"; OPT_HA_PASSWORD_FILE="$2"; shift ;;
+    --home-assistant-share-showmesh) OPT_HA_SHARE=1 ;;
+    --no-home-assistant) OPT_HA_REMOVE=1 ;;
     --address) need_value "$@"; OPT_ADDRESS="$2"; shift ;;
     --ui-port) need_value "$@"; OPT_UI_PORT="$2"; shift ;;
     --admin-name) need_value "$@"; OPT_ADMIN_NAME="$2"; shift ;;

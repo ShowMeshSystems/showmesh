@@ -415,14 +415,13 @@ func TestFixedRolesDoNotInheritAgentTopicAccess(t *testing.T) {
 		t.Skipf("%s is not set", envTestMQTTCoordinatorUsername)
 	}
 
-	fppUsername, fppPassword := provisionBrokerCredential(t, "fpp")
+	// fpp is absent: it may read every topic, and TestFPPRoleReadsEverythingAndWritesOnlyItsOwnTopics covers it.
 	healthcheckUsername, healthcheckPassword := provisionBrokerCredential(t, "healthcheck")
 	roles := []struct {
 		username string
 		password string
 	}{
 		{testMQTTCoordinatorUsername, testMQTTCoordinatorPassword},
-		{fppUsername, fppPassword},
 		{healthcheckUsername, healthcheckPassword},
 	}
 
@@ -464,55 +463,44 @@ func TestFixedRolesDoNotInheritAgentTopicAccess(t *testing.T) {
 	}
 }
 
-// TestFPPPublisherRoleHasNoShowmeshAccess and
-// TestHealthcheckPrincipalIsReadOnlySYS cover the two ACL roles this
-// task's ACL file grants beyond agents and the coordinator (ADR-024
-// decision 10's "an FPP publisher role" and "a healthcheck principal").
-func TestFPPPublisherRoleHasNoShowmeshAccess(t *testing.T) {
+// TestFPPRoleReadsEverythingAndWritesOnlyItsOwnTopics pins ADR-024 decision
+// 10 as amended 2026-10-17: the shared FPP login subscribes to anything and
+// publishes all of FPP's own topics, so a bridged Home Assistant sees them all.
+func TestFPPRoleReadsEverythingAndWritesOnlyItsOwnTopics(t *testing.T) {
 	requireBroker(t)
 	if mosquittoContainer == "" {
 		t.Skipf("%s is not set; this test needs the real shipped ACL from `make test-integration`", envMosquittoContainer)
+	}
+	if testMQTTCoordinatorUsername == "" {
+		t.Skipf("%s is not set", envTestMQTTCoordinatorUsername)
 	}
 
 	username, password := provisionBrokerCredential(t, "fpp")
 	cli := rawConnect(t, username, password)
 
-	if rc := rawPublishReasonCode(t, cli, "falcon/player/FPP-Test/status"); rc >= 0x80 {
-		t.Errorf("fpp role PUBLISH to its own status prefix: reason code %d, want < 0x80 (accepted)", rc)
+	for _, topic := range []string{
+		"falcon/player/FPP-Test/status",
+		"falcon/player/FPP-Test/command/run",
+		"falcon/player/FPP-Test/set/playlist/name",
+		"falcon/player/FPP-Test/playlist/name/status",
+		"homeassistant/light/FPP-Test/config",
+	} {
+		if rc := rawPublishReasonCode(t, cli, topic); rc >= 0x80 {
+			t.Errorf("fpp role PUBLISH to %q: reason code %d, want < 0x80 (accepted)", topic, rc)
+		}
 	}
 	if rc := rawPublishReasonCode(t, cli, "showmesh/nodes/anything/hello"); rc < 0x80 {
-		t.Errorf("fpp role PUBLISH to a showmesh/ topic: reason code %d, want >= 0x80 (rejected) — the fpp role must have no showmesh/ access at all", rc)
-	}
-}
-
-// TestFPPPublisherRoleCannotWriteCommandTopicButCanSubscribeToIt closes
-// review finding 7: deploy/mosquitto/acl.conf's fpp role used to grant
-// "topic readwrite falcon/player/#", which — because MQTT wildcards do not
-// distinguish "status" from "command" — also granted WRITE on
-// falcon/player/<host>/command/run, the exact topic CLAUDE.md names by
-// name as "a topic FPP acts on" (Step 5's own "GET-only is not read-only"
-// lesson's MQTT analogue). ADR-024 decision 10 confines this role to
-// FPP's own status topics: write is now enumerated per suffix
-// (TestFPPPublisherRoleHasNoShowmeshAccess above already proves one of
-// those suffixes, "status", is still writable), and the command subtree
-// stays READ-only — FPP itself subscribes to its own command topic to
-// receive commands sent to it, so removing read there too would silently
-// break FPP's own remote-command feature on any operator who followed
-// ADR-008's one-broker recommendation, which is not what this fix is for.
-func TestFPPPublisherRoleCannotWriteCommandTopicButCanSubscribeToIt(t *testing.T) {
-	requireBroker(t)
-	if mosquittoContainer == "" {
-		t.Skipf("%s is not set; this test needs the real shipped ACL from `make test-integration`", envMosquittoContainer)
+		t.Errorf("fpp role PUBLISH to a showmesh/ topic: reason code %d, want >= 0x80 (rejected): only the coordinator and agents write showmesh/", rc)
 	}
 
-	username, password := provisionBrokerCredential(t, "fpp")
-	cli := rawConnect(t, username, password)
-
-	if rc := rawPublishReasonCode(t, cli, "falcon/player/FPP-Test/command/run"); rc < 0x80 {
-		t.Errorf("fpp role PUBLISH to its own command/run topic: reason code %d, want >= 0x80 (rejected) — this is the exact topic FPP acts on; the fpp role must never be able to write it", rc)
+	// A successful SUBACK alone proves nothing, so read a retained command the coordinator really published.
+	cmdTopic := "showmesh/nodes/fpp-read-check-" + uniqueSuffix() + "/cmd"
+	publisher := rawConnect(t, testMQTTCoordinatorUsername, testMQTTCoordinatorPassword)
+	if rc := rawPublishRetainedReasonCode(t, publisher, cmdTopic); rc >= 0x80 {
+		t.Fatalf("coordinator retained PUBLISH to %q: reason code %d, want < 0x80", cmdTopic, rc)
 	}
-	if rc := rawSubscribeReasonCode(t, cli, "falcon/player/FPP-Test/command/run"); rc >= 0x80 {
-		t.Errorf("fpp role SUBSCRIBE to its own command/run topic: reason code %d, want < 0x80 (accepted) — FPP itself receives commands via this subtree, which must stay readable", rc)
+	if !rawSubscribeReceives(t, cli, cmdTopic, 2*time.Second) {
+		t.Errorf("fpp role did not receive the retained message on %q: the fpp role must be able to read every topic", cmdTopic)
 	}
 }
 

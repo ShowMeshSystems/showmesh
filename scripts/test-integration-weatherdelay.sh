@@ -80,6 +80,7 @@ echo "test-integration-weatherdelay: starting $MOSQUITTO_IMAGE as $CONTAINER_NAM
 docker create --name "$CONTAINER_NAME" \
   -p "127.0.0.1::1883" \
   -v "$ROOT_DIR/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+  -v "$ROOT_DIR/deploy/mosquitto/conf.d:/mosquitto/config/conf.d:ro" \
   "$MOSQUITTO_IMAGE" >/dev/null
 
 TMP_SEED_PASSWD="$(mktemp)"
