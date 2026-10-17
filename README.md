@@ -13,7 +13,7 @@ ShowMesh is never in the timing path: FPP MultiSync carries timing, so when the 
 On Debian 13 or newer (amd64 or arm64), as root:
 
 ```sh
-curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh | sudo bash
+curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.5.0/get-showmesh.sh | sudo bash
 ```
 
 The installer asks what the machine is (`coordinator`, `render`, `audio`, or `coordinator-node`), verifies the release checksums, and starts everything that role needs. A coordinator gets the coordinator, an authenticated Mosquitto broker, the Operator UI on port `8081`, and `showmeshctl`.
@@ -22,7 +22,7 @@ To add a node, create an enrollment code on the coordinator and pass it to the i
 
 ```sh
 sudo showmeshctl node enroll <node-id>     # on the coordinator
-curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.3.0/get-showmesh.sh \
+curl -fsSL https://github.com/ShowMeshSystems/showmesh/releases/download/v0.5.0/get-showmesh.sh \
   | sudo bash -s -- --role render --coordinator http://<coordinator-host>:8080 --code <code>
 ```
 

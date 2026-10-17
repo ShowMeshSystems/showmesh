@@ -11,6 +11,12 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-17
+
+Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin. Upgrade the coordinator and every node agent together,
+because the `0.x` line makes no compatibility promise between versions.
+
 ### Audio
 
 - A background music track, in a night session or a media playlist, is now
@@ -23,6 +29,82 @@ not the public API version (`/api/v1` moves independently).
   Missing for FPP players and render nodes.
 - The "Background audio files on every node" readiness check now counts a
   show-wide upload.
+- Night readiness fails when the show's audio would play nowhere: a
+  background track or cue sent to a node with no audio settings, a node whose
+  cue list gives a timecode without its audio, or an audio node playing on
+  the wrong clock.
+- Audio nodes on PipeWire report all of their outputs, and Node routing picks
+  the PipeWire output from that list. A new node can get its first audio
+  routing from Node routing.
+
+### Clock
+
+- Nodes report their network interfaces, and the coordinator refuses clock
+  settings that name an interface the node does not have or that would start
+  a second PTP service. A node that refuses its clock settings reports a
+  failed clock with the reason.
+- Node routing picks the PTP network interface from the node's list, fills
+  the PTP hardware clock device, and shows the node's answer after a save.
+
+### Brightness
+
+- The display has one brightness setting, kept by the coordinator and
+  applied to every FPP, including one added later. Set it on the new
+  Settings > Brightness tab or with `showmeshctl fpp set-brightness-ceiling`.
+  Night fades and lighting cue gain write every FPP.
+- With FPP plugin 0.3.0 the coordinator sets brightness on every FPP. A
+  change made on one FPP, from its plugin page or scheduler, spreads to the
+  others only with a plugin release newer than 0.3.0.
+- The per-FPP brightness ceiling and transition gain routes are replaced by
+  `GET /api/v1/fpp/brightness`, `PUT /api/v1/fpp/brightness/ceiling` and
+  `POST /api/v1/fpp/brightness/transition-gain`.
+
+### Render
+
+- Render nodes draw the resting sequence during resting instead of black,
+  when they hold the resting sequence's file.
+- Editing a running surface's channel range, size, frame rate or output
+  re-applies it on the node.
+- Re-uploading a sequence redeploys the cue catalog that uses it.
+
+### FPP
+
+- One Update from FPP button brings an edited FPP playlist into the show
+  playlist, replacing Re-import and Review changes.
+- An FPP whose ShowMesh plugin is not reporting shows as degraded, and says
+  whether the plugin is not paired, silent, or stopped.
+
+### Dashboard and Monitor
+
+- Operators can add NDI sources by hand, by name and an optional address,
+  for senders discovery cannot reach. `showmeshctl preview ndi` covers them.
+- A preview gateway with a missing or misnamed NDI runtime says so on the
+  Dashboard and in `showmeshctl preview list`.
+- A Dashboard preview tile can open large in a popup window.
+- The Dashboard shows lifecycle, playback, audio sync, timecode and
+  temperature blocks. Values the API does not serve yet are marked Not wired.
+- The Resolume tile on the Dashboard and on Monitor says how many instances
+  are not healthy.
+- Monitor Activity keeps its columns aligned, loads older operator actions,
+  and filters by type and text.
+
+### Show editing
+
+- Resolume action fields pick decks, clips, columns and layers from the
+  stored composition.
+- View version shows which fields changed from the version before.
+- Fire hard stop stays usable while a Stop is in progress.
+- Messages on Live Control, Monitor, Node detail, the show editors, Settings
+  and sign-in read as plain sentences that state the fact and then the
+  action.
+
+### Installer
+
+- The installer can bridge the built-in broker to a Home Assistant broker
+  with `--home-assistant`, and the bridge survives upgrades. The FPP broker
+  login can now read every topic and write all of FPP's own topics.
+- A new "Audio and render node" role installs both on one machine.
+- A stray Enter no longer answers the next installer prompt.
 
 ## 0.4.1 - 2026-10-16
 
