@@ -156,6 +156,8 @@ This container is a client, not a dependency: the coordinator, the broker, and a
 
 When Home Assistant runs its own MQTT broker, the bundled broker can bridge to it so FPP's `falcon/player/#` topics flow both ways: Home Assistant sees every FPP topic, including FPP's `homeassistant/` discovery announcements, and the commands and `set/` requests Home Assistant publishes reach FPP. The FPP login in `mosquitto/acl.conf` may publish anywhere under `falcon/player/` and `homeassistant/` and subscribe to any topic, so nothing FPP sends is held back. No second client or credential is needed on the ShowMesh side.
 
+On a coordinator installed with `showmesh-install`, set it up with the installer's `--home-assistant` options (see `deploy/install/README.md`). On a hand-run Compose bundle, run the script the installer uses:
+
 ```sh
 sudo ./mosquitto/add-home-assistant-bridge.sh --host <home-assistant> --user <login> --password-file <file>
 ```

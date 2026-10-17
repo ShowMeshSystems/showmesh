@@ -65,7 +65,27 @@ exist so every question has an unattended answer: `--address`,
 `--ui-port`, `--admin-name`, `--admin-password-file`, `--node-role`, `--node-id`,
 `--ptp-interface`, `--ptp-domain`, `--ptp-role`, `--audio-card` and
 `--agent-package` (a node agent tarball on disk, for a build that has no
-release).
+release), and the `--home-assistant` options below.
+
+## Home Assistant bridge
+
+A coordinator on the built-in broker can bridge it to Home Assistant's MQTT
+broker, so Home Assistant sees every FPP topic and FPP's discovery
+announcements, and its commands reach FPP. An interactive run asks once, when
+no bridge exists, and defaults to no. Unattended:
+
+```sh
+sudo showmesh-install --home-assistant 192.168.1.20 --home-assistant-username showmesh \
+  --home-assistant-password-file /root/ha-password
+```
+
+The login is one you create on Home Assistant's broker. `--home-assistant HOST:PORT`
+sets a port other than 1883, `--home-assistant-share-showmesh` also shows
+ShowMesh node state to Home Assistant read-only, and `--no-home-assistant` takes
+the bridge down. Setting it up restarts the broker, so nodes show offline for a
+few seconds. The bridge lives in `/opt/showmesh/coordinator/mosquitto/conf.d/`,
+which upgrades keep, so a later run with no options leaves it as it is. Running
+again with `--home-assistant` replaces it.
 
 ## Operator UI port
 
