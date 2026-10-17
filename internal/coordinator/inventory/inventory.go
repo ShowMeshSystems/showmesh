@@ -448,7 +448,7 @@ func (m *Manager) observeLiveness(ctx context.Context, nodeID string, liveness L
 		Resource: observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID},
 		Category: "control_plane",
 		Severity: severity,
-		Summary:  fmt.Sprintf("node control-plane state changed to %s", liveness),
+		Summary:  fmt.Sprintf("The node is now %s.", liveness),
 		Details:  json.RawMessage(details),
 	}); err != nil {
 		m.logger.Error("failed to append control-plane liveness-transition event", "node_id", nodeID, "error", err)

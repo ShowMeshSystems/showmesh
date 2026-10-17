@@ -130,7 +130,7 @@ export function fleetSummary(rows: readonly FleetRow[]): string {
   const resolume = rows.filter((row) => row.kind === 'resolume').length
   const parts = [
     `${nodes} ${nodes === 1 ? 'node' : 'nodes'}`,
-    `${fpp} FPP ${fpp === 1 ? 'player' : 'players'}`,
+    `${fpp} FPP`,
     `${resolume} Resolume ${resolume === 1 ? 'instance' : 'instances'}`,
   ]
   return `${rows.length} resources · ${parts.join(', ')}.`
@@ -304,13 +304,13 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
     },
     {
       key: 'instance-uuid',
-      label: 'Instance UUID',
+      label: 'FPP UUID',
       value: instance.instanceUuid ?? 'not observed',
       state: instance.instanceUuidChange === null ? null : 'Bindings held',
       detail:
         instance.instanceUuidChange === null
           ? instance.instanceUuid === null
-            ? 'The endpoint has not reported a SystemUUID yet.'
+            ? 'FPP has not reported its UUID yet.'
             : null
           : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Acknowledge the replacement to rebind it.`,
       tone: instance.instanceUuidChange === null ? (instance.instanceUuid === null ? 'unknown' : 'pending') : 'warn',
@@ -319,9 +319,9 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
 
   return {
     title: instance.instanceId,
-    subtitle: `FPP player · ${instance.health} as FPP reports`,
+    subtitle: `FPP · ${instance.health} as FPP reports`,
     groups: [
-      { name: 'Instance', rows: identity, absent: null },
+      { name: 'FPP', rows: identity, absent: null },
       {
         name: 'Reported observations',
         rows: observations,

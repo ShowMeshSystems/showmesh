@@ -464,36 +464,32 @@ func ClassifyError(err error) string {
 			// left to the bare-status-code fallthrough below, so an
 			// operator-facing reason says something a person can act on
 			// instead of "http status 412".
-			return "the composition is locked, or still loading (http 412)"
+			return "Resolume's composition is locked or still loading. Wait a moment."
 		}
-		return fmt.Sprintf("http status %d", statusErr.StatusCode)
+		return fmt.Sprintf("Resolume answered with error %d. Check Resolume.", statusErr.StatusCode)
 	}
 
 	var decodeErr *DecodeError
 	if errors.As(err, &decodeErr) {
-		return "decode error"
+		return "Resolume sent an answer ShowMesh could not read. Check the Resolume version."
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+		return "Resolume did not answer in time. Check that Resolume is running."
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
+		return "Resolume did not answer in time. Check that Resolume is running."
 	}
 
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "dns error"
+		return "Resolume's address could not be found. Check the address in Settings."
 	}
 
 	if errors.Is(err, syscall.ECONNREFUSED) {
-		return "connection refused"
+		return "Resolume refused the connection. Check that Resolume is running."
 	}
 
-	s := err.Error()
-	if len(s) > maxClassifiedErrorLen {
-		s = s[:maxClassifiedErrorLen] + "…(truncated)"
-	}
-	return s
+	return "Resolume could not be reached. Check that Resolume is running."
 }

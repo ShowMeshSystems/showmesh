@@ -37,21 +37,21 @@ func resolveActiveShowForParticipation(ctx context.Context, assetManifests *stor
 func nodeShowParticipation(ctx context.Context, assetManifests *store.Store, active assetsync.ActiveShow, activeErr error, nodeID string) v1.NodeShowParticipation {
 	if assetManifests == nil {
 		return v1.NodeShowParticipation{State: "not_configured",
-			Reason: strPtr("no asset manifest store is configured on this coordinator")}
+			Reason: strPtr("The coordinator cannot tell which nodes take part in the show.")}
 	}
 	if activeErr != nil {
 		return v1.NodeShowParticipation{State: "unknown",
-			Reason: strPtr("could not resolve the active show: " + activeErr.Error())}
+			Reason: strPtr("The active show could not be read.")}
 	}
 	if !active.Configured {
 		return v1.NodeShowParticipation{State: "not_configured",
-			Reason: strPtr("no show is currently active")}
+			Reason: strPtr("No show is active.")}
 	}
 
 	catalog, err := assetsync.ResolveCueCatalog(ctx, assetManifests, active, nodeID)
 	if err != nil {
 		return v1.NodeShowParticipation{State: "unknown", Show: active.ShowID,
-			Reason: strPtr("could not resolve cue catalog: " + err.Error())}
+			Reason: strPtr("The cues for this node could not be read.")}
 	}
 	if !catalog.HasAnyOutput() {
 		return v1.NodeShowParticipation{State: "not_participating", Show: active.ShowID}

@@ -416,8 +416,8 @@ func TestComputeNodeManifestReportIncompleteCarriesAgentReason(t *testing.T) {
 	if m.State != ManifestUnknown || m.UnknownCause != UnknownCauseReportIncomplete {
 		t.Fatalf("ComputeNodeManifest() = %+v, want State=unknown Cause=report_incomplete", m)
 	}
-	if m.Reason == "" || !strings.Contains(m.Reason, "asset directory does not exist") {
-		t.Errorf("ComputeNodeManifest().Reason = %q, want it to carry the agent's own reason through", m.Reason)
+	if m.Reason == "" || !strings.Contains(m.Reason, "could not list all of its files") {
+		t.Errorf("ComputeNodeManifest().Reason = %q, want it to say the node could not list its files", m.Reason)
 	}
 }
 

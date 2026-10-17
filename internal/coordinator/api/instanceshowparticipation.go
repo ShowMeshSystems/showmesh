@@ -67,21 +67,21 @@ type showInstanceParticipation struct {
 func resolveShowInstanceParticipation(ctx context.Context, cfg ConfigStore, assetManifests *store.Store, active assetsync.ActiveShow, activeErr error) showInstanceParticipation {
 	// A nil store is not an inactive show. Without this the zero-valued
 	// ActiveShow that [resolveActiveShowForParticipation] returns for a nil
-	// store reads as "no show is currently active", which is a confident
+	// store reads as "No show is active.", which is a confident
 	// false answer sending a reader to the wrong remedy.
 	if assetManifests == nil {
-		return showInstanceParticipation{notConfiguredReason: "no asset manifest store is configured on this coordinator"}
+		return showInstanceParticipation{notConfiguredReason: "The coordinator cannot tell which FPP instances take part in the show."}
 	}
 	if activeErr != nil {
-		return showInstanceParticipation{unknownReason: "could not resolve the active show: " + activeErr.Error()}
+		return showInstanceParticipation{unknownReason: "The active show could not be read."}
 	}
 	if !active.Configured {
-		return showInstanceParticipation{notConfiguredReason: "no show is currently active"}
+		return showInstanceParticipation{notConfiguredReason: "No show is active."}
 	}
 	p := showInstanceParticipation{show: active.ShowID}
 	payload, err := readShowPayload(ctx, cfg, active.ShowID)
 	if err != nil {
-		p.unknownReason = "could not read the active show's participation selection: " + err.Error()
+		p.unknownReason = "The list of FPP instances in the show could not be read."
 		return p
 	}
 	if ids, selected := payload.FPPParticipation(); selected {

@@ -164,7 +164,7 @@ export function Monitor() {
         <div>
           <Tiles>
             <StatTile label="Nodes" value={`${counts.nodesOnline} / ${counts.nodesTotal}`} detail={nodesDetail(counts)} />
-            <StatTile label="FPP players" value={`${counts.fppHealthy} / ${counts.fppTotal}`} detail={fppDetail(model.fpp)} />
+            <StatTile label="FPP" value={`${counts.fppHealthy} / ${counts.fppTotal}`} detail={fppDetail(model.fpp)} />
             <StatTile
               label="Resolume"
               value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
@@ -563,22 +563,22 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
         <RuledStrip
           absence="empty"
           label="None"
-          fact="No instance UUID"
+          fact="No FPP UUID"
           detail="This FPP has not reported its UUID, so it cannot take a fallback program."
         />
       ) : list.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading this host's fallback program." />
+        <RuledStrip absence="loading" label="Reading" fact="Reading the fallback program on this FPP." />
       ) : list.kind === 'unavailable' ? (
         <RuledStrip
           absence="unavailable"
           label="Unavailable"
           fact="This coordinator does not support fallback programs."
-          detail="Update the coordinator to see this host's program."
+          detail="Update the coordinator to see the program on this FPP."
         />
       ) : list.kind === 'failed' ? (
         <RuledStrip absence="failed" label="Read failed" fact={list.message} />
       ) : list.entry === null ? (
-        <RuledStrip absence="empty" label="Empty" fact="No fallback program exists for this host." />
+        <RuledStrip absence="empty" label="Empty" fact="No fallback program exists for this FPP." />
       ) : (
         <>
           {fallbackProgramMetadataRows(list.entry).map((row) => (
@@ -588,7 +588,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
             </div>
           ))}
           {detail.kind === 'loading' ? (
-            <RuledStrip absence="loading" label="Reading" fact="Reading this host's acknowledgement." />
+            <RuledStrip absence="loading" label="Reading" fact="Reading the acknowledgement from this FPP." />
           ) : detail.kind === 'noPermission' ? (
             <RuledStrip
               absence="noPermission"
@@ -604,7 +604,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
               return (
                 <>
                   <div className="sm-inspector__row">
-                    <span className="sm-inspector__label sm-data">Host holds</span>
+                    <span className="sm-inspector__label sm-data">FPP holds</span>
                     <div>
                       <p className="sm-inspector__state">
                         <StatusPair tone={ack.tone} label={ack.label} />

@@ -515,8 +515,8 @@ func TestRecordLivenessTransitionAppendsEventOnlyOnRealChange(t *testing.T) {
 	if last.Severity != "warning" {
 		t.Errorf("last event Severity = %q, want \"warning\" for a transition to offline", last.Severity)
 	}
-	if last.Summary != "node control-plane state changed to offline" {
-		t.Errorf("last event Summary = %q, want %q", last.Summary, "node control-plane state changed to offline")
+	if last.Summary != "The node is now offline." {
+		t.Errorf("last event Summary = %q, want %q", last.Summary, "The node is now offline.")
 	}
 }
 
@@ -584,8 +584,8 @@ func TestRecordLivenessObservationDetectsStalenessOnlyTransition(t *testing.T) {
 	if last.Category != "control_plane" {
 		t.Errorf("last event Category = %q, want \"control_plane\"", last.Category)
 	}
-	if last.Summary != "node control-plane state changed to offline" {
-		t.Errorf("last event Summary = %q, want %q", last.Summary, "node control-plane state changed to offline")
+	if last.Summary != "The node is now offline." {
+		t.Errorf("last event Summary = %q, want %q", last.Summary, "The node is now offline.")
 	}
 
 	// A repeated call reporting the SAME liveness must not append a second
