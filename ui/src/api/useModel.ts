@@ -119,6 +119,7 @@ import type {
   CueActivateResponse,
   CueCatalogDeployResult,
   NodeClockConfigResponse,
+  NodeResponse,
   ResolumeActionResult,
   ResyncNodeAssetsResult,
 } from './domain'
@@ -453,6 +454,10 @@ export function stopAudioAlignmentRun(nodeId: string, runId: string, reason?: st
 
 // Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
 // Same thin pass-through pattern as audio.node above.
+export function getNode(nodeId: string): Promise<NodeResponse> {
+  return store.getNode(nodeId)
+}
+
 export function getNodeClock(id: string): Promise<NodeClockConfigResponse> {
   return store.getNodeClock(id)
 }

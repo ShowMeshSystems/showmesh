@@ -385,7 +385,8 @@
   margin-bottom: var(--s-2);
 }
 
-.sm-radio-cards:disabled .sm-choice--card {
+.sm-radio-cards:disabled .sm-choice--card,
+.sm-choice--card:has(input:disabled) {
   cursor: not-allowed;
   color: var(--text-muted);
 }
