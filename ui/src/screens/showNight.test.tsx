@@ -1461,7 +1461,7 @@ describe('Show Night', () => {
     expect(await screen.findByLabelText('Audio asset')).toHaveValue('asset-1')
   })
 
-  it('selecting a real asset sets sequence and target from the chosen asset', async () => {
+  it('selecting a track saves its sequence with no node, so the bed nodes decide where it plays', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -1474,12 +1474,25 @@ describe('Show Night', () => {
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
     const select = await screen.findByLabelText('Audio asset')
-    fireEvent.change(select, { target: { value: 'asset-2' } })
-    expect(select).toHaveValue('asset-2')
+    fireEvent.change(select, { target: { value: 'track:other-seq' } })
+    expect(select).toHaveValue('track:other-seq')
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
     const item = ((captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>).items as Record<string, unknown>[]
-    expect(item[0]).toMatchObject({ sequence: 'other-seq', target: 'audio-02', itemId: 'bed-1' })
+    expect(item[0]).toMatchObject({ sequence: 'other-seq', itemId: 'bed-1' })
+    expect(item[0]).not.toHaveProperty('target')
+  })
+
+  it('offers a show-wide audio upload as a track, labelled by name only', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () =>
+      Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01'), { ...(audioAsset('asset-3', 'every-day', '') as object), targetKind: 'show' } as never] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const select = await screen.findByLabelText('Audio asset')
+    expect(within(select).getByRole('option', { name: 'every-day' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: 'bed-seq · audio-01 only' })).toBeInTheDocument()
   })
 
   it('selecting a real asset defaults a blank item id to the asset sequence', async () => {
@@ -1517,7 +1530,7 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     // itemId ('bed-1') survives the clear, so a now-blank sequence/target is what trips this
     // validation error rather than the unrelated "needs at least one item" check.
-    expect(await screen.findByText('Background audio item 1 needs an item id, show, sequence, and target node.')).toBeInTheDocument()
+    expect(await screen.findByText('Background audio item 1 needs an item id and an audio track.')).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
   })
 
@@ -1568,7 +1581,7 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const helpText = /sets how long the resting cycle runs/
+    const helpText = /sets how long resting runs/
     const sequenceSelect = await screen.findByLabelText('Resting sequence')
     const describedBy = sequenceSelect.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()
@@ -1579,13 +1592,13 @@ describe('Show Night', () => {
     expect(document.getElementById(lengthFrom!)).toHaveTextContent('usually the FPP player')
   })
 
-  it('explains the audio asset picker lists store-registered assets by name and node', async () => {
+  it('explains the audio asset picker plays on the nodes chosen below', async () => {
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
     expect(
-      await screen.findByText(/Listed by name and the node it plays on/),
+      await screen.findByText(/Plays on the nodes chosen below/),
     ).toBeInTheDocument()
   })
 

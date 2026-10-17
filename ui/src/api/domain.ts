@@ -136,11 +136,12 @@ export type ConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssets
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
-// Pairing an FPP plugin by code, and the brightness ceiling write's own
-// response shape (the dispatched command plus the plugin's read-back).
+// Pairing an FPP plugin by code, and the display brightness ceiling every
+// FPP follows.
 export type FPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
 export type FPPPairingResponse = components['schemas']['FPPPairingResponse']
-export type FPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
+export type FPPBrightnessResponse = components['schemas']['FPPBrightnessResponse']
+export type FPPBrightnessPlayer = components['schemas']['FPPBrightnessPlayer']
 export type FPPChannelRange = components['schemas']['FPPChannelRange']
 export type FPPBrightnessExcludedRangesResponse = components['schemas']['FPPBrightnessExcludedRangesResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints' own
@@ -801,6 +802,9 @@ export type ConfigPreviewGatewayPutRequest = components['schemas']['ConfigPrevie
 export type PreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
 export type ConfigPreviewCameraPayload = components['schemas']['ConfigPreviewCameraPayload']
 export type ConfigPreviewCameraPutRequest = components['schemas']['ConfigPreviewCameraPutRequest']
+export type PreviewNDIConfigResponse = components['schemas']['PreviewNDIConfigResponse']
+export type ConfigPreviewNDIPayload = components['schemas']['ConfigPreviewNDIPayload']
+export type ConfigPreviewNDIPutRequest = components['schemas']['ConfigPreviewNDIPutRequest']
 export type DashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
 export type ConfigDashboardLayoutPayload = components['schemas']['ConfigDashboardLayoutPayload']
 export type ConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']

@@ -105,12 +105,12 @@ type SchemaEvent = components['schemas']['Event']
 type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
-// Pairing an FPP plugin by code, and writing its brightness ceiling.
+// Pairing an FPP plugin by code, and the display brightness ceiling.
 type SchemaFPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
 type SchemaFPPPairingRequest = components['schemas']['FPPPairingRequest']
 type SchemaFPPPairingResponse = components['schemas']['FPPPairingResponse']
 type SchemaFPPBrightnessCeilingRequest = components['schemas']['FPPBrightnessCeilingRequest']
-type SchemaFPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
+type SchemaFPPBrightnessResponse = components['schemas']['FPPBrightnessResponse']
 type SchemaFPPChannelRange = components['schemas']['FPPChannelRange']
 type SchemaFPPBrightnessExcludedRangesRequest = components['schemas']['FPPBrightnessExcludedRangesRequest']
 type SchemaFPPBrightnessExcludedRangesResponse = components['schemas']['FPPBrightnessExcludedRangesResponse']
@@ -247,6 +247,8 @@ type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreview
 type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
 type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
 type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaConfigPreviewNDIPutRequest = components['schemas']['ConfigPreviewNDIPutRequest']
+type SchemaPreviewNDIConfigResponse = components['schemas']['PreviewNDIConfigResponse']
 type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
 type SchemaPreviewsResponse = components['schemas']['PreviewsResponse']
 type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
@@ -679,6 +681,36 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/config/preview.ndi/{id}`. Throws (404) when no such NDI source exists. */
+  async getPreviewNDI(id: string): Promise<SchemaPreviewNDIConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPreviewNDIConfigResponse>(`/config/preview.ndi/${encodeURIComponent(id)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/preview.ndi/{id}`. A field left out keeps its stored value. */
+  async putPreviewNDI(id: string, request: SchemaConfigPreviewNDIPutRequest): Promise<SchemaPreviewNDIConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPreviewNDIConfigResponse>(`/config/preview.ndi/${encodeURIComponent(id)}`, request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/config/preview.ndi/{id}`. Always sends `{"confirm":true}`, the server's own required body. */
+  async deletePreviewNDI(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(`/config/preview.ndi/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/dashboard.layout`. Throws (404) when no layout has been saved yet. */
   async getDashboardLayout(): Promise<SchemaDashboardLayoutConfigResponse> {
     const controller = this.beginSideCall()
@@ -908,21 +940,22 @@ export class ApiStore {
     }
   }
 
-  /**
-   * `POST /api/v1/fpp/{instanceId}/brightness/ceiling` (contract section
-   * 3). Behind `fpp:command`. Refused, not clamped, on an out-of-range
-   * value; `ceiling` on the response is present only when the plugin's
-   * own route read the new value back within the coordinator's window.
-   */
-  async postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<SchemaFPPBrightnessCeilingResponse> {
+  /** `GET /api/v1/fpp/brightness`. Behind `fpp:read`. The display ceiling every FPP follows, and each FPP's state against it. */
+  async getFPPBrightness(): Promise<SchemaFPPBrightnessResponse> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaFPPBrightnessCeilingRequest = { ceiling }
-      return await this.client.postJson<SchemaFPPBrightnessCeilingResponse>(
-        `/fpp/${encodeURIComponent(instanceId)}/brightness/ceiling`,
-        body,
-        controller.signal,
-      )
+      return await this.client.getJson<SchemaFPPBrightnessResponse>('/fpp/brightness', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/fpp/brightness/ceiling`. Behind `fpp:command`. Refused, not clamped, on an out-of-range value; answers with the same document as the read. */
+  async putFPPBrightnessCeiling(targetPercent: number, fadeSeconds: number): Promise<SchemaFPPBrightnessResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaFPPBrightnessCeilingRequest = { targetPercent, fadeSeconds }
+      return await this.client.putJson<SchemaFPPBrightnessResponse>('/fpp/brightness/ceiling', body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -2556,7 +2589,8 @@ export class ApiStore {
       | 'media.playlist'
       | 'night.session'
       | 'node.clock'
-      | 'preview.camera',
+      | 'preview.camera'
+      | 'preview.ndi',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse>
   // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
@@ -2576,6 +2610,7 @@ export class ApiStore {
       | 'night.session'
       | 'node.clock'
       | 'preview.camera'
+      | 'preview.ndi'
       | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

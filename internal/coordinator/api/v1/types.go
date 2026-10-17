@@ -512,6 +512,17 @@ type FPPInstance struct {
 	// playlist-entry reports are currently being refused. Cleared by the
 	// next accepted report or by the observation reset route.
 	PlaylistObservationRefused *FPPPlaylistObservationRefused `json:"playlistObservationRefused"`
+
+	// Plugin is the state of the ShowMesh plugin's reports to this
+	// coordinator, separate from Health, which is what FPP's own API says.
+	Plugin FPPPluginStatus `json:"plugin"`
+}
+
+// FPPPluginStatus is [FPPInstance.Plugin]'s shape. State is one of
+// "not_paired", "not_reported", "stopped" or "reporting".
+type FPPPluginStatus struct {
+	State          string  `json:"state"`
+	LastReportedAt *string `json:"lastReportedAt"`
 }
 
 // FPPInstanceUUIDChange is [FPPInstance.InstanceUUIDChange]'s shape: the
@@ -1606,6 +1617,28 @@ type PreviewCameraConfigResponse struct {
 	CreatedByPrincipalID   *string                    `json:"createdByPrincipalId"`
 	CreatedByPrincipalName *string                    `json:"createdByPrincipalName"`
 	Source                 string                     `json:"source"`
+}
+
+// ConfigPreviewNDIPayload is the "preview.ndi" kind's payload: one NDI source
+// added by hand. Address is host:port, or empty to find the source by name.
+type ConfigPreviewNDIPayload struct {
+	Label   string `json:"label"`
+	NDIName string `json:"ndiName"`
+	Address string `json:"address"`
+	Enabled bool   `json:"enabled"`
+}
+
+// PreviewNDIConfigResponse is the body of GET and PUT /config/preview.ndi/{id}.
+type PreviewNDIConfigResponse struct {
+	ServerTime             string                  `json:"serverTime"`
+	Kind                   string                  `json:"kind"`
+	ID                     string                  `json:"id"`
+	Revision               int64                   `json:"revision"`
+	Payload                ConfigPreviewNDIPayload `json:"payload"`
+	UpdatedAt              string                  `json:"updatedAt"`
+	CreatedByPrincipalID   *string                 `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                 `json:"createdByPrincipalName"`
+	Source                 string                  `json:"source"`
 }
 
 // ConfigDashboardPreviewLayout is the tile order and hidden tiles of the preview grid.

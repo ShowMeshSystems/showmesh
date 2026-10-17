@@ -53,7 +53,11 @@
       "reason": "The coordinator cannot tell which FPP instances take part in the show."
     },
     "duplicateInstanceUuidEndpointIds": [],
-    "playlistObservationRefused": null
+    "playlistObservationRefused": null,
+    "plugin": {
+      "state": "not_paired",
+      "lastReportedAt": null
+    }
   }
 }
 

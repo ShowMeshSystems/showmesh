@@ -33,7 +33,7 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail, type ParticipationState } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, resolumeDetail, type ParticipationState } from './dashboardModel'
 
 /** The operator-facing sentence for each participation state but "absent", which says nothing. */
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
@@ -54,6 +54,7 @@ import {
   fleetSummary,
   fppInspector,
   monitorConnection,
+  pluginNote,
   type FleetKind,
   type FleetRow,
 } from './monitorModel'
@@ -168,7 +169,7 @@ export function Monitor() {
             <StatTile
               label="Resolume"
               value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
-              detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
+              detail={resolumeDetail(counts)}
             />
             <SignalsTile counts={counts.signals} />
           </Tiles>
@@ -381,7 +382,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   // Tied to the instanceUuid each was fetched for, so another instance's
   // verdict or error never renders under a newly selected one.
   const [reconciliation, setReconciliation] = useState<{ instanceUuid: string; response: FPPPlaylistEntryReconciliationResponse } | null>(null)
-  const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string } | null>(null)
+  const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string; notFound: boolean } | null>(null)
   // Keyed on the numeric sequence, not the observation object: it is a
   // new identity every snapshot.
   const latestObservationSequence =
@@ -404,12 +405,13 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
         // A failed refetch must not leave the previous success showing
         // beside the failure strip.
         setReconciliation(null)
-        setReconciliationError({ instanceUuid, message: describeApiError(err) })
+        setReconciliationError({ instanceUuid, message: describeApiError(err), notFound: err instanceof ApiError && err.status === 404 })
       })
     return () => { cancelled = true }
   }, [instance.instanceUuid, latestObservationSequence])
   const currentReconciliation = reconciliation?.instanceUuid === instance.instanceUuid ? reconciliation.response : null
-  const currentReconciliationError = reconciliationError?.instanceUuid === instance.instanceUuid ? reconciliationError.message : null
+  const currentReconciliationError = reconciliationError?.instanceUuid === instance.instanceUuid ? reconciliationError : null
+  const plugin = pluginNote(instance, nowIso)
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
@@ -483,7 +485,11 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
           <p className="sm-small sm-faint">{`Checked ${formatClock(currentReconciliation.serverTime) ?? 'at an unrecorded time'}`}</p>
         </div>
       )}
-      {currentReconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={currentReconciliationError} />}
+      {plugin.problem && <RuledStrip absence="failed" label="Plugin not reporting" fact={plugin.text} />}
+      {!plugin.problem && currentReconciliationError?.notFound === true && (
+        <p className="sm-small sm-faint">{`${instance.instanceId} is idle. ${plugin.text.replace('reported', 'reported its playlists')}`}</p>
+      )}
+      {!plugin.problem && currentReconciliationError?.notFound === false && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={currentReconciliationError.message} />}
     </div>
   )
 }

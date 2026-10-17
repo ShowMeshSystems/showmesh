@@ -407,14 +407,9 @@ func (r *recordingCatalogDeployer) AutoDeployCueCatalog(_ context.Context, _ tim
 }
 
 // TestServiceReconcileOnceTriggersAutoDeployOnMissingAcknowledgement is
-// Part 2's own wiring proof: reconcileOnce's own periodic pass reuses
-// EXACTLY the condition [fallbackcompile.Compile] already detects
-// (fallbackcompile.OutcomeMissingCatalogAcknowledgement) as the trigger for
-// autoDeployStaleCatalogs, rather than a second detector on its own
-// schedule: a healthy tick that publishes cleanly never calls the
-// deployer at all, and breaking a node's own acknowledgement (mirroring
-// TestServiceRefusalDoesNotClearPreviouslyPublishedProgram's identical
-// setup) triggers exactly one call for that node.
+// Part 2's own wiring proof: a healthy tick that publishes cleanly never
+// calls the deployer at all, and breaking a node's own acknowledgement
+// triggers exactly one call for that node.
 func TestServiceReconcileOnceTriggersAutoDeployOnMissingAcknowledgement(t *testing.T) {
 	st, now := newPublishableFixture(t)
 	svc := NewService(st, fakeSigner{}, nil, nil, time.Hour)
@@ -439,5 +434,75 @@ func TestServiceReconcileOnceTriggersAutoDeployOnMissingAcknowledgement(t *testi
 
 	if len(deployer.calls) != 1 || deployer.calls[0] != "render-01" {
 		t.Fatalf("auto-deploy calls after a missing-acknowledgement refusal = %v, want exactly one call for render-01", deployer.calls)
+	}
+}
+
+func reuploadThriller(t *testing.T, st *store.Store) {
+	t.Helper()
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: strings.Repeat("b", 64) + "-show-thriller", ShowID: "halloween", SequenceID: "thriller",
+		TargetKind: store.AssetTargetKindShow, MediaType: "fseq", ContentHash: strings.Repeat("b", 64),
+		RuntimeFilename: "thriller.fseq", SizeBytes: 2048, Backend: "volume", StorageKey: strings.Repeat("b", 64),
+	}); err != nil {
+		t.Fatalf("re-upload asset: %v", err)
+	}
+}
+
+func TestServiceReconcileOnceAutoDeploysAfterSequenceReupload(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	svc := NewService(st, fakeSigner{}, nil, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+	deployer := &recordingCatalogDeployer{}
+	svc.SetCatalogDeployer(deployer)
+
+	svc.reconcileOnce(context.Background())
+	reuploadThriller(t, st)
+	svc.reconcileOnce(context.Background())
+
+	if len(deployer.calls) != 1 || deployer.calls[0] != "render-01" {
+		t.Fatalf("auto-deploy calls after re-uploading a deployed sequence = %v, want exactly one call for render-01", deployer.calls)
+	}
+}
+
+func TestServiceReconcileOnceAutoDeploysAfterReuploadWhileCompileRefusesForAnotherReason(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	svc := NewService(st, fakeSigner{}, nil, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+	deployer := &recordingCatalogDeployer{}
+	svc.SetCatalogDeployer(deployer)
+
+	playlistPayload, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: strings.Repeat("2", 64)},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode playlist: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowPlaylistConfigKind, ObjectID: "main", Revision: 2, PayloadJSON: playlistPayload, Source: "test",
+	}); err != nil {
+		t.Fatalf("create playlist revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowPlaylistConfigKind, "main", 2); err != nil {
+		t.Fatalf("activate playlist revision: %v", err)
+	}
+	reuploadThriller(t, st)
+
+	result, err := fallbackcompile.Compile(ctx, st, fakeSigner{}, testInstanceUUID, now)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if result.Outcome != fallbackcompile.OutcomeUnresolvableTarget {
+		t.Fatalf("compile outcome = %q, want %q so the acknowledgement check is never reached", result.Outcome, fallbackcompile.OutcomeUnresolvableTarget)
+	}
+
+	svc.reconcileOnce(ctx)
+
+	if len(deployer.calls) != 1 || deployer.calls[0] != "render-01" {
+		t.Fatalf("auto-deploy calls = %v, want exactly one call for render-01", deployer.calls)
 	}
 }

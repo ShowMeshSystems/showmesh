@@ -75,6 +75,7 @@ function fpp(
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
     playlistObservationRefused: null,
+    plugin: { state: 'reporting', lastReportedAt: '2026-09-01T00:00:00Z' },
   }
   if (showParticipation === undefined) {
     delete (instance as Partial<typeof instance>).showParticipation

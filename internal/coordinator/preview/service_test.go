@@ -556,6 +556,58 @@ func TestSlowSnapshotAndOfferTimeOutWithoutMarkingTheGatewayUnreachable(t *testi
 	}
 }
 
+func TestHandAddedNDISourcesBecomeStreamsAndTiles(t *testing.T) {
+	gw := newFakeGateway(t, "tok")
+	gw.sources = []Source{{Name: "NODE-01 (matrix-main)"}, {Name: "ARENA (Composition)"}}
+	src := &staticSettings{s: Settings{
+		GatewayURL: gw.srv.URL, Token: "tok",
+		Surfaces: []Surface{{NodeID: "node-01", SurfaceID: "matrix-main", SourceName: "matrix-main"}},
+		NDISources: []NDISource{
+			{ID: "far", Label: "Far barn", Name: "BARN-02 (Composition)", Address: "10.0.20.15:5961", Enabled: true},
+			{ID: "arena", Label: "Arena main", Name: "ARENA (Composition)", Enabled: true},
+			{ID: "node", Label: "Ignored for a node", Name: "NODE-01 (matrix-main)", Address: "10.0.20.16:5961", Enabled: true},
+			{ID: "off", Label: "Spare", Name: "SPARE (Out)", Enabled: false},
+		},
+	}}
+	svc := newTestService(src)
+	svc.Reconcile(context.Background())
+
+	want := []Stream{
+		{Key: "ndi:ARENA (Composition)", Kind: "ndi", NDIName: "ARENA (Composition)"},
+		{Key: "ndi:BARN-02 (Composition)", Kind: "ndi", NDIName: "BARN-02 (Composition)", NDIAddress: "10.0.20.15:5961"},
+		{Key: "ndi:NODE-01 (matrix-main)", Kind: "ndi", NDIName: "NODE-01 (matrix-main)", NDIAddress: "10.0.20.16:5961"},
+	}
+	got := gw.lastPut()
+	if len(got) != len(want) {
+		t.Fatalf("streams = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("stream %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	ov, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ov.Tiles) != 4 {
+		t.Fatalf("a hand-added source with a discovered name must share one tile: %+v", ov.Tiles)
+	}
+	if tile := tileByKey(t, ov, "ndi:ARENA (Composition)"); tile.Label != "Arena main" {
+		t.Fatalf("arena label = %q", tile.Label)
+	}
+	if tile := tileByKey(t, ov, "ndi:BARN-02 (Composition)"); tile.Label != "Far barn" || tile.State == TileNotFound {
+		t.Fatalf("unannounced hand-added tile = %+v", tile)
+	}
+	if tile := tileByKey(t, ov, "ndi:NODE-01 (matrix-main)"); tile.Label != "node-01 · matrix-main" || tile.NodeID != "node-01" {
+		t.Fatalf("node match must win over the hand-added label: %+v", tile)
+	}
+	if tile := tileByKey(t, ov, "ndi:SPARE (Out)"); tile.State != TileDisabled || tile.Label != "Spare" || tile.Message != msgNDIDisabled {
+		t.Fatalf("disabled tile = %+v", tile)
+	}
+}
+
 func TestOverviewReportsNDIDiscoveryOnlyWhenTheGatewaySaysSo(t *testing.T) {
 	gw := newFakeGateway(t, "tok")
 	svc := newTestService(&staticSettings{s: Settings{GatewayURL: gw.srv.URL, Token: "tok"}})

@@ -88,6 +88,7 @@ const fpp = (instanceId: string, health: FPPInstance['health'], uuidChanged = fa
     lastPollError: null,
     instanceUuidChange: uuidChanged ? { previousUuid: 'old', changedAt: '2026-08-28T20:54:00Z' } : null,
     playlistObservationRefused: null,
+    plugin: { state: 'reporting', lastReportedAt: '2026-09-01T00:00:00Z' },
   }) as unknown as FPPInstance
 
 function renderScreen(model: Partial<Model>, initialPath = '/monitor/fleet') {
@@ -682,5 +683,47 @@ describe('Monitor · Fleet · FPP inspector · playlist observation refused', ()
     fireEvent.click(screen.getByRole('link', { name: 'Open Monitor' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog')).getByText('Playlist reports are being refused')).toBeInTheDocument()
+  })
+})
+
+describe('Monitor · Fleet · FPP plugin silence', () => {
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => Promise.reject(new ApiError('FPP has not reported a playlist entry.', 404))
+  })
+  afterEach(cleanup)
+
+  function renderPlugin(plugin: FPPInstance['plugin']) {
+    const instance = { ...fpp('fpp-main', 'healthy'), instanceUuid: 'main-uuid', plugin } as FPPInstance
+    render(
+      <ModelContext.Provider value={{ ...initialModel(), fpp: [instance], serverTime: '2026-09-01T00:30:00Z', serverTimeReceivedAt: Date.now() }}>
+        <MemoryRouter initialEntries={['/monitor/fleet']}>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    fireEvent.click(screen.getByRole('row', { name: 'View fpp-main' }))
+  }
+
+  it.each([
+    ['not_paired', null, "The ShowMesh plugin on fpp-main is not paired with this coordinator. Pair it from the plugin's page in FPP."],
+    ['not_reported', null, "The ShowMesh plugin on fpp-main has not reported since it was paired. Check the coordinator address on the plugin's page in FPP."],
+    ['stopped', '2026-09-01T00:10:00Z', 'The ShowMesh plugin on fpp-main last reported 20 minutes ago. Check that FPP is running and the plugin is enabled.'],
+  ] as const)('degrades the fleet row and names the fix when the plugin is %s', async (state, lastReportedAt, text) => {
+    renderPlugin({ state, lastReportedAt })
+    expect(screen.getAllByText(text).length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('degraded')).toBeInTheDocument()
+    expect(screen.queryByText('Reconciliation unavailable')).not.toBeInTheDocument()
+  })
+
+  it('shows a quiet idle line, not an error, for a reporting plugin and an idle FPP', async () => {
+    renderPlugin({ state: 'reporting', lastReportedAt: '2026-09-01T00:00:00Z' })
+    await waitFor(() => expect(screen.getByText(/^fpp-main is idle\. The plugin last reported its playlists/)).toBeInTheDocument())
+    expect(screen.queryByText('Reconciliation unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByText('Plugin not reporting')).not.toBeInTheDocument()
+    expect(screen.getAllByText('healthy').length).toBeGreaterThan(0)
   })
 })

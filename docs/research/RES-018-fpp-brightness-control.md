@@ -4,6 +4,8 @@
 
 Status: planned · Risk: **high** · Verification: **L1 source evidence** for the FPP plugin mechanisms and **L2 bench evidence** for the absence of a stock FPP brightness command; no ShowMesh brightness component has been built or installed on an FPP host
 
+Superseded in part: [ADR-062](../decisions/ADR-062-brightness-is-one-setting-for-every-fpp.md) (2026-10-17) makes the ceiling one value for every FPP, written by the coordinator and by any FPP. Section 1's single-owner rule for the ceiling no longer holds.
+
 Decision dates: 2026-08-18 for brightness and repository structure; 2026-08-20 for Apache-2.0 licensing and the ADR-043 playlist-identity publisher. This record does not claim that the selected design, the third repository, release artifacts, or real-host installation exist yet.
 
 Linear tracking: SM-63 owns the runtime/repository build; SM-14 owns the first real-host install and release-publication gate. SM-49 is complete because the owner decision is made.

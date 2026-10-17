@@ -25,8 +25,10 @@ import type {
   ConfigDashboardLayoutPutRequest,
   ConfigPreviewCameraPutRequest,
   ConfigPreviewGatewayPutRequest,
+  ConfigPreviewNDIPutRequest,
   DashboardLayoutConfigResponse,
   PreviewCameraConfigResponse,
+  PreviewNDIConfigResponse,
   PreviewGatewayConfigResponse,
   PreviewsResponse,
   AcknowledgeFPPInstanceUUIDChangeResponse,
@@ -57,7 +59,7 @@ import type {
   CurrentRunsResponse,
   EmergencyStopArmResponse,
   EmergencyStopResult,
-  FPPBrightnessCeilingResponse,
+  FPPBrightnessResponse,
   FPPBrightnessExcludedRangesResponse,
   FPPChannelRange,
   FPPCommandResult,
@@ -232,8 +234,12 @@ export function postFPPPairing(instanceId: string, code: string): Promise<FPPPai
   return store.postFPPPairing(instanceId, code)
 }
 
-export function postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<FPPBrightnessCeilingResponse> {
-  return store.postFPPBrightnessCeiling(instanceId, ceiling)
+export function getFPPBrightness(): Promise<FPPBrightnessResponse> {
+  return store.getFPPBrightness()
+}
+
+export function putFPPBrightnessCeiling(targetPercent: number, fadeSeconds: number): Promise<FPPBrightnessResponse> {
+  return store.putFPPBrightnessCeiling(targetPercent, fadeSeconds)
 }
 
 export function putFPPBrightnessExcludedRanges(instanceId: string, ranges: FPPChannelRange[]): Promise<FPPBrightnessExcludedRangesResponse> {
@@ -775,7 +781,8 @@ export function listConfigObjects(
     | 'media.playlist'
     | 'night.session'
     | 'node.clock'
-    | 'preview.camera',
+    | 'preview.camera'
+    | 'preview.ndi',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -794,6 +801,7 @@ export function listConfigObjects(
     | 'night.session'
     | 'node.clock'
     | 'preview.camera'
+    | 'preview.ndi'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
@@ -1248,6 +1256,18 @@ export function putPreviewCamera(id: string, request: ConfigPreviewCameraPutRequ
 
 export function deletePreviewCamera(id: string): Promise<void> {
   return store.deletePreviewCamera(id)
+}
+
+export function getPreviewNDI(id: string): Promise<PreviewNDIConfigResponse> {
+  return store.getPreviewNDI(id)
+}
+
+export function putPreviewNDI(id: string, request: ConfigPreviewNDIPutRequest): Promise<PreviewNDIConfigResponse> {
+  return store.putPreviewNDI(id, request)
+}
+
+export function deletePreviewNDI(id: string): Promise<void> {
+  return store.deletePreviewNDI(id)
 }
 
 export function getDashboardLayout(): Promise<DashboardLayoutConfigResponse> {

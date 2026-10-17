@@ -11,6 +11,9 @@ const stubs = vi.hoisted(() => ({
   getPreviewCamera: vi.fn(),
   putPreviewCamera: vi.fn(),
   deletePreviewCamera: vi.fn(),
+  getPreviewNDI: vi.fn(),
+  putPreviewNDI: vi.fn(),
+  deletePreviewNDI: vi.fn(),
   getPreviewGatewayConfigRevisions: vi.fn(),
 }))
 
@@ -50,6 +53,20 @@ const cameraResponse = (revision = 1) => ({
   id: 'driveway',
 })
 
+const ndiResponse = (revision = 1) => ({
+  ...envelope('preview.ndi', { label: 'Far barn', ndiName: 'BARN-02 (Composition)', address: '10.0.20.15:5961', enabled: true }, revision),
+  id: 'far-barn',
+})
+
+function withStoredNDISource() {
+  stubs.listConfigObjects.mockImplementation(async (kind: string) => ({
+    serverTime: '2026-10-15T12:00:00Z',
+    kind,
+    objects: [{ id: kind === 'preview.camera' ? 'driveway' : 'far-barn', label: 'x', show: '', currentRevision: 1, updatedAt: '2026-10-15T12:00:00Z' }],
+  }))
+  stubs.getPreviewNDI.mockResolvedValue(ndiResponse())
+}
+
 function renderSettings(scopes = ['config:write'], model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), session: session(scopes), ...model }}>
@@ -63,11 +80,14 @@ const notFound = () => new ApiError('not found', 404)
 beforeEach(() => {
   stubs.getPreviewGatewayConfig.mockResolvedValue(gatewayResponse())
   stubs.putPreviewGatewayConfig.mockResolvedValue(gatewayResponse(2))
-  stubs.listConfigObjects.mockResolvedValue({
+  stubs.listConfigObjects.mockImplementation(async (kind: string) => ({
     serverTime: '2026-10-15T12:00:00Z',
-    kind: 'preview.camera',
-    objects: [{ id: 'driveway', label: 'Driveway', show: '', currentRevision: 1, updatedAt: '2026-10-15T12:00:00Z' }],
-  })
+    kind,
+    objects: kind === 'preview.camera' ? [{ id: 'driveway', label: 'Driveway', show: '', currentRevision: 1, updatedAt: '2026-10-15T12:00:00Z' }] : [],
+  }))
+  stubs.getPreviewNDI.mockRejectedValue(notFound())
+  stubs.putPreviewNDI.mockResolvedValue(ndiResponse(1))
+  stubs.deletePreviewNDI.mockResolvedValue(undefined)
   stubs.getPreviewCamera.mockResolvedValue(cameraResponse())
   stubs.putPreviewCamera.mockResolvedValue(cameraResponse(2))
   stubs.deletePreviewCamera.mockResolvedValue(undefined)
@@ -206,6 +226,67 @@ describe('Settings › Dashboard: cameras', () => {
     expect(stubs.deletePreviewCamera).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove and save' }))
     await waitFor(() => expect(stubs.deletePreviewCamera).toHaveBeenCalledWith('driveway'))
+  })
+})
+
+describe('Settings › Dashboard: NDI sources', () => {
+  it('says so when no NDI source is added, without an empty panel', async () => {
+    const { container } = renderSettings()
+    expect(await screen.findByText('No NDI sources')).toBeInTheDocument()
+    expect(container.querySelector('#st-dash-ndi .sm-panel')).toBeNull()
+  })
+
+  it('adds an NDI source by name and address', async () => {
+    renderSettings()
+    await screen.findByText('No NDI sources')
+    fireEvent.click(screen.getByRole('button', { name: 'Add an NDI source' }))
+    fireEvent.change(screen.getByLabelText('Source id'), { target: { value: 'far-barn' } })
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Far barn' } })
+    fireEvent.change(screen.getByLabelText('NDI name'), { target: { value: 'BARN-02 (Composition)' } })
+    fireEvent.change(screen.getAllByLabelText(/^Address/)[0]!, { target: { value: '10.0.20.15:5961' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    await waitFor(() =>
+      expect(stubs.putPreviewNDI).toHaveBeenCalledWith('far-barn', { label: 'Far barn', ndiName: 'BARN-02 (Composition)', address: '10.0.20.15:5961', enabled: true }),
+    )
+    expect(stubs.putPreviewCamera).not.toHaveBeenCalled()
+  })
+
+  it('refuses a malformed address before writing', async () => {
+    renderSettings()
+    await screen.findByText('No NDI sources')
+    fireEvent.click(screen.getByRole('button', { name: 'Add an NDI source' }))
+    fireEvent.change(screen.getByLabelText('Source id'), { target: { value: 'far-barn' } })
+    fireEvent.change(screen.getByLabelText('NDI name'), { target: { value: 'BARN-02 (Composition)' } })
+    fireEvent.change(screen.getAllByLabelText(/^Address/)[0]!, { target: { value: '10.0.20.15' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    expect(await screen.findByText('The NDI address must be host:port, such as 10.0.20.15:5961.')).toBeInTheDocument()
+    expect(stubs.putPreviewNDI).not.toHaveBeenCalled()
+  })
+
+  it('lists a stored source and clears its address on save', async () => {
+    withStoredNDISource()
+    renderSettings()
+    const address = await screen.findByDisplayValue('10.0.20.15:5961')
+    expect(screen.getByRole('heading', { level: 3, name: 'Far barn' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Source id')).toBeDisabled()
+    fireEvent.change(address, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    await waitFor(() =>
+      expect(stubs.putPreviewNDI).toHaveBeenCalledWith('far-barn', { label: 'Far barn', ndiName: 'BARN-02 (Composition)', address: '', enabled: true }),
+    )
+  })
+
+  it('removes a source only after confirming', async () => {
+    withStoredNDISource()
+    renderSettings()
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove Far barn' }))
+    fireEvent.click(screen.getByRole('button', { name: SAVE }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Remove Far barn?')).toBeInTheDocument()
+    expect(stubs.deletePreviewNDI).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove and save' }))
+    await waitFor(() => expect(stubs.deletePreviewNDI).toHaveBeenCalledWith('far-barn'))
+    expect(stubs.deletePreviewCamera).not.toHaveBeenCalled()
   })
 })
 

@@ -68,7 +68,7 @@ import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, nightLifecycleGroups } from './liveControlModel'
 import { AudioAssetPicker } from './audioAssetPicker'
-import { audioAssetOptions, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
+import { audioAssetOptions, audioItemResolves, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
 import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
@@ -1054,7 +1054,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
         : {
             mode: 'inline',
             mediaPlaylist: '',
-            items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
+            items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target ?? '' })),
             repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
             crossfadeMs: bg.crossfadeMs === undefined ? '' : String(bg.crossfadeMs),
             maxGainDb: String(bg.maxGainDb),
@@ -1124,16 +1124,16 @@ function buildBackgroundAudio(
   if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or choose None.' }
   const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
   for (const [index, item] of audio.items.entries()) {
-    if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
-      return { ok: false, error: `Background audio item ${index + 1} needs an item id, show, sequence, and target node.` }
+    if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '') {
+      return { ok: false, error: `Background audio item ${index + 1} needs an item id and an audio track.` }
     }
     const sequence = item.sequence.trim()
     const target = item.target.trim()
     // A stored (sequence, target) that no longer matches a current asset must not be persisted silently.
-    if (!audioAssets.some((asset) => asset.sequence === sequence && asset.target === target)) {
+    if (!audioItemResolves(audioAssets, sequence, target)) {
       return { ok: false, error: `Background audio item ${index + 1} names a missing asset. Pick another or remove it.` }
     }
-    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence, target })
+    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence, ...(target === '' ? {} : { target }) })
   }
   const maxGainDb = Number(audio.maxGainDb)
   if (audio.maxGainDb.trim() === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
@@ -1349,7 +1349,6 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const [error, setError] = useState<string | null>(null)
   const [backgroundAudioTargetsError, setBackgroundAudioTargetsError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [revision, setRevision] = useState<NightSessionConfigResponse | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -1382,7 +1381,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }, [reloadKey, showId])
 
   const selectDefinition = (id: string) => {
-    setSelected(id); setError(null); setBackgroundAudioTargetsError(null); setRevision(null); setDeleteError(null)
+    setSelected(id); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null)
     if (id === '') { setLoaded(null); setDraft(blankDefinition(showId)); return }
     getNightSessionConfig(id)
       .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)) })
@@ -1447,7 +1446,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const audioAssets = audioAssetOptions(assets)
   // A non-blank stored (sequence, target) that matches no current asset is a dead reference, not "unset".
   const deadAudioAssetError = (item: BackgroundAudioItemDraft): string | undefined =>
-    item.sequence === '' || item.target === '' || audioAssets.some((asset) => asset.sequence === item.sequence && asset.target === item.target)
+    audioItemResolves(audioAssets, item.sequence, item.target)
       ? undefined
       : 'This audio asset no longer exists. Pick another or remove the item.'
   const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
@@ -1457,7 +1456,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   ])).sort()
   const fppIds = (retained: string) => Array.from(new Set([...(retained === '' ? [] : [retained]), ...fppInstances.map((instance) => instance.instanceId)])).sort()
 
-  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setRevision(null); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null) }
+  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null) }
   return <div id="sn-definitions" className="sm-night-session-workspace">
     <div className="sm-night-session-heading">
       <div><h2 className="sm-section__title">Night session definitions</h2><p className="sm-small sm-muted">How the night enters the show and returns to resting.</p></div>
@@ -1480,7 +1479,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <h3 className="sm-inspector__title" id="sn-definition-inspector-heading">{loaded === null ? 'New night session' : draft.label}</h3>
           <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
-          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="The length of this file sets how long the resting cycle runs.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Read the length from" help="The node whose copy of the resting sequence is measured, usually the FPP player.">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a node…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence" help="Its length sets how long resting runs. Any render node that has this sequence draws it during resting.">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Read the length from" help="The node whose copy of the resting sequence is measured, usually the FPP player.">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a node…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v} value={v}>{optionLabel(v)}</option>)}</Select>}</Field></div>
           <TransitionStepEditor title="Enter show" offsetHelp="Milliseconds from the end of the resting sequence. Negative is before." steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the end of the show. Negative is before." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
@@ -1540,7 +1539,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 {draft.backgroundAudio.items.map((item, index) => (
                   <div className="sm-night-session-item" key={`bg-item-${index}`}>
                     <Field label="Item id">{(p) => <Input {...p} value={item.itemId} onChange={(e) => updateBackgroundAudioItem(index, { itemId: e.target.value })} />}</Field>
-                    <Field label="Audio asset" help="Listed by name and the node it plays on." error={deadAudioAssetError(item)}>
+                    <Field label="Audio asset" help="Plays on the nodes chosen below." error={deadAudioAssetError(item)}>
                       {(p) => (
                         <AudioAssetPicker
                           {...p}
@@ -1661,8 +1660,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             ))}
           </div>
           {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
-          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
-          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing version', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }]} />}
+          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} fetchRevision={(n) => getNightSessionConfigRevision(loaded.id, n)} />}
           <div className="sm-inspector__actions"><span className="sm-small sm-muted">{loaded === null ? 'Creates version 1' : `Creates version ${loaded.revision + 1}`}</span><div className="sm-btn-row"><Button variant="quiet" onClick={closeInspector}>Cancel</Button><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div></div>
           {loaded !== null && (
             <DeletePanel

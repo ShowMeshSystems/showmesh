@@ -177,20 +177,16 @@ func nightLightsWaitForStore(k any) {
 }
 
 // nightLightsInstances lists the FPP instances the night's own fades write
-// to: the resting instance, then the show instance when it differs.
-func nightLightsInstances(p config.NightSessionPayload) []string {
-	var out []string
-	for _, id := range []string{p.Resting.FPPInstanceID, p.ShowPlaylist.FPPInstanceID} {
-		if id == "" {
-			continue
-		}
-		dup := false
-		for _, have := range out {
-			dup = dup || have == id
-		}
-		if !dup {
-			out = append(out, id)
-		}
+// to: every FPP in fpp.endpoints (ADR-062 decision 7).
+func (h *handlers) nightLightsInstances(ctx context.Context) []string {
+	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
+	if err != nil {
+		h.logWarn("night loop: listing fpp endpoints for the lights fade failed", "error", err)
+		return nil
+	}
+	out := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		out = append(out, ep.ID)
 	}
 	return out
 }
@@ -217,7 +213,7 @@ func nightTransitionLeadMs(p config.NightSessionPayload) int64 {
 func (h *handlers) nightLightsStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, st nightLightsStep) {
 	st.key = nightLightsKey(rec, st.step)
 	st.rec = rec
-	st.instances = nightLightsInstances(payload)
+	st.instances = h.nightLightsInstances(ctx)
 	st.inst = map[string]*nightLightsInstanceState{}
 	for _, id := range st.instances {
 		st.inst[id] = &nightLightsInstanceState{}
@@ -516,7 +512,7 @@ func (h *handlers) nightLightsRestoreAtEnd(ctx context.Context, now time.Time, r
 // is not yet verified, and a warning must not stop a night from starting.
 func (h *handlers) nightCheckLightsFades(ctx context.Context, p config.NightSessionPayload) []nightReadinessCheck {
 	var checks []nightReadinessCheck
-	on := nightNames(nightLightsInstances(p))
+	on := nightNames(h.nightLightsInstances(ctx))
 	const unverified = "Watch the first one, because this is not proven on a real display."
 	if p.LightsFadeOutMs != nil {
 		checks = append(checks, nightReadinessCheck{name: "lights:fade-out", health: nightHealthDegraded(), reason: fmt.Sprintf(
@@ -578,10 +574,10 @@ func (h *handlers) nightLightsYield(sessionID, instanceID string) {
 	}
 }
 
-// nightLightsYieldToAcceptedCue makes pending lights writes to the cue's player
-// give way, but only when the player accepted the cue's own gain write.
-func (h *handlers) nightLightsYieldToAcceptedCue(rec store.NightSessionRecord, target config.ShowActionTarget, gain nightGainResult) {
-	if target.Integration == config.ShowActionIntegrationFPP && gain.note != "" && !gain.failed {
-		h.nightLightsYield(rec.ID, target.InstanceID)
+// nightLightsYieldToAcceptedCue makes pending lights writes give way on each
+// player that accepted the cue's own gain write.
+func (h *handlers) nightLightsYieldToAcceptedCue(rec store.NightSessionRecord, gain nightGainResult) {
+	for _, id := range gain.accepted {
+		h.nightLightsYield(rec.ID, id)
 	}
 }
