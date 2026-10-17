@@ -7696,7 +7696,8 @@ export interface components {
             kind: "asset";
             show: string;
             sequence: string;
-            target: string;
+            /** @description Optional. Names one node's own upload of the file. Omitted, the item is the sequence's audio, and each playing node uses its own upload, then the show-wide upload, then another node's. */
+            target?: string;
         };
         /** @description The "media.playlist" configuration kind's decoded payload: the body PUT /config/media.playlist/{id} accepts, and the "payload" member of GET /config/media.playlist/{id}'s response. Unlike show.playlist (a list of cues a runner steps through), a media.playlist is a list of things the audio engine plays as a bed, and several may exist per show. show must name an existing show object. items is required and non-empty. resume and itemTransition share night.session's own resting.backgroundAudio vocabulary. crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs must be configured together, or both omitted for an instant cut (server-side; not expressible here). repeat defaults to "none" and is always resolved and emitted on the wire, even though an authored request may omit it. */
         ConfigMediaPlaylist: {
@@ -7766,8 +7767,8 @@ export interface components {
             itemId: string;
             show: string;
             sequence: string;
-            /** @description Which registered copy of the file this item uses. When the bed's own targets (ADR-049) is absent or empty, this also decides where the item plays: items are not required to share one target, and every distinct target among them is its own node the bed plays on, independently. When the bed's own targets is non-empty, every listed node plays every item, and this field no longer decides where it plays. */
-            target: string;
+            /** @description Optional. Omitted, the item is the sequence's audio: it plays on the bed's own targets, or on the show's audioNodes when the bed names none, and each node uses its own upload, then the show-wide upload, then another node's. Saving such an item is refused when neither list names a node. When present, this names which registered copy of the file this item uses. When the bed's own targets (ADR-049) is absent or empty, this also decides where the item plays: items are not required to share one target, and every distinct target among them is its own node the bed plays on, independently. When the bed's own targets is non-empty, every listed node plays every item, and this field no longer decides where it plays. */
+            target?: string;
         };
         /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8) - a discriminated union of two mutually exclusive forms, distinguished by which of `items` and `mediaPlaylist` is present. The INLINE form (ConfigNightSessionBackgroundAudioInline) plays on every distinct node its own items[].target names (a list of target nodes, derived from the items themselves - there is no separate "which output(s)" field) unless `targets` overrides that, see `targets` below. The REFERENCE form (ConfigNightSessionBackgroundAudioReference) names a media.playlist object whose own items/repeat/resume/itemTransition/ gain/fade fields govern the bed instead - editing that object re-pins the bed on its next apply without writing this session again. Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `targets` (ADR-049) applies identically to both forms. */
         ConfigNightSessionBackgroundAudio: components["schemas"]["ConfigNightSessionBackgroundAudioInline"] | components["schemas"]["ConfigNightSessionBackgroundAudioReference"];
@@ -8143,8 +8144,8 @@ export interface components {
             itemId: string;
             show: string;
             sequence: string;
-            /** @description The audio node that holds this item's file. */
-            target: string;
+            /** @description The audio node that holds this item's file. Absent when the item names only its sequence. */
+            target?: string;
         };
         /** @description The background audio the session will play, read from its own pinned configuration revision so it never reports another revision's items. It is available before the bed starts and is not replaced by the step log. `state` "recorded" with `configured` false means the revision has no background audio; `configured` true with no steps means it is set up but has not started this cycle. `state` "unknown" carries the `reason` the plan could not be read, for example a missing media playlist. */
         NightBackgroundAudioPlan: {

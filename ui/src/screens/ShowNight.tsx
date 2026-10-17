@@ -68,7 +68,7 @@ import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, nightLifecycleGroups } from './liveControlModel'
 import { AudioAssetPicker } from './audioAssetPicker'
-import { audioAssetOptions, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
+import { audioAssetOptions, audioItemResolves, excludeNodesError, explicitListExcludeConflictError, type AudioAssetOption } from './showsModel'
 import { AudioNodesResolutionField, useShowAudioNodes } from './audioNodesField'
 import { StaleWriteStrip } from './StaleWrite'
 import {
@@ -1054,7 +1054,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
         : {
             mode: 'inline',
             mediaPlaylist: '',
-            items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
+            items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target ?? '' })),
             repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
             crossfadeMs: bg.crossfadeMs === undefined ? '' : String(bg.crossfadeMs),
             maxGainDb: String(bg.maxGainDb),
@@ -1124,16 +1124,16 @@ function buildBackgroundAudio(
   if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or choose None.' }
   const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
   for (const [index, item] of audio.items.entries()) {
-    if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
-      return { ok: false, error: `Background audio item ${index + 1} needs an item id, show, sequence, and target node.` }
+    if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '') {
+      return { ok: false, error: `Background audio item ${index + 1} needs an item id and an audio track.` }
     }
     const sequence = item.sequence.trim()
     const target = item.target.trim()
     // A stored (sequence, target) that no longer matches a current asset must not be persisted silently.
-    if (!audioAssets.some((asset) => asset.sequence === sequence && asset.target === target)) {
+    if (!audioItemResolves(audioAssets, sequence, target)) {
       return { ok: false, error: `Background audio item ${index + 1} names a missing asset. Pick another or remove it.` }
     }
-    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence, target })
+    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence, ...(target === '' ? {} : { target }) })
   }
   const maxGainDb = Number(audio.maxGainDb)
   if (audio.maxGainDb.trim() === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
@@ -1447,7 +1447,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const audioAssets = audioAssetOptions(assets)
   // A non-blank stored (sequence, target) that matches no current asset is a dead reference, not "unset".
   const deadAudioAssetError = (item: BackgroundAudioItemDraft): string | undefined =>
-    item.sequence === '' || item.target === '' || audioAssets.some((asset) => asset.sequence === item.sequence && asset.target === item.target)
+    audioItemResolves(audioAssets, item.sequence, item.target)
       ? undefined
       : 'This audio asset no longer exists. Pick another or remove the item.'
   const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
@@ -1540,7 +1540,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 {draft.backgroundAudio.items.map((item, index) => (
                   <div className="sm-night-session-item" key={`bg-item-${index}`}>
                     <Field label="Item id">{(p) => <Input {...p} value={item.itemId} onChange={(e) => updateBackgroundAudioItem(index, { itemId: e.target.value })} />}</Field>
-                    <Field label="Audio asset" help="Listed by name and the node it plays on." error={deadAudioAssetError(item)}>
+                    <Field label="Audio asset" help="Plays on the nodes chosen below." error={deadAudioAssetError(item)}>
                       {(p) => (
                         <AudioAssetPicker
                           {...p}

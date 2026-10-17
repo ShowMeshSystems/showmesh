@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -30,13 +31,17 @@ import (
 
 // nightSessionAssetCurrent is [config.AssetCurrent] for this coordinator's
 // asset store: a current (non-superseded) asset for (show, sequence,
-// target) with an implied TargetKind of "node" (store.AssetTargetKindNode)
-// — every night.session asset reference is per rendering/playout target,
-// never per show. A store error is treated as "no such asset", the same
-// posture noAssetStore's own ListAssets stub already establishes for "no
-// asset store wired in".
+// target) with an implied TargetKind of "node" (store.AssetTargetKindNode).
+// An empty target accepts any current audio upload of the sequence. A
+// store error is treated as "no such asset", the same posture
+// noAssetStore's own ListAssets stub already establishes for "no asset
+// store wired in".
 func (h *handlers) nightSessionAssetCurrent(ctx context.Context) config.AssetCurrent {
 	return func(show, sequence, target string) bool {
+		if target == "" {
+			_, ok, err := assetsync.BedAudioCopyFor(ctx, h.deps.Assets, show, sequence, "", nil)
+			return err == nil && ok
+		}
 		recs, err := h.deps.Assets.ListAssets(ctx, store.AssetFilter{ShowID: show, SequenceID: sequence, NodeID: target})
 		if err != nil {
 			return false

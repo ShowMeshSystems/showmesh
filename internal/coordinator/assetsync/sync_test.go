@@ -269,6 +269,7 @@ func TestServiceDispatchesRenditionRouteForSubstitutedAudioAsset(t *testing.T) {
 	putShow(t, st, "halloween-2026", "Halloween 2026")
 	putActiveShow(t, st, "halloween-2026")
 	declareNode(t, st, "audio-01")
+	putAudioNode(t, st, "audio-01")
 	createAssetWithMediaType(t, st, "halloween-2026", "opening-theme", store.AssetTargetKindShow, "", "audio", "sha256:original", "opening-theme.mp3")
 	if err := st.SetAudioRenditionReady(context.Background(), "sha256:original", store.AudioRenditionReady{
 		ContentHash: "sha256:rendition", SizeBytes: 4096, DurationMillis: 12345, Format: "wav48k16s",
