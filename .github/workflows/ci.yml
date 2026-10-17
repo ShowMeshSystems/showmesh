@@ -141,20 +141,9 @@ jobs:
     # `'true'`) when that job failed or was cancelled, so the steps below
     # default to running the full suite rather than silently skipping it.
     if: always()
-    # Raised from 15 on 2026-08-21 because this job was already crossing the
-    # old limit on `main`, not because of any one branch: run 32506564142's
-    # 1.26.6 leg was cancelled at 15m05s and run 32510556351's finished at
-    # 14m38s, so whether a green `main` reported success came down to runner
-    # variance. internal/coordinator/api alone costs about 8 minutes under
-    # the race detector. Raise the ceiling rather than let a timeout keep
-    # reading as a test failure; making that package cheaper is separate work.
-    # Raised again on 2026-09-18: that package now takes 17 to 19 minutes
-    # under the race detector on every main run (runs 35170310208 through
-    # 35306228942), and run 35306264479 crossed go test's own 20 minute
-    # per-package limit with one unrelated one-second test still running.
-    # That package no longer replays every migration per test, so the race
-    # step's own per-package limit is 20m; see the comment beside it.
-    timeout-minutes: 55
+    # Each leg runs one slice of the suite on its own runner, so the job's
+    # wall time is the slowest slice rather than the sum of all of them.
+    timeout-minutes: 30
     strategy:
       # Both matrix legs run to completion. With the default fail-fast, a
       # failure on one Go version cancels the other, so a run reports one
@@ -165,8 +154,15 @@ jobs:
       # binary on. This is a literal version, not go-version-file, so it
       # cannot silently drift from the Dockerfile's own pin; update by hand
       # when the Dockerfile's golang: tag changes.
+      # `part` splits the suite across runners: the audio engine alone,
+      # internal/coordinator/api in round-robin shards named api-K-of-N,
+      # every other package, and the vet, build and format checks.
       matrix:
         go-version: ["1.26.9"]
+        part: [engine, api-1-of-3, api-2-of-3, api-3-of-3, rest, checks]
+    env:
+      ENGINE_PKG: github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine
+      API_PKG: github.com/showmeshsystems/showmesh/internal/coordinator/api
     steps:
       # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26 or newer,
       # so every job that compiles the agent's cgo backend runs on Debian 13
@@ -235,7 +231,7 @@ jobs:
 
       - name: Vet
         id: vet
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'checks'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -243,14 +239,13 @@ jobs:
 
       - name: Test the audio engine (race detector)
         id: test_engine
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'engine'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
-        # gstengine drives real GStreamer pipelines in real time; run it
-        # alone, before the rest of the suite claims the runner's other
-        # cores, so its timing bounds reflect this package rather than
-        # contention with internal/coordinator/api's own long race run.
+        # gstengine drives real GStreamer pipelines in real time; it has a
+        # runner to itself so its timing bounds reflect this package rather
+        # than contention with the rest of the suite.
         #
         # Every engine test is behind //go:build cgo, and `go test` on a
         # package whose files are excluded prints "ok" and exits 0 having
@@ -268,35 +263,58 @@ jobs:
             || { echo "the engine's cgo test files are not being built." >&2; exit 1; }
           go test -race ./internal/agent/audio/gstengine/...
 
-      - name: Test (race detector)
-        id: test_rest
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+      - name: Test the coordinator API (race detector, one shard)
+        id: test_api
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && startsWith(matrix.part, 'api-')
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
-        # Everything the step above did not run. grep -vx on the full
-        # import path, not a substring: an unanchored match would also
-        # exclude a future sibling like gstengineltc, which the step above
-        # would not pick up either, leaving it tested by neither step. The
-        # count check fails if the two steps ever stop partitioning the
-        # package list exactly.
+        # Every shard lists the same top-level tests in the same order and
+        # takes every Nth name, so the N legs partition the list. An empty
+        # shard fails rather than passing having run nothing.
         run: |
           set -eu
-          engine=github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine
-          rest="$(go list ./... | grep -vx "$engine")"
-          if [ "$(go list ./... | wc -l)" -ne "$(( $(echo "$rest" | wc -l) + 1 ))" ]; then
-            echo "the two test steps do not partition the package list." >&2
+          shard="${MATRIX_PART#api-}"
+          shards="${shard#*-of-}"
+          shard="${shard%-of-*}"
+          names="$(go test -race -list '.*' "$API_PKG" | grep -E '^(Test|Example|Fuzz)' | sort)"
+          total="$(echo "$names" | wc -l)"
+          mine="$(echo "$names" | awk -v n="$shards" -v s="$shard" '(NR - 1) % n == s - 1')"
+          if [ -z "$mine" ]; then
+            echo "shard $shard of $shards selected no tests." >&2
             exit 1
           fi
-          # 20m is about twice the slowest package's race run. That is
-          # internal/coordinator/api, about 10 minutes now that its tests copy
-          # one migrated template database (teststore_test.go).
+          echo "shard $shard of $shards runs $(echo "$mine" | wc -l) of $total tests."
+          # 20m is about twice this package's whole race run before sharding.
+          go test -race -timeout=20m -run "^($(echo "$mine" | paste -sd '|' -))\$" "$API_PKG"
+        env:
+          MATRIX_PART: ${{ matrix.part }}
+
+      - name: Test (race detector)
+        id: test_rest
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'rest'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
+        # Everything the engine and API steps do not run. grep -vx on the
+        # full import path, not a substring, so a future sibling like
+        # gstengineltc stays here. The count check fails if the three
+        # steps ever stop partitioning the package list exactly.
+        run: |
+          set -eu
+          rest="$(go list ./... | grep -vx -e "$ENGINE_PKG" -e "$API_PKG")"
+          if [ "$(go list ./... | wc -l)" -ne "$(( $(echo "$rest" | wc -l) + 2 ))" ]; then
+            echo "the three test steps do not partition the package list." >&2
+            exit 1
+          fi
+          # 20m is about four times the slowest remaining package's race run,
+          # internal/coordinator/store at about 3.5 minutes.
           # shellcheck disable=SC2086
           go test -race -timeout=20m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
         id: build_cgo
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'checks'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -310,7 +328,7 @@ jobs:
 
       - name: Build CGo-free (ADR-012)
         id: build_cgofree
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'checks'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -322,7 +340,7 @@ jobs:
 
       - name: Check formatting
         id: check_fmt
-        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
+        if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' && matrix.part == 'checks'
         # continue-on-error so a failure here does not skip every step
         # after it, per the aggregating step at the end of this job.
         continue-on-error: true
@@ -344,7 +362,7 @@ jobs:
 
       - name: "Suite results (this log names which suites ran and which failed)"
         if: always()
-        # The six steps above each carry continue-on-error, so a failure
+        # The steps above each carry continue-on-error, so a failure
         # in an early one (Vet, or the audio engine test) no longer skips
         # the ones after it -- this is the actual defect this job is
         # fixing: an engine failure previously hid the rest of the Go
@@ -354,13 +372,10 @@ jobs:
         # happened -- GitHub's own step list and job-view API show that
         # forced `conclusion`, not the real result -- so this reads
         # `outcome` instead, which still carries the real pass/fail.
-        # `skipped` is accepted because every one of those steps carries
-        # the same docs_only guard the rest of this job does: on a
-        # documentation-only pull request they legitimately do not run,
-        # and that must not turn this job red. Anything other than
-        # success or skipped -- failure, cancelled, or an empty string if
-        # a step never ran for some other reason -- fails this step, so
-        # an unexecuted suite cannot silently read as a passing one.
+        # Each step belongs to one `part`. On that leg it must succeed, or
+        # be skipped on a documentation-only or UI-only pull request; on
+        # every other leg it must be skipped. Anything else fails this step,
+        # so an unexecuted suite cannot silently read as a passing one.
         #
         # Every step's name is printed next to its outcome, on both
         # success and failure, both to stdout/stderr and to
@@ -371,31 +386,35 @@ jobs:
         # pass/fail verdict.
         run: |
           failed=false
+          suite="${{ needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true' }}"
+          part="${{ matrix.part }}"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          for pair in \
-            "Vet:${{ steps.vet.outcome }}" \
-            "Test the audio engine (race detector):${{ steps.test_engine.outcome }}" \
-            "Test (race detector):${{ steps.test_rest.outcome }}" \
-            "Build with cgo (ADR-042 real agent backend):${{ steps.build_cgo.outcome }}" \
-            "Build CGo-free (ADR-012):${{ steps.build_cgofree.outcome }}" \
-            "Check formatting:${{ steps.check_fmt.outcome }}"; do
-            name="${pair%%:*}"
-            outcome="${pair#*:}"
-            case "$outcome" in
-              success)
-                line="PASS  $name: $outcome"
-                echo "$line"
-                ;;
-              skipped)
-                line="SKIP  $name: $outcome"
-                echo "$line"
-                ;;
-              *)
-                line="FAIL  $name: $outcome"
-                echo "$line" >&2
-                failed=true
-                ;;
+          for entry in \
+            "checks|Vet|${{ steps.vet.outcome }}" \
+            "engine|Test the audio engine (race detector)|${{ steps.test_engine.outcome }}" \
+            "api-*|Test the coordinator API (race detector, one shard)|${{ steps.test_api.outcome }}" \
+            "rest|Test (race detector)|${{ steps.test_rest.outcome }}" \
+            "checks|Build with cgo (ADR-042 real agent backend)|${{ steps.build_cgo.outcome }}" \
+            "checks|Build CGo-free (ADR-012)|${{ steps.build_cgofree.outcome }}" \
+            "checks|Check formatting|${{ steps.check_fmt.outcome }}"; do
+            owner="${entry%%|*}"
+            rest="${entry#*|}"
+            name="${rest%%|*}"
+            outcome="${rest#*|}"
+            # shellcheck disable=SC2254
+            case "$part" in
+              $owner) expected=success; [ "$suite" = true ] || expected=skipped ;;
+              *) expected=skipped ;;
             esac
+            if [ "$outcome" = "$expected" ]; then
+              line="PASS  $name: $outcome"
+              [ "$outcome" = skipped ] && line="SKIP  $name: $outcome"
+              echo "$line"
+            else
+              line="FAIL  $name: $outcome, expected $expected on the $part leg"
+              echo "$line" >&2
+              failed=true
+            fi
             echo "$line" >> "$GITHUB_STEP_SUMMARY"
           done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -404,9 +423,9 @@ jobs:
           fi
 
   test-gate:
-    # Required-check aggregate for the `test` go-version matrix. Branch
-    # protection matches required checks by literal name, and the matrix
-    # leg is named `test (1.26.9)`, so bumping the version renames the leg
+    # Required-check aggregate for the `test` matrix. Branch protection
+    # matches required checks by literal name, and each matrix leg is named
+    # like `test (1.26.9, engine)`, so bumping the version renames the leg
     # and the old required name stops reporting forever. This job's name
     # never changes, so it is what branch protection requires instead of
     # the version-specific name; bump the matrix without touching branch
