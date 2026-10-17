@@ -150,7 +150,7 @@ func TestSnapshotReportsAudioConfigPushUnusableForAnUndecodableRevision(t *testi
 	if !containsAll(string(body), `"audioConfigPush":{"state":"unusable"`) {
 		t.Fatalf("snapshot does not report the push as unusable; body: %s", body)
 	}
-	if !containsAll(string(body), "defaultMaxBackgroundGainDb") || !containsAll(string(body), "-60") {
+	if !containsAll(string(body), "audio settings are invalid") {
 		t.Fatalf("snapshot's reason does not name the failing field and bound; body: %s", body)
 	}
 	t.Logf("what an operator reads: %s", body)

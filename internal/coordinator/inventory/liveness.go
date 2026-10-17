@@ -202,23 +202,23 @@ func deriveLiveness(rec store.NodeRecord, now time.Time) (Liveness, string) {
 		if reason, disagrees := offlineDisagreesWithHealth(rec, now); disagrees {
 			return LivenessUnknown, reason
 		}
-		return LivenessOffline, "the node's last report said it went offline"
+		return LivenessOffline, "The node said it went offline. Check its power and network."
 	}
 	if rec.LWT == nil {
-		return LivenessUnknown, "this node has never reported itself online"
+		return LivenessUnknown, "This node has never reported itself online. Check that its agent is running."
 	}
 	// rec.LWT != nil && rec.LWT.Online == true from here on.
 
 	if rec.Health == nil {
-		return LivenessUnknown, "the node reports online but no health report has been observed yet"
+		return LivenessUnknown, "The node says it is online but has not sent a health report yet. Wait a moment."
 	}
 	if rec.Health.ObservedAt == nil {
-		return LivenessUnknown, "the node reports online, but the only health report is a retained message of unknown age"
+		return LivenessUnknown, "The node says it is online, but its only health report is old. Wait for the node to report again."
 	}
 
 	age := now.Sub(*rec.Health.ObservedAt)
 	if age > StalenessWindow {
-		return LivenessUnknown, fmt.Sprintf("this node's health status is %s old, past the %s limit, and may be out of date. Wait for the node to report again.", age.Round(time.Second), StalenessWindow)
+		return LivenessUnknown, fmt.Sprintf("This node's last health report is %s old and may be out of date. Wait for the node to report again.", age.Round(time.Second))
 	}
 
 	return LivenessOnline, ""
@@ -252,7 +252,7 @@ func offlineDisagreesWithHealth(rec store.NodeRecord, now time.Time) (reason str
 		// the "node came back and has not republished its online will"
 		// case.
 		return fmt.Sprintf(
-			"the node's last report said offline, but a live health check %s ago says otherwise. Its online state cannot be confirmed.",
+			"The node said it went offline, but it sent a health report %s ago. Wait for the node to report again.",
 			age.Round(time.Second)), true
 	}
 

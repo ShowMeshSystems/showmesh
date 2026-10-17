@@ -79,7 +79,7 @@
       "showParticipation": {
         "state": "not_configured",
         "show": "",
-        "reason": "no asset manifest store is configured on this coordinator"
+        "reason": "The coordinator cannot tell which nodes take part in the show."
       },
       "render": [],
       "audio": [],
@@ -106,7 +106,7 @@
           "value": null,
           "unit": null,
           "state": "not_collected",
-          "reason": "no hello has ever been observed for this node",
+          "reason": "This node has not said hello yet.",
           "observedAt": null,
           "collectedAt": null,
           "source": "mqtt-inventory",
@@ -118,7 +118,7 @@
           "value": true,
           "unit": null,
           "state": "unknown_age",
-          "reason": "observation time is unknown (e.g. a retained MQTT delivery replayed on reconnect)",
+          "reason": "The time of this reading is unknown.",
           "observedAt": null,
           "collectedAt": "2026-08-10T18:00:00-05:00",
           "source": "mqtt-inventory",
@@ -130,7 +130,7 @@
           "value": null,
           "unit": null,
           "state": "not_collected",
-          "reason": "no health heartbeat has ever been observed for this node",
+          "reason": "This node has not sent a health report yet.",
           "observedAt": null,
           "collectedAt": null,
           "source": "mqtt-inventory",
@@ -155,7 +155,7 @@
       "showParticipation": {
         "state": "not_configured",
         "show": "",
-        "reason": "no asset manifest store is configured on this coordinator"
+        "reason": "The coordinator cannot tell which nodes take part in the show."
       },
       "render": [],
       "audio": [],
@@ -199,7 +199,7 @@
             "value": 120,
             "unit": null,
             "state": "stale",
-            "reason": "value has not been reconfirmed within its 30s validity window",
+            "reason": "This value was not refreshed within 30s. Wait for the next report.",
             "observedAt": "2026-08-10T21:00:00-05:00",
             "collectedAt": "2026-08-10T21:14:22.6-05:00",
             "source": "fpp-rest",
@@ -215,7 +215,7 @@
         "showParticipation": {
           "state": "not_configured",
           "show": "",
-          "reason": "no asset manifest store is configured on this coordinator"
+          "reason": "The coordinator cannot tell which FPP instances take part in the show."
         },
         "duplicateInstanceUuidEndpointIds": [],
         "playlistObservationRefused": null,
@@ -280,7 +280,7 @@
       "showParticipation": {
         "state": "not_configured",
         "show": "",
-        "reason": "no asset manifest store is configured on this coordinator"
+        "reason": "The coordinator cannot tell which FPP instances take part in the show."
       }
     }
   ],

@@ -194,7 +194,7 @@ func (s *svc) recordAuditWriteOutcome(err error) {
 	defer s.auditWriteMu.Unlock()
 	if err != nil {
 		s.auditWriteState = "unusable"
-		s.auditWriteReason = fmt.Sprintf("the coordinator's most recent attempt to write an audit_log entry failed: %v", err)
+		s.auditWriteReason = "The last audit record could not be written. Check the disk space on the coordinator."
 		return
 	}
 	s.auditWriteState = "usable"

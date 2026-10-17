@@ -96,7 +96,7 @@ func TestPostResyncNodeAssetsDisabledSyncRefused(t *testing.T) {
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem: %v", err)
 	}
-	if !containsAll(problem.Detail, "contentBaseUrl") {
+	if !containsAll(problem.Detail, "content base URL") {
 		t.Fatalf("problem detail = %q, want it to name the disabled asset sync setting", problem.Detail)
 	}
 }

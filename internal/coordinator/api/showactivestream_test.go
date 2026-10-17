@@ -153,7 +153,7 @@ func TestFPPParticipationResolvesAgainstTheActivatedShow(t *testing.T) {
 	}
 
 	after := getFPPListBody(t, api, token)
-	if containsAll(after, `"reason":"no show is currently active"`) {
+	if containsAll(after, `"reason":"No show is active."`) {
 		t.Errorf("participation still reports no active show after a committed activation; body: %s", after)
 	}
 	if !containsAll(after, `"show":"halloween-2026"`) {
@@ -181,10 +181,10 @@ func TestFPPParticipationWithNoStoreDoesNotClaimNoShowIsActive(t *testing.T) {
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := getFPPListBody(t, api, token)
-	if containsAll(body, `"reason":"no show is currently active"`) {
+	if containsAll(body, `"reason":"No show is active."`) {
 		t.Errorf("a coordinator with no participation data source must not report that no show is active; body: %s", body)
 	}
-	if !containsAll(body, `"reason":"no asset manifest store is configured on this coordinator"`) {
+	if !containsAll(body, `"reason":"The coordinator cannot tell which FPP instances take part in the show."`) {
 		t.Errorf("participation must name the missing data source; body: %s", body)
 	}
 }

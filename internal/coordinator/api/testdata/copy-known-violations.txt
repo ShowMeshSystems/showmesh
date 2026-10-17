@@ -318,7 +318,6 @@ quoted-name	problem invalid-parameter in handlePostResolumeCompositionUpload
 capital	problem invalid-parameter in handlePostResyncNodeAssets
 full-stop	problem invalid-parameter in handlePostResyncNodeAssets
 joined	problem invalid-parameter in handlePostResyncNodeAssets
-kind-name	problem invalid-parameter in handlePostResyncNodeAssets
 quoted-name	problem invalid-parameter in handlePostResyncNodeAssets
 capital	problem invalid-parameter in handlePutAssetsSettingsConfig
 full-stop	problem invalid-parameter in handlePutAssetsSettingsConfig
@@ -679,8 +678,6 @@ joined	problem unsupported-definition-schema-version in handlePostFPPPlaylistDef
 capital	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
 full-stop	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
 joined	problem unsupported-observation-schema-version in handlePostFPPPlaylistEntryObservation
-capital	v1.AcknowledgeFPPInstanceUUIDChangeResponse instance.showParticipation.reason
-full-stop	v1.AcknowledgeFPPInstanceUUIDChangeResponse instance.showParticipation.reason
 capital	v1.ActionBindingResponse binding.reason
 full-stop	v1.ActionBindingResponse binding.reason
 go-error	v1.ActionBindingResponse binding.reason
@@ -724,19 +721,9 @@ full-stop	v1.EventsResponse events[].summary
 capital	v1.FPPChangedEvent instance.observations[].reason
 full-stop	v1.FPPChangedEvent instance.observations[].reason
 go-error	v1.FPPChangedEvent instance.observations[].reason
-capital	v1.FPPChangedEvent instance.showParticipation.reason
-full-stop	v1.FPPChangedEvent instance.showParticipation.reason
 capital	v1.FPPInstanceResponse instance.observations[].reason
 full-stop	v1.FPPInstanceResponse instance.observations[].reason
 vocabulary	v1.FPPInstanceResponse instance.observations[].reason
-capital	v1.FPPInstanceResponse instance.showParticipation.reason
-full-stop	v1.FPPInstanceResponse instance.showParticipation.reason
-capital	v1.FPPPlaylistEntryReconciliationResponse reason
-full-stop	v1.FPPPlaylistEntryReconciliationResponse reason
-hex	v1.FPPPlaylistEntryReconciliationResponse reason
-joined	v1.FPPPlaylistEntryReconciliationResponse reason
-kind-name	v1.FPPPlaylistEntryReconciliationResponse reason
-length	v1.FPPPlaylistEntryReconciliationResponse reason
 capital	v1.FPPResponse instances[].observations[].reason
 full-stop	v1.FPPResponse instances[].observations[].reason
 vocabulary	v1.FPPResponse instances[].observations[].reason
@@ -755,52 +742,19 @@ full-stop	v1.NightSessionResponse session.cues.cues[].reason
 vocabulary	v1.NightSessionResponse session.cues.cues[].reason
 capital	v1.NodeAssetManifestResponse manifest.reason
 full-stop	v1.NodeAssetManifestResponse manifest.reason
-go-error	v1.NodeAssetManifestResponse manifest.reason
-joined	v1.NodeAssetManifestResponse manifest.reason
-kind-name	v1.NodeAssetManifestResponse manifest.reason
-length	v1.NodeAssetManifestResponse manifest.reason
 capital	v1.NodeAssetManifestResponse manifest.resyncRequest.outcomeReason
 full-stop	v1.NodeAssetManifestResponse manifest.resyncRequest.outcomeReason
-capital	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
-full-stop	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
-go-error	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
-joined	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
-kind-name	v1.NodeAssetManifestResponse manifest.verdicts[].lastFetch.failureReason
-capital	v1.NodeChangedEvent node.showParticipation.reason
-full-stop	v1.NodeChangedEvent node.showParticipation.reason
 capital	v1.NodeResponse node.controlPlane.reason
 full-stop	v1.NodeResponse node.controlPlane.reason
 vocabulary	v1.NodeResponse node.controlPlane.reason
-capital	v1.NodeResponse node.evidence.heartbeat.reason
-full-stop	v1.NodeResponse node.evidence.heartbeat.reason
-capital	v1.NodeResponse node.evidence.hello.reason
-full-stop	v1.NodeResponse node.evidence.hello.reason
-capital	v1.NodeResponse node.evidence.lastWill.reason
-full-stop	v1.NodeResponse node.evidence.lastWill.reason
-vocabulary	v1.NodeResponse node.evidence.lastWill.reason
 capital	v1.NodeResponse node.render[].reason
 full-stop	v1.NodeResponse node.render[].reason
 hex	v1.NodeResponse node.render[].reason
 length	v1.NodeResponse node.render[].reason
 quoted-name	v1.NodeResponse node.render[].reason
 sentences	v1.NodeResponse node.render[].reason
-capital	v1.NodeResponse node.showParticipation.reason
-full-stop	v1.NodeResponse node.showParticipation.reason
-capital	v1.NodeUnusedAssetsResponse reason
-full-stop	v1.NodeUnusedAssetsResponse reason
 capital	v1.NodesResponse nodes[].controlPlane.reason
 full-stop	v1.NodesResponse nodes[].controlPlane.reason
-capital	v1.NodesResponse nodes[].evidence.heartbeat.reason
-full-stop	v1.NodesResponse nodes[].evidence.heartbeat.reason
-capital	v1.NodesResponse nodes[].evidence.hello.reason
-full-stop	v1.NodesResponse nodes[].evidence.hello.reason
-capital	v1.NodesResponse nodes[].evidence.lastWill.reason
-full-stop	v1.NodesResponse nodes[].evidence.lastWill.reason
-vocabulary	v1.NodesResponse nodes[].evidence.lastWill.reason
-capital	v1.NodesResponse nodes[].showParticipation.reason
-full-stop	v1.NodesResponse nodes[].showParticipation.reason
-capital	v1.ObservationsResponse observations[].reason
-full-stop	v1.ObservationsResponse observations[].reason
 capital	v1.RemoveNodeAssetResponse command.reason
 full-stop	v1.RemoveNodeAssetResponse command.reason
 capital	v1.RenderCommandResponse command.outcomeReason
@@ -813,49 +767,22 @@ vocabulary	v1.ResolumeActionResponse result.outcomeReason
 capital	v1.ResolumeChangedEvent instance.observations[].reason
 full-stop	v1.ResolumeChangedEvent instance.observations[].reason
 go-error	v1.ResolumeChangedEvent instance.observations[].reason
-capital	v1.ResolumeChangedEvent instance.showParticipation.reason
-full-stop	v1.ResolumeChangedEvent instance.showParticipation.reason
 capital	v1.ResolumeInstanceResponse instance.observations[].reason
 full-stop	v1.ResolumeInstanceResponse instance.observations[].reason
-capital	v1.ResolumeInstanceResponse instance.showParticipation.reason
-full-stop	v1.ResolumeInstanceResponse instance.showParticipation.reason
 capital	v1.ResolumeInstancesResponse instances[].observations[].reason
 full-stop	v1.ResolumeInstancesResponse instances[].observations[].reason
-capital	v1.ResolumeInstancesResponse instances[].showParticipation.reason
-full-stop	v1.ResolumeInstancesResponse instances[].showParticipation.reason
 capital	v1.ShowMacroConfigResponse payload.steps[].localFallback.reason
 full-stop	v1.ShowMacroConfigResponse payload.steps[].localFallback.reason
 length	v1.ShowPlaylistMovePreviewResponse entries[].summary
 sentences	v1.ShowPlaylistMovePreviewResponse entries[].summary
 joined	v1.ShowPlaylistMovePreviewResponse newEntries[].summary
-capital	v1.Snapshot audioConfigPush.reason
-full-stop	v1.Snapshot audioConfigPush.reason
-joined	v1.Snapshot audioConfigPush.reason
-kind-name	v1.Snapshot audioConfigPush.reason
-length	v1.Snapshot audioConfigPush.reason
-vocabulary	v1.Snapshot audioConfigPush.reason
-capital	v1.Snapshot auditStore.reason
-full-stop	v1.Snapshot auditStore.reason
-joined	v1.Snapshot auditStore.reason
 capital	v1.Snapshot fpp.instances[].observations[].reason
 full-stop	v1.Snapshot fpp.instances[].observations[].reason
 vocabulary	v1.Snapshot fpp.instances[].observations[].reason
-capital	v1.Snapshot fpp.instances[].showParticipation.reason
-full-stop	v1.Snapshot fpp.instances[].showParticipation.reason
 capital	v1.Snapshot nodes[].controlPlane.reason
 full-stop	v1.Snapshot nodes[].controlPlane.reason
-capital	v1.Snapshot nodes[].evidence.heartbeat.reason
-full-stop	v1.Snapshot nodes[].evidence.heartbeat.reason
-capital	v1.Snapshot nodes[].evidence.hello.reason
-full-stop	v1.Snapshot nodes[].evidence.hello.reason
-capital	v1.Snapshot nodes[].evidence.lastWill.reason
-full-stop	v1.Snapshot nodes[].evidence.lastWill.reason
-capital	v1.Snapshot nodes[].showParticipation.reason
-full-stop	v1.Snapshot nodes[].showParticipation.reason
 capital	v1.Snapshot resolume[].observations[].reason
 full-stop	v1.Snapshot resolume[].observations[].reason
-capital	v1.Snapshot resolume[].showParticipation.reason
-full-stop	v1.Snapshot resolume[].showParticipation.reason
 capital	v1.StreamReset reason
 full-stop	v1.StreamReset reason
 capital	v1.WeatherDelayActionResponse result.targets[].outcomeReason

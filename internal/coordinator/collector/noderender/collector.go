@@ -212,7 +212,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// the surface's configured frameRate echoed back.
 	if sf.FramesRate == nil {
 		obs = append(obs, notCollected(res, SignalSurfaceFramesRate, SourceFor(nodeID),
-			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
+			"The frame rate has not been measured yet. Wait a few seconds.", rep.receivedAt))
 	} else {
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, framesObservedAt, rep))
 	}
@@ -228,7 +228,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// "unknown value of a known attempt", so this is NotCollected
 	// regardless of rep.retained, unlike every other field above.
 	if sf.TransportAvailable == nil {
-		reason := "transport availability has not been probed for this surface"
+		reason := "Output availability has not been checked yet."
 		obs = append(obs,
 			notCollected(res, SignalSurfaceTransportAvailable, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceTransportReason, SourceFor(nodeID), reason, rep.receivedAt),
@@ -357,7 +357,7 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 // comment.
 func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.Drawing == "" {
-		reason := "this surface is not playing a sequence, for example it shows a test pattern only."
+		reason := "This surface is not playing a sequence, so it has no timeline."
 		return []observation.Observation{
 			notCollected(res, SignalSurfaceTimelineState, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID), reason, rep.receivedAt),
