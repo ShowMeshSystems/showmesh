@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { audioNodeVerdict, channelCountLabel, channelListLabel, defaultRoutingEntryMode, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle, nodeClockVerdict } from './settingsModel'
+import { advertisedNetworkInterfaces, audioNodeVerdict, channelCountLabel, channelListLabel, defaultRoutingEntryMode, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle, nodeClockVerdict, nodeRunsInstallerPTP } from './settingsModel'
 import type { Node, NightSessionState } from '../api'
+import { makeNode } from '../api/test-support/fixtures'
 
 describe('audioNodeVerdict', () => {
   const base = { programRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], ltcRoute: '', ltcChannel: '' }
@@ -107,7 +108,7 @@ describe('nodeClockVerdict', () => {
 
   it('refuses a device path typed into interface, naming an interface name instead', () => {
     const verdict = nodeClockVerdict({ ...base, interfaceName: '/dev/ptp0' })
-    expect(verdict).toEqual({ ok: false, reason: 'Interface takes an interface name such as eno2, not a device path.' })
+    expect(verdict).toEqual({ ok: false, reason: 'Network interface takes a name such as eno2, not a device path.' })
   })
 
   it('refuses any interface value containing a slash, not only a /dev/ptpN shape', () => {
@@ -192,5 +193,28 @@ describe('routing choices', () => {
     expect(channelListLabel([3, 4])).toBe('Channels 3 and 4')
     expect(channelCountLabel(route)).toBe('4 channels')
     expect(channelCountLabel({ ...route, channels: 3, channelBasis: 'atLeast' })).toBe('at least 3 channels')
+  })
+})
+
+describe('advertisedNetworkInterfaces and nodeRunsInstallerPTP', () => {
+  const withPTP = (attributes: unknown) => makeNode('n1', { capabilities: [{ id: 'clock.ptp', version: 1, attributes } as never] })
+
+  it('reads the reported interfaces, keeping a PHC device only where one is reported', () => {
+    expect(advertisedNetworkInterfaces(withPTP({ interfaces: [{ name: 'eno1' }, { name: 'eno2', phcDevice: '/dev/ptp0' }] }))).toEqual([
+      { name: 'eno1' },
+      { name: 'eno2', phcDevice: '/dev/ptp0' },
+    ])
+  })
+
+  it('is null when the node does not report interfaces, and null rather than partial when the list is malformed', () => {
+    expect(advertisedNetworkInterfaces(makeNode('n1'))).toBeNull()
+    expect(advertisedNetworkInterfaces(null)).toBeNull()
+    expect(advertisedNetworkInterfaces(withPTP({ interfaces: [{ name: 'eno1' }, { phcDevice: '/dev/ptp0' }] }))).toBeNull()
+  })
+
+  it("reports the installer's own PTP service only when the node says so", () => {
+    expect(nodeRunsInstallerPTP(withPTP({ interfaces: [], externalProvider: true }))).toBe(true)
+    expect(nodeRunsInstallerPTP(withPTP({ interfaces: [] }))).toBe(false)
+    expect(nodeRunsInstallerPTP(null)).toBe(false)
   })
 })

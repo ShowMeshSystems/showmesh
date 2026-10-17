@@ -17,6 +17,32 @@ export const HEALTH_TONE: Record<string, Tone> = {
 
 const AUDIO_OUTPUT_LOCAL = 'audio.output.local'
 const AUDIO_OUTPUT_LTC = 'audio.output.ltc'
+const CLOCK_PTP = 'clock.ptp'
+
+/** One network interface a node reports under clock.ptp; phcDevice only when that interface has a PTP hardware clock. */
+export type NetworkInterfaceChoice = { name: string; phcDevice?: string }
+
+/** The node's network interfaces from its clock.ptp capability, or null when the node does not report them. A malformed list is null, never partial. */
+export function advertisedNetworkInterfaces(node: Node | null): NetworkInterfaceChoice[] | null {
+  const capability = node?.capabilities.find((c) => c.id === CLOCK_PTP)
+  const raw = (capability?.attributes as Record<string, unknown> | undefined)?.['interfaces']
+  if (!Array.isArray(raw)) return null
+  const out: NetworkInterfaceChoice[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) return null
+    const { name, phcDevice } = item as Record<string, unknown>
+    if (typeof name !== 'string' || name === '') return null
+    if (phcDevice !== undefined && typeof phcDevice !== 'string') return null
+    out.push(phcDevice === undefined || phcDevice === '' ? { name } : { name, phcDevice })
+  }
+  return out
+}
+
+/** Whether the node reports that its installer already runs PTP for it, so the agent should observe that PTP rather than start its own. */
+export function nodeRunsInstallerPTP(node: Node | null): boolean {
+  const capability = node?.capabilities.find((c) => c.id === CLOCK_PTP)
+  return (capability?.attributes as Record<string, unknown> | undefined)?.['externalProvider'] === true
+}
 
 export function fppHealthFor(fpp: readonly FPPInstance[], id: string): FPPInstance | null {
   return fpp.find((instance) => instance.instanceId === id) ?? null
@@ -138,17 +164,17 @@ export function nodeClockVerdict(payload: {
   phcDeviceText: string
 }): NodeClockVerdict {
   if (payload.interfaceName.trim() === '') {
-    return { ok: false, reason: 'Interface is required.' }
+    return { ok: false, reason: 'Network interface is required.' }
   }
   if (payload.interfaceName.includes('/')) {
-    return { ok: false, reason: 'Interface takes an interface name such as eno2, not a device path.' }
+    return { ok: false, reason: 'Network interface takes a name such as eno2, not a device path.' }
   }
   const domain = Number(payload.domainText)
   if (payload.domainText.trim() === '' || !Number.isInteger(domain) || domain < 0 || domain > 255) {
     return { ok: false, reason: 'Domain must be a whole number from 0 to 255.' }
   }
   if (payload.provider === 'fpp' && payload.fppBaseUrl.trim() === '') {
-    return { ok: false, reason: 'FPP base URL is required when the provider is fpp.' }
+    return { ok: false, reason: 'FPP base URL is required when the clock is read from FPP.' }
   }
   if (payload.holdoverLimitSecondsText.trim() !== '') {
     const holdover = Number(payload.holdoverLimitSecondsText)

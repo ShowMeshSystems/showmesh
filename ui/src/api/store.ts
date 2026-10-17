@@ -144,6 +144,7 @@ type SchemaAudioAlignmentRunStopRequest = components['schemas']['AudioAlignmentR
 // node.clock per-node PTP configuration (Track I seam I1, RES-019,
 // ADR-039). A full-replacement kind, same shape as audio.node above.
 type SchemaNodeClockConfigResponse = components['schemas']['NodeClockConfigResponse']
+type SchemaNodeResponse = components['schemas']['NodeResponse']
 type SchemaConfigNodeClock = components['schemas']['ConfigNodeClock']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
@@ -1627,6 +1628,16 @@ export class ApiStore {
         controller.signal,
         AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/nodes/{nodeId}`: one node's current inventory and signals, read fresh rather than from the model. */
+  async getNode(nodeId: string): Promise<SchemaNodeResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeResponse>(`/nodes/${encodeURIComponent(nodeId)}`, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

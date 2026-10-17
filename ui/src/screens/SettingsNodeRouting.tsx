@@ -5,6 +5,7 @@ import {
   getAudioNode,
   getAudioNodeConfigRevisions,
   getAudioRoutingChoices,
+  getNode,
   getNodeClock,
   getNodeClockConfigRevisions,
   listConfigObjects,
@@ -15,6 +16,7 @@ import {
   type AudioRoutingChoicesResponse,
   type ConfigObjectSummary,
   type NodeClockConfigResponse,
+  type ObservationEntry,
 } from '../api'
 import { Button, ButtonRow, Choice, DeletePanel, Field, Input, RadioCardList, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, type Absence } from '../kit'
 import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
@@ -24,6 +26,7 @@ import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import {
+  advertisedNetworkInterfaces,
   advertisedRoutes,
   audioNodeVerdict,
   channelCountLabel,
@@ -31,6 +34,7 @@ import {
   defaultRoutingEntryMode,
   hasAudioCapability,
   nodeClockVerdict,
+  nodeRunsInstallerPTP,
   type NodeClockProvider,
   type RoutingEntryMode,
 } from './settingsModel'
@@ -61,10 +65,11 @@ const OUTPUT_LATENCY_METHOD_OPTIONS: readonly { value: OutputLatencyMethod; labe
 
 const DEFAULT_PROVIDER: NodeClockProvider = 'managed'
 const PROVIDER_OPTIONS: readonly { value: NodeClockProvider; label: string }[] = [
-  { value: 'managed', label: 'Managed' },
-  { value: 'external', label: 'External' },
-  { value: 'fpp', label: 'FPP' },
+  { value: 'external', label: "This node's PTP service" },
+  { value: 'managed', label: 'ShowMesh starts its own PTP' },
+  { value: 'fpp', label: 'Read from FPP' },
 ]
+const INSTALLER_PTP_REASON = 'This node already runs its own PTP service.'
 const DEFAULT_HOLDOVER_LIMIT_SECONDS = 60
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
@@ -116,12 +121,10 @@ function isRfc3339(s: string): boolean {
 
 const LTC_CHANNEL_CHOICES = 8
 
-// No channel inventory is advertised, so offer 1-8 minus program channels, keeping any stored value.
-function ltcChannelOptions(programChannels: number[], current: string): number[] {
+// Every channel 1..count, keeping a stored value beyond that range so it stays visible.
+function ltcChannelList(count: number, current: string): number[] {
   const options = new Set<number>()
-  for (let ch = 1; ch <= LTC_CHANNEL_CHOICES; ch++) {
-    if (!programChannels.includes(ch)) options.add(ch)
-  }
+  for (let ch = 1; ch <= count; ch++) options.add(ch)
   const stored = Number(current)
   if (current.trim() !== '' && Number.isInteger(stored) && stored >= 1) options.add(stored)
   return [...options].sort((a, b) => a - b)
@@ -741,7 +744,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted, onCreated }: { nodeId: s
             }}
           />
           {sinkBackend === 'pipewiresink' && (
-            <Field label="PipeWire target node">
+            <Field label="Audio interface">
               {(props) =>
                 pipewireOutputs.length > 0 ? (
                   <Select
@@ -805,58 +808,42 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted, onCreated }: { nodeId: s
         )}
         {ltcOn && (
           <div className="sm-grid sm-form-column sm-stack-4">
-            <div className="sm-field">
-              <span className="sm-field__label">Route</span>
-              <p className="sm-input sm-data sm-muted" title={programRoute}>
-                {programRoute === '' ? 'Set a program route first' : routeName(programRoute, routeShortName(node ?? undefined, programRoute))}
-              </p>
-            </div>
             {entryMode === 'choices' ? (
               chosenGroup === null ? (
                 <p className="sm-small sm-muted">Choose the program channels first. Timecode uses a channel they leave free.</p>
               ) : noLtcChannelReason !== null ? (
                 <p className="sm-small sm-muted">{noLtcChannelReason}</p>
               ) : (
-                <Field label="Channel">
-                  {(props) => (
-                    <Select
-                      {...props}
-                      value={chosenGroup.ltcChannels.includes(Number(ltcChannelText)) ? ltcChannelText : ''}
-                      onChange={(e) => {
-                        setLtcChannelText(e.target.value)
-                        setDirty(true)
-                      }}
-                    >
-                      {!chosenGroup.ltcChannels.includes(Number(ltcChannelText)) && <option value="">Select a channel</option>}
-                      {chosenGroup.ltcChannels.map((ch) => (
-                        <option key={ch} value={String(ch)}>
-                          {ch}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                </Field>
+                <RadioCardList
+                  label="Timecode channel"
+                  options={ltcChannelList(routeChoice?.channels ?? 0, '').map((ch) => ({
+                    value: String(ch),
+                    title: `Channel ${ch}`,
+                    desc: programChannels.includes(ch) ? 'Program audio uses this channel.' : chosenGroup.ltcChannels.includes(ch) ? undefined : 'Timecode cannot use this channel.',
+                    disabled: !chosenGroup.ltcChannels.includes(ch),
+                  }))}
+                  value={chosenGroup.ltcChannels.includes(Number(ltcChannelText)) ? ltcChannelText : ''}
+                  onChange={(v) => {
+                    setLtcChannelText(v)
+                    setDirty(true)
+                  }}
+                />
               )
             ) : (
-              <Field label="Channel">
-                {(props) => (
-                  <Select
-                    {...props}
-                    value={ltcChannelText}
-                    onChange={(e) => {
-                      setLtcChannelText(e.target.value)
-                      setDirty(true)
-                    }}
-                  >
-                    {ltcChannelText === '' && <option value="">Select a channel</option>}
-                    {ltcChannelOptions(programChannels, ltcChannelText).map((ch) => (
-                      <option key={ch} value={String(ch)}>
-                        {ch}
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
+              <RadioCardList
+                label="Timecode channel"
+                options={ltcChannelList(LTC_CHANNEL_CHOICES, ltcChannelText).map((ch) => ({
+                  value: String(ch),
+                  title: `Channel ${ch}`,
+                  desc: programChannels.includes(ch) ? 'Program audio uses this channel.' : undefined,
+                  disabled: programChannels.includes(ch),
+                }))}
+                value={ltcChannelText}
+                onChange={(v) => {
+                  setLtcChannelText(v)
+                  setDirty(true)
+                }}
+              />
             )}
           </div>
         )}
@@ -1022,6 +1009,10 @@ type NodeClockState =
   | { kind: 'failed'; reason: string }
 
 function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: ScopeGateResult }) {
+  const model = useModelContext()
+  const clockNode = model.nodes.find((n) => n.nodeId === nodeId) ?? null
+  const networkInterfaces = advertisedNetworkInterfaces(clockNode)
+  const installerPTP = nodeRunsInstallerPTP(clockNode)
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<NodeClockState>({ kind: 'loading' })
 
@@ -1092,6 +1083,34 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     }
   }, [nodeId, attempt])
 
+  // The node's report can arrive after the 404: an untouched new form follows it.
+  useEffect(() => {
+    if (state.kind === 'notfound' && !dirty && installerPTP) setProvider('external')
+  }, [state.kind, dirty, installerPTP])
+
+  // A saved "managed" stays selectable so it can be seen and changed.
+  const savedProvider = state.kind === 'loaded' ? state.response.payload.provider : null
+  const managedBlocked = installerPTP && savedProvider !== 'managed'
+  const providerOptions = PROVIDER_OPTIONS.map((o) => (o.value === 'managed' && managedBlocked ? { ...o, disabled: true, reason: INSTALLER_PTP_REASON } : o))
+  const [savedAt, setSavedAt] = useState<string | null>(null)
+
+  const phcDeviceFor = (name: string) => networkInterfaces?.find((n) => n.name === name)?.phcDevice
+
+  const chooseInterface = (name: string) => {
+    const previous = phcDeviceFor(interfaceName)
+    const next = phcDeviceFor(name)
+    setInterfaceName(name)
+    if (provider === 'external' && next !== undefined && (phcDevice.trim() === '' || phcDevice === previous)) setPhcDevice(next)
+    setDirty(true)
+  }
+
+  const chooseProvider = (v: NodeClockProvider) => {
+    setProvider(v)
+    const device = phcDeviceFor(interfaceName)
+    if (v === 'external' && device !== undefined && phcDevice.trim() === '') setPhcDevice(device)
+    setDirty(true)
+  }
+
   const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl, holdoverLimitSecondsText, priority1Text, phcDeviceText: phcDevice })
   const canSave = verdict.ok
 
@@ -1150,6 +1169,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         if (outcome.kind === 'created') {
           setState({ kind: 'loaded', response: outcome.response })
           loadFrom(outcome.response.payload)
+          setSavedAt(outcome.response.serverTime)
           setAttempt((n) => n + 1)
           return
         }
@@ -1177,6 +1197,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         if (outcome.kind === 'saved') {
           setState({ kind: 'loaded', response: outcome.response })
           setDirty(false)
+          setSavedAt(outcome.response.serverTime)
           setAttempt((n) => n + 1)
           return
         }
@@ -1208,27 +1229,38 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
   const fields = (
     <>
       <div className="sm-grid sm-form-column">
-        <Segmented
-          label="Provider"
-          value={provider}
-          options={PROVIDER_OPTIONS}
-          onChange={(v) => {
-            setProvider(v)
-            setDirty(true)
-          }}
-        />
-        <Field label="Interface">
-          {(props) => (
-            <Input
-              {...props}
-              value={interfaceName}
-              onChange={(e) => {
-                setInterfaceName(e.target.value)
-                setDirty(true)
-              }}
-            />
-          )}
-        </Field>
+        <Segmented label="Clock source" value={provider} options={providerOptions} onChange={chooseProvider} />
+        {managedBlocked && <p className="sm-small sm-muted">{INSTALLER_PTP_REASON}</p>}
+        {networkInterfaces !== null ? (
+          <Field label="Network interface">
+            {(props) => (
+              <Select {...props} value={interfaceName} onChange={(e) => chooseInterface(e.target.value)}>
+                {interfaceName === '' && <option value="">Choose a network interface</option>}
+                {interfaceName !== '' && !networkInterfaces.some((n) => n.name === interfaceName) && (
+                  <option value={interfaceName}>{interfaceName}, no longer reported by this node</option>
+                )}
+                {networkInterfaces.map((n) => (
+                  <option key={n.name} value={n.name}>
+                    {n.phcDevice !== undefined ? `${n.name}, PTP hardware clock` : n.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        ) : (
+          <Field label="Network interface" help="This node does not report its network interfaces yet. Type one, such as eno2.">
+            {(props) => (
+              <Input
+                {...props}
+                value={interfaceName}
+                onChange={(e) => {
+                  setInterfaceName(e.target.value)
+                  setDirty(true)
+                }}
+              />
+            )}
+          </Field>
+        )}
         <Field label="PTP domain number">
           {(props) => (
             <Input
@@ -1289,7 +1321,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         )}
         {provider === 'external' && (
           <>
-            <Field label="External UDS address · optional">
+            <Field label="PTP service socket · optional">
               {(props) => (
                 <Input
                   {...props}
@@ -1373,6 +1405,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
           />
         )}
         {saveError !== null && <RuledStrip absence="failed" label="Create failed" fact={saveError} />}
+        <NodeClockStatus nodeId={nodeId} savedAt={savedAt} />
       </Section>
     )
   }
@@ -1401,8 +1434,109 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <NodeClockStatus nodeId={nodeId} savedAt={savedAt} />
     </Section>
   )
+}
+
+const CLOCK_STATE_SIGNAL = 'node.clock.ptp.state'
+const CLOCK_REASON_SIGNAL = 'node.clock.ptp.reason'
+const CLOCK_STATUS_POLL_MS = 1000
+const CLOCK_STATUS_WAIT_MS = 10_000
+
+type ClockReading = { state: string; reason: string; collectedAt: string | null }
+
+function clockReading(signals: readonly ObservationEntry[]): ClockReading | null {
+  const stateObs = signals.find((o) => o.signal === CLOCK_STATE_SIGNAL)
+  if (stateObs === undefined || typeof stateObs.value !== 'string') return null
+  const reasonObs = signals.find((o) => o.signal === CLOCK_REASON_SIGNAL)
+  const reason = typeof reasonObs?.value === 'string' ? reasonObs.value : (stateObs.reason ?? '')
+  return { state: stateObs.value, reason, collectedAt: stateObs.collectedAt }
+}
+
+function postDates(reading: ClockReading, savedAt: string): boolean {
+  return reading.collectedAt !== null && Date.parse(reading.collectedAt) > Date.parse(savedAt)
+}
+
+type ClockStatusState =
+  | { kind: 'loading' }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'loaded'; reading: ClockReading | null; waiting: boolean; gaveUp: boolean }
+
+// The node's own answer, read fresh. After a save it polls until a reading post-dates the save, never trusting the save's 200.
+function NodeClockStatus({ nodeId, savedAt }: { nodeId: string; savedAt: string | null }) {
+  const [status, setStatus] = useState<ClockStatusState>({ kind: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = Date.now() + CLOCK_STATUS_WAIT_MS
+    const poll = () => {
+      getNode(nodeId)
+        .then((response) => {
+          if (cancelled) return
+          const reading = clockReading(response.node.clock)
+          const fresh = savedAt === null || (reading !== null && postDates(reading, savedAt))
+          if (fresh) {
+            setStatus({ kind: 'loaded', reading, waiting: false, gaveUp: false })
+            return
+          }
+          if (Date.now() >= deadline) {
+            setStatus({ kind: 'loaded', reading, waiting: false, gaveUp: true })
+            return
+          }
+          setStatus({ kind: 'loaded', reading, waiting: true, gaveUp: false })
+          timer = setTimeout(poll, CLOCK_STATUS_POLL_MS)
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setStatus({ kind: 'failed', reason: describeApiError(err) })
+        })
+    }
+    poll()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [nodeId, savedAt])
+
+  if (status.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact={`Asking ${nodeId} for its clock status.`} />
+  if (status.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={status.reason} />
+  if (status.waiting) return <RuledStrip absence="loading" label="Waiting" fact={`Waiting for ${nodeId} to answer the saved settings.`} />
+  if (status.gaveUp) {
+    return <RuledStrip absence="stale" label="No answer" fact={`${nodeId} has not reported its clock since this save. Check that the node is online.`} />
+  }
+  if (status.reading === null) return <RuledStrip absence="unobserved" label="Not reported" fact={`${nodeId} does not report its clock status.`} />
+  const { state, reason } = status.reading
+  if (state === 'failed') {
+    return (
+      <div className="sm-panel sm-stack-4">
+        <StatusPair tone="bad" label={`${nodeId} refused these clock settings`} />
+        {reason !== '' && <p className="sm-small">{reason}</p>}
+      </div>
+    )
+  }
+  const tone = state === 'locked' ? 'good' : state === 'holdover' || state === 'acquiring' ? 'warn' : 'unknown'
+  return (
+    <div className="sm-panel sm-stack-4">
+      <StatusPair tone={tone} label={`${nodeId} reports its clock ${clockStateWords(state)}`} />
+      {reason !== '' && <p className="sm-small sm-muted">{reason}</p>}
+    </div>
+  )
+}
+
+function clockStateWords(state: string): string {
+  switch (state) {
+    case 'locked':
+      return 'locked'
+    case 'acquiring':
+      return 'locking'
+    case 'holdover':
+      return 'holding over'
+    case 'unsynchronized':
+      return 'not synchronized'
+    default:
+      return state
+  }
 }
 
 // Why choices are or are not offered, and the saved placement's standing against them.

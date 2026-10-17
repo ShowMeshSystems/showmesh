@@ -129,7 +129,7 @@ export function ChoiceGroup({ label, help, error, options, value, onChange }: Ch
   )
 }
 
-export type RadioCardOption = { value: string; title: ReactNode; desc?: ReactNode }
+export type RadioCardOption = { value: string; title: ReactNode; desc?: ReactNode; /** Shown greyed and not selectable; say why in desc. */ disabled?: boolean }
 
 type RadioCardListProps = {
   /** Label the outcome of the choice, not the field. */
@@ -153,7 +153,7 @@ export function RadioCardList({ label, help, options, value, onChange, disabled 
         <div className="sm-choice-list">
           {options.map((option) => (
             <label key={option.value} className="sm-choice sm-choice--card">
-              <input type="radio" name={id} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+              <input type="radio" name={id} value={option.value} checked={value === option.value} disabled={option.disabled} onChange={() => onChange(option.value)} />
               <span className="sm-choice--card__body">
                 <span className="sm-choice--card__title">{option.title}</span>
                 {option.desc !== undefined && <span className="sm-choice--card__desc">{option.desc}</span>}

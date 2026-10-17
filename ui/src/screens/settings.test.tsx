@@ -41,6 +41,7 @@ const stubs = vi.hoisted(() => ({
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNodeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   deleteAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getNodeClockConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -89,6 +90,7 @@ vi.mock('../api', async () => {
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
     getAudioNodeConfigRevisions: (...args: never[]) => stubs.getAudioNodeConfigRevisions(...args),
     deleteAudioNode: (...args: never[]) => stubs.deleteAudioNode(...args),
+    getNode: (...args: never[]) => stubs.getNode(...args),
     getNodeClock: (...args: never[]) => stubs.getNodeClock(...args),
     putNodeClock: (...args: never[]) => stubs.putNodeClock(...args),
     getNodeClockConfigRevisions: (...args: never[]) => stubs.getNodeClockConfigRevisions(...args),
@@ -1330,13 +1332,13 @@ describe('Settings › Node routing', () => {
     fireEvent.change(channelsInput, { target: { value: '1, 2' } })
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
 
-    // LTC route is read-only, mirroring program route (audionode.go
-    // refuses them differing). No independent input exists to mistype,
-    // so a mismatch cannot be produced from this UI.
+    // LTC follows the program route (audionode.go refuses them differing),
+    // so the LTC section shows no route of its own to mistype.
+    expect(screen.getAllByLabelText('Route')).toHaveLength(1)
     const routeText = screen.getByLabelText('Route') as HTMLInputElement
     fireEvent.change(routeText, { target: { value: 'hw:CARD=PCH,DEV=0' } })
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
-    expect(screen.getByText('hw:CARD=PCH,DEV=0', { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByText('hw:CARD=PCH,DEV=0', { selector: 'p' })).not.toBeInTheDocument()
 
     expect(screen.getByLabelText('Program channels')).not.toBeDisabled()
   })
@@ -1357,9 +1359,12 @@ describe('Settings › Node routing', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
-    const channel = screen.getByRole('combobox', { name: 'Channel' })
-    expect(Array.from((channel as HTMLSelectElement).options).map((o) => o.value)).toEqual(['3', '4', '5', '6', '7', '8'])
-    fireEvent.change(channel, { target: { value: '3' } })
+    const ltcGroup = screen.getByRole('group', { name: 'Timecode channel' })
+    const radios = within(ltcGroup).getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.map((r) => r.value)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'])
+    expect(radios.filter((r) => r.disabled).map((r) => r.value)).toEqual(['1', '2'])
+    expect(within(ltcGroup).getAllByText('Program audio uses this channel.')).toHaveLength(2)
+    fireEvent.click(within(ltcGroup).getByRole('radio', { name: /Channel 3/ }))
     const save = screen.getByRole('button', { name: 'Save routing' })
     expect(save).not.toBeDisabled()
     fireEvent.click(save)
@@ -1439,9 +1444,9 @@ describe('Settings › Node routing', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'PipeWire', pressed: true })).toBeInTheDocument())
-    expect(screen.getByLabelText('PipeWire target node')).toHaveValue('alsa_output.usb-Focusrite')
+    expect(screen.getByLabelText('Audio interface')).toHaveValue('alsa_output.usb-Focusrite')
 
-    fireEvent.change(screen.getByLabelText('PipeWire target node'), { target: { value: 'alsa_output.usb-Scarlett' } })
+    fireEvent.change(screen.getByLabelText('Audio interface'), { target: { value: 'alsa_output.usb-Scarlett' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
@@ -1828,17 +1833,19 @@ describe('Settings › Node routing › choices from the node', () => {
     const first = await screen.findByRole('radio', { name: /Channels 1 and 2/ })
     expect(first).toBeChecked()
     expect(screen.queryByRole('textbox', { name: 'Program channels' })).not.toBeInTheDocument()
-    const ltc = screen.getByRole('combobox', { name: 'Channel' }) as HTMLSelectElement
-    expect(Array.from(ltc.options).map((o) => o.value)).toEqual(['3', '4'])
+    const ltcRadios = () => within(screen.getByRole('group', { name: 'Timecode channel' })).getAllByRole('radio') as HTMLInputElement[]
+    expect(ltcRadios().map((r) => r.value)).toEqual(['1', '2', '3', '4'])
+    expect(ltcRadios().filter((r) => r.disabled).map((r) => r.value)).toEqual(['1', '2'])
+    expect(ltcRadios().find((r) => r.checked)?.value).toBe('3')
 
     fireEvent.click(screen.getByRole('radio', { name: /Channels 3 and 4/ }))
-    const ltcAfter = screen.getByRole('combobox', { name: 'Channel' }) as HTMLSelectElement
-    expect(Array.from(ltcAfter.options).map((o) => o.value)).toEqual(['', '1', '2'])
+    expect(ltcRadios().filter((r) => r.disabled).map((r) => r.value)).toEqual(['3', '4'])
+    expect(ltcRadios().some((r) => r.checked)).toBe(false)
     const save = screen.getByRole('button', { name: 'Save routing' })
     expect(save).toBeDisabled()
     expect(save).toHaveAttribute('title', 'Choose a timecode channel from the ones offered.')
 
-    fireEvent.change(ltcAfter, { target: { value: '1' } })
+    fireEvent.click(ltcRadios()[0]!)
     expect(save).not.toBeDisabled()
     fireEvent.click(save)
     await waitFor(() => expect(sent).not.toBeNull())
@@ -1931,7 +1938,7 @@ describe('Settings › Node routing › choices from the node', () => {
     }
     renderAt('/settings/node-routing', { nodes: [] })
 
-    const target = (await screen.findByRole('combobox', { name: 'PipeWire target node' })) as HTMLSelectElement
+    const target = (await screen.findByRole('combobox', { name: 'Audio interface' })) as HTMLSelectElement
     expect(target.value).toBe(OLD)
     expect(Array.from(target.options).map((o) => o.textContent)).toEqual(["PipeWire's default output", `${OLD}, no longer reported by this node`, 'M4'])
 
@@ -2085,7 +2092,7 @@ describe('Settings › Node routing › choices from the node', () => {
     renderAt('/settings/node-routing', { nodes: [] })
 
     fireEvent.click(await screen.findByRole('radio', { name: /Channels 3 and 4/ }))
-    fireEvent.change(screen.getByRole('combobox', { name: 'Channel' }), { target: { value: '2' } })
+    fireEvent.click(within(screen.getByRole('group', { name: 'Timecode channel' })).getByRole('radio', { name: /^Channel 2/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
     expect(await screen.findByText(/Channel 5 does not exist/)).toBeInTheDocument()
 
@@ -2190,7 +2197,7 @@ describe('Settings › Node routing › PTP clock', () => {
     expect(screen.getByLabelText('Priority1 · optional')).toHaveValue('128')
     expect(screen.getByLabelText('Hardware timestamping')).toBeChecked()
     expect(screen.queryByLabelText('FPP base URL')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('External UDS address · optional')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('PTP service socket · optional')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
   })
 
@@ -2206,10 +2213,10 @@ describe('Settings › Node routing › PTP clock', () => {
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Read from FPP' }))
     expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'External' }))
+    fireEvent.click(screen.getByRole('button', { name: "This node's PTP service" }))
     expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument()
   })
 
@@ -2223,7 +2230,7 @@ describe('Settings › Node routing › PTP clock', () => {
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Read from FPP' }))
     expect(screen.queryByLabelText('Priority1 · optional')).not.toBeInTheDocument()
     expect(screen.getByLabelText('FPP base URL')).toBeInTheDocument()
   })
@@ -2256,7 +2263,7 @@ describe('Settings › Node routing › PTP clock', () => {
     const select = await screen.findByLabelText('Existing node')
     fireEvent.change(select, { target: { value: 'ptp-node-01' } })
 
-    await waitFor(() => expect(screen.getByLabelText('Interface')).toHaveValue('eth7'))
+    await waitFor(() => expect(screen.getByLabelText('Network interface')).toHaveValue('eth7'))
   })
 
   it('shows a create flow when no node.clock object exists, then saves the full payload', async () => {
@@ -2273,7 +2280,7 @@ describe('Settings › Node routing › PTP clock', () => {
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
 
@@ -2295,12 +2302,12 @@ describe('Settings › Node routing › PTP clock', () => {
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: 'eth1' } })
     fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
 
     expect(await screen.findByText('Already exists')).toBeInTheDocument()
-    expect(screen.getByLabelText('Interface')).toHaveValue('eth1')
+    expect(screen.getByLabelText('Network interface')).toHaveValue('eth1')
   })
 
   it('sends the full replacement payload on save', async () => {
@@ -2317,8 +2324,8 @@ describe('Settings › Node routing › PTP clock', () => {
     await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
+    await waitFor(() => expect(screen.getByLabelText('PTP service socket · optional')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: 'eth2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
@@ -2341,7 +2348,7 @@ describe('Settings › Node routing › PTP clock', () => {
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toHaveValue('/dev/ptp0'))
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: 'eth2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
@@ -2398,11 +2405,11 @@ describe('Settings › Node routing › PTP clock', () => {
     await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByLabelText('Interface')).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: '/dev/ptp0' } })
+    await waitFor(() => expect(screen.getByLabelText('Network interface')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: '/dev/ptp0' } })
 
     expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
-    expect(screen.getByText('Interface takes an interface name such as eno2, not a device path.')).toBeInTheDocument()
+    expect(screen.getByText('Network interface takes a name such as eno2, not a device path.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save clock config' })).toBeDisabled()
   })
 
@@ -2421,8 +2428,8 @@ describe('Settings › Node routing › PTP clock', () => {
     await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Managed' }))
+    await waitFor(() => expect(screen.getByLabelText('PTP service socket · optional')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'ShowMesh starts its own PTP' }))
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
 
@@ -2475,7 +2482,7 @@ describe('Settings › Node routing › PTP clock', () => {
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth5' } })
+    fireEvent.change(screen.getByLabelText('Network interface'), { target: { value: 'eth5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
 
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
@@ -2845,5 +2852,163 @@ describe('RevisionHistory, shared across editors', () => {
     const save = await screen.findByRole('button', { name: /Save routing/ })
     await waitFor(() => expect(within(save.parentElement as HTMLElement).getByText(/Active version/)).toBeInTheDocument())
     expect(screen.queryByRole('heading', { level: 2, name: 'History' })).not.toBeInTheDocument()
+  })
+})
+
+
+describe('Settings › Node routing › PTP clock network interfaces and node answer', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  const PTP_NODE = 'audio-node-01'
+
+  function ptpNode(attributes: Record<string, unknown> | null, clock: unknown[] = []) {
+    return makeNode(PTP_NODE, {
+      capabilities: attributes === null ? [] : [{ id: 'clock.ptp', version: 1, attributes } as never],
+      clock: clock as never,
+    })
+  }
+
+  function clockObs(signal: string, value: string, collectedAt: string) {
+    return {
+      resource: { kind: 'node', id: PTP_NODE }, signal, value, unit: null, state: 'current', reason: null,
+      observedAt: collectedAt, collectedAt, source: 'node-clock', quality: 'direct', validForSeconds: 45,
+    }
+  }
+
+  function clockConfig(payload: Record<string, unknown>, serverTime = '2026-10-17T06:00:00Z') {
+    return {
+      serverTime, kind: 'node.clock', id: PTP_NODE, revision: 1, payload,
+      updatedAt: serverTime, createdByPrincipalId: 'p1', createdByPrincipalName: 'admin', source: 'api',
+    }
+  }
+
+  function setUp(nodeClock: () => Promise<unknown>) {
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', objects: [] })
+        : Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'audio.node', objects: [] })
+    stubs.getNodeClock = nodeClock
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', revisions: [] })
+    stubs.getNode = () => Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', node: ptpNode(null) })
+  }
+
+  async function openClock(nodes: ReturnType<typeof makeNode>[]) {
+    renderAt('/settings/node-routing', { nodes })
+    await screen.findByRole('option', { name: PTP_NODE })
+    fireEvent.change(screen.getByLabelText('Set up a node'), { target: { value: PTP_NODE } })
+  }
+
+  const NICS = { interfaces: [{ name: 'eno1' }, { name: 'eno2', phcDevice: '/dev/ptp0' }], externalProvider: true }
+
+  it('offers the network interfaces the node reports, marks the one with a PTP hardware clock, and keeps an unreported saved one', async () => {
+    setUp(() => Promise.resolve(clockConfig({ provider: 'external', interface: 'alsa_output.usb-MOTU_M4', domain: 1 })))
+    const node = ptpNode(NICS)
+    stubs.getNode = () => Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', node })
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', objects: [{ id: PTP_NODE, label: 'external', show: '', currentRevision: 1, updatedAt: '2026-10-17T06:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'audio.node', objects: [] })
+    renderAt('/settings/node-routing', { nodes: [node] })
+    fireEvent.change(await screen.findByLabelText('Existing node'), { target: { value: PTP_NODE } })
+
+    const select = (await screen.findByRole('combobox', { name: 'Network interface' })) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => o.text)).toEqual([
+      'alsa_output.usb-MOTU_M4, no longer reported by this node',
+      'eno1',
+      'eno2, PTP hardware clock',
+    ])
+  })
+
+  it('falls back to a typed network interface with a hint when the node does not report its interfaces', async () => {
+    setUp(() => notConfigured('none yet'))
+    await openClock([ptpNode(null)])
+    const input = await screen.findByRole('textbox', { name: 'Network interface' })
+    expect(input).toBeInTheDocument()
+    expect(screen.getByText('This node does not report its network interfaces yet. Type one, such as eno2.')).toBeInTheDocument()
+  })
+
+  it("defaults a new node running its own PTP service to that service, blocks ShowMesh's own PTP with the reason, and fills the PHC device from the chosen interface", async () => {
+    setUp(() => notConfigured('none yet'))
+    let sent: Record<string, unknown> | null = null
+    stubs.putNodeClock = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(clockConfig(payload, '2026-10-17T06:05:00Z'))
+    }
+    await openClock([ptpNode(NICS)])
+
+    await waitFor(() => expect(screen.getByRole('button', { name: "This node's PTP service" })).toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.getByRole('button', { name: 'ShowMesh starts its own PTP' })).toBeDisabled()
+    expect(screen.getByText('This node already runs its own PTP service.')).toBeInTheDocument()
+    expect(screen.queryByText('Managed')).not.toBeInTheDocument()
+    expect(screen.queryByText('External')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Network interface' }), { target: { value: 'eno2' } })
+    expect(screen.getByLabelText('PHC device · optional')).toHaveValue('/dev/ptp0')
+    fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ provider: 'external', interface: 'eno2', domain: 1, phcDevice: '/dev/ptp0' })
+  })
+
+  it("keeps a saved ShowMesh-started PTP selectable so it can be seen and changed", async () => {
+    setUp(() => Promise.resolve(clockConfig({ provider: 'managed', interface: 'eno2', domain: 1 })))
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', objects: [{ id: PTP_NODE, label: 'managed', show: '', currentRevision: 1, updatedAt: '2026-10-17T06:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'audio.node', objects: [] })
+    renderAt('/settings/node-routing', { nodes: [ptpNode(NICS)] })
+    fireEvent.change(await screen.findByLabelText('Existing node'), { target: { value: PTP_NODE } })
+    const managed = await screen.findByRole('button', { name: 'ShowMesh starts its own PTP' })
+    expect(managed).toHaveAttribute('aria-pressed', 'true')
+    expect(managed).not.toBeDisabled()
+  })
+
+  it("shows the node's refusal verbatim, and after a save waits for a reading newer than the save", async () => {
+    setUp(() => Promise.resolve(clockConfig({ provider: 'managed', interface: 'eno2', domain: 1 })))
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', objects: [{ id: PTP_NODE, label: 'managed', show: '', currentRevision: 1, updatedAt: '2026-10-17T06:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'audio.node', objects: [] })
+    const refusal = "This node already runs its own PTP service, so ShowMesh cannot start another. Choose This node's PTP service."
+    const reads: string[] = []
+    let phase: 'before' | 'old' | 'new' = 'before'
+    stubs.getNode = () => {
+      reads.push(phase)
+      const at = phase === 'new' ? '2026-10-17T06:05:02Z' : '2026-10-17T05:59:00Z'
+      const reading: [string, string] = phase === 'new' ? ['locked', ''] : ['failed', refusal]
+      return Promise.resolve({ serverTime: at, node: ptpNode(NICS, [clockObs('node.clock.ptp.state', reading[0], at), clockObs('node.clock.ptp.reason', reading[1], at)]) })
+    }
+    stubs.putNodeClock = (_id: string, payload: Record<string, unknown>) => Promise.resolve(clockConfig(payload, '2026-10-17T06:05:00Z'))
+    renderAt('/settings/node-routing', { nodes: [ptpNode(NICS)] })
+    fireEvent.change(await screen.findByLabelText('Existing node'), { target: { value: PTP_NODE } })
+
+    expect(await screen.findByText(`${PTP_NODE} refused these clock settings`)).toBeInTheDocument()
+    expect(screen.getByText(refusal)).toBeInTheDocument()
+
+    phase = 'old'
+    fireEvent.click(screen.getByRole('button', { name: "This node's PTP service" }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+    expect(await screen.findByText(`Waiting for ${PTP_NODE} to answer the saved settings.`)).toBeInTheDocument()
+    phase = 'new'
+    expect(await screen.findByText(`${PTP_NODE} reports its clock locked`, {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(reads.filter((r) => r === 'old').length).toBeGreaterThan(0)
+  })
+
+  it('shows a coordinator refusal of the save inline', async () => {
+    setUp(() => Promise.resolve(clockConfig({ provider: 'external', interface: 'eno2', domain: 1 })))
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'node.clock', objects: [{ id: PTP_NODE, label: 'external', show: '', currentRevision: 1, updatedAt: '2026-10-17T06:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-10-17T06:00:00Z', kind: 'audio.node', objects: [] })
+    stubs.putNodeClock = () => Promise.reject(new ApiError('eno9 is not a network interface on this node. Pick one from the list.', 422, 'https://showmesh.dev/problems/unprocessable'))
+    renderAt('/settings/node-routing', { nodes: [ptpNode({ interfaces: [{ name: 'eno2', phcDevice: '/dev/ptp0' }, { name: 'eno9' }] })] })
+    fireEvent.change(await screen.findByLabelText('Existing node'), { target: { value: PTP_NODE } })
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Network interface' }), { target: { value: 'eno9' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+    expect(await screen.findByText('eno9 is not a network interface on this node. Pick one from the list.')).toBeInTheDocument()
   })
 })

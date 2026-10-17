@@ -264,6 +264,7 @@ export type AudioAlignmentRunResponse = components['schemas']['AudioAlignmentRun
 // (ADR-015). A full-replacement config kind, like ConfigAudioNode above.
 export type ConfigNodeClock = components['schemas']['ConfigNodeClock']
 export type NodeClockConfigResponse = components['schemas']['NodeClockConfigResponse']
+export type NodeResponse = components['schemas']['NodeResponse']
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above
