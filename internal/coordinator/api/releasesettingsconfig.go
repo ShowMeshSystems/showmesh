@@ -246,7 +246,6 @@ func releaseSettingsMigrationDeferredProblem() v1.Problem {
 	return v1.Problem{
 		Type: ProblemTypeConflict, Status: http.StatusConflict,
 		Title: "The release check cannot be changed yet",
-		Detail: "The coordinator's data volume cannot be written, so nothing was saved. Fix the volume and " +
-			"restart; keep the SHOWMESH_RELEASE_CHECK variables until then.",
+		Detail: "Nothing was saved because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then.",
 	}
 }

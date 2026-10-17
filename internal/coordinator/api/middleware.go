@@ -61,7 +61,7 @@ func withVersionNegotiation(logger *slog.Logger, clock func() time.Time) func(ht
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if v := r.Header.Get(apiVersionHeaderName); v != "" && v != servedAPIVersion {
 				writeProblem(w, logger, clock(), unsupportedAPIVersionProblem(
-					"this coordinator serves API version 1; the "+apiVersionHeaderName+" request header must be absent or \"1\""))
+					"This coordinator serves API version 1 only. Remove the "+apiVersionHeaderName+" header or set it to 1."))
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -271,7 +271,7 @@ func (m *methodNotAllowedInterceptor) WriteHeader(status int) {
 	m.ResponseWriter.Header().Del("X-Content-Type-Options")
 	m.rewriting = true
 	writeProblem(m.ResponseWriter, m.logger, m.clock(), methodNotAllowedProblem(
-		"this route does not support this request's method; it supports: "+allow))
+		"This address does not accept that method. It accepts "+allow+"."))
 }
 
 // Write discards net/http.Error's own "Method Not Allowed\n" body once

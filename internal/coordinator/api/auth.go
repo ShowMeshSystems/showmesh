@@ -350,7 +350,7 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 					limiter.recordFailure(source)
 				}
 				writeProblem(w, logger, now, credentialInURLProblem(
-					"a credential must never be presented as a query parameter; use Authorization: Bearer or the session cookie"))
+					"A credential cannot go in the address. Send it in a header or sign in with a session."))
 				return
 			}
 
@@ -431,7 +431,7 @@ func (h *handlers) readGuardAll(scopes []identity.Scope, next http.HandlerFunc) 
 		ac := authFromContext(r.Context())
 		if !ac.ok {
 			writeProblem(w, h.logger, now, unauthorizedProblem(
-				"this coordinator has closed the read API; a valid credential is required"))
+				"Reading is closed to anonymous users. Sign in to continue."))
 			return
 		}
 		for _, s := range scopes {
@@ -455,7 +455,7 @@ func (h *handlers) requireScope(scope identity.Scope, next http.HandlerFunc) htt
 		now := h.now()
 		ac := authFromContext(r.Context())
 		if !ac.ok {
-			writeProblem(w, h.logger, now, unauthorizedProblem("this endpoint requires authentication"))
+			writeProblem(w, h.logger, now, unauthorizedProblem("Sign in to continue."))
 			return
 		}
 		if !ac.result.Principal.Role.Has(scope) {
@@ -501,7 +501,7 @@ func (h *handlers) readAnyGuard(scopes []identity.Scope, next http.HandlerFunc) 
 		now := h.now()
 		ac := authFromContext(r.Context())
 		if !ac.ok {
-			writeProblem(w, h.logger, now, unauthorizedProblem("this endpoint requires authentication"))
+			writeProblem(w, h.logger, now, unauthorizedProblem("Sign in to continue."))
 			return
 		}
 		for _, s := range scopes {
@@ -553,7 +553,7 @@ func (h *handlers) writeGuard(scope *identity.Scope, next http.HandlerFunc) http
 		now := h.now()
 		ac := authFromContext(r.Context())
 		if !ac.ok {
-			writeProblem(w, h.logger, now, unauthorizedProblem("this endpoint requires authentication"))
+			writeProblem(w, h.logger, now, unauthorizedProblem("Sign in to continue."))
 			return
 		}
 		if scope != nil && !ac.result.Principal.Role.Has(*scope) {

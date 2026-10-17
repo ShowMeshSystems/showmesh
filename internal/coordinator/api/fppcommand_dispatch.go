@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -554,7 +553,7 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		}
 	}
 	if target == nil {
-		p := resourceNotFoundProblem("no FPP instance with id " + strconv.Quote(in.InstanceID) + " is configured")
+		p := resourceNotFoundProblem("FPP " + in.InstanceID + " is not set up. Add it in Settings first.")
 		return FPPCommandOutcome{}, &p, nil
 	}
 

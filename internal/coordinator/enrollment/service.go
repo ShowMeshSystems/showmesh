@@ -206,7 +206,7 @@ func (s *Service) Mint(ctx context.Context, actor identity.Authenticated, client
 		return Minted{}, err
 	}
 	if isEnrolled && !reenroll {
-		return Minted{}, opErr(ErrAlreadyEnrolled, "Node %q is already enrolled. Mint a re-enrollment code to replace its credentials.", nodeID)
+		return Minted{}, opErr(ErrAlreadyEnrolled, "Node %s is already enrolled. Make a re-enrollment code to replace its login.", nodeID)
 	}
 
 	value, err := GenerateCode()

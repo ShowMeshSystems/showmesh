@@ -381,13 +381,13 @@ func (h *handlers) ensureFPPPluginPrincipal(ctx context.Context, instanceID stri
 		switch {
 		case p.Disabled:
 			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
-				fmt.Sprintf("the account this plugin signs in as, %q, is switched off. Turn it back on, or delete it and pair again.", name))), nil
+				fmt.Sprintf("The plugin's account %s is switched off. Turn it back on, or delete it and pair again.", name))), nil
 		case p.Role != identity.RoleScheduler:
 			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
-				fmt.Sprintf("the account this plugin signs in as, %q, has the %q role instead of scheduler. Set it back to scheduler, or delete it and pair again.", name, p.Role))), nil
+				fmt.Sprintf("The plugin's account %s has the %s role, not scheduler. Set the role back to scheduler, or delete the account and pair again.", name, p.Role))), nil
 		case p.Kind != identity.KindMachine:
 			return identity.Principal{}, problemPtr(fppPairingPrincipalUnusableProblem(
-				fmt.Sprintf("the account this plugin signs in as, %q, is a person's account, not a machine's. Rename or delete it and pair again.", name))), nil
+				fmt.Sprintf("The plugin's account %s belongs to a person, not a machine. Rename or delete it and pair again.", name))), nil
 		}
 		return p, nil, nil
 	}
@@ -470,7 +470,7 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 	if !h.fppPairingClaims.allow(loginSource(r), now) {
 		w.Header().Set("Retry-After", "60")
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
-			"this plugin has asked to finish pairing too many times in the last minute. Wait a minute and let it try again."))
+			"This plugin tried to finish pairing too many times. Wait a minute and let it try again."))
 		return
 	}
 

@@ -114,7 +114,7 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	deviceLabel := strings.TrimSpace(req.DeviceLabel)
 	if name == "" || req.Password == "" {
-		writeProblem(w, h.logger, now, invalidParameterProblem("name and password are both required and must be non-empty"))
+		writeProblem(w, h.logger, now, invalidParameterProblem("Enter a name and a password."))
 		return
 	}
 
@@ -142,7 +142,7 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))
 		// ADR-024 decision 8's login concurrency bound.
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
-			"too many concurrent login attempts; try again shortly"))
+			"Too many people are signing in at once. Try again in a moment."))
 		return
 	}
 	defer h.loginLimiter.release()
@@ -152,12 +152,12 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, identity.ErrInvalidCredential):
 		h.loginLimiter.recordFailure(source)
 		h.auditAuthFailure(r, now, name, "invalid credentials")
-		writeProblem(w, h.logger, now, unauthorizedProblem("invalid name or password"))
+		writeProblem(w, h.logger, now, unauthorizedProblem("The name or password is wrong. Try again."))
 		return
 	case errors.Is(err, identity.ErrDisabled):
 		h.loginLimiter.recordFailure(source)
 		h.auditAuthFailure(r, now, name, "principal disabled")
-		writeProblem(w, h.logger, now, unauthorizedProblem("this account has been disabled by an administrator"))
+		writeProblem(w, h.logger, now, unauthorizedProblem("This account is turned off. Ask an administrator to turn it on."))
 		return
 	case err != nil:
 		h.writeInternalError(w, now, "authenticate password", err)
@@ -225,7 +225,7 @@ func (h *handlers) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if targetID == "" {
 		if ac.result.Form != identity.FormSession {
 			writeProblem(w, h.logger, now, invalidParameterProblem(
-				"this request authenticated with a bearer token, which has no session to revoke; pass {\"sessionId\":...} to revoke a specific session instead"))
+				"This request used a token, so it has no session to end. Name the session to end."))
 			return
 		}
 		targetID = ac.result.CredentialID

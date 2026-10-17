@@ -318,7 +318,7 @@ func forbiddenProblem(scope identity.Scope) v1.Problem {
 		Type:   ProblemTypeForbidden,
 		Title:  "Forbidden",
 		Status: http.StatusForbidden,
-		Detail: "this principal does not hold the required scope: " + string(scope),
+		Detail: "Your account is not allowed to do this. Ask an administrator to add the " + string(scope) + " permission.",
 	}
 }
 
@@ -454,7 +454,7 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear SHOWMESH_FPP_ENDPOINTS.",
+		Detail: "Nothing was saved because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then.",
 	}
 }
 
@@ -646,7 +646,7 @@ func alignmentRunAlreadyActiveProblem(activeRunID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Audio alignment run already active",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf("This node already has an alignment run (%q). Stop it before starting another.", activeRunID),
+		Detail: "This node already has an alignment run. Stop it before starting another.",
 	}
 }
 

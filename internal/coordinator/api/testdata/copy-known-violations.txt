@@ -151,19 +151,10 @@ hex	problem conflict in handlePostRemoveNodeAsset
 length	problem conflict in handlePostRemoveNodeAsset
 quoted-name	problem conflict in handlePostRemoveNodeAsset
 joined	problem conflict in handlePutAssetsSettingsConfig
-joined	problem conflict in handlePutFPPEndpointsConfig
 joined	problem conflict in handlePutFPPMQTTConfig
-joined	problem conflict in handlePutReleaseSettingsConfig
 joined	problem conflict in handlePutResolumeInstancesConfig
 quoted-name	problem conflict in handlePutShowPlaylist
-hex	problem conflict in handleStartAlignmentRun
-quoted-name	problem conflict in handleStartAlignmentRun
-capital	problem conflict in handleStartFPPPairing
-quoted-name	problem conflict in handleStartFPPPairing
 quoted-name	problem conflict in writeEnrollmentError
-capital	problem credential-in-url in withIdentity
-full-stop	problem credential-in-url in withIdentity
-joined	problem credential-in-url in withIdentity
 length	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
 quoted-name	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
 capital	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
@@ -175,22 +166,7 @@ full-stop	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
 joined	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
 vocabulary	problem emergency-stop-hard-stop-not-armed in handleEmergencyStopFire
 full-stop	problem enrollment-code-gone in writeEnrollmentError
-capital	problem forbidden in readAnyGuard
-full-stop	problem forbidden in readAnyGuard
-vocabulary	problem forbidden in readAnyGuard
-capital	problem forbidden in readGuardAll
-full-stop	problem forbidden in readGuardAll
-vocabulary	problem forbidden in readGuardAll
-capital	problem forbidden in requireScope
-full-stop	problem forbidden in requireScope
-vocabulary	problem forbidden in requireScope
-capital	problem forbidden in writeGuard
-full-stop	problem forbidden in writeGuard
 vocabulary	problem forbidden in writeGuard
-capital	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-full-stop	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-joined	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
-quoted-name	problem fpp-brightness-ceiling-write-failed in handleFPPBrightnessCeiling
 full-stop	problem fpp-brightness-excluded-ranges-write-failed in handleFPPBrightnessExcludedRanges
 full-stop	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
 go-error	problem fpp-definition-republish-failed in handleFPPDefinitionRepublish
@@ -202,15 +178,8 @@ quoted-name	problem fpp-start-playlist-busy in handleFPPCommand
 kind-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
 length	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
 quoted-name	problem fpp-start-playlist-evidence-not-current in handleFPPCommand
-capital	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-full-stop	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-joined	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
-quoted-name	problem fpp-transition-gain-write-failed in handleFPPTransitionGain
 capital	problem interlock-shutdown-phase-requires-override in handlePutNightSession
 quoted-name	problem interlock-shutdown-phase-requires-override in handlePutNightSession
-capital	problem internal-error in writeInternalError
-full-stop	problem internal-error in writeInternalError
-joined	problem internal-error in writeInternalError
 capital	problem invalid-parameter in dispatchAudioSessionCommand
 full-stop	problem invalid-parameter in dispatchAudioSessionCommand
 joined	problem invalid-parameter in dispatchAudioSessionCommand
@@ -228,8 +197,6 @@ full-stop	problem invalid-parameter in handleAudit
 joined	problem invalid-parameter in handleAudit
 capital	problem invalid-parameter in handleClaimBootstrap
 full-stop	problem invalid-parameter in handleClaimBootstrap
-capital	problem invalid-parameter in handleCreateSession
-full-stop	problem invalid-parameter in handleCreateSession
 capital	problem invalid-parameter in handleDeleteAsset
 full-stop	problem invalid-parameter in handleDeleteAsset
 quoted-name	problem invalid-parameter in handleDeleteAsset
@@ -239,10 +206,6 @@ quoted-name	problem invalid-parameter in handleDeleteAudioNode
 capital	problem invalid-parameter in handleDeleteNodeDeclaration
 full-stop	problem invalid-parameter in handleDeleteNodeDeclaration
 quoted-name	problem invalid-parameter in handleDeleteNodeDeclaration
-capital	problem invalid-parameter in handleDeleteSession
-full-stop	problem invalid-parameter in handleDeleteSession
-joined	problem invalid-parameter in handleDeleteSession
-quoted-name	problem invalid-parameter in handleDeleteSession
 capital	problem invalid-parameter in handleDispatchResolumeAction
 full-stop	problem invalid-parameter in handleDispatchResolumeAction
 joined	problem invalid-parameter in handleDispatchResolumeAction
@@ -254,9 +217,6 @@ capital	problem invalid-parameter in handleEmergencyStop
 full-stop	problem invalid-parameter in handleEmergencyStop
 capital	problem invalid-parameter in handleEmergencyStopFire
 full-stop	problem invalid-parameter in handleEmergencyStopFire
-capital	problem invalid-parameter in handleFPPBrightnessCeiling
-full-stop	problem invalid-parameter in handleFPPBrightnessCeiling
-joined	problem invalid-parameter in handleFPPBrightnessCeiling
 quoted-name	problem invalid-parameter in handleFPPBrightnessExcludedRanges
 sentences	problem invalid-parameter in handleFPPBrightnessExcludedRanges
 capital	problem invalid-parameter in handleFPPCommand
@@ -270,7 +230,6 @@ full-stop	problem invalid-parameter in handleFPPDefinitionRepublish
 quoted-name	problem invalid-parameter in handleFPPDefinitionRepublish
 capital	problem invalid-parameter in handleFPPTransitionGain
 full-stop	problem invalid-parameter in handleFPPTransitionGain
-joined	problem invalid-parameter in handleFPPTransitionGain
 capital	problem invalid-parameter in handleGetFPPPlaylistReadiness
 full-stop	problem invalid-parameter in handleGetFPPPlaylistReadiness
 joined	problem invalid-parameter in handleGetFPPPlaylistReadiness
@@ -360,7 +319,6 @@ capital	problem invalid-parameter in handlePutFPPEndpointsConfig
 full-stop	problem invalid-parameter in handlePutFPPEndpointsConfig
 joined	problem invalid-parameter in handlePutFPPEndpointsConfig
 kind-name	problem invalid-parameter in handlePutFPPEndpointsConfig
-length	problem invalid-parameter in handlePutFPPEndpointsConfig
 quoted-name	problem invalid-parameter in handlePutFPPEndpointsConfig
 capital	problem invalid-parameter in handlePutFPPMQTTConfig
 full-stop	problem invalid-parameter in handlePutFPPMQTTConfig
@@ -422,9 +380,6 @@ quoted-name	problem invalid-parameter in weatherDelayStartOrChange
 vocabulary	problem invalid-parameter in weatherDelayStartOrChange
 capital	problem invalid-parameter in writeEnrollmentError
 quoted-name	problem invalid-parameter in writeEnrollmentError
-capital	problem method-not-allowed in WriteHeader
-full-stop	problem method-not-allowed in WriteHeader
-joined	problem method-not-allowed in WriteHeader
 joined	problem node-enrollment-unavailable in writeEnrollmentError
 capital	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
 full-stop	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
@@ -434,9 +389,6 @@ capital	problem payload-too-large in handlePostFPPPlaylistDefinition
 full-stop	problem payload-too-large in handlePostFPPPlaylistDefinition
 length	problem payload-too-large in handlePostResolumeCompositionUpload
 sentences	problem payload-too-large in handlePostResolumeCompositionUpload
-capital	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
-full-stop	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
-quoted-name	problem resource-not-found in handleAcknowledgeFPPInstanceUUIDChange
 capital	problem resource-not-found in handleActivateCue
 full-stop	problem resource-not-found in handleActivateCue
 kind-name	problem resource-not-found in handleActivateCue
@@ -450,24 +402,12 @@ full-stop	problem resource-not-found in handleDeleteSession
 hex	problem resource-not-found in handleDeleteSession
 quoted-name	problem resource-not-found in handleDeleteSession
 vocabulary	problem resource-not-found in handleDeleteSession
-capital	problem resource-not-found in handleFPPBrightnessCeiling
-full-stop	problem resource-not-found in handleFPPBrightnessCeiling
-quoted-name	problem resource-not-found in handleFPPBrightnessCeiling
 capital	problem resource-not-found in handleFPPBrightnessExcludedRanges
 full-stop	problem resource-not-found in handleFPPBrightnessExcludedRanges
 quoted-name	problem resource-not-found in handleFPPBrightnessExcludedRanges
-capital	problem resource-not-found in handleFPPCommand
-full-stop	problem resource-not-found in handleFPPCommand
-quoted-name	problem resource-not-found in handleFPPCommand
 capital	problem resource-not-found in handleFPPDefinitionRepublish
 full-stop	problem resource-not-found in handleFPPDefinitionRepublish
 quoted-name	problem resource-not-found in handleFPPDefinitionRepublish
-capital	problem resource-not-found in handleFPPInstance
-full-stop	problem resource-not-found in handleFPPInstance
-quoted-name	problem resource-not-found in handleFPPInstance
-capital	problem resource-not-found in handleFPPTransitionGain
-full-stop	problem resource-not-found in handleFPPTransitionGain
-quoted-name	problem resource-not-found in handleFPPTransitionGain
 kind-name	problem resource-not-found in handleGetActionBinding
 quoted-name	problem resource-not-found in handleGetActionBinding
 capital	problem resource-not-found in handleGetAlignmentRun
@@ -487,7 +427,6 @@ capital	problem resource-not-found in handleGetFPPEndpointsConfig
 full-stop	problem resource-not-found in handleGetFPPEndpointsConfig
 joined	problem resource-not-found in handleGetFPPEndpointsConfig
 kind-name	problem resource-not-found in handleGetFPPEndpointsConfig
-sentences	problem resource-not-found in handleGetFPPEndpointsConfig
 capital	problem resource-not-found in handleGetFPPMQTTConfig
 full-stop	problem resource-not-found in handleGetFPPMQTTConfig
 joined	problem resource-not-found in handleGetFPPMQTTConfig
@@ -513,7 +452,6 @@ capital	problem resource-not-found in handleGetResolumeInstancesConfig
 full-stop	problem resource-not-found in handleGetResolumeInstancesConfig
 joined	problem resource-not-found in handleGetResolumeInstancesConfig
 kind-name	problem resource-not-found in handleGetResolumeInstancesConfig
-sentences	problem resource-not-found in handleGetResolumeInstancesConfig
 kind-name	problem resource-not-found in handleGetShowActive
 quoted-name	problem resource-not-found in handleGetShowActive
 capital	problem resource-not-found in handleNode
@@ -669,39 +607,10 @@ quoted-name	problem show-config-night-background-audio-target-duplicate in handl
 capital	problem show-config-safety-class-mismatch in handlePutShowAction
 full-stop	problem show-config-safety-class-mismatch in handlePutShowAction
 quoted-name	problem show-config-safety-class-mismatch in handlePutShowAction
-capital	problem storage-full in handlePostAssetUpload
-full-stop	problem storage-full in handlePostAssetUpload
-joined	problem storage-full in handlePostAssetUpload
 capital	problem too-many-requests in TestOpenAPIProblemSchemaMatchesEveryClass
 full-stop	problem too-many-requests in TestOpenAPIProblemSchemaMatchesEveryClass
-capital	problem too-many-requests in handleClaimBootstrap
-full-stop	problem too-many-requests in handleClaimBootstrap
-joined	problem too-many-requests in handleClaimBootstrap
-capital	problem too-many-requests in handleClaimFPPPairing
-capital	problem too-many-requests in handleCreateSession
-full-stop	problem too-many-requests in handleCreateSession
-joined	problem too-many-requests in handleCreateSession
 capital	problem unauthorized in handleClaimBootstrap
 full-stop	problem unauthorized in handleClaimBootstrap
-capital	problem unauthorized in handleCreateSession
-full-stop	problem unauthorized in handleCreateSession
-capital	problem unauthorized in readAnyGuard
-full-stop	problem unauthorized in readAnyGuard
-capital	problem unauthorized in readGuardAll
-full-stop	problem unauthorized in readGuardAll
-joined	problem unauthorized in readGuardAll
-capital	problem unauthorized in requireScope
-full-stop	problem unauthorized in requireScope
-capital	problem unauthorized in writeGuard
-full-stop	problem unauthorized in writeGuard
-capital	problem unsupported-api-version in handleUnknownAPIPath
-full-stop	problem unsupported-api-version in handleUnknownAPIPath
-joined	problem unsupported-api-version in handleUnknownAPIPath
-quoted-name	problem unsupported-api-version in handleUnknownAPIPath
-capital	problem unsupported-api-version in withVersionNegotiation
-full-stop	problem unsupported-api-version in withVersionNegotiation
-joined	problem unsupported-api-version in withVersionNegotiation
-quoted-name	problem unsupported-api-version in withVersionNegotiation
 capital	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
 full-stop	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
 joined	problem unsupported-definition-schema-version in handlePostFPPPlaylistDefinition
@@ -765,9 +674,6 @@ capital	v1.EventRecordedEvent event.summary
 full-stop	v1.EventRecordedEvent event.summary
 capital	v1.EventsResponse events[].summary
 full-stop	v1.EventsResponse events[].summary
-capital	v1.FPPBrightnessCeilingResponse command.outcomeReason
-full-stop	v1.FPPBrightnessCeilingResponse command.outcomeReason
-quoted-name	v1.FPPBrightnessCeilingResponse command.outcomeReason
 full-stop	v1.FPPBrightnessExcludedRangesResponse command.outcomeReason
 capital	v1.FPPChangedEvent instance.observations[].reason
 full-stop	v1.FPPChangedEvent instance.observations[].reason
@@ -944,8 +850,6 @@ quoted-name	problem invalid-parameter in handleDispatchResolumeAction
 capital	problem invalid-parameter in handleEvents
 full-stop	problem invalid-parameter in handleEvents
 quoted-name	problem invalid-parameter in handleEvents
-capital	problem invalid-parameter in handleFPPBrightnessCeiling
-full-stop	problem invalid-parameter in handleFPPBrightnessCeiling
 capital	problem invalid-parameter in handleFPPCommand
 full-stop	problem invalid-parameter in handleFPPCommand
 capital	problem invalid-parameter in handleFPPDefinitionRepublish

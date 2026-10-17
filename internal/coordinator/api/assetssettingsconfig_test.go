@@ -277,7 +277,7 @@ func TestGetAssetsSettingsConfigDeferredMigrationStatesItRatherThanReportingNoth
 	if strings.Contains(detail, "has been created yet") {
 		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: settings ARE in effect", detail)
 	}
-	for _, want := range []string{"SHOWMESH_ASSET_*", "unwritable"} {
+	for _, want := range []string{"keep the existing environment setting", "cannot be written"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", detail, want)
 		}

@@ -414,7 +414,7 @@ func (h *handlers) handleFPPInstance(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeProblem(w, h.logger, now, resourceNotFoundProblem("no FPP instance with id "+strconv.Quote(instanceID)+" is configured"))
+	writeProblem(w, h.logger, now, resourceNotFoundProblem("FPP "+instanceID+" is not set up. Add it in Settings first."))
 }
 
 // handleObservations serves GET /api/v1/observations, filtered per
@@ -759,7 +759,7 @@ func (h *handlers) writeInternalError(w http.ResponseWriter, now time.Time, acti
 		Type:   problemBaseURI + "internal-error",
 		Title:  "Internal error",
 		Status: http.StatusInternalServerError,
-		Detail: "an internal error occurred; see the coordinator's own logs for detail",
+		Detail: "ShowMesh hit an error. Check the coordinator log.",
 	})
 }
 
@@ -799,7 +799,7 @@ func handleUnknownAPIPath(logger *slog.Logger, clock func() time.Time) http.Hand
 		v, ok := apiPathVersion(r.URL.Path)
 		if ok && v != servedAPIVersion {
 			writeProblem(w, logger, now, unsupportedAPIVersionProblem(
-				"this coordinator serves API version 1; path "+strconv.Quote(r.URL.Path)+" names a version it does not serve"))
+				"This coordinator serves API version 1 only. Use a path that starts with /api/v1."))
 			return
 		}
 		writeProblem(w, logger, now, resourceNotFoundProblem("no route matches "+strconv.Quote(r.URL.Path)))
