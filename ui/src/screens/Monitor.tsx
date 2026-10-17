@@ -33,7 +33,7 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail, type ParticipationState } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, resolumeDetail, type ParticipationState } from './dashboardModel'
 
 /** The operator-facing sentence for each participation state but "absent", which says nothing. */
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
@@ -168,7 +168,7 @@ export function Monitor() {
             <StatTile
               label="Resolume"
               value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
-              detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
+              detail={resolumeDetail(counts)}
             />
             <SignalsTile counts={counts.signals} />
           </Tiles>
