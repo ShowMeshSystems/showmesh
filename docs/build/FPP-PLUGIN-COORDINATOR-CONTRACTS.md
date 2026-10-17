@@ -647,8 +647,9 @@ what this season gives up.
 ### 2.4 What remains unbuilt
 
 Both sides are built and neither is proven. The coordinator serves
-`POST /fpp/{instanceId}/brightness/transition-gain` (`handleFPPTransitionGain`)
-and reaches it from `showmeshctl fpp set-transition-gain`. Track F's readiness
+`POST /fpp/brightness/transition-gain` (`handleFPPTransitionGain`), which
+writes every FPP in `fpp.endpoints` (section 2.8), and reaches it from
+`showmeshctl fpp set-transition-gain`. Track F's readiness
 check no longer refuses a cue requiring compositional brightness: it warns
 instead, which is why it is now `nightCheckBrightnessCompositionUnverified`
 rather than a name asserting the composition is unbuilt.
@@ -762,7 +763,7 @@ Response body, every field always present:
 | `excludedRanges` | array | The channel ranges no ceiling changes, each `{"startChannel", "channelCount"}` with a 1-based start. Empty when nothing is excluded. A plugin older than section 2.7 omits it. |
 | `ceilingTarget` | integer | The ceiling's target, 0 to 100: where a fade in progress is going, or the ceiling itself when nothing fades. A plugin older than section 2.8 omits it. |
 | `ceilingFadeEndMillis` | number | The plugin's clock when the ceiling fade in progress ends, or `0` when the ceiling is not fading. A plugin older than section 2.8 omits it. |
-| `ceilingChangedAtMillis` | number | The plugin's clock when the ceiling was last deliberately set, by the FPP action (which the plugin page fader, FPP scheduler entries and the coordinator all use) or by a peer's state adopted over MultiSync, which carries the peer's time. `0` when it never has been. A restart's safe-ceiling settle and a restore from the plugin's persisted state leave it unchanged. A plugin older than section 2.8 omits it. |
+| `ceilingChangedAtMillis` | number | The plugin's clock when the ceiling was last deliberately set, by the FPP action (which the plugin page fader, FPP scheduler entries and the coordinator all use). A peer's state adopted over MultiSync brings the peer's own value. `0` when it never has been. A restart's safe-ceiling settle and a restore from the plugin's persisted state leave it unchanged. A plugin older than section 2.8 omits it. |
 
 Example: `{"schemaVersion":1,"ceiling":60,"transitionGain":75,"effectiveOutput":45,"fadeActive":false,"weatherGateClosed":false,"updatedAtMillis":1790000000000}`
 
@@ -789,7 +790,9 @@ Coordinator behavior:
   text, `start-count` pairs joined by a comma and a space. An empty list reads
   not applicable, and a missing key reads not collected.
 - The collector decodes `ceiling`, `transitionGain`, `effectiveOutput`,
-  `fadeActive` and `updatedAtMillis` only. `schemaVersion` and `weatherGateClosed`
+  `fadeActive` and `updatedAtMillis` for the signals, and hands those with
+  `ceilingTarget`, `ceilingFadeEndMillis` and `ceilingChangedAtMillis` to the
+  display ceiling reconciler (section 2.8). `schemaVersion` and `weatherGateClosed`
   are informational for now: nothing in the coordinator reads them, and the
   UI does not show `weatherGateClosed`. The weather delay's own gate routes
   in section 2.5 remain how the coordinator reads and writes the gate.
@@ -854,8 +857,9 @@ A plugin that omits `ceilingChangedAtMillis` is written to under rule 3 and
 never adopted from under rule 2.
 
 **The plugin's side.** The plugin stamps `ceilingChangedAtMillis` in
-`BrightnessEngine::setCeiling` and when `adoptState` changes the ceiling's
-target or fade, taking the adopted state's `stateChangedAtMillis`. It persists
+`BrightnessEngine::setCeiling`. `adoptState` takes the adopted state's own
+`ceilingChangedAtMillis`, so a peer's safe-ceiling settle never reads as a
+deliberate change on the host that adopted it. It persists
 the field with the rest of its brightness state. It sends its full state over
 MultiSync with `MultiSync::SendPluginData` from its worker thread whenever the
 state's revision changes and when it starts, only while FPP has MultiSync

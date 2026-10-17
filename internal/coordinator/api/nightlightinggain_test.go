@@ -167,7 +167,7 @@ func TestNightLightingCueGainOrdering(t *testing.T) {
 			// value, not two values that happen to agree: a resume after a
 			// restart regenerates this string from cue identity alone, and
 			// the plugin then declines to restart the fade.
-			wantKey := nightCueIdempotencyKey(rig.rec.ID, rig.rec.Cycle, tc.phase, cue.Name)
+			wantKey := nightGainRequestID(nightCueIdempotencyKey(rig.rec.ID, rig.rec.Cycle, tc.phase, cue.Name), "bench-fpp")
 			if len(ids) != 1 || ids[0] != wantKey {
 				t.Fatalf("gain requestId = %v, want [%q]", ids, wantKey)
 			}
@@ -251,6 +251,40 @@ func TestNightLightingCueGainSkipsNonFPPTarget(t *testing.T) {
 	}
 	if row.State != nightCueStateResolved {
 		t.Errorf("row state = %q, want %q: the cue's action still runs", row.State, nightCueStateResolved)
+	}
+}
+
+// A lighting cue's fade goes to every FPP, each with its own requestId, and
+// one FPP failing marks the cue failed without stopping the others.
+func TestNightLightingCueGainWritesEveryFPPAndRecordsAPartialFailure(t *testing.T) {
+	rig := newNightGainRig(t, nil)
+	lister := rig.h.deps.FPP.(*fakeFPPLister)
+	lister.views = append(lister.views, FPPInstanceView{InstanceID: "remote-a", Endpoint: "http://remote-a"}, FPPInstanceView{InstanceID: "remote-b", Endpoint: "http://remote-b"})
+	var mu sync.Mutex
+	written := map[string]string{}
+	rig.h.nightGainWriter = func(_ context.Context, target config.ShowActionTarget, fade nightLightingFade, requestID string) (fppcommand.TransitionGainOutcome, error) {
+		mu.Lock()
+		written[target.InstanceID] = requestID
+		mu.Unlock()
+		if target.InstanceID == "remote-b" {
+			return fppcommand.TransitionGainOutcome{}, errors.New("connection refused")
+		}
+		return fppcommand.TransitionGainOutcome{Applied: true, GainTarget: fade.TargetPercent}, nil
+	}
+	cue := nightLightingCue("dim", nightFadeMs(3000))
+
+	row, err := rig.h.nightRunCue(context.Background(), testNow, rig.rec, nightPhaseEnterShow, cue, testIssuer, true)
+	if err != nil {
+		t.Fatalf("nightRunCue: %v", err)
+	}
+	if len(written) != 3 || written["bench-fpp"] == written["remote-a"] {
+		t.Fatalf("writes = %v, want three FPPs with distinct requestIds", written)
+	}
+	if row.Outcome != nightCueOutcomeFailed {
+		t.Errorf("outcome = %q, want %q: a partial failure is not a clean success", row.Outcome, nightCueOutcomeFailed)
+	}
+	if !strings.Contains(row.OutcomeReason, "remote-b could not be faded") || !strings.Contains(row.OutcomeReason, "bench-fpp, remote-a took the fade") {
+		t.Errorf("outbox reason %q, want the failed player and the ones that took named", row.OutcomeReason)
 	}
 }
 

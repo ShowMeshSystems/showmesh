@@ -791,7 +791,7 @@ type fppCommandResult struct {
 }
 
 // fppTransitionGainRequest is the body of
-// POST /api/v1/fpp/{instanceId}/brightness/transition-gain. RequestID is
+// POST /api/v1/fpp/brightness/transition-gain. RequestID is
 // minted by this program, once per invocation, for the same reason
 // [fppCommandRequest]'s IdempotencyKey is: the caller owns the key that
 // makes a retry safe, and a value minted per invocation can never turn two
@@ -803,25 +803,25 @@ type fppTransitionGainRequest struct {
 }
 
 // fppTransitionGainResponse is the body of a successful response from
-// POST /api/v1/fpp/{instanceId}/brightness/transition-gain.
+// POST /api/v1/fpp/brightness/transition-gain: one result per FPP.
 type fppTransitionGainResponse struct {
-	ServerTime     time.Time               `json:"serverTime"`
-	TransitionGain fppTransitionGainResult `json:"transitionGain"`
+	ServerTime time.Time                 `json:"serverTime"`
+	Players    []fppTransitionGainResult `json:"players"`
 }
 
-// fppTransitionGainResult mirrors v1.FPPTransitionGainResult field for
-// field - this program's own independent transcription of it, per this
-// file's own doc comment. Applied false is a success (an idempotent repeat
-// of a requestId already applied), never an error.
+// fppTransitionGainResult mirrors v1.FPPTransitionGainResult. Outcome is
+// applied, alreadyApplied (a success) or failed; the numbers are absent
+// when it failed.
 type fppTransitionGainResult struct {
 	InstanceID      string `json:"instanceId"`
 	RequestID       string `json:"requestId"`
-	Applied         bool   `json:"applied"`
-	GainStart       int    `json:"gainStart"`
-	GainTarget      int    `json:"gainTarget"`
-	FadeSeconds     int    `json:"fadeSeconds"`
-	Ceiling         int    `json:"ceiling"`
-	EffectiveOutput int    `json:"effectiveOutput"`
+	Outcome         string `json:"outcome"`
+	Reason          string `json:"reason,omitempty"`
+	GainStart       *int   `json:"gainStart,omitempty"`
+	GainTarget      *int   `json:"gainTarget,omitempty"`
+	FadeSeconds     *int   `json:"fadeSeconds,omitempty"`
+	Ceiling         *int   `json:"ceiling,omitempty"`
+	EffectiveOutput *int   `json:"effectiveOutput,omitempty"`
 }
 
 // fppDefinitionRepublishRequest is the body of POST
@@ -970,21 +970,38 @@ type fppPairingStateResponse struct {
 	PrincipalID string    `json:"principalId"`
 }
 
-// fppBrightnessCeilingRequest is the body of POST
-// /api/v1/fpp/{instanceId}/brightness/ceiling. RequestID is minted per
-// invocation, for [fppTransitionGainRequest]'s reason.
+// fppBrightnessCeilingRequest is the body of PUT /api/v1/fpp/brightness/ceiling.
 type fppBrightnessCeilingRequest struct {
-	Ceiling   int    `json:"ceiling"`
-	RequestID string `json:"requestId"`
+	TargetPercent int `json:"targetPercent"`
+	FadeSeconds   int `json:"fadeSeconds"`
 }
 
-// fppBrightnessCeilingResponse is the body of a successful ceiling write.
-// Ceiling is absent when the plugin did not report the new value in time,
-// which is not a failure: the command still reached FPP.
-type fppBrightnessCeilingResponse struct {
-	ServerTime time.Time        `json:"serverTime"`
-	Command    fppCommandResult `json:"command"`
-	Ceiling    *int             `json:"ceiling"`
+// fppBrightnessResponse mirrors v1.FPPBrightnessResponse: the display
+// ceiling, nil before one is set, and each FPP against it.
+type fppBrightnessResponse struct {
+	ServerTime time.Time             `json:"serverTime"`
+	Ceiling    *fppBrightnessCeiling `json:"ceiling"`
+	Players    []fppBrightnessPlayer `json:"players"`
+}
+
+type fppBrightnessCeiling struct {
+	TargetPercent int        `json:"targetPercent"`
+	FadeEndsAt    *time.Time `json:"fadeEndsAt"`
+	ChangedAt     time.Time  `json:"changedAt"`
+	ChangedBy     struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+		Name string `json:"name,omitempty"`
+	} `json:"changedBy"`
+}
+
+type fppBrightnessPlayer struct {
+	InstanceID    string     `json:"instanceId"`
+	State         string     `json:"state"`
+	Reason        string     `json:"reason,omitempty"`
+	Ceiling       *int       `json:"ceiling,omitempty"`
+	CeilingTarget *int       `json:"ceilingTarget,omitempty"`
+	ReportedAt    *time.Time `json:"reportedAt,omitempty"`
 }
 
 // fppChannelRange is one run of channels: a 1-based first channel and how

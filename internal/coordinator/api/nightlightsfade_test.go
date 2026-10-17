@@ -674,12 +674,18 @@ func TestLightsFade_AHangingGainWriteNeverDelaysTheLaunch(t *testing.T) {
 }
 
 // One dead player must not make a healthy player's landed write repeat.
+// Every FPP in fpp.endpoints gets the night's fade, not only the resting and
+// show players, and a dead one never stops the others.
 func TestLightsFade_CompletionIsTrackedPerInstance(t *testing.T) {
 	n := newLightsNight(t, "")
+	n.h.deps.FPP.(*fakeFPPLister).views = []FPPInstanceView{
+		{InstanceID: "healthy", Endpoint: "http://healthy"}, {InstanceID: "dead", Endpoint: "http://dead"},
+		{InstanceID: "remote", Endpoint: "http://remote"},
+	}
 	n.setFail(func(_ nightLightingFade, instance string) bool { return instance == "dead" })
 	payload := config.NightSessionPayload{
 		Resting:      config.NightSessionResting{FPPInstanceID: "healthy"},
-		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "dead"},
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "healthy"},
 	}
 	rec := store.NightSessionRecord{ID: "sess-x", Cycle: 1}
 	n.h.nightLightsStart(context.Background(), n.now, rec, payload, nightLightsStep{step: nightLightsStepShowGain, target: 100})
@@ -689,17 +695,19 @@ func TestLightsFade_CompletionIsTrackedPerInstance(t *testing.T) {
 		n.h.nightLightsAdvance(context.Background(), n.now, rec)
 		n.h.lights().wait()
 	}
-	var healthy, dead int
+	var healthy, dead, remote int
 	for _, e := range n.events() {
 		switch e {
 		case "gain:healthy:100:0s":
 			healthy++
 		case "gain:dead:100:0s":
 			dead++
+		case "gain:remote:100:0s":
+			remote++
 		}
 	}
-	if healthy != 1 || dead != 4 {
-		t.Fatalf("healthy written %d times (want 1), dead %d (want 4): %v", healthy, dead, n.events())
+	if healthy != 1 || remote != 1 || dead != 4 {
+		t.Fatalf("healthy written %d times (want 1), remote %d (want 1), dead %d (want 4): %v", healthy, remote, dead, n.events())
 	}
 	if got := len(n.failedEvents()); got != 1 {
 		t.Fatalf("a dead player is reported once per night, got %d reports", got)
@@ -809,6 +817,10 @@ func TestLightsFade_GainWaitsForTheStartWhenRestingIsStillPlaying(t *testing.T) 
 
 func TestLightsFade_ReadinessNamesEachFadeAndWarnsWhenTheyDoNotFit(t *testing.T) {
 	n := newLightsNight(t, "")
+	n.h.deps.FPP.(*fakeFPPLister).views = []FPPInstanceView{
+		{InstanceID: "rest-fpp", Endpoint: "http://rest"}, {InstanceID: "remote-fpp", Endpoint: "http://remote"},
+		{InstanceID: "show-fpp", Endpoint: "http://show"},
+	}
 	p := config.NightSessionPayload{
 		Show:            "halloween-2026",
 		ShowPlaylist:    config.NightSessionFPPPlaylist{FPPInstanceID: "show-fpp"},
@@ -817,7 +829,7 @@ func TestLightsFade_ReadinessNamesEachFadeAndWarnsWhenTheyDoNotFit(t *testing.T)
 	}
 	checks := n.h.nightCheckLightsFades(context.Background(), p)
 	if len(checks) != 1 || checks[0].name != "lights:fade-out" ||
-		!strings.Contains(checks[0].reason, "20 seconds") || !strings.Contains(checks[0].reason, "rest-fpp and show-fpp") ||
+		!strings.Contains(checks[0].reason, "20 seconds") || !strings.Contains(checks[0].reason, "rest-fpp, remote-fpp and show-fpp") ||
 		!strings.Contains(checks[0].reason, "each show after the first") {
 		t.Fatalf("readiness must name the fade, its length and both instances: %+v", checks)
 	}
@@ -1176,7 +1188,7 @@ func TestLightsFade_APendingWriteToFullYieldsToTheOperatorRoute(t *testing.T) {
 	n.h.nightLightsStart(context.Background(), n.now, rec, payload, nightLightsStep{step: "pending", target: 100})
 	n.h.lights().wait()
 
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/player-01/brightness/transition-gain", `{"targetPercent":10,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/brightness/transition-gain", `{"targetPercent":10,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
 	n.mu.Lock()
 	n.operatorOK = true
 	n.mu.Unlock()
@@ -1202,9 +1214,9 @@ func TestLightsFade_AFailedOperatorWriteDoesNotCancelTheFadeIn(t *testing.T) {
 	n.advance(nightLightsRetryBackoff)
 	n.tick()
 
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/player-01/brightness/transition-gain", `{"targetPercent":100,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
-	if resp, _ := doRawRequest(t, n.api.Handler, req); resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("the operator write should fail against this player, got %d", resp.StatusCode)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/fpp/brightness/transition-gain", `{"targetPercent":100,"fadeSeconds":0}`, map[string]string{"Authorization": "Bearer " + n.token})
+	if resp, body := doRawRequest(t, n.api.Handler, req); resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"outcome":"failed"`) {
+		t.Fatalf("the operator write should fail against this player, got %d %s", resp.StatusCode, body)
 	}
 	n.setFail(nil)
 	for i := 0; i < 3; i++ {

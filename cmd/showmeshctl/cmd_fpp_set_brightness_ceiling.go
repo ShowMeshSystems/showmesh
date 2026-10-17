@@ -4,35 +4,66 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
+// cmdFPPBrightness implements "showmeshctl fpp brightness": GET
+// /api/v1/fpp/brightness, the display ceiling and how each FPP follows it.
+func cmdFPPBrightness(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl fpp brightness", stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp brightness [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nShow the display brightness ceiling every FPP follows, and each FPP's")
+		_, _ = fmt.Fprintln(stderr, "reported ceiling and whether it is following (GET /api/v1/fpp/brightness).")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "fpp brightness", err)
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return exitUsage
+	}
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "fpp brightness", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	var resp fppBrightnessResponse
+	if err := c.getJSON(ctx, "/api/v1/fpp/brightness", nil, &resp); err != nil {
+		return reportError(stderr, "fpp brightness", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "fpp brightness", err)
+		}
+		return exitOK
+	}
+	printFPPBrightness(stdout, resp)
+	return exitOK
+}
+
 // cmdFPPSetBrightnessCeiling implements "showmeshctl fpp
-// set-brightness-ceiling <instance-id> <0-100>": POST
-// /api/v1/fpp/{instanceId}/brightness/ceiling, behind fpp:command.
-//
-// This writes the CEILING, the limit FPP's own output is held under. The
-// transition gain is a separate value with a separate command and is
-// never written from here.
-//
-// An out-of-range value is refused here, before dispatch, and again by
-// the coordinator. No clamping anywhere, so a mistyped value stays
-// visible instead of silently becoming a brightness nobody asked for.
+// set-brightness-ceiling <0-100> [--fade-seconds N]": PUT
+// /api/v1/fpp/brightness/ceiling. Out of range is refused here and by the
+// coordinator, never clamped.
 func cmdFPPSetBrightnessCeiling(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fpp set-brightness-ceiling", stderr)
-	var requestID string
-	fs.StringVar(&requestID, "request-id", "", "idempotency key; minted fresh per invocation when omitted")
+	var fadeSeconds int
+	fs.IntVar(&fadeSeconds, "fade-seconds", 0, "fade duration in seconds, 0-86400; 0 applies immediately")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp set-brightness-ceiling [flags] <instance-id> <ceiling>")
-		_, _ = fmt.Fprintln(stderr, "\nWrite one FPP host's brightness ceiling (POST")
-		_, _ = fmt.Fprintln(stderr, "/api/v1/fpp/{instanceId}/brightness/ceiling, behind the fpp:command scope).")
-		_, _ = fmt.Fprintln(stderr, "<ceiling> is 0-100 and is the limit the host's output is held under.")
-		_, _ = fmt.Fprintln(stderr, "\nPrints the ceiling the plugin reported back, when it reported one in")
-		_, _ = fmt.Fprintln(stderr, "time. A ceiling that was not read back is not a failure: the command")
-		_, _ = fmt.Fprintln(stderr, "reached FPP and the value simply was not confirmed yet.")
-		_, _ = fmt.Fprintln(stderr, "\nAn out-of-range ceiling is refused, never clamped.")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp set-brightness-ceiling [flags] <percent>")
+		_, _ = fmt.Fprintln(stderr, "\nSet the display brightness ceiling every FPP follows (PUT")
+		_, _ = fmt.Fprintln(stderr, "/api/v1/fpp/brightness/ceiling, behind the fpp:command scope). <percent>")
+		_, _ = fmt.Fprintln(stderr, "is 0-100. Every FPP is brought to it within about one poll, five seconds.")
+		_, _ = fmt.Fprintln(stderr, "\nAn out-of-range percent or fade is refused, never clamped.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -41,29 +72,22 @@ func cmdFPPSetBrightnessCeiling(args []string, stdout, stderr io.Writer, clock f
 	if err := validateOutput(g); err != nil {
 		return reportError(stderr, "fpp set-brightness-ceiling", err)
 	}
-	rest := fs.Args()
-	if len(rest) != 2 {
+	if fs.NArg() != 1 {
 		fs.Usage()
 		return exitUsage
 	}
-	instanceID, ceilingArg := rest[0], rest[1]
-
-	ceiling, err := strconv.Atoi(ceilingArg)
+	percent, err := strconv.Atoi(fs.Arg(0))
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp set-brightness-ceiling: invalid ceiling %q: must be an integer 0-100\n", ceilingArg)
+		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp set-brightness-ceiling: invalid percent %q: must be an integer 0-100\n", fs.Arg(0))
 		return exitUsage
 	}
-	if ceiling < 0 || ceiling > 100 {
-		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp set-brightness-ceiling: ceiling %d out of range: must be 0-100\n", ceiling)
+	if percent < 0 || percent > 100 {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp set-brightness-ceiling: percent %d out of range: must be 0-100\n", percent)
 		return exitUsage
 	}
-
-	if requestID == "" {
-		key, keyErr := newIdempotencyKey()
-		if keyErr != nil {
-			return reportError(stderr, "fpp set-brightness-ceiling", keyErr)
-		}
-		requestID = key
+	if fadeSeconds < 0 || fadeSeconds > 86400 {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl fpp set-brightness-ceiling: --fade-seconds %d out of range: must be 0-86400\n", fadeSeconds)
+		return exitUsage
 	}
 
 	c, err := newRequestClient(g)
@@ -72,26 +96,53 @@ func cmdFPPSetBrightnessCeiling(args []string, stdout, stderr io.Writer, clock f
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
-
-	path := "/api/v1/fpp/" + url.PathEscape(instanceID) + "/brightness/ceiling"
-	var resp fppBrightnessCeilingResponse
-	if err := c.postJSON(ctx, path, fppBrightnessCeilingRequest{Ceiling: ceiling, RequestID: requestID}, &resp); err != nil {
+	var resp fppBrightnessResponse
+	if err := c.putJSON(ctx, "/api/v1/fpp/brightness/ceiling", "", fppBrightnessCeilingRequest{TargetPercent: percent, FadeSeconds: fadeSeconds}, &resp); err != nil {
 		return reportError(stderr, "fpp set-brightness-ceiling", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
-
 	if g.output == outputJSON {
 		if err := printJSON(stdout, resp); err != nil {
 			return reportError(stderr, "fpp set-brightness-ceiling", err)
 		}
 		return exitOK
 	}
-	if resp.Ceiling != nil {
-		_, _ = fmt.Fprintf(stdout, "confirmed: %s is holding its output at a ceiling of %d (request %s)\n",
-			instanceID, *resp.Ceiling, resp.Command.IdempotencyKey)
-		return exitOK
+	printFPPBrightness(stdout, resp)
+	return exitOK
+}
+
+func printFPPBrightness(w io.Writer, r fppBrightnessResponse) {
+	if r.Ceiling == nil {
+		_, _ = fmt.Fprintln(w, "display ceiling: not set")
+	} else {
+		c := r.Ceiling
+		fade := ""
+		if c.FadeEndsAt != nil {
+			fade = ", fading until " + c.FadeEndsAt.UTC().Format(time.RFC3339)
+		}
+		by := c.ChangedBy.ID
+		if c.ChangedBy.Name != "" {
+			by = c.ChangedBy.Name
+		}
+		_, _ = fmt.Fprintf(w, "display ceiling: %d%%%s (set %s by %s %s)\n",
+			c.TargetPercent, fade, c.ChangedAt.UTC().Format(time.RFC3339), c.ChangedBy.Kind, by)
 	}
-	_, _ = fmt.Fprintf(stdout, "unconfirmed: %s took a ceiling of %d but has not reported it yet: %s (request %s)\n",
-		instanceID, ceiling, resp.Command.OutcomeReason, resp.Command.IdempotencyKey)
-	return exitCommandUnconfirmed
+	if len(r.Players) == 0 {
+		_, _ = fmt.Fprintln(w, "no FPP players are configured")
+		return
+	}
+	for _, p := range r.Players {
+		reported := "-"
+		if p.Ceiling != nil {
+			reported = fmt.Sprintf("%d%%", *p.Ceiling)
+			if p.CeilingTarget != nil && *p.CeilingTarget != *p.Ceiling {
+				reported += fmt.Sprintf(" -> %d%%", *p.CeilingTarget)
+			}
+		}
+		line := fmt.Sprintf("%-20s %-13s %s", p.InstanceID, p.State, reported)
+		if p.Reason != "" {
+			line += "  " + p.Reason
+		}
+		_, _ = fmt.Fprintln(w, strings.TrimRight(line, " "))
+	}
 }

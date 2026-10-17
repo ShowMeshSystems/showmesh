@@ -167,11 +167,6 @@ type handlers struct {
 	// comment. Nil in production.
 	fppDefinitionRepublisher fppDefinitionRepublisher
 
-	// fppCeilingWriter substitutes the brightness ceiling write - see
-	// [fppBrightnessCeilingWriter] (fppbrightnessceiling.go). Nil in
-	// production; only a test ever sets it.
-	fppCeilingWriter fppBrightnessCeilingWriter
-
 	// fppExcludedRangesWriter substitutes the excluded ranges write. Nil
 	// in production.
 	fppExcludedRangesWriter fppBrightnessExcludedRangesWriter

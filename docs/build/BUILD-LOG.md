@@ -131,6 +131,25 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-10-17 (one brightness ceiling for every FPP: ADR-062's coordinator, API, UI and CLI half)
+
+**Goal:** make brightness one setting for the whole display, held by the coordinator and followed by every FPP in `fpp.endpoints`, per [ADR-062](../decisions/ADR-062-brightness-is-one-setting-for-every-fpp.md) and contract section 2.8.
+
+**Completed:**
+
+- Desired state: schema v50 `display_brightness_ceiling` (`internal/coordinator/store/displayceiling.go`), one row with target, fade end, change time and who set it.
+- Reconciler: `internal/coordinator/displayceiling` applies section 2.8's per-poll rules (skew correction, adoption of a newer deliberate FPP change, latest wins, remaining fade seconds rounded up, one write per FPP per poll interval, 404 not following) from the `fppbrightness` collector's poll, which now also decodes `ceilingTarget`, `ceilingFadeEndMillis` and `ceilingChangedAtMillis`.
+- API: `GET /fpp/brightness`, `PUT /fpp/brightness/ceiling` and `POST /fpp/brightness/transition-gain` (every FPP, per-FPP outcome); the two per-FPP brightness writes are removed. Night fades and a lighting cue's gain write every FPP, each with its own `requestId`, and a partial failure marks the cue failed.
+- UI: one Display brightness slider in Settings, Connections with each FPP's reported ceiling and state; the FPP drawer shows a readout instead of a slider. `showmeshctl fpp brightness`, `fpp set-brightness-ceiling <percent>` and `fpp set-transition-gain <percent>`, no instance argument.
+
+**Decisions made:** none beyond ADR-062. The desired ceiling is live state in a store table, on the weather delay state's precedent, not a configuration kind. `fpp set-transition-gain` exits 12 when any FPP did not take the gain.
+
+**Deferred:** nothing has run on real FPP hardware.
+
+**Verification gates:** narrow Go, CLI and UI tests and a containerized bench (two, then three FPP 10 players with the plugin from its `claude/global-brightness` branch) run this session; `make check` runs in CI on the pull request.
+
+---
+
 ## 2026-09-22 to 2026-09-23 (overnight before the pre-release cut: cue actions, FPP reports-refused visibility in three repos, level 1 stop hold with resume-show and ADR-054; `main` `9e6adb8` to `d6c0bfa`)
 
 **Goal:** land the three operator-facing gaps found in the 2026-09-22 day test before the pre-release is cut: a cue could not launch a Resolume column ahead of its timecode, a plugin reinstall that made the coordinator refuse every FPP report was invisible on every screen, and a level 1 emergency stop let the night loop relight the resting playlist a few seconds later.

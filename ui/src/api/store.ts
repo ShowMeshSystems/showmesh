@@ -105,12 +105,12 @@ type SchemaEvent = components['schemas']['Event']
 type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
-// Pairing an FPP plugin by code, and writing its brightness ceiling.
+// Pairing an FPP plugin by code, and the display brightness ceiling.
 type SchemaFPPPairingStateResponse = components['schemas']['FPPPairingStateResponse']
 type SchemaFPPPairingRequest = components['schemas']['FPPPairingRequest']
 type SchemaFPPPairingResponse = components['schemas']['FPPPairingResponse']
 type SchemaFPPBrightnessCeilingRequest = components['schemas']['FPPBrightnessCeilingRequest']
-type SchemaFPPBrightnessCeilingResponse = components['schemas']['FPPBrightnessCeilingResponse']
+type SchemaFPPBrightnessResponse = components['schemas']['FPPBrightnessResponse']
 type SchemaFPPChannelRange = components['schemas']['FPPChannelRange']
 type SchemaFPPBrightnessExcludedRangesRequest = components['schemas']['FPPBrightnessExcludedRangesRequest']
 type SchemaFPPBrightnessExcludedRangesResponse = components['schemas']['FPPBrightnessExcludedRangesResponse']
@@ -907,21 +907,22 @@ export class ApiStore {
     }
   }
 
-  /**
-   * `POST /api/v1/fpp/{instanceId}/brightness/ceiling` (contract section
-   * 3). Behind `fpp:command`. Refused, not clamped, on an out-of-range
-   * value; `ceiling` on the response is present only when the plugin's
-   * own route read the new value back within the coordinator's window.
-   */
-  async postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<SchemaFPPBrightnessCeilingResponse> {
+  /** `GET /api/v1/fpp/brightness`. Behind `fpp:read`. The display ceiling every FPP follows, and each FPP's state against it. */
+  async getFPPBrightness(): Promise<SchemaFPPBrightnessResponse> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaFPPBrightnessCeilingRequest = { ceiling }
-      return await this.client.postJson<SchemaFPPBrightnessCeilingResponse>(
-        `/fpp/${encodeURIComponent(instanceId)}/brightness/ceiling`,
-        body,
-        controller.signal,
-      )
+      return await this.client.getJson<SchemaFPPBrightnessResponse>('/fpp/brightness', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/fpp/brightness/ceiling`. Behind `fpp:command`. Refused, not clamped, on an out-of-range value; answers with the same document as the read. */
+  async putFPPBrightnessCeiling(targetPercent: number, fadeSeconds: number): Promise<SchemaFPPBrightnessResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaFPPBrightnessCeilingRequest = { targetPercent, fadeSeconds }
+      return await this.client.putJson<SchemaFPPBrightnessResponse>('/fpp/brightness/ceiling', body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

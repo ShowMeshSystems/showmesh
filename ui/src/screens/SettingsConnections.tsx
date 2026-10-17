@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ApiError,
   getFPPEndpointsConfig,
@@ -10,7 +10,6 @@ import {
   getFPPPairing,
   getResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
-  postFPPBrightnessCeiling,
   postFPPPairing,
   putFPPBrightnessExcludedRanges,
   putFPPEndpointsConfig,
@@ -20,16 +19,16 @@ import {
   type ConfigFPPEndpoint,
   type ConfigResolumeInstance,
   type Evidence,
-  type FPPBrightnessCeilingResponse,
   type FPPBrightnessExcludedRangesResponse,
   type FPPPairingStateResponse,
 } from '../api'
-import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Slider, StatusPair } from '../kit'
+import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
+import { DisplayBrightnessPlayerReadout, DisplayBrightnessSection } from './DisplayBrightness'
 import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
 import { SettingsReleaseCheck } from './SystemVersions'
 import { brightnessReadout, CHANNEL_RANGES_FORM_ERROR, formatChannelRanges, normalizePairingCode, pairingSentence, parseChannelRanges, type SignalFact } from './fppPairingModel'
@@ -380,6 +379,8 @@ export function SettingsConnections() {
         {fppOutcome !== null && 'error' in fppOutcome && <RuledStrip absence="failed" label="Save failed" fact={fppOutcome.error} />}
       </Section>
 
+      <DisplayBrightnessSection />
+
       <Section id="st-res" title="Resolume">
         {resolumeLoad.kind === 'loading' ? (
           <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for the configured Resolume instances." />
@@ -624,7 +625,7 @@ export function SettingsConnections() {
   )
 }
 
-/** The FPP endpoint detail (Settings > Connections > the FPP instance): pairing (contract section 1) and the brightness ceiling (contract section 3). */
+/** The FPP endpoint detail (Settings > Connections > the FPP instance): pairing, and this player's brightness readout and excluded channels. */
 function FPPInstanceDetail({ instanceId }: { instanceId: string }) {
   const model = useModelContext()
   const instance = fppHealthFor(model.fpp, instanceId)
@@ -715,8 +716,6 @@ function FactCell<T>({ fact, render }: { fact: SignalFact<T>; render: (value: T)
   return <span className="sm-data">{render(fact.value)}</span>
 }
 
-const BRIGHTNESS_DEBOUNCE_MS = 250
-
 /** One entry per distinct reason among the absent facts, so a shared reason is stated once. */
 function absentFacts(facts: readonly SignalFact<unknown>[]) {
   const seen = new Map<string, Extract<SignalFact<unknown>, { kind: 'absent' }>>()
@@ -724,89 +723,15 @@ function absentFacts(facts: readonly SignalFact<unknown>[]) {
   return [...seen.values()]
 }
 
-type CeilingOutcome = { kind: 'ok'; sentence: string } | { kind: 'failed'; reason: string }
-
-/** The write's own sentence: the plugin's read-back wins, an unconfirmed or refused command reports the coordinator's own reason, never a generic "sent" line that outruns what the response actually said. */
-function ceilingOutcome(response: FPPBrightnessCeilingResponse): CeilingOutcome {
-  if (response.command.outcome === 'unconfirmed') return { kind: 'failed', reason: response.command.outcomeReason }
-  if (response.ceiling !== undefined) return { kind: 'ok', sentence: `Ceiling set to ${response.ceiling}%.` }
-  return { kind: 'ok', sentence: "Sent to the plugin; the new ceiling wasn't read back in time." }
-}
-
 function BrightnessSection({ instanceId, observations }: { instanceId: string; observations: readonly Evidence[] }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
   const readout = brightnessReadout(observations)
-
-  const [sliderValue, setSliderValue] = useState<number | null>(null)
-  const [outcome, setOutcome] = useState<CeilingOutcome | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inFlightRef = useRef(false)
-  const pendingRef = useRef<number | null>(null)
-
-  const reading = readout.ceiling.kind === 'value' ? readout.ceiling.value : null
-  useEffect(() => {
-    const writing = debounceRef.current !== null || inFlightRef.current || pendingRef.current !== null
-    if (!writing) setSliderValue(reading)
-  }, [reading])
-
-  const sendCeiling = (value: number) => {
-    if (inFlightRef.current) {
-      pendingRef.current = value
-      return
-    }
-    inFlightRef.current = true
-    postFPPBrightnessCeiling(instanceId, value)
-      .then((response) => setOutcome(ceilingOutcome(response)))
-      .catch((err: unknown) => setOutcome({ kind: 'failed', reason: describeApiError(err) }))
-      .finally(() => {
-        inFlightRef.current = false
-        if (pendingRef.current !== null) {
-          const next = pendingRef.current
-          pendingRef.current = null
-          sendCeiling(next)
-        }
-      })
-  }
-
-  const onChange = (value: number) => {
-    setSliderValue(value)
-    if (debounceRef.current !== null) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      debounceRef.current = null
-      sendCeiling(value)
-    }, BRIGHTNESS_DEBOUNCE_MS)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current !== null) clearTimeout(debounceRef.current)
-    }
-  }, [])
-
-  const ceilingUnknown = sliderValue === null
-  const displayed = sliderValue ?? 0
   const absentReasons = absentFacts([readout.ceiling, readout.transitionGain, readout.effectiveOutput, readout.fadeActive, readout.excludedRanges])
-  const sliderTitle = !gate.allowed ? gate.reason : ceilingUnknown ? 'The ceiling is unknown until the plugin reports it.' : undefined
 
   return (
     <Section id="fpp-instance-brightness-title" title="Brightness">
-      <Slider
-        label="Ceiling"
-        value={displayed}
-        min={0}
-        max={100}
-        valueLabel={`${displayed}%`}
-        onChange={(e) => onChange(Number(e.target.value))}
-        unknown={ceilingUnknown}
-        disabled={!gate.allowed}
-        title={sliderTitle}
-      />
-      {outcome !== null && (outcome.kind === 'ok' ? (
-        <p className="sm-small sm-muted">{outcome.sentence}</p>
-      ) : (
-        <RuledStrip absence="failed" label="Ceiling write failed" fact={outcome.reason} />
-      ))}
+      <DisplayBrightnessPlayerReadout instanceId={instanceId} />
       <DefinitionStrip
         items={[
           { term: 'Ceiling', value: <FactCell fact={readout.ceiling} render={(v) => `${v}%`} /> },

@@ -48,7 +48,8 @@ const stubs = vi.hoisted(() => ({
   getCurrentNightSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   postFPPPairing: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
-  postFPPBrightnessCeiling: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getFPPBrightness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putFPPBrightnessCeiling: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putFPPBrightnessExcludedRanges: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
@@ -96,7 +97,8 @@ vi.mock('../api', async () => {
     getCurrentNightSession: (...args: never[]) => stubs.getCurrentNightSession(...args),
     getFPPPairing: (...args: never[]) => stubs.getFPPPairing(...args),
     postFPPPairing: (...args: never[]) => stubs.postFPPPairing(...args),
-    postFPPBrightnessCeiling: (...args: never[]) => stubs.postFPPBrightnessCeiling(...args),
+    getFPPBrightness: (...args: never[]) => stubs.getFPPBrightness(...args),
+    putFPPBrightnessCeiling: (...args: never[]) => stubs.putFPPBrightnessCeiling(...args),
     putFPPBrightnessExcludedRanges: (...args: never[]) => stubs.putFPPBrightnessExcludedRanges(...args),
   }
 })
@@ -550,7 +552,7 @@ describe('Settings › Connections › FPP instance detail', () => {
     expect(screen.getAllByText('This FPP instance has not reported this signal.')).toHaveLength(1)
   })
 
-  it('shows an unknown ceiling as a disabled slider with no number, and states the shared reason once', async () => {
+  it('shows an unreported brightness in the drawer as absences with the shared reason once, and no per-player slider', async () => {
     stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
@@ -567,39 +569,112 @@ describe('Settings › Connections › FPP instance detail', () => {
     await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
     openDetail()
 
-    const slider = await screen.findByLabelText('Ceiling')
-    expect(slider).toBeDisabled()
-    expect(screen.getByText('Unknown')).toBeInTheDocument()
-    expect(screen.queryByText('0%')).not.toBeInTheDocument()
-    expect(screen.getAllByText('Unavailable')).toHaveLength(5)
+    await waitFor(() => expect(screen.getAllByText('Unavailable')).toHaveLength(5))
     expect(screen.getAllByText(reason)).toHaveLength(1)
+    const drawer = document.querySelector('[aria-labelledby="fpp-instance-detail-title"]') ?? document.body
+    expect(drawer.querySelector('input[type="range"]')).toBeNull()
   })
 
-  it('follows the ceiling reading: value, then absent back to Unknown, then a new value', async () => {
+  function brightnessDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      serverTime: '2026-10-17T20:00:00Z',
+      ceiling: { targetPercent: 60, fadeEndsAt: null, changedAt: '2026-10-17T20:00:00Z', changedBy: { kind: 'operator', id: 'p1', name: 'operator-1' } },
+      players: [
+        { instanceId: 'barn-player', state: 'following', ceiling: 60, ceilingTarget: 60, reportedAt: '2026-10-17T20:00:00Z' },
+        { instanceId: 'yard-remote', state: 'catchingUp', reason: 'The player yard-remote is at 100% and is being set to 60%.', ceiling: 100, ceilingTarget: 100 },
+        { instanceId: 'old-remote', state: 'pluginTooOld', reason: 'The player old-remote follows the display brightness, but a change made on it reaches no other player. Update its ShowMesh plugin.', ceiling: 60 },
+        { instanceId: 'dark-remote', state: 'notReporting', reason: 'The brightness on the player dark-remote could not be read. Check that it is on and reachable.' },
+      ],
+      ...overrides,
+    }
+  }
+
+  function connectionsWithBrightness(doc: unknown, scopes = ['config:write', 'fpp:command']) {
     stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPPairing = () => Promise.resolve(pairingNone())
-    const session = signedIn(['config:write', 'fpp:command'])
-    const withCeiling = (evidence: ReturnType<typeof makeEvidence>) => ({
-      session,
-      fpp: [makeFPPInstance('barn-player', { observations: [evidence] })],
-    })
+    stubs.getFPPBrightness = () => Promise.resolve(doc)
+    renderAt('/settings/connections', { session: signedIn(scopes) })
+  }
 
-    const view = renderAt('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })))
+  it('shows one display ceiling with every player reported ceiling and following state', async () => {
+    connectionsWithBrightness(brightnessDoc())
+    const slider = await screen.findByLabelText('Display ceiling')
+    await waitFor(() => expect(slider).toHaveValue('60'))
+    expect(slider).toBeEnabled()
+    expect(screen.getByRole('heading', { name: 'Display brightness' })).toBeInTheDocument()
+    expect(screen.getByText(/60%, set by operator-1 at/)).toBeInTheDocument()
+    for (const word of ['Following', 'Catching up', 'Plugin too old', 'Not reporting']) expect(screen.getByText(word)).toBeInTheDocument()
+    expect(screen.getByText('The player yard-remote is at 100% and is being set to 60%.')).toBeInTheDocument()
+    expect(screen.getByText('Not reported')).toBeInTheDocument()
+  })
+
+  it('says when no display ceiling has been set and still lets one be set', async () => {
+    connectionsWithBrightness(brightnessDoc({ ceiling: null }))
+    const slider = await screen.findByLabelText('Display ceiling')
+    expect(slider).toBeEnabled()
+    expect(screen.getAllByText('Not set').length).toBeGreaterThan(0)
+    expect(screen.getByText(/No display brightness has been set/)).toBeInTheDocument()
+  })
+
+  it('disables the display ceiling with the reason when fpp:command is missing', async () => {
+    connectionsWithBrightness(brightnessDoc(), ['config:write'])
+    const slider = await screen.findByLabelText('Display ceiling')
+    expect(slider).toBeDisabled()
+    expect(slider.getAttribute('title')).toMatch(/fpp:command/)
+  })
+
+  it('debounces the display ceiling write, sends the fade, and keeps one write in flight at a time', async () => {
+    let resolveFirst!: (value: unknown) => void
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const putFPPBrightnessCeiling = vi.fn().mockReturnValueOnce(first).mockResolvedValue(brightnessDoc())
+    stubs.putFPPBrightnessCeiling = putFPPBrightnessCeiling
+    connectionsWithBrightness(brightnessDoc())
+
+    const slider = await screen.findByLabelText('Display ceiling')
+    fireEvent.change(screen.getByLabelText('Fade'), { target: { value: '30' } })
+    fireEvent.change(slider, { target: { value: '55' } })
+    await sleep(300)
+    expect(putFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
+    expect(putFPPBrightnessCeiling).toHaveBeenCalledWith(55, 30)
+
+    fireEvent.change(slider, { target: { value: '45' } })
+    await sleep(300)
+    expect(putFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
+
+    resolveFirst(brightnessDoc())
+    await waitFor(() => expect(putFPPBrightnessCeiling).toHaveBeenCalledTimes(2))
+    expect(putFPPBrightnessCeiling).toHaveBeenLastCalledWith(45, 30)
+  })
+
+  it("renders the coordinator's refusal as a failed strip", async () => {
+    stubs.putFPPBrightnessCeiling = vi.fn(() => Promise.reject(new Error('The brightness 101% is outside 0 to 100. Send a value from 0 to 100.')))
+    connectionsWithBrightness(brightnessDoc())
+    const slider = await screen.findByLabelText('Display ceiling')
+    fireEvent.change(slider, { target: { value: '55' } })
+    await sleep(300)
+    expect(await screen.findByText('Not saved')).toBeInTheDocument()
+  })
+
+  it('refuses a fade that is not whole seconds in range before writing', async () => {
+    const putFPPBrightnessCeiling = vi.fn(() => Promise.resolve(brightnessDoc()))
+    stubs.putFPPBrightnessCeiling = putFPPBrightnessCeiling
+    connectionsWithBrightness(brightnessDoc())
+    const slider = await screen.findByLabelText('Display ceiling')
+    fireEvent.change(screen.getByLabelText('Fade'), { target: { value: '90000' } })
+    expect(await screen.findByText('Enter whole seconds from 0 to 86400.')).toBeInTheDocument()
+    expect(slider).toBeDisabled()
+    expect(putFPPBrightnessCeiling).not.toHaveBeenCalled()
+  })
+
+  it('shows the player state from the display ceiling in the drawer', async () => {
+    connectionsWithBrightness(brightnessDoc())
     await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
     openDetail()
-    const slider = await screen.findByLabelText('Ceiling')
-    expect(slider).toHaveValue('40')
-    expect(slider).toBeEnabled()
-
-    view.rerender(settingsTree('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: null, state: 'unsupported', reason: 'gone' }))))
-    await waitFor(() => expect(screen.getByLabelText('Ceiling')).toBeDisabled())
-    expect(screen.getByText('Unknown')).toBeInTheDocument()
-
-    view.rerender(settingsTree('/settings/connections', withCeiling(makeEvidence({ signal: 'fpp.brightness.ceiling', value: 70 }))))
-    await waitFor(() => expect(screen.getByLabelText('Ceiling')).toHaveValue('70'))
-    expect(screen.getByLabelText('Ceiling')).toBeEnabled()
+    expect(await screen.findByText(/The display brightness is 60%/)).toBeInTheDocument()
   })
 
   async function openExcludedRanges(observations: ReturnType<typeof makeEvidence>[], scopes = ['config:write', 'fpp:command']) {
@@ -688,93 +763,6 @@ describe('Settings › Connections › FPP instance detail', () => {
     const field = await openExcludedRanges([], ['config:write'])
     expect(field).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Save excluded channels' })).toBeDisabled()
-  })
-
-  it('debounces the ceiling write and keeps one write in flight at a time', async () => {
-    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
-    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
-    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
-    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
-
-    let resolveFirst!: (value: unknown) => void
-    const first = new Promise((resolve) => {
-      resolveFirst = resolve
-    })
-    const postFPPBrightnessCeiling = vi.fn().mockReturnValueOnce(first).mockResolvedValue({
-      serverTime: '2026-09-22T00:00:00Z',
-      command: { id: 'c1', idempotencyKey: 'k1', action: 'setBrightnessCeiling', instanceId: 'barn-player', params: {}, replay: false, outcome: 'confirmed', outcomeState: 'current', outcomeReason: 'ok', attributionDegraded: false, dispatchedAt: null, resolvedAt: null },
-      ceiling: 60,
-    })
-    stubs.postFPPBrightnessCeiling = postFPPBrightnessCeiling
-
-    renderAt('/settings/connections', {
-      session: signedIn(['config:write', 'fpp:command']),
-      fpp: [makeFPPInstance('barn-player', { observations: [makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })] })],
-    })
-    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
-    openDetail()
-
-    const slider = await screen.findByLabelText('Ceiling')
-    fireEvent.change(slider, { target: { value: '55' } })
-    await sleep(300)
-    expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
-    expect(postFPPBrightnessCeiling).toHaveBeenCalledWith('barn-player', 55)
-
-    // A second change while the first write is still in flight is held, not sent alongside it.
-    fireEvent.change(slider, { target: { value: '60' } })
-    await sleep(300)
-    expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(1)
-
-    resolveFirst({
-      serverTime: '2026-09-22T00:00:00Z',
-      command: { id: 'c0', idempotencyKey: 'k0', action: 'setBrightnessCeiling', instanceId: 'barn-player', params: {}, replay: false, outcome: 'confirmed', outcomeState: 'current', outcomeReason: 'ok', attributionDegraded: false, dispatchedAt: null, resolvedAt: null },
-      ceiling: 55,
-    })
-
-    await waitFor(() => expect(postFPPBrightnessCeiling).toHaveBeenCalledTimes(2))
-    expect(postFPPBrightnessCeiling).toHaveBeenLastCalledWith('barn-player', 60)
-  })
-
-  it("renders the coordinator's own reason as a failed strip when the ceiling write comes back unconfirmed, not as a generic 'sent' line", async () => {
-    stubs.getFPPEndpointsConfig = () => fppEndpointsResponse(['barn-player'])
-    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
-    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
-    stubs.getFPPPairing = () => Promise.resolve(pairingNone())
-    stubs.postFPPBrightnessCeiling = vi.fn(() =>
-      Promise.resolve({
-        serverTime: '2026-09-22T00:00:00Z',
-        command: {
-          id: 'c1',
-          idempotencyKey: 'k1',
-          action: 'setBrightnessCeiling',
-          instanceId: 'barn-player',
-          params: {},
-          replay: false,
-          outcome: 'unconfirmed',
-          outcomeState: 'not_collected',
-          outcomeReason: 'FPP answered "OK" and the plugin did not report a ceiling of 55 in time',
-          attributionDegraded: false,
-          dispatchedAt: null,
-          resolvedAt: null,
-        },
-      }),
-    )
-
-    renderAt('/settings/connections', {
-      session: signedIn(['config:write', 'fpp:command']),
-      fpp: [makeFPPInstance('barn-player', { observations: [makeEvidence({ signal: 'fpp.brightness.ceiling', value: 40 })] })],
-    })
-    await waitFor(() => expect(screen.getByDisplayValue('barn-player')).toBeInTheDocument())
-    openDetail()
-
-    const slider = await screen.findByLabelText('Ceiling')
-    fireEvent.change(slider, { target: { value: '55' } })
-    await sleep(300)
-
-    const strip = await screen.findByText('FPP answered "OK" and the plugin did not report a ceiling of 55 in time')
-    expect(strip.closest('.sm-strip')).not.toBeNull()
-    expect(screen.getByText('Ceiling write failed')).toBeInTheDocument()
-    expect(screen.queryByText(/wasn't read back in time/)).not.toBeInTheDocument()
   })
 })
 
