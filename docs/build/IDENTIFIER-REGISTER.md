@@ -403,6 +403,7 @@ above was added for.
 | `audio.output.dante` | shipped | ARCHITECTURE section 6 |
 | `timecode.ltc.observe` | shipped | ARCHITECTURE section 6 |
 | `process.supervise` | shipped | ARCHITECTURE section 6 |
+| `clock.ptp` | shipped | Version 1 attributes: `interfaces` (each `name`, plus `phcDevice` when that interface has a PTP hardware clock) and `externalProvider` (a PTP service outside ShowMesh runs on the node). Read by Node routing and node.clock validation. |
 | `audio.playback.background` | shipped | Lane 17a SM-201 |
 | `audio.playback.announcement` | shipped | Lane 17a SM-201 |
 | `audio.playback.playlist` | shipped | Lane 17a SM-201 |

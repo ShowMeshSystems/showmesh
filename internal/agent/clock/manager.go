@@ -56,6 +56,9 @@ type Manager struct {
 	mu       sync.Mutex
 	provider Provider
 	tracker  *Tracker
+	// rejected is the operator reason the last configuration was refused,
+	// reported while no provider is running.
+	rejected string
 }
 
 // NewManager builds an unconfigured Manager. now defaults to [time.Now]
@@ -95,6 +98,7 @@ func (m *Manager) SetConfig(ctx context.Context, cfg Config) error {
 		if m.logger != nil {
 			m.logger.Warn("node.clock configuration rejected", "provider", cfg.Provider, "interface", cfg.Interface, "domain", cfg.Domain, "error", err)
 		}
+		m.rejected = RejectionReason(cfg)
 		return err
 	}
 	if mp, ok := provider.(*ManagedProvider); ok {
@@ -102,10 +106,12 @@ func (m *Manager) SetConfig(ctx context.Context, cfg Config) error {
 			if m.logger != nil {
 				m.logger.Warn("node.clock managed provider failed to start", "interface", cfg.Interface, "domain", cfg.Domain, "error", err)
 			}
+			m.rejected = RejectionReason(cfg)
 			return err
 		}
 	}
 
+	m.rejected = ""
 	m.provider = provider
 	m.tracker = NewTracker(provider, TrackerConfig{
 		Domain: cfg.Domain, DomainDeclared: true,
@@ -139,9 +145,12 @@ func buildProvider(cfg Config, logger Logger) (Provider, error) {
 // report-loop caller.
 func (m *Manager) Poll(ctx context.Context) Status {
 	m.mu.Lock()
-	t := m.tracker
+	t, rejected := m.tracker, m.rejected
 	m.mu.Unlock()
 	if t == nil {
+		if rejected != "" {
+			return StatusRejected(m.now(), rejected)
+		}
 		return StatusUnconfigured(m.now())
 	}
 	return t.Poll(ctx)
