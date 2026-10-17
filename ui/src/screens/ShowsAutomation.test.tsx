@@ -14,6 +14,7 @@ import {
 } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
+import { compositionFixture } from './resolumeComposition.fixture'
 
 const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -29,6 +30,7 @@ const stubs = vi.hoisted(() => ({
   deleteShowMacro: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   deleteShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listResolumeActions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getResolumeComposition: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   submitMacroRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   invokeAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -50,6 +52,7 @@ vi.mock('../api', async () => {
     deleteShowMacro: (...args: never[]) => stubs.deleteShowMacro(...args),
     deleteShowAction: (...args: never[]) => stubs.deleteShowAction(...args),
     listResolumeActions: (...args: never[]) => stubs.listResolumeActions(...args),
+    getResolumeComposition: (...args: never[]) => stubs.getResolumeComposition(...args),
     submitMacroRun: (...args: never[]) => stubs.submitMacroRun(...args),
     invokeAction: (...args: never[]) => stubs.invokeAction(...args),
   }
@@ -727,6 +730,82 @@ describe('Shows · Automation tab', () => {
 
       fireEvent.click(within(aside).getByRole('button', { name: 'None' }))
       await waitFor(() => expect(create).not.toBeDisabled())
+    })
+  })
+
+  describe('Resolume references', () => {
+    function launchClipFixture() {
+      return Promise.resolve({
+        serverTime: '2026-10-17T20:00:00Z',
+        actions: [
+          {
+            name: 'launchClip',
+            params: [
+              { name: 'clip', kind: 'string', required: true },
+              { name: 'deck', kind: 'string', required: false },
+              { name: 'layer', kind: 'string', required: false },
+              { name: 'persistent', kind: 'bool', required: false },
+            ],
+            auditExempt: false,
+            coordinatorRequired: true,
+          },
+        ],
+      })
+    }
+
+    async function openResolumeDraft() {
+      stubs.listResolumeActions = launchClipFixture
+      setup()
+      fireEvent.click(await screen.findByRole('button', { name: 'New action' }))
+      const aside = screen.getByRole('dialog')
+      fireEvent.change(await within(aside).findByLabelText('Label'), { target: { value: 'Pumpkin Wall' } })
+      fireEvent.click(within(aside).getByRole('button', { name: 'Resolume' }))
+      fireEvent.change(await within(aside).findByLabelText('Action'), { target: { value: 'launchClip' } })
+      return aside
+    }
+
+    it('picks deck and clip from the stored composition and fills the layer for a shared clip name', async () => {
+      stubs.getResolumeComposition = () => Promise.resolve(compositionFixture())
+      const aside = await openResolumeDraft()
+      const clip = await within(aside).findByRole('combobox', { name: 'clip' })
+      expect(clip).toBeDisabled()
+      expect(within(aside).getByText('Required unless the clip is persistent.')).toBeInTheDocument()
+      expect(within(aside).getByRole('button', { name: 'Create action' })).toHaveAttribute('title', expect.stringMatching(/deck|clip/i))
+
+      fireEvent.change(within(aside).getByRole('combobox', { name: 'deck' }), { target: { value: 'Show' } })
+      await waitFor(() => expect(clip).not.toBeDisabled())
+      fireEvent.change(clip, { target: { value: 'k2' } })
+      expect(within(aside).getByRole('combobox', { name: 'layer' })).toHaveValue('Overlay')
+      fireEvent.change(clip, { target: { value: 'k3' } })
+      expect(within(aside).getByRole('combobox', { name: 'layer' })).toHaveValue('')
+    })
+
+    it('hides the deck for a persistent clip and lists persistent clips', async () => {
+      stubs.getResolumeComposition = () => Promise.resolve(compositionFixture())
+      const aside = await openResolumeDraft()
+      await within(aside).findByRole('combobox', { name: 'deck' })
+      fireEvent.click(within(aside).getByRole('checkbox', { name: 'persistent' }))
+      expect(within(aside).queryByRole('combobox', { name: 'deck' })).not.toBeInTheDocument()
+      expect(within(aside).getByRole('option', { name: 'Logo · Overlay' })).toBeInTheDocument()
+    })
+
+    it('keeps a stored name the composition no longer has, and says so', async () => {
+      stubs.getResolumeComposition = () => Promise.resolve(compositionFixture())
+      stubs.listResolumeActions = launchClipFixture
+      setupWithAction({ target: { integration: 'resolume', action: 'launchClip', ref: { clip: 'Bats', deck: 'Show' } } as ConfigShowActionTarget, safetyClass: 'none' })
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
+      const aside = screen.getByRole('dialog')
+      expect(await within(aside).findByRole('option', { name: 'Bats · not in the stored composition' })).toBeInTheDocument()
+      expect(within(aside).getByRole('combobox', { name: 'clip' })).toHaveDisplayValue('Bats · not in the stored composition')
+    })
+
+    it('falls back to typed names when no composition is stored', async () => {
+      stubs.getResolumeComposition = () => Promise.reject(new ApiError('no composition', 404))
+      const aside = await openResolumeDraft()
+      expect(await within(aside).findByText('No Resolume composition is stored, so names are typed by hand.')).toBeInTheDocument()
+      expect(within(aside).getByRole('textbox', { name: 'clip' })).toBeInTheDocument()
+      fireEvent.change(within(aside).getByRole('textbox', { name: 'clip' }), { target: { value: 'Pumpkins' } })
+      expect(within(aside).getByRole('button', { name: 'Create action' })).toHaveAttribute('title', expect.stringContaining('deck'))
     })
   })
 
