@@ -168,7 +168,7 @@ func (h *handlers) handleListShowMacros(w http.ResponseWriter, r *http.Request) 
 // kind is unconfigured), the interesting fact here is which OBJECT ID was
 // asked for.
 func showConfigObjectNotFoundProblem(kind, id string) v1.Problem {
-	return resourceNotFoundProblem(fmt.Sprintf("Nothing is saved for %s %q yet. Save one to create it.", kind, id))
+	return resourceNotFoundProblem(fmt.Sprintf("No %s named %s exists yet. Create it first.", configKindNoun(kind), id))
 }
 
 func (h *handlers) getActiveShowConfigRevision(ctx context.Context, kind, id string) (store.ConfigRevisionRecord, store.ConfigObjectRecord, *v1.Problem, error) {
@@ -227,8 +227,8 @@ func (h *handlers) refuseShowChange(ctx context.Context, kind, id, incomingShow 
 	p := mapValidationError(&config.ValidationError{
 		Code: config.ValidationCodeCrossShowReference, Field: "show",
 		Detail: fmt.Sprintf(
-			"%s %q belongs to show %q and cannot move to show %q. Create a new %s in show %q instead.",
-			kind, id, head.Show, incomingShow, kind, incomingShow),
+			"The %s %s belongs to show %s and cannot move to show %s. Create a new %s in show %s instead.",
+			configKindNoun(kind), id, head.Show, incomingShow, configKindNoun(kind), incomingShow),
 	})
 	return &p, nil
 }
@@ -758,14 +758,11 @@ const ProblemTypeConfigRevisionPreconditionFailed = ProblemBaseURI + "config-rev
 // writeShowConfigRevision reports errConfigRevisionPreconditionFailed.
 func configRevisionConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Problem {
 	var detail string
+	noun := configKindNoun(e.kind)
 	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
-		detail = fmt.Sprintf(
-			"%s %q already exists at version %d. Send If-Match with that version to update it.",
-			e.kind, e.id, e.actualRevision)
+		detail = fmt.Sprintf("A %s named %s already exists. Open it to change it.", noun, e.id)
 	} else {
-		detail = fmt.Sprintf(
-			"If-Match %q is out of date for %s %q. The current version is %d. Read it again and retry.",
-			fmt.Sprintf("%d", e.precondition.Revision), e.kind, e.id, e.actualRevision)
+		detail = fmt.Sprintf("The %s %s was changed by someone else. Reload it and try again.", noun, e.id)
 	}
 	return v1.Problem{
 		Type:   ProblemTypeConfigRevisionPreconditionFailed,
@@ -947,6 +944,7 @@ func parseDeleteRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1
 // graph of ordinary references to scan.
 type errConfigObjectCurrentlyActive struct {
 	kind, id, activeKind string
+	detail               string
 }
 
 func (e *errConfigObjectCurrentlyActive) Error() string {
@@ -965,9 +963,7 @@ func configObjectCurrentlyActiveProblem(e *errConfigObjectCurrentlyActive) v1.Pr
 		Type:   ProblemTypeConfigObjectCurrentlyActive,
 		Title:  "Config delete refused: this object is the one currently active",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"%s %q is currently named by %s; change %s to something else first, then delete %s %q",
-			e.kind, e.id, e.activeKind, e.activeKind, e.kind, e.id),
+		Detail: e.detail,
 	}
 }
 
@@ -1201,4 +1197,31 @@ func mapValidationError(verr *config.ValidationError) v1.Problem {
 // operation.
 func jsonUnmarshalStrict(raw string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
+}
+
+// configKindNoun is the plain word an operator uses for a config kind.
+func configKindNoun(kind string) string {
+	switch kind {
+	case config.ShowConfigKind:
+		return "show"
+	case config.ShowCueConfigKind:
+		return "cue"
+	case config.ShowActionConfigKind:
+		return "action"
+	case config.ShowMacroConfigKind:
+		return "macro"
+	case config.ShowPlaylistConfigKind:
+		return "playlist"
+	case config.ShowSurfaceConfigKind:
+		return "surface"
+	case config.MediaPlaylistConfigKind:
+		return "media playlist"
+	case config.NightSessionConfigKind:
+		return "night session"
+	case config.AudioNodeConfigKind:
+		return "audio node"
+	case config.NodeClockConfigKind:
+		return "node clock setting"
+	}
+	return "setting"
 }

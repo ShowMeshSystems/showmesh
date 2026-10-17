@@ -131,7 +131,7 @@ func TestPutReleaseSettingsIsRefusedWhileTheVariablesAreStillSet(t *testing.T) {
 		d.ReleaseSettingsEnvVarsSet, d.ReleaseSettingsMigrationDeferred = true, true
 	})
 	resp, m = putReleaseSettings(t, api, admin, `{"enabled":false}`, nil)
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(m["detail"].(string), "keep the SHOWMESH_RELEASE_CHECK variables") {
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(m["detail"].(string), "keep the existing environment setting") {
 		t.Fatalf("deferred: status %d, body %v, want 409 that keeps the variables", resp.StatusCode, m)
 	}
 	if len(checker.applied) != 0 {

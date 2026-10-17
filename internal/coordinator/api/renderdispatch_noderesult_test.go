@@ -93,7 +93,7 @@ func TestRenderApplyNodeResultWinsOverPipelineSignal(t *testing.T) {
 					map[string]any{"surfaceId": "wall-1", "state": "running", "reason": ""})
 				return &m
 			},
-			wantOutcome: "confirmed", wantReason: `surface.pipeline.state = "running" (node result)`,
+			wantOutcome: "confirmed", wantReason: "The node reports the output is running.",
 		},
 		{
 			name: "no result and a reading from before dispatch does not confirm",
@@ -101,7 +101,7 @@ func TestRenderApplyNodeResultWinsOverPipelineSignal(t *testing.T) {
 		},
 		{
 			name: "no result and a reading from after dispatch confirms",
-			obs:  runningPipelineObs(after), wantOutcome: "confirmed", wantReason: `surface.pipeline.state = "running" (via node-render:media-01)`,
+			obs:  runningPipelineObs(after), wantOutcome: "confirmed", wantReason: "The output is now running.",
 		},
 		{
 			name: "an unconfirmed result leaves a fresh reading free to confirm",
@@ -110,7 +110,7 @@ func TestRenderApplyNodeResultWinsOverPipelineSignal(t *testing.T) {
 					map[string]any{"surfaceId": "wall-1", "state": "starting", "reason": ""})
 				return &m
 			},
-			obs: runningPipelineObs(after), wantOutcome: "confirmed", wantReason: `surface.pipeline.state = "running" (via node-render:media-01)`,
+			obs: runningPipelineObs(after), wantOutcome: "confirmed", wantReason: "The output is now running.",
 		},
 	}
 	for _, tc := range tests {

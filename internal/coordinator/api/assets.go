@@ -89,7 +89,7 @@ func assetTargetRequiredProblem() v1.Problem {
 		Type:   problemBaseURI + "asset-target-required",
 		Title:  "Asset target required",
 		Status: http.StatusBadRequest,
-		Detail: `targetKind is "node" but target is empty; a node-targeted asset must name the declared node it belongs to`,
+		Detail: "A file for a node must name the node it belongs to. Choose a node and try again.",
 	}
 }
 
@@ -101,7 +101,7 @@ func assetStorageFullProblem() v1.Problem {
 		Type:   problemBaseURI + "storage-full",
 		Title:  "Storage full",
 		Status: http.StatusInsufficientStorage,
-		Detail: "this coordinator's asset storage is full; the upload was discarded and nothing was registered",
+		Detail: "The asset storage is full, so the upload was discarded. Free some space and upload again.",
 	}
 }
 
@@ -612,7 +612,7 @@ func assetPinnedByShowAction(ctx context.Context, tx *store.Tx, id string) (stri
 		if label == "" {
 			label = obj.ID
 		}
-		return fmt.Sprintf("This asset is the announcement media for %q. Choose different media for that action, then delete it.", label), nil
+		return fmt.Sprintf("This file is the announcement media for %s. Choose different media for that action, then delete the file.", label), nil
 	}
 	return "", nil
 }

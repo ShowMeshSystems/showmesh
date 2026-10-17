@@ -553,7 +553,7 @@ func TestPutFPPEndpointsConfigDeferredMigrationGivesANonDestructiveRemedy(t *tes
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
-	if !strings.Contains(detail, "do not clear SHOWMESH_FPP_ENDPOINTS") {
+	if !strings.Contains(detail, "keep the existing environment setting") {
 		t.Errorf("detail = %q, want an explicit warning against clearing the variable while the migration is deferred", detail)
 	}
 	// The exact instruction the standard 409 gives, which is destructive
@@ -595,7 +595,7 @@ func TestGetFPPEndpointsConfigDeferredMigrationStatesItRatherThanReportingNothin
 	if strings.Contains(detail, "has been created yet") {
 		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: one IS in effect", detail)
 	}
-	for _, want := range []string{"SHOWMESH_FPP_ENDPOINTS", "unwritable", "GET /api/v1/fpp"} {
+	for _, want := range []string{"keep the existing environment setting", "cannot be written"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", detail, want)
 		}

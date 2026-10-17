@@ -447,7 +447,7 @@ func TestCueCatalogDeployReplayFailsCleanlyOnAWrongFamilyCallerIntent(t *testing
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "cmd-wrong-family") {
+	if p.Detail != replayedKeyDifferentCommandDetail {
 		t.Fatalf("detail = %q, want it to name the undecodable command", p.Detail)
 	}
 }
@@ -506,11 +506,8 @@ func TestCueCatalogDeployReplayRefusesAnUntaggedWrongFamilyRowByItsAllZeroIdenti
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "cmd-untagged-wrong-family") {
+	if p.Detail != replayedKeyDifferentCommandDetail {
 		t.Fatalf("detail = %q, want it to name the refused command", p.Detail)
-	}
-	if !strings.Contains(p.Detail, "not a cue list deploy") {
-		t.Fatalf("detail = %q, want it to say the command is not a cue list deploy", p.Detail)
 	}
 }
 
@@ -848,7 +845,7 @@ func TestCueCatalogDeployRefusesOnClaimConflict(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("deploy with a claim conflict: status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "cue-a") || !strings.Contains(string(body), "cue-b") {
+	if !strings.Contains(string(body), "cue-a and cue-b") {
 		t.Fatalf("refusal body %q does not name both cue ids", body)
 	}
 	if !strings.Contains(string(body), "program audio output on audio-01") {

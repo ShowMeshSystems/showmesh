@@ -112,7 +112,7 @@ func TestCueCatalogDeployEstablishesRenderAssignmentEndToEnd(t *testing.T) {
 	// unchanged catalog) stays in place, so nothing but a genuine
 	// establishment can bring it back. ---
 	clearOut := mustCtl(t, coord, token, []string{"render", "clear"}, nodeID, surfaceID)
-	if !strings.Contains(clearOut, "confirmed:") || !strings.Contains(clearOut, `"stopped"`) {
+	if !strings.Contains(clearOut, "confirmed:") || !strings.Contains(clearOut, "stopped.") {
 		t.Fatalf("render clear stdout = %q, want a confirmed stopped outcome", clearOut)
 	}
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -318,7 +317,7 @@ func forbiddenProblem(scope identity.Scope) v1.Problem {
 		Type:   ProblemTypeForbidden,
 		Title:  "Forbidden",
 		Status: http.StatusForbidden,
-		Detail: "this principal does not hold the required scope: " + string(scope),
+		Detail: "Your account is not allowed to do this. Ask an administrator to add the " + string(scope) + " permission.",
 	}
 }
 
@@ -454,7 +453,7 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: data volume unwritable",
 		Status: http.StatusConflict,
-		Detail: "Not saved: the data volume is unwritable. Fix the volume and restart; do not clear SHOWMESH_FPP_ENDPOINTS.",
+		Detail: "Nothing was saved because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then.",
 	}
 }
 
@@ -585,9 +584,7 @@ func cueCatalogClaimConflictProblem(nodeID string, conflicts []assetsync.Catalog
 		Type:   ProblemTypeCueCatalogClaimConflict,
 		Title:  "Cue catalog deploy refused: conflicting exclusive claims",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"The Cue list for node %q has a conflict: %s. Fix the Cues, or deploy anyway with override.",
-			nodeID, strings.Join(details, "; ")),
+		Detail: cueCatalogConflictDetail(details),
 	}
 }
 
@@ -646,7 +643,7 @@ func alignmentRunAlreadyActiveProblem(activeRunID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Audio alignment run already active",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf("This node already has an alignment run (%q). Stop it before starting another.", activeRunID),
+		Detail: "This node already has an alignment run. Stop it before starting another.",
 	}
 }
 
@@ -669,9 +666,7 @@ func fppCommandReplayConflictProblem(existingID, existingAction, existingTargetI
 		// An idempotency key is scoped to the exact (action, instanceId) it
 		// was first used against — this is that scope stated in the wire
 		// text, not a citation of where the rule is defined.
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
-			existingID, existingAction, existingTargetID, requestedAction, requestedTargetID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -697,9 +692,7 @@ func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existin
 		// An idempotency key names ONE intended operation — this is that
 		// rule stated in the wire text, not a citation of where it is
 		// defined.
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q) with params %s, not %s. Use a new key.",
-			existingID, action, targetID, existingParamsJSON, requestedParamsJSON),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 
@@ -826,4 +819,18 @@ func fppPairingPrincipalUnusableProblem(detail string) v1.Problem {
 		Status: http.StatusConflict,
 		Detail: detail,
 	}
+}
+
+const (
+	replayedKeyDifferentCommandDetail  = "This request was already used for a different command. Try again."
+	replayedKeyDifferentSettingsDetail = "This request was already used with different settings. Try again."
+)
+
+// cueCatalogConflictDetail names the first conflict and counts the rest.
+func cueCatalogConflictDetail(details []string) string {
+	first := details[0]
+	if n := len(details) - 1; n > 0 {
+		first += fmt.Sprintf(", and %d more conflicting %s", n, map[bool]string{true: "pair", false: "pairs"}[n == 1])
+	}
+	return first + ". Fix the cues, or deploy anyway with override."
 }

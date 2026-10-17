@@ -1097,7 +1097,7 @@ func TestPutShowSurfaceRefusesConflictOnSameNodeAndShow(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("overlapping surface status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	if want := `channelRange: The surface "Matrix Left" already uses channels 1 to 3600 on this node. Choose other channels.`; !strings.Contains(problemDetail(t, body), want) {
+	if want := `channelRange: The surface Matrix Left already uses channels 1 to 3600 on this node. Choose other channels.`; !strings.Contains(problemDetail(t, body), want) {
 		t.Fatalf("body = %s, want detail %q", body, want)
 	}
 
@@ -1105,7 +1105,7 @@ func TestPutShowSurfaceRefusesConflictOnSameNodeAndShow(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("same NDI name status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	if want := `output.ndi.sourceName: The NDI name "Matrix" is already used by the surface "Matrix Left" on this node. Choose a different NDI name.`; !strings.Contains(problemDetail(t, body), want) {
+	if want := `output.ndi.sourceName: The NDI name Matrix is already used by the surface Matrix Left on this node. Choose a different NDI name.`; !strings.Contains(problemDetail(t, body), want) {
 		t.Fatalf("body = %s, want detail %q", body, want)
 	}
 
@@ -1152,7 +1152,7 @@ func TestPutShowSurfaceConflictAcrossNodeMoveAndDelete(t *testing.T) {
 
 	// Moving right onto render-01 collides with left's channels.
 	resp, body := put("right", "render-01", 1, "Right")
-	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(problemDetail(t, body), `The surface "left" already uses channels 1 to 3600`) {
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(problemDetail(t, body), `The surface left already uses channels 1 to 3600`) {
 		t.Fatalf("move into conflict: status = %d; body: %s", resp.StatusCode, body)
 	}
 

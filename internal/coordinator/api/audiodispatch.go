@@ -785,9 +785,7 @@ func audioSessionReplayConflictProblem(existingID, existingAction, existingNodeI
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
-			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -801,9 +799,7 @@ func audioSessionReplayParamsConflictProblem(existingID, action, existingParamsJ
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q) with params %s, not %s. Use a new key.",
-			existingID, action, existingParamsJSON, requestedParamsJSON),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 

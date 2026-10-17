@@ -206,7 +206,7 @@ func (s *Service) Mint(ctx context.Context, actor identity.Authenticated, client
 		return Minted{}, err
 	}
 	if isEnrolled && !reenroll {
-		return Minted{}, opErr(ErrAlreadyEnrolled, "Node %q is already enrolled. Mint a re-enrollment code to replace its credentials.", nodeID)
+		return Minted{}, opErr(ErrAlreadyEnrolled, "Node %s is already enrolled. Make a re-enrollment code to replace its login.", nodeID)
 	}
 
 	value, err := GenerateCode()
@@ -336,7 +336,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 	}
 	switch codeFromRecord(rec, now).State {
 	case StateRedeemed:
-		return Redeemed{}, opErr(ErrCodeUsed, "This code has already been used. Mint a new one: showmeshctl node enroll --reenroll %s", rec.NodeID)
+		return Redeemed{}, opErr(ErrCodeUsed, "This code was already used. Make a new one with showmeshctl node enroll --reenroll %s.", rec.NodeID)
 	case StateCancelled:
 		return Redeemed{}, opErr(ErrCodeCancelled, "This enrollment code was cancelled. Mint a new one with showmeshctl node enroll %s.", rec.NodeID)
 	case StateExpired:
@@ -378,7 +378,7 @@ func (s *Service) Redeem(ctx context.Context, req RedeemRequest, now time.Time) 
 		password, undo, err := s.broker.Provision(nodeID)
 		if err != nil {
 			return Redeemed{}, &operatorError{kind: ErrRedeemFailed, cause: err,
-				msg: "The node's broker login could not be created. The code is still valid; check the coordinator's log and retry."}
+				msg: "The node's login could not be created, but the code is still valid. Check the coordinator log and try again."}
 		}
 		result.MQTTUsername, result.MQTTPassword, undoBroker = nodeID, password, undo
 	} else {

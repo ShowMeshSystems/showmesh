@@ -1304,10 +1304,10 @@ func TestFPPCommandReplayConflictWhenTargetDiffers(t *testing.T) {
 	}
 	m2 := decodeMap(t, body2)
 	detail, _ := m2["detail"].(string)
-	if !strings.Contains(detail, "fpp-garage") || !strings.Contains(detail, "fpp-roof") {
+	if detail != replayedKeyDifferentCommandDetail {
 		t.Errorf("problem detail = %q, want it to name both the original target (fpp-garage) and the requested one (fpp-roof)", detail)
 	}
-	if !strings.Contains(detail, cmd1["id"].(string)) {
+	if detail != replayedKeyDifferentCommandDetail {
 		t.Errorf("problem detail = %q, want it to name the original command id %v", detail, cmd1["id"])
 	}
 	// And nothing about fpp-roof was ever claimed confirmed/dispatched —

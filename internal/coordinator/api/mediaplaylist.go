@@ -169,7 +169,7 @@ func (h *handlers) refuseMediaPlaylistIfReferencedByRunningNightSession(playlist
 		}
 		return &errConfigObjectCurrentlyActive{
 			kind: config.MediaPlaylistConfigKind, id: playlistID,
-			activeKind: fmt.Sprintf("night.session %q's resting.backgroundAudio", rec.ConfigObjectID),
+			detail: fmt.Sprintf("The media playlist %s is the background audio of night session %s. Choose another playlist there first, then delete this one.", playlistID, rec.ConfigObjectID),
 		}
 	}
 }

@@ -76,7 +76,7 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))
 		// ADR-024 decision 8's login concurrency bound.
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
-			"too many concurrent login/bootstrap attempts; try again shortly"))
+			"Too many people are signing in at once. Try again in a moment."))
 		return
 	}
 	defer h.loginLimiter.release()

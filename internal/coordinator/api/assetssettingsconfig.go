@@ -53,7 +53,7 @@ func (h *handlers) handleGetAssetsSettingsConfig(w http.ResponseWriter, r *http.
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.AssetSettingsMigrationDeferred {
 			writeProblem(w, h.logger, now, assetsSettingsNotStoredProblem(
-				"No asset settings are stored: the data volume is unwritable. Fix it, restart, and do not clear the SHOWMESH_ASSET_* variables."))
+				"No asset settings are stored because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(

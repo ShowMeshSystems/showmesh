@@ -87,7 +87,7 @@ func (h *handlers) handleGetFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		// never reported as absence.
 		if h.deps.FPPEndpointsMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"No FPP endpoints are stored: the data volume is unwritable. GET /api/v1/fpp shows those in effect. Fix it, restart, and do not clear SHOWMESH_FPP_ENDPOINTS."))
+				"No FPP endpoints are stored because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
@@ -389,8 +389,7 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	// immediately above rather than exposing internal package names.
 	if err := config.ValidateResolumeIDAgainstFPPEndpoints(h.deps.ResolumeID, endpoints); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"endpoint id %q is the same id this coordinator uses for its Resolume connection; "+
-				"rename this endpoint's id, or change the Resolume instance id, then retry.",
+			"The FPP id %s is the id used for the Resolume connection. Rename the FPP, or change the Resolume id, and try again.",
 			h.deps.ResolumeID,
 		)))
 		return
@@ -410,7 +409,7 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	for _, id := range resolumeIDs {
 		if err := config.ValidateResolumeIDAgainstFPPEndpoints(id, endpoints); err != nil {
 			writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-				"Endpoint id %q is already used by a Resolume instance. Rename one of them, then retry.",
+				"The FPP id %s is already used by a Resolume instance. Rename one of them and try again.",
 				id,
 			)))
 			return

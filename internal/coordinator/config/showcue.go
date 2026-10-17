@@ -343,7 +343,7 @@ func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExi
 	if !showExists(show) {
 		return ShowCuePayload{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "show",
-			Detail: fmt.Sprintf("show %q is not a configured show", show),
+			Detail: fmt.Sprintf("Show %s does not exist. Create it first.", show),
 		}
 	}
 
@@ -435,7 +435,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 		}
 		return ShowCueOutputs{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "outputs",
-			Detail: "outputs must declare at least one of render, audio, ltc, or announcement",
+			Detail: "A cue needs at least one output, such as render, audio, LTC or announcement.",
 		}
 	}
 
@@ -501,7 +501,7 @@ func decodeShowCueActions(raw json.RawMessage) ([]string, *ValidationError) {
 		if seen[id] {
 			return nil, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: itemField,
-				Detail: fmt.Sprintf("show action %q is already listed earlier in outputs.actions", id),
+				Detail: fmt.Sprintf("Action %s is listed more than once. Remove the repeat.", id),
 			}
 		}
 		seen[id] = true
@@ -522,13 +522,13 @@ func ValidateShowCueActions(p ShowCuePayload, actionShow func(id string) (string
 		if !ok {
 			return &ValidationError{
 				Code: ValidationCodeFieldUnknownReference, Field: itemField,
-				Detail: fmt.Sprintf("show action %q does not exist. Create it first, or remove it from this cue.", id),
+				Detail: fmt.Sprintf("Action %s does not exist. Create it first, or remove it from this cue.", id),
 			}
 		}
 		if show != p.Show {
 			return &ValidationError{
 				Code: ValidationCodeCrossShowReference, Field: itemField,
-				Detail: fmt.Sprintf("show action %q belongs to show %q, not %q. Pick an action from this cue's show.", id, show, p.Show),
+				Detail: fmt.Sprintf("Action %s belongs to show %s, not %s. Pick an action from this cue's show.", id, show, p.Show),
 			}
 		}
 	}
@@ -567,7 +567,7 @@ func decodeShowCueTarget(fields map[string]json.RawMessage, path string, audioNo
 	if !audioNodeExists(target) {
 		return "", &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: path + ".target",
-			Detail: fmt.Sprintf("target %q is not a configured audio.node", target),
+			Detail: fmt.Sprintf("Audio node %s is not set up. Add it first.", target),
 		}
 	}
 	return target, nil
@@ -637,14 +637,14 @@ func decodeShowCueTargets(fields map[string]json.RawMessage, path string, audioN
 		if seen[id] {
 			return nil, &ValidationError{
 				Code: ValidationCodeShowCueTargetDuplicate, Field: itemField,
-				Detail: fmt.Sprintf("target %q is already listed earlier in %s", id, targetsField),
+				Detail: fmt.Sprintf("Node %s is listed more than once. Remove the repeat.", id),
 			}
 		}
 		seen[id] = true
 		if !audioNodeExists(id) {
 			return nil, &ValidationError{
 				Code: ValidationCodeFieldUnknownReference, Field: itemField,
-				Detail: fmt.Sprintf("target %q is not a configured audio.node", id),
+				Detail: fmt.Sprintf("Audio node %s is not set up. Add it first.", id),
 			}
 		}
 	}
