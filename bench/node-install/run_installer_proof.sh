@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Runs showmesh-install for one node role (render or audio) against the fake enrollment server,
+# Runs showmesh-install for one node role (render, audio or render-audio) against the fake enrollment server,
 # unattended: a wrong code, an expired code, an old coordinator, a first install, then an in-place
 # upgrade, a node enrolled before the installer saved its coordinator, and a by-hand enrollment.
 # Runs inside the node-install bench container with the releases from build_installer_release.sh.
 set -uo pipefail
 
-ROLE="${1:?usage: run_installer_proof.sh render|audio RELEASES_DIR}"
-RELEASES="${2:?usage: run_installer_proof.sh render|audio RELEASES_DIR}"
+ROLE="${1:?usage: run_installer_proof.sh render|audio|render-audio RELEASES_DIR}"
+RELEASES="${2:?usage: run_installer_proof.sh render|audio|render-audio RELEASES_DIR}"
 NODE_ID="bench-$ROLE"
 PORT=18080
 URL="http://127.0.0.1:$PORT"
@@ -47,7 +47,7 @@ python3 /repo/bench/node-install/fake_enrollment_server.py "$PORT" GOOD-C0DE "$N
 for _ in $(seq 1 20); do curl -fsS "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.3; done
 
 extra=()
-[ "$ROLE" = "render" ] && extra=(--skip-ndi)
+[ "$ROLE" != "audio" ] && extra=(--skip-ndi)
 
 run_install 0.0.0-bench1 /tmp/wrong.log --role "$ROLE" --coordinator "$URL" --code ZZZZ-9999 --yes "${extra[@]}"
 check "a wrong code stops the install" "[ $? -ne 0 ]"
@@ -95,11 +95,12 @@ check "the agent binary is bench1" "/usr/local/bin/showmesh-agent-native -versio
 check "showmesh-install is on PATH" "[ \"\$(readlink /usr/local/bin/showmesh-install)\" = /opt/showmesh/installer/0.0.0-bench1/showmesh-install ]"
 check "the code was redeemed once" "[ \"\$(grep -c 'POST /api/v1/node-enrollments/redeem' $SERVER_LOG)\" = 4 ]"
 multiarch="$(gcc -dumpmachine | sed 's/-unknown//')"
-if [ "$ROLE" = "render" ]; then
+if [ "$ROLE" != "audio" ]; then
   check "the packaged NDI plugin is installed" "[ -f /usr/lib/$multiarch/gstreamer-1.0/libgstndi.so ]"
   check "the skipped NDI runtime names the later command" "grep -q 'showmesh-install --ndi' /tmp/install.log"
-else
-  check "the unattended audio node skips PTP and names the later command" "grep -q 'install-ptp-audio.sh <interface>' /tmp/install.log"
+fi
+if [ "$ROLE" != "render" ]; then
+  check "the unattended $ROLE node skips PTP and names the later command" "grep -q 'install-ptp-audio.sh <interface>' /tmp/install.log"
 fi
 
 echo 'SHOWMESH_LOG_LEVEL=debug' >> "$ENV_FILE"

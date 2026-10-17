@@ -81,7 +81,7 @@ nothing on the host's network: every container publishes no ports, and the
 coordinator proof runs its own dockerd with no host Docker socket.
 
 ```sh
-bench/node-install/run_installer_bench.sh     # render node and audio node
+bench/node-install/run_installer_bench.sh     # render, audio and render-audio nodes
 bench/node-install/run_coordinator_bench.sh   # coordinator, after the line above
 ```
 
