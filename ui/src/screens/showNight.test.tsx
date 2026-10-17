@@ -1568,14 +1568,14 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    const helpText = /sets how long the resting cycle runs/
+    const helpText = /sets how long resting runs/
     const sequenceSelect = await screen.findByLabelText('Resting sequence')
     const describedBy = sequenceSelect.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()
     expect(document.getElementById(describedBy!)).toHaveTextContent(helpText)
-    // A second copy on Resting target would still pass a plain text-presence assertion.
+    // A second copy on Read the length from would still pass a plain text-presence assertion.
     expect(screen.getAllByText(helpText)).toHaveLength(1)
-    expect(screen.getByLabelText('Resting target').getAttribute('aria-describedby')).toBeNull()
+    expect(screen.getByLabelText('Read the length from').getAttribute('aria-describedby')).toBeNull()
   })
 
   it('explains the audio asset picker lists store-registered assets by name and node', async () => {

@@ -185,8 +185,17 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].CueID < entries[j].CueID })
 
+	resting, restingCoveredBy, err := restingRenderEntry(ctx, st, showID, nodeHasSurface, entries, assetsBySequence)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+	all := entries
+	if resting != nil {
+		all = sortedWithResting(entries, *resting)
+	}
+
 	revision, err := cuecatalog.ComputeRevision(cuecatalog.RevisionInput{
-		Show: showID, Generation: active.Generation, Node: nodeID, Entries: entries,
+		Show: showID, Generation: active.Generation, Node: nodeID, Entries: all,
 	})
 	if err != nil {
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: compute revision: %w", err)
@@ -195,6 +204,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 	return Catalog{
 		Show: showID, Generation: active.Generation, Node: nodeID,
 		Entries: entries, Revision: revision, Conflicts: conflicts,
+		RenderNode: nodeHasSurface, Resting: resting, RestingCoveredByCue: restingCoveredBy,
 	}, nil
 }
 
@@ -217,6 +227,33 @@ type Catalog struct {
 	Entries    []cuecatalog.Entry
 	Revision   string
 	Conflicts  []CatalogConflict
+
+	// RenderNode is true when the node holds a surface in this Show.
+	RenderNode bool
+	// Resting is the resting sequence's render entry (ADR-061), or nil when
+	// this node does not draw it. It is not a Cue, so it stays out of
+	// Entries; Revision covers it and the node receives it via AllEntries.
+	Resting *cuecatalog.Entry
+	// RestingCoveredByCue names the Cue that already renders the resting
+	// sequence on this node, in which case Resting is nil.
+	RestingCoveredByCue string
+}
+
+// AllEntries is every entry the node holds, the resting entry included, in
+// the order the catalog revision is computed over.
+func (c Catalog) AllEntries() []cuecatalog.Entry {
+	if c.Resting == nil {
+		return c.Entries
+	}
+	return sortedWithResting(c.Entries, *c.Resting)
+}
+
+func sortedWithResting(entries []cuecatalog.Entry, resting cuecatalog.Entry) []cuecatalog.Entry {
+	all := make([]cuecatalog.Entry, 0, len(entries)+1)
+	all = append(all, entries...)
+	all = append(all, resting)
+	sort.Slice(all, func(i, j int) bool { return all[i].CueID < all[j].CueID })
+	return all
 }
 
 // HasAnyOutput reports whether c resolves at least one non-empty output
@@ -230,7 +267,7 @@ type Catalog struct {
 // itself, never cueactivate's own participation set, have one place to
 // ask it from Catalog directly.
 func (c Catalog) HasAnyOutput() bool {
-	for _, e := range c.Entries {
+	for _, e := range c.AllEntries() {
 		if e.Outputs.Render != nil || e.Outputs.Audio != nil || e.Outputs.LTC != nil || e.Outputs.Announcement != nil {
 			return true
 		}

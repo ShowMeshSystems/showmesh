@@ -21840,6 +21840,11 @@ components:
           type: string
           minLength: 1
         timelineAsset:
+          description: >-
+            The resting sequence. Its length, read from the copy on target,
+            sets how long resting runs. Any render node that has this
+            sequence draws it during resting; target does not choose render
+            nodes.
           $ref: "#/components/schemas/ConfigNightSessionAssetRef"
         endOfNightRepeat:
           type: boolean
@@ -22108,6 +22113,11 @@ components:
           type: string
           minLength: 1
         timelineAsset:
+          description: >-
+            The resting sequence. Its length, read from the copy on target,
+            sets how long resting runs. Any render node that has this
+            sequence draws it during resting; target does not choose render
+            nodes.
           $ref: "#/components/schemas/ConfigNightSessionAssetRef"
         endOfNightRepeat:
           type: boolean
@@ -23773,7 +23783,11 @@ components:
         show.playlist entry naming this Cue whose
         fpp.expectedSequenceFilename is set, plus this Cue's own resolved
         render output filename when it has one. Always present, an empty
-        array when there is no trigger yet.
+        array when there is no trigger yet. A render node that holds the
+        active night session's resting sequence also has one entry whose
+        cueId is "resting:" followed by the sequence id (ADR-061). It is
+        not a Cue: it has only a render output, cueRevision 1, and no
+        triggers.
       additionalProperties: false
       required: [cueId, cueRevision, outputs, triggers]
       properties:

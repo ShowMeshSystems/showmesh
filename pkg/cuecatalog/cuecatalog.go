@@ -15,6 +15,7 @@ package cuecatalog
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 )
@@ -150,3 +151,18 @@ func ComputeRevision(in RevisionInput) (string, error) {
 	}
 	return hashHex, nil
 }
+
+// RestingEntryPrefix starts the id of the catalog entry that renders the
+// night's resting sequence (ADR-061). A Cue id cannot contain ':', so no
+// Cue can collide with it.
+const RestingEntryPrefix = "resting:"
+
+// RestingEntryRevision is the resting entry's fixed revision. The entry's
+// content is covered by the catalog revision, not by this number.
+const RestingEntryRevision int64 = 1
+
+// RestingEntryID is the catalog entry id for resting sequence sequence.
+func RestingEntryID(sequence string) string { return RestingEntryPrefix + sequence }
+
+// IsRestingEntry reports whether id names a resting entry rather than a Cue.
+func IsRestingEntry(id string) bool { return strings.HasPrefix(id, RestingEntryPrefix) }
