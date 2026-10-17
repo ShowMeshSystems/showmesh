@@ -422,7 +422,7 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 
 	if rep.payload.MultiSyncObservedAt.IsZero() {
-		reason := "this node has not reported multisync listener status yet"
+		reason := "This node has not reported its sync status yet."
 		return []observation.Observation{
 			notCollected(res, SignalNodeMultiSyncListening, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalNodeMultiSyncReason, SourceFor(nodeID), reason, rep.receivedAt),

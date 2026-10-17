@@ -79,7 +79,7 @@ func assetResyncPublishFailedProblem(nodeID, commandID string, err error) v1.Pro
 		Type:   ProblemTypeAssetResyncPublishFailed,
 		Title:  "Re-sync request could not be sent",
 		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf("node %q could not be asked for a fresh inventory: %v (command %s)", nodeID, err, commandID),
+		Detail: fmt.Sprintf("Node %s could not be asked for its file list. Check that the node is online and try again.", nodeID),
 	}
 }
 

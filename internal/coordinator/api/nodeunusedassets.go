@@ -254,8 +254,7 @@ func (h *handlers) handlePostRemoveNodeAsset(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if filename == "" {
-		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"node %q's inventory holds no asset with content hash %q; nothing to remove", nodeID, req.ContentHash)))
+		writeProblem(w, h.logger, now, invalidParameterProblem("This node does not hold that file, so there is nothing to remove."))
 		return
 	}
 
@@ -383,7 +382,8 @@ func (h *handlers) handlePostRemoveNodeAsset(w http.ResponseWriter, r *http.Requ
 		}
 		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{DispatchedAt: &dispatchedAt})
 		resolvedAt := h.now()
-		reason := err.Error()
+		h.logWarn("node command was not confirmed", "node", nodeID, "error", err)
+		reason := "The node did not answer in time. Check that the node is online."
 		resultJSON, _ := json.Marshal(removeNodeAssetResultPayload{Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason})
 		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 			ResolvedAt: &resolvedAt, State: strPtr("resolved"), ResultJSON: strPtr(string(resultJSON)),
@@ -488,9 +488,7 @@ func assetRemoveReplayUndecodableProblem(existingID, nodeID string) v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s on node %q, not a file removal. Use a new key.",
-			existingID, nodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -534,7 +532,7 @@ func assetInUseByCueProblem(nodeID, contentHash string, cueIDs []string) v1.Prob
 		Title:  "Asset removal refused: still referenced by a Cue",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"content hash %q on node %q is referenced by the following Cue(s) in this node's current Cue catalog and cannot be removed: %s",
-			contentHash, nodeID, strings.Join(quoted, ", ")),
+			"This file is used by cue %s on this node, so it cannot be removed. Change the cue first.",
+			strings.Join(cueIDs, ", ")),
 	}
 }

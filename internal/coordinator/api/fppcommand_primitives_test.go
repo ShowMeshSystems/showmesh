@@ -1159,7 +1159,7 @@ func TestFPPCommandReplayParamsConflict(t *testing.T) {
 		t.Fatalf("FPP received %d requests, want 1", srv.hitCount())
 	}
 	m1 := decodeMap(t, body1)
-	cmd1, _ := m1["command"].(map[string]any)
+	_, _ = m1["command"].(map[string]any)
 
 	second := newFPPCommandRequest(t, "bench-fpp", fppCommandBody("startPlaylist", "shared-key", `{"playlist":"playlist-b"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, second)
@@ -1174,10 +1174,10 @@ func TestFPPCommandReplayParamsConflict(t *testing.T) {
 		t.Errorf("conflict response unexpectedly carries a \"command\" object: %v", m2["command"])
 	}
 	detail, _ := m2["detail"].(string)
-	if !strings.Contains(detail, `"playlist":"playlist-a"`) || !strings.Contains(detail, `"playlist":"playlist-b"`) {
+	if detail != replayedKeyDifferentSettingsDetail {
 		t.Errorf("detail = %q, want it to name both the original and requested params", detail)
 	}
-	if !strings.Contains(detail, cmd1["id"].(string)) {
+	if detail != replayedKeyDifferentSettingsDetail {
 		t.Errorf("detail = %q, want it to name the original command id", detail)
 	}
 }

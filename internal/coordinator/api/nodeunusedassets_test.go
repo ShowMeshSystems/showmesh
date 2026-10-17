@@ -210,7 +210,7 @@ func TestPostRemoveNodeAssetRefusesWhenCueReferencesAsset(t *testing.T) {
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem: %v", err)
 	}
-	if !containsAll(problem.Detail, `"thriller"`) {
+	if !containsAll(problem.Detail, "cue thriller") {
 		t.Fatalf("problem detail = %q, want it to name cue \"thriller\"", problem.Detail)
 	}
 }

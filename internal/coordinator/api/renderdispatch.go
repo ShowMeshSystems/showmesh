@@ -1017,7 +1017,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	// post-dispatch changed_at (rows only ever move forward).
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID})
 	if err != nil {
-		return false, string(observation.StateCollectionFailed), "reading surface.pipeline.state for confirmation: " + err.Error(), false
+		return false, string(observation.StateCollectionFailed), "The output state could not be read, so the command could not be confirmed.", false
 	}
 	var o, changedAtRow observation.Observation
 	var foundState, foundChangedAt bool
@@ -1033,8 +1033,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 		}
 	}
 	if !foundState {
-		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.pipeline.state observation is recorded for this surface from node %s yet", nodeID), false
+		return false, string(observation.StateNotCollected), fmt.Sprintf("Node %s has not reported this output yet.", nodeID), false
 	}
 	src := o.Source
 	if src == "" {
@@ -1055,9 +1054,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	// satisfy.
 	if o.Absence == observation.StateNotCollected {
 		if o.CollectedAt.Before(notBefore) {
-			return false, string(observation.StateNotCollected), fmt.Sprintf(
-				"No pipeline reading has arrived since this command was sent at %s. The latest is from %s via %s.",
-				notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src), false
+			return false, string(observation.StateNotCollected), "The node has not reported this output since the command was sent. Check again in a moment.", false
 		}
 		if wantState == mqttproto.RenderPipelineStateStopped {
 			reason := o.Reason
@@ -1068,46 +1065,38 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 			// the value-observation branch below uses, so a caller reading
 			// the outcome reason sees the desired state was reached either
 			// way — only the parenthetical names how it was confirmed.
-			return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src), false
+			return true, string(observation.StateCurrent), fmt.Sprintf("The output is now %s.", wantState), false
 		}
-		return false, string(o.Absence), fmt.Sprintf("surface.pipeline.state is absent (%s), wanted %q (via %s)", o.Reason, wantState, src), false
+		return false, string(o.Absence), fmt.Sprintf("The node no longer reports this output, and it should be %s.", wantState), false
 	}
 
 	// Value-bearing evidence is fenced on the node's real transition time,
 	// never CollectedAt. surface.pipeline.changed_at's VALUE is preferred;
 	// o.ObservedAt is the fallback ONLY when changed_at is entirely absent.
-	transitionAt, changedOutcome, changedDetail := classifyChangedAt(changedAtRow, foundChangedAt)
+	transitionAt, changedOutcome, _ := classifyChangedAt(changedAtRow, foundChangedAt)
 	switch changedOutcome {
 	case changedAtNotCollected:
-		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"Node %s has not reported when its pipeline last changed (%s), so the change cannot be confirmed.", nodeID, changedDetail), false
+		return false, string(observation.StateUnknownAge), fmt.Sprintf("Node %s has not said when this output last changed, so the change could not be confirmed.", nodeID), false
 	case changedAtUnparsable:
-		return false, string(observation.StateCollectionFailed), fmt.Sprintf(
-			"Node %s sent a pipeline change time that cannot be read: %s", nodeID, changedDetail), false
+		return false, string(observation.StateCollectionFailed), fmt.Sprintf("Node %s sent a change time that could not be read, so the change could not be confirmed.", nodeID), false
 	case changedAtAbsent:
 		if o.ObservedAt == nil {
 			return false, string(observation.StateUnknownAge), fmt.Sprintf(
-				"Node %s's pipeline reading has no time, so it cannot be confirmed as new.", nodeID), false
+				"Node %s's output report has no time, so it could not be confirmed as new.", nodeID), false
 		}
 		transitionAt = *o.ObservedAt
 	}
 	if transitionAt.Before(notBefore) {
-		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"No pipeline change has arrived since this command was sent at %s. The latest was at %s via %s.",
-			notBefore.Format(time.RFC3339), transitionAt.Format(time.RFC3339), src), false
+		return false, string(observation.StateNotCollected), "The node has not reported a change since the command was sent. Check again in a moment.", false
 	}
 
 	state := o.StateAt(h.now())
 	if state != observation.StateCurrent {
-		reason := o.Reason
-		if reason == "" {
-			reason = fmt.Sprintf("pipeline reading is %s", state)
-		}
-		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src), false
+		return false, string(state), "The output report is out of date, so the command could not be confirmed.", false
 	}
 	v, _ := o.Value.(string)
 	if v == wantState {
-		return true, string(state), fmt.Sprintf("surface.pipeline.state = %q (via %s)", v, src), false
+		return true, string(state), fmt.Sprintf("The output is now %s.", v), false
 	}
 	// Finding 15: the pipeline's own reported value is distinct,
 	// structured evidence — not merely "some other state" — exactly when
@@ -1116,7 +1105,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	// function it is false because the branch that fired is either
 	// confirmation itself or a state that genuinely isn't "failed".
 	pipelineFailed = v == mqttproto.RenderPipelineStateFailed
-	return false, string(state), fmt.Sprintf("surface.pipeline.state = %v, wanted %q (via %s)", o.Value, wantState, src), pipelineFailed
+	return false, string(state), fmt.Sprintf("The output is %v and should be %s.", o.Value, wantState), pipelineFailed
 }
 
 // changedAtOutcome distinguishes why a surface.pipeline.changed_at read did
@@ -1226,7 +1215,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	wantSource := renderNodeSourceFor(nodeID)
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
 	if err != nil {
-		return false, string(observation.StateCollectionFailed), "reading surface.transport.available for confirmation: " + err.Error()
+		return false, string(observation.StateCollectionFailed), "The output check could not be read, so it could not be confirmed."
 	}
 	var o observation.Observation
 	var found bool
@@ -1238,8 +1227,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 		}
 	}
 	if !found {
-		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.transport.available observation is recorded for this surface from node %s yet", nodeID)
+		return false, string(observation.StateNotCollected), fmt.Sprintf("Node %s has not reported the output check yet.", nodeID)
 	}
 	src := o.Source
 	if src == "" {
@@ -1251,7 +1239,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	// coordinator's receipt time.
 	if o.ObservedAt == nil {
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"Node %s's output reading has no time, so it cannot be confirmed as new.", nodeID)
+			"Node %s's output check has no time, so it could not be confirmed as new.", nodeID)
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
@@ -1267,7 +1255,7 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
 	}
 	v, _ := o.Value.(bool)
-	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
+	return true, string(state), fmt.Sprintf("The output is available: %v.", v)
 }
 
 // renderBlackoutResultAwaitDeadline bounds how long dispatchRenderCommand's
@@ -1324,7 +1312,7 @@ func renderNodeConfirmedReason(res mqttproto.ResultPayload) string {
 	if res.Evidence != nil {
 		if v, ok := res.Evidence.Value.(map[string]any); ok {
 			if state, ok := v["state"].(string); ok && state != "" {
-				return fmt.Sprintf("surface.pipeline.state = %q (node result)", state)
+				return fmt.Sprintf("The node reports the output is %s.", state)
 			}
 		}
 	}
@@ -1468,9 +1456,7 @@ func renderCommandReplayConflictProblem(existingID, existingAction, existingNode
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
-			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -1482,9 +1468,7 @@ func renderCommandReplayIdentityConflictProblem(existingID, action, nodeID strin
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q, surface %q, sequence %q), not surface %q, sequence %q. Use a new key.",
-			existingID, action, nodeID, existingSurfaceID, existingSequenceID, requestedSurfaceID, requestedSequenceID),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 

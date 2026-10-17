@@ -1326,7 +1326,7 @@ func TestRenderDispatchReplayDifferentNodeIsConflict(t *testing.T) {
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "media-01") || !strings.Contains(p.Detail, "media-02") {
+	if p.Detail != replayedKeyDifferentCommandDetail {
 		t.Fatalf("detail = %q, want it to name both the existing and the requested node", p.Detail)
 	}
 	if n := countRenderAuditReplayEntries(t, setup.svc, first.Command.CommandID); n != 1 {
@@ -1383,7 +1383,7 @@ func TestRenderDispatchReplayDifferentSurfaceIsParamsConflict(t *testing.T) {
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "wall-1") || !strings.Contains(p.Detail, "wall-2") {
+	if p.Detail != replayedKeyDifferentSettingsDetail {
 		t.Fatalf("detail = %q, want it to name both the existing and the requested params", p.Detail)
 	}
 	if n := countRenderAuditReplayEntries(t, setup.svc, first.Command.CommandID); n != 1 {
@@ -1479,7 +1479,7 @@ func TestRenderApplyReplayDifferentSequenceIsParamsConflict(t *testing.T) {
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "opener") || !strings.Contains(p.Detail, "closer") {
+	if p.Detail != replayedKeyDifferentSettingsDetail {
 		t.Fatalf("detail = %q, want it to name both the existing and the requested sequenceId", p.Detail)
 	}
 }
@@ -1682,7 +1682,7 @@ func TestRenderApplyReplayDifferentSequenceIsConflictEvenWhenNewSequenceFailsToR
 	if p.Type != ProblemTypeConflict {
 		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
 	}
-	if !strings.Contains(p.Detail, "opener") || !strings.Contains(p.Detail, "missing-sequence") {
+	if p.Detail != replayedKeyDifferentSettingsDetail {
 		t.Fatalf("detail = %q, want it to name both the existing and the requested sequenceId", p.Detail)
 	}
 }
@@ -1808,7 +1808,7 @@ func TestRenderClearConfirmsOnDroppedSurfaceAbsence(t *testing.T) {
 	// the DECODED field (not the raw JSON body, where the same quotes are
 	// escaped as \"stopped\"), so a regression is caught at the unit level
 	// before the much slower integration suite has to find it.
-	if !strings.Contains(result.Command.OutcomeReason, `"stopped"`) {
+	if !strings.Contains(result.Command.OutcomeReason, "stopped") {
 		t.Errorf(`outcomeReason = %q, want it to name the confirmed "stopped" state even though it was reached via absence`, result.Command.OutcomeReason)
 	}
 }
