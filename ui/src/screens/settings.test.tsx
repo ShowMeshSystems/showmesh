@@ -1918,6 +1918,29 @@ describe('Settings › Node routing › choices from the node', () => {
     expect(sent).not.toHaveProperty('pipewireTargetNode')
   })
 
+  it('picks the PipeWire target node from the outputs the node reports, keeping a saved one it no longer reports', async () => {
+    const OLD = 'alsa_output.usb-Old-00.pro-output-0'
+    setUp(
+      { programRoute: M4, programChannels: [1, 2], role: 'program', sinkBackend: 'pipewiresink', pipewireTargetNode: OLD },
+      choices({ routes: [{ ...m4Route, shortName: 'M4' }], current: { programRoute: M4, programChannels: [1, 2], offered: true } }),
+    )
+    let sent: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    const target = (await screen.findByRole('combobox', { name: 'PipeWire target node' })) as HTMLSelectElement
+    expect(target.value).toBe(OLD)
+    expect(Array.from(target.options).map((o) => o.textContent)).toEqual(["PipeWire's default output", `${OLD}, no longer reported by this node`, 'M4'])
+
+    fireEvent.change(target, { target: { value: M4 } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ sinkBackend: 'pipewiresink', pipewireTargetNode: M4 })
+  })
+
   it('explains stale discovery and keeps the manual fields, with no choices offered', async () => {
     setUp(
       { programRoute: M4, programChannels: [1, 2] },
