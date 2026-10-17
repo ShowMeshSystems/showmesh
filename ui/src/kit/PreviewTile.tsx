@@ -1,4 +1,5 @@
 import type { DragEventHandler, ReactNode, Ref } from 'react'
+import { Button } from './Button'
 import { StatusPair } from './Status'
 import type { Tone } from './tone'
 
@@ -35,6 +36,8 @@ type Props = {
   actions?: ReactNode
   /** A grab handle in the caption row; present only when the tile can be dragged. */
   handle?: ReactNode
+  /** Shows an enlarge icon in the caption row that calls this. */
+  onEnlarge?: () => void
   dragState?: 'dragging' | 'over' | undefined
   draggable?: boolean
   onDragStart?: DragEventHandler<HTMLElement>
@@ -44,7 +47,7 @@ type Props = {
 }
 
 /** One live source: a 16:9 frame, its name, and a state word with the coordinator's sentence under it. */
-export function PreviewTile({ label, state, message, media, frameAgeSeconds, mediaRef, actions, handle, dragState, ...drag }: Props) {
+export function PreviewTile({ label, state, message, media, frameAgeSeconds, mediaRef, actions, handle, onEnlarge, dragState, ...drag }: Props) {
   const stale = frameAgeSeconds !== undefined && frameAgeSeconds >= STALE_FRAME_SECONDS
   const { tone, word } = stale ? { tone: 'warn' as const, word: 'Stale' } : STATE_WORD[state]
   const classes = ['sm-preview', dragState === undefined ? '' : `sm-preview--${dragState}`].filter(Boolean).join(' ')
@@ -58,6 +61,11 @@ export function PreviewTile({ label, state, message, media, frameAgeSeconds, med
         <h3 className="sm-preview__label sm-subhead sm-truncate">{label}</h3>
         {frameAgeSeconds !== undefined && <span className="sm-small sm-muted">{frameAgeWords(frameAgeSeconds)}</span>}
         <StatusPair tone={tone} label={word} appearance="word" />
+        {onEnlarge !== undefined && (
+          <Button size="icon" variant="quiet" aria-label={`Enlarge ${label}`} title="Enlarge" onClick={onEnlarge}>
+            <span aria-hidden="true">⤢</span>
+          </Button>
+        )}
       </div>
       {message !== '' && <p className="sm-preview__message sm-small sm-muted">{message}</p>}
       {actions !== undefined && <div className="sm-preview__actions">{actions}</div>}

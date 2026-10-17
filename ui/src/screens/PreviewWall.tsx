@@ -197,6 +197,7 @@ export function PreviewWall() {
             <PreviewWallTile
               key={tile.key}
               tile={tile}
+              enlargeable
               withMessage={gatewayState === 'reachable'}
               handle={gate.allowed ? <span className="sm-preview__handle" aria-hidden="true">⠿</span> : undefined}
               actions={

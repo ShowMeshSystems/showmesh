@@ -19,6 +19,7 @@ import {
   WeatherDelayHeldBanner,
   WeatherDelayQuestionBanner,
   ConfirmDialog,
+  WindowDialog,
   ConnectionPill,
   CopyButton,
   DefinitionStrip,
@@ -154,6 +155,7 @@ export function Specimen() {
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [windowOpen, setWindowOpen] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
   const [sliderValue, setSliderValue] = useState(72)
@@ -842,12 +844,12 @@ export function Specimen() {
           number="17 · Preview tile"
           id="specimen-preview-tile"
           title="A live source: the picture, its name, and one state word"
-          detail="The frame is always 16:9. The sentence under the caption is the coordinator's own, a tile with no picture says so, and a picture with no new frame for 10 seconds reads Stale."
+          detail="The enlarge icon on Camera 3 opens the tile in a window, closed by the X, Escape or a click outside. The frame is always 16:9. The sentence under the caption is the coordinator's own, a tile with no picture says so, and a picture with no new frame for 10 seconds reads Stale."
         >
           <PreviewGrid>
             <PreviewTile label="Camera 1" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={1} />
             <PreviewTile label="Camera 2" state="live" message="" media={<span aria-hidden="true" />} frameAgeSeconds={14} />
-            <PreviewTile label="Camera 3" state="connecting" message="" />
+            <PreviewTile label="Camera 3" state="connecting" message="" onEnlarge={() => setWindowOpen(true)} />
             <PreviewTile label="NDI source" state="not_found" message="This source is no longer announced on the network. Check that its sender is running." />
             <PreviewTile label="Camera 4" state="disabled" message="This camera is turned off. Turn it on to see it here." />
             <PreviewTile label="Camera 5" state="error" message="The gateway did not accept the camera addresses. Check each address and save again." />
@@ -859,6 +861,9 @@ export function Specimen() {
               actions={<ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} />}
             />
           </PreviewGrid>
+          <WindowDialog open={windowOpen} title="Camera 3" onClose={() => setWindowOpen(false)}>
+            <PreviewTile label="Camera 3" state="connecting" message="" />
+          </WindowDialog>
         </SpecSection>
         <SpecSection
           number="18 · Reorder buttons"
