@@ -194,7 +194,7 @@ func decodeShowAudioNodes(top map[string]json.RawMessage, audioNodeExists func(s
 		if !audioNodeExists(id) {
 			return nil, &ValidationError{
 				Code: ValidationCodeFieldUnknownReference, Field: field,
-				Detail: fmt.Sprintf("%s names %q, which is not a configured audio.node", field, id),
+				Detail: fmt.Sprintf("%s names audio node %s, which is not set up. Add it first.", field, id),
 			}
 		}
 		if seen[id] {

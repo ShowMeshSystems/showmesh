@@ -286,13 +286,13 @@ func decodeShowPlaylistMismatchPolicy(top map[string]json.RawMessage, runner, pl
 	if !ok {
 		return "", "", &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "safeCueRef",
-			Detail: fmt.Sprintf("safeCueRef %q does not resolve to an existing show.cue object", safeCueRef),
+			Detail: fmt.Sprintf("Cue %s does not exist. Create it first, or pick another cue.", safeCueRef),
 		}
 	}
 	if cueShow != playlistShow {
 		return "", "", &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: "safeCueRef",
-			Detail: fmt.Sprintf("safeCueRef %q belongs to show %q, not this playlist's own show %q", safeCueRef, cueShow, playlistShow),
+			Detail: fmt.Sprintf("Cue %s belongs to show %s, not this playlist's show %s. Pick a cue from this show.", safeCueRef, cueShow, playlistShow),
 		}
 	}
 
@@ -435,7 +435,7 @@ func decodeShowPlaylistEntries(top map[string]json.RawMessage, runner, playlistS
 			if seenPositions[key] {
 				return nil, &ValidationError{
 					Code: ValidationCodeEntryPositionDuplicate, Field: field + ".fpp.position",
-					Detail: fmt.Sprintf("section %q position %d is used by more than one entry", entry.FPP.Section, entry.FPP.Position),
+					Detail: fmt.Sprintf("Section %s position %d is used by more than one entry. Give each entry its own position.", entry.FPP.Section, entry.FPP.Position),
 				}
 			}
 			seenPositions[key] = true
@@ -472,13 +472,13 @@ func decodeShowPlaylistEntry(raw json.RawMessage, field, runner, playlistShow st
 	if !ok {
 		return ShowPlaylistEntry{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: field + ".cue",
-			Detail: fmt.Sprintf("cue %q does not resolve to an existing show.cue object", cue),
+			Detail: fmt.Sprintf("Cue %s does not exist. Create it first, or pick another cue.", cue),
 		}
 	}
 	if cueShow != playlistShow {
 		return ShowPlaylistEntry{}, &ValidationError{
 			Code: ValidationCodeCrossShowReference, Field: field + ".cue",
-			Detail: fmt.Sprintf("cue %q belongs to show %q, not this playlist's own show %q", cue, cueShow, playlistShow),
+			Detail: fmt.Sprintf("Cue %s belongs to show %s, not this playlist's show %s. Pick a cue from this show.", cue, cueShow, playlistShow),
 		}
 	}
 

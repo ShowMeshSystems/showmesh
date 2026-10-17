@@ -76,7 +76,7 @@ func DecodeNightSessionActivePayload(raw string, sessionExists NightSessionExist
 	if session != "" && !sessionExists(session) {
 		return NightSessionActivePayload{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "session",
-			Detail: fmt.Sprintf("session %q is not a configured night.session object", session),
+			Detail: fmt.Sprintf("Night session %s does not exist. Create it first.", session),
 		}
 	}
 

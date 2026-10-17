@@ -526,7 +526,7 @@ function TargetNodeField({
       label={label}
       help={
         notDeclared
-          ? `${value} is not a configured audio.node; saving is refused until you deselect it.`
+          ? `Audio node ${value} is not set up. Deselect it to save.`
           : "Empty resolves to the installation's single program+ltc node."
       }
     >

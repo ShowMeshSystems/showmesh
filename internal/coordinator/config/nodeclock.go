@@ -154,7 +154,7 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 	if !nodeClockProviders[provider] {
 		return NodeClockPayload{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "provider",
-			Detail: fmt.Sprintf("provider %q is not one of %q, %q, %q", provider, NodeClockProviderManaged, NodeClockProviderExternal, NodeClockProviderFPP),
+			Detail: fmt.Sprintf("Provider %s must be managed, external or fpp.", provider),
 		}
 	}
 
@@ -225,7 +225,7 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 	if provider == NodeClockProviderFPP && fppBaseURL == "" {
 		return NodeClockPayload{}, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "fppBaseUrl",
-			Detail: "fppBaseUrl is required when provider is \"fpp\"",
+			Detail: "The FPP base URL is required when the provider is fpp.",
 		}
 	}
 
@@ -237,7 +237,7 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 		if provider != NodeClockProviderExternal {
 			return NodeClockPayload{}, &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
-				Detail: fmt.Sprintf("phcDevice applies only when provider is %q. Remove it.", NodeClockProviderExternal),
+				Detail: fmt.Sprintf("A PHC device applies only when the provider is %s. Remove it.", NodeClockProviderExternal),
 			}
 		}
 		if !phcDevicePattern.MatchString(phcDevice) {

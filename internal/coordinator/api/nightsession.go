@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -280,7 +281,8 @@ func (h *handlers) refuseNightSessionIfActive(sessionID string) func(ctx context
 		if payload.Session != sessionID {
 			return nil
 		}
-		return &errConfigObjectCurrentlyActive{kind: config.NightSessionConfigKind, id: sessionID, activeKind: config.NightSessionActiveConfigKind}
+		return &errConfigObjectCurrentlyActive{kind: config.NightSessionConfigKind, id: sessionID, activeKind: config.NightSessionActiveConfigKind,
+			detail: fmt.Sprintf("The night session %s is the active night session. Choose another one first, then delete this one.", sessionID)}
 	}
 }
 

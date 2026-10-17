@@ -532,7 +532,7 @@ func decodeNightSiteControl(top map[string]json.RawMessage, sessionShow string, 
 	if len(fields) == 0 {
 		return nil, &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "siteControl",
-			Detail: "siteControl sets no thermal profile, power-on or power-off action. Add one, or remove siteControl.",
+			Detail: "Site control has no thermal profile, power-on or power-off action. Add one, or remove site control.",
 		}
 	}
 

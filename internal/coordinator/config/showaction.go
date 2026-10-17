@@ -877,7 +877,7 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 	if !showExists(show) {
 		return ShowActionPayload{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "show",
-			Detail: fmt.Sprintf("show %q is not a configured show; create it first", show),
+			Detail: fmt.Sprintf("Show %s does not exist. Create it first.", show),
 		}
 	}
 
@@ -963,7 +963,7 @@ func decodeFPPTarget(targetFields map[string]json.RawMessage, declaredSafetyClas
 	if !fppInstanceConfigured(instanceID, endpoints) {
 		return ShowActionTarget{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "target.instanceId",
-			Detail: fmt.Sprintf("instance %q is not a configured FPP endpoint", instanceID),
+			Detail: fmt.Sprintf("FPP %s is not set up. Add it in Settings first.", instanceID),
 		}
 	}
 
@@ -999,7 +999,7 @@ func decodeFPPTarget(targetFields map[string]json.RawMessage, declaredSafetyClas
 	if registeredClass != declaredSafetyClass {
 		return ShowActionTarget{}, &ValidationError{
 			Code: ValidationCodeSafetyClassMismatch, Field: "safetyClass",
-			Detail: fmt.Sprintf("safetyClass %q does not match primitive %q's own registered safety class %q", declaredSafetyClass, primitive, registeredClass),
+			Detail: fmt.Sprintf("Safety class %s does not fit the %s action, which needs %s.", declaredSafetyClass, primitive, registeredClass),
 		}
 	}
 
@@ -1020,7 +1020,7 @@ func decodeMQTTTarget(targetFields map[string]json.RawMessage, brokers []Integra
 	if !integrationBrokerDeclared(broker, brokers) {
 		return ShowActionTarget{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "target.broker",
-			Detail: fmt.Sprintf("broker %q is not a declared integration broker", broker),
+			Detail: fmt.Sprintf("Broker %s is not declared. Declare it first.", broker),
 		}
 	}
 
@@ -1744,7 +1744,7 @@ func rejectUnknownTopLevelKeys(top map[string]json.RawMessage, known map[string]
 	return &ValidationError{
 		Code: ValidationCodeFieldUnknownKey,
 		Detail: fmt.Sprintf(
-			"unrecognized key(s): %s. Check the spelling or remove them.",
+			"These keys are not recognized: %s. Check the spelling or remove them.",
 			strings.Join(unknown, ", ")),
 	}
 }
