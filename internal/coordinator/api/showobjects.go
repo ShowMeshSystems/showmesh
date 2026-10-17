@@ -559,7 +559,11 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		h.pushFPPConnectToNode(r.Context(), previousNode)
 	}
 	if hadPrevious && previous.Node == payload.Node && surfaceRenderGeometryChanged(previous, payload) {
-		go h.reapplyEditedSurface(context.WithoutCancel(r.Context()), now, payload.Node, id, nextRevisionNo)
+		h.surfaceReapplyWG.Add(1)
+		go func() {
+			defer h.surfaceReapplyWG.Done()
+			h.reapplyEditedSurface(context.WithoutCancel(r.Context()), now, payload.Node, id, nextRevisionNo)
+		}()
 	}
 
 	jsonWrite(w, mapShowSurfaceConfigResponse(now, activated, store.ConfigObjectRecord{

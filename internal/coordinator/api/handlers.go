@@ -248,6 +248,9 @@ type handlers struct {
 	// this without blocking and never waits for it to appear.
 	nightFirstCueStageResult map[string][]string
 
+	// surfaceReapplyWG owns every re-apply started by a surface geometry edit.
+	surfaceReapplyWG sync.WaitGroup
+
 	// nightRestingRenderWG owns every resting render dispatch goroutine, and
 	// nightRestingRenderMu guards nightRestingRenders, keyed by
 	// nightRestingRenderKey. In-memory: a restart sends once more.

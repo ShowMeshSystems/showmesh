@@ -52,12 +52,12 @@ func renderApplyPublishes(pub *fakeRenderPublisher) []mqttCmdEnvelopeForTest {
 func TestPutShowSurfaceGeometryChangeReappliesRunningSurface(t *testing.T) {
 	renderCommandConfirmDeadline = 50 * time.Millisecond
 	renderCommandPollInterval = 5 * time.Millisecond
+	api, st, renderPub, live, token := surfaceEditFixture(t)
 	defer func() {
+		api.h.surfaceReapplyWG.Wait()
 		renderCommandConfirmDeadline = 15 * time.Second
 		renderCommandPollInterval = 250 * time.Millisecond
 	}()
-
-	api, st, renderPub, live, token := surfaceEditFixture(t)
 	hash := strings.Repeat("c", 64)
 	renderCreateAsset(t, st, "halloween-2026", "thriller", store.AssetTargetKindShow, "", hash, "thriller.fseq")
 
@@ -92,6 +92,7 @@ func TestPutShowSurfaceGeometryChangeReappliesRunningSurface(t *testing.T) {
 
 func TestPutShowSurfaceGeometryChangeSkipsUnassignedSurface(t *testing.T) {
 	api, _, renderPub, _, token := surfaceEditFixture(t)
+	t.Cleanup(api.h.surfaceReapplyWG.Wait)
 
 	putSurfaceBody(t, api, token, validSurfaceBodyNDI)
 	putSurfaceBody(t, api, token, strings.Replace(validSurfaceBodyNDI, `"frameRate": 40`, `"frameRate": 20`, 1))
