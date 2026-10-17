@@ -586,9 +586,15 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
                     {...props}
                     value={programRoute}
                     onChange={(e) => {
+                      const picked = choices.routes.find((r) => r.route === e.target.value)
                       setProgramRoute(e.target.value)
                       setProgramChannelsText('')
                       setLtcChannelText('')
+                      if (picked !== undefined) {
+                        // A PipeWire output plays only through PipeWire, aimed at that output.
+                        setSinkBackend(picked.source === 'pipewire' ? 'pipewiresink' : 'alsasink')
+                        setPipewireTargetNode(picked.source === 'pipewire' ? picked.route : '')
+                      }
                       setDirty(true)
                     }}
                   >

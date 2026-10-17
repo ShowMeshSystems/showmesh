@@ -29,17 +29,27 @@ var audioPipeWireDiscoverer = audio.DiscoverPipeWire
 // audioPipeWireDiscoverer probes against.
 var audioPipeWireEnumerator audio.PipeWireEnumerator = audio.PwDumpEnumerator{}
 
-// discoverAudio runs this node's full ALSA and PipeWire discovery and
-// merges them into one [audio.Discovery]: a PipeWire-backed node's own
-// device model must still describe the node in ALSA terms alongside
-// whatever PipeWire holds, so both discovery methods run on every call,
-// never a backend selector choosing one or the other; see the union
-// advertisement rule documented on [detectAudioCapabilities].
+// discoverAudio runs this node's PipeWire and ALSA discovery and merges
+// them into one [audio.Discovery]. When PipeWire lists outputs it owns the
+// cards, so no ALSA name is probed: each is the same hardware and opens busy.
 func discoverAudio(ctx context.Context) audio.Discovery {
-	d := audioDiscoverer(ctx, audioEnumerator)
 	pw := audioPipeWireDiscoverer(ctx, audioPipeWireEnumerator)
-	return d.WithPipeWireRoutes(pw)
+	enum := audioEnumerator
+	if pipeWireOwnsOutputs(pw) {
+		enum = pipeWireOwnedEnumerator{enum}
+	}
+	return audioDiscoverer(ctx, enum).WithPipeWireRoutes(pw)
 }
+
+func pipeWireOwnsOutputs(pw audio.PipeWireDiscovery) bool {
+	return pw.Enumerated && len(pw.Routes) > 0
+}
+
+// pipeWireOwnedEnumerator keeps the hardware-card answer and lists no ALSA
+// candidates, so discovery still proves the engine and probes no device.
+type pipeWireOwnedEnumerator struct{ audio.Enumerator }
+
+func (pipeWireOwnedEnumerator) Devices(context.Context) ([]string, error) { return nil, nil }
 
 // audioEngineAvailable reports whether this node's actual playback
 // engine (the real backend behind internal/agent/audio.Manager, bound to
@@ -373,7 +383,7 @@ func audioCapabilitiesFor(d audio.Discovery, gone map[string]bool) capability.Se
 		attrs := routeAttributes(usable)
 		outputs, missing := outputEvidence(usable)
 		attrs["outputs"] = outputs
-		discovered, reason := discoveryCompleteness(d, missing)
+		discovered, reason, route := discoveryCompleteness(d, missing)
 		if len(gone) > 0 {
 			missingRoutes := goneRouteAttributes(gone)
 			attrs["missingRoutes"] = missingRoutes
@@ -381,6 +391,9 @@ func audioCapabilitiesFor(d audio.Discovery, gone map[string]bool) capability.Se
 		attrs["discoveryComplete"] = discovered
 		if !discovered {
 			attrs["discoveryIncompleteReason"] = reason
+		}
+		if route != "" {
+			attrs["discoveryIncompleteRoute"] = route
 		}
 		set = append(set, capability.Capability{
 			ID: "audio.output.local", Version: 1,
@@ -557,17 +570,18 @@ func outputEvidence(routes []audio.RouteEvidence) (out []map[string]any, missing
 
 // discoveryCompleteness reports whether every enumeration d merges ran
 // cleanly and in full, and every candidate output has real channel
-// evidence; a partial discovery is never offered as a complete list.
-func discoveryCompleteness(d audio.Discovery, missing []string) (bool, string) {
+// evidence; a partial discovery is never offered as a complete list. route
+// names the one output at fault when a single output is the cause.
+func discoveryCompleteness(d audio.Discovery, missing []string) (complete bool, reason, route string) {
 	switch {
 	case !d.HardwareEnumerated:
-		return false, d.HardwareEnumeratedReason
+		return false, d.HardwareEnumeratedReason, ""
 	case d.Truncated:
-		return false, fmt.Sprintf("the node has %d audio outputs and checks only the first %d", d.CandidateCount, audio.MaxProbedDevices)
+		return false, fmt.Sprintf("the node has %d audio outputs and checks only the first %d", d.CandidateCount, audio.MaxProbedDevices), ""
 	case !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != "":
-		return false, d.PipeWireEnumeratedReason
+		return false, d.PipeWireEnumeratedReason, ""
 	case d.PipeWireTruncated:
-		return false, fmt.Sprintf("the node's PipeWire graph has %d outputs and only the first %d are checked", d.PipeWireNodeCount, audio.MaxProbedDevices)
+		return false, fmt.Sprintf("the node's PipeWire graph has %d outputs and only the first %d are checked", d.PipeWireNodeCount, audio.MaxProbedDevices), ""
 	}
 	for _, r := range d.Routes {
 		if r.Available {
@@ -576,10 +590,10 @@ func discoveryCompleteness(d audio.Discovery, missing []string) (bool, string) {
 		if _, cached := lastKnownGoodRoutes.get(r.Device); r.Busy && cached {
 			continue
 		}
-		return false, fmt.Sprintf("the output %s did not open: %s", r.Device, r.Reason)
+		return false, fmt.Sprintf("the output %s did not open: %s", r.Device, r.Reason), r.Device
 	}
 	if len(missing) > 0 {
-		return false, fmt.Sprintf("the output %s is in use and has not been checked since the node started", missing[0])
+		return false, fmt.Sprintf("the output %s is in use and has not been checked since the node started", missing[0]), missing[0]
 	}
-	return true, ""
+	return true, "", ""
 }

@@ -825,3 +825,81 @@ func TestHeldRouteMissCountIgnoresIncompleteEnumeration(t *testing.T) {
 		}
 	}
 }
+
+// TestDiscoverAudioProbesNoALSAOutputWhileItsPipeWireGraphListsOutputs proves
+// a PipeWire node never opens its cards' ALSA names, which PipeWire holds
+// and which would open busy and mark discovery partial.
+func TestDiscoverAudioProbesNoALSAOutputWhileItsPipeWireGraphListsOutputs(t *testing.T) {
+	m4 := audio.RouteEvidence{Device: "alsa_output.usb-MOTU_M4-00.pro-output-0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 4, FromGraph: true}
+	alsaNames := []string{"null", "sysdefault", "hw:CARD=M4,DEV=0"}
+	cases := []struct {
+		name      string
+		pw        audio.PipeWireDiscovery
+		wantProbe []string
+	}{
+		{"pipewire lists outputs", audio.PipeWireDiscovery{Enumerated: true, Routes: []audio.RouteEvidence{m4}}, nil},
+		{"no pipewire", audio.PipeWireDiscovery{}, alsaNames},
+		{"pipewire lists no outputs", audio.PipeWireDiscovery{Enumerated: true}, alsaNames},
+		{"pipewire unreadable", audio.PipeWireDiscovery{EnumeratedReason: "PipeWire graph enumeration failed: bad json"}, alsaNames},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withAudioPipeWireDiscoverer(t, tc.pw)
+			origEnum, origDiscoverer := audioEnumerator, audioDiscoverer
+			t.Cleanup(func() { audioEnumerator, audioDiscoverer = origEnum, origDiscoverer })
+			audioEnumerator = listingEnumerator{devices: alsaNames}
+			var listed []string
+			var hasCards bool
+			audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+				listed, _ = enum.Devices(ctx)
+				hasCards, _ = enum.HasHardwareCards(ctx)
+				return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: hasCards}
+			}
+
+			d := discoverAudio(context.Background())
+
+			if strings.Join(listed, ",") != strings.Join(tc.wantProbe, ",") {
+				t.Errorf("ALSA devices offered for probing = %v, want %v", listed, tc.wantProbe)
+			}
+			if !hasCards {
+				t.Error("HasHardwareCards = false, want the real card answer kept")
+			}
+			if len(d.Routes) != len(tc.pw.Routes) {
+				t.Errorf("routes = %v, want the PipeWire routes %v", d.Routes, tc.pw.Routes)
+			}
+		})
+	}
+}
+
+// TestDetectAudioCapabilitiesNamesTheOneOutputThatFailed proves a partial
+// discovery caused by a single output names it, so the operator knows which
+// interface to check; a whole-enumeration failure names none.
+func TestDetectAudioCapabilitiesNamesTheOneOutputThatFailed(t *testing.T) {
+	good := audio.RouteEvidence{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}}
+	cases := []struct {
+		name string
+		d    audio.Discovery
+		want string
+	}{
+		{"one output failed", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Routes: []audio.RouteEvidence{good,
+			{Device: "hw:CARD=GONE,DEV=0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open audio device"}}}}, "hw:CARD=GONE,DEV=0"},
+		{"enumeration truncated", audio.Discovery{EngineUsable: true, HardwareEnumerated: true, Truncated: true, EnumeratedCount: 9, Routes: []audio.RouteEvidence{good}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lastKnownGoodRoutes.reset()
+			t.Cleanup(lastKnownGoodRoutes.reset)
+			withAudioEngineAvailable(t, true, "")
+			withAudioDiscoverer(t, tc.d)
+			withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{})
+			local, ok := detectAudioCapabilities(context.Background()).Lookup("audio.output.local")
+			if !ok {
+				t.Fatal("audio.output.local not advertised, want present")
+			}
+			got, present := local.Attributes["discoveryIncompleteRoute"].(string)
+			if got != tc.want || (tc.want == "" && present) {
+				t.Errorf("discoveryIncompleteRoute = %q (present %v), want %q", got, present, tc.want)
+			}
+		})
+	}
+}

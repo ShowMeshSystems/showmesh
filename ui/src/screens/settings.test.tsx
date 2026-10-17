@@ -1874,6 +1874,50 @@ describe('Settings › Node routing › choices from the node', () => {
     expect(sent).not.toHaveProperty('ltcChannel')
   })
 
+  it('plays a chosen PipeWire output through PipeWire aimed at that output', async () => {
+    const PCH = 'hw:CARD=PCH,DEV=0'
+    const pch = { route: PCH, interface: 'hw:CARD=PCH', source: 'alsa', channels: 2, channelBasis: 'atLeast', ltcCapable: false, programGroups: [{ channels: [1, 2], ltcChannels: [], conflicts: [] }] }
+    setUp(
+      { programRoute: PCH, programChannels: [1, 2], role: 'program' },
+      choices({ routes: [pch, m4Route], current: { programRoute: PCH, programChannels: [1, 2], offered: true } }),
+    )
+    const sent: Record<string, unknown>[] = []
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent.push(payload)
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    const output = await screen.findByRole('combobox', { name: 'Output' })
+    fireEvent.change(output, { target: { value: M4 } })
+    fireEvent.click(screen.getByRole('radio', { name: /Channels 1 and 2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toMatchObject({ programRoute: M4, sinkBackend: 'pipewiresink', pipewireTargetNode: M4 })
+  })
+
+  it('plays a chosen ALSA output through ALSA and drops a PipeWire target', async () => {
+    const PCH = 'hw:CARD=PCH,DEV=0'
+    const pch = { route: PCH, interface: 'hw:CARD=PCH', source: 'alsa', channels: 2, channelBasis: 'atLeast', ltcCapable: false, programGroups: [{ channels: [1, 2], ltcChannels: [], conflicts: [] }] }
+    setUp(
+      { programRoute: M4, programChannels: [1, 2], role: 'program', sinkBackend: 'pipewiresink', pipewireTargetNode: M4 },
+      choices({ routes: [pch, m4Route], current: { programRoute: M4, programChannels: [1, 2], offered: true } }),
+    )
+    let sent: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sent = payload
+      return Promise.resolve(stored(payload))
+    }
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Output' }), { target: { value: PCH } })
+    fireEvent.click(screen.getByRole('radio', { name: /Channels 1 and 2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+    await waitFor(() => expect(sent).not.toBeNull())
+    expect(sent).toMatchObject({ programRoute: PCH, sinkBackend: 'alsasink' })
+    expect(sent).not.toHaveProperty('pipewireTargetNode')
+  })
+
   it('explains stale discovery and keeps the manual fields, with no choices offered', async () => {
     setUp(
       { programRoute: M4, programChannels: [1, 2] },

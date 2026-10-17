@@ -35,6 +35,7 @@ func audioRoutingEvidence(ctx context.Context, nodes NodeLister, now time.Time, 
 	}
 	ev.Outputs, ev.Complete = outputs, complete
 	ev.IncompleteReason, _ = local.Attributes["discoveryIncompleteReason"].(string)
+	ev.IncompleteRoute, _ = local.Attributes["discoveryIncompleteRoute"].(string)
 	return ev, nil
 }
 
