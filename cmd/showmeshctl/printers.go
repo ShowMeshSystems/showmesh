@@ -253,10 +253,10 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tPARTICIPATION\tLAST POLL\tLAST POLL ERROR\tINSTANCE UUID")
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tPLUGIN\tPARTICIPATION\tLAST POLL\tLAST POLL ERROR\tINSTANCE UUID")
 	for _, f := range resp.Instances {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			f.InstanceID, f.Endpoint, healthGlyph(f.Health),
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			f.InstanceID, f.Endpoint, healthGlyph(f.Health), emptyOrDash(f.Plugin.State),
 			participationStateGlyph(f.ShowParticipation.State),
 			timeOrDash(f.LastPollAt), stringOrDash(f.LastPollError),
 			stringOrDash(f.InstanceUUID))

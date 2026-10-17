@@ -69,7 +69,7 @@ func TestClientNeverFollowsARedirect(t *testing.T) {
 	if got := recorder.hits.Load(); got != 0 {
 		t.Fatalf("redirect target was contacted %d time(s); this Client must NEVER follow a redirect", got)
 	}
-	if got := ClassifyError(err); got != "http status 302" {
+	if got := ClassifyError(err); got != "Resolume answered with error 302. Check Resolume." {
 		t.Errorf("ClassifyError(%v) = %q, want it to name the 302 status", err, got)
 	}
 }

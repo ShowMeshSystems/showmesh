@@ -89,7 +89,7 @@ func assetTargetRequiredProblem() v1.Problem {
 		Type:   problemBaseURI + "asset-target-required",
 		Title:  "Asset target required",
 		Status: http.StatusBadRequest,
-		Detail: `targetKind is "node" but target is empty; a node-targeted asset must name the declared node it belongs to`,
+		Detail: "A file for a node must name the node it belongs to. Choose a node and try again.",
 	}
 }
 
@@ -612,7 +612,7 @@ func assetPinnedByShowAction(ctx context.Context, tx *store.Tx, id string) (stri
 		if label == "" {
 			label = obj.ID
 		}
-		return fmt.Sprintf("This asset is the announcement media for %q. Choose different media for that action, then delete it.", label), nil
+		return fmt.Sprintf("This file is the announcement media for %s. Choose different media for that action, then delete the file.", label), nil
 	}
 	return "", nil
 }

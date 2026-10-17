@@ -1004,7 +1004,7 @@ describe('Shows · Cues tab', () => {
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       await screen.findByRole('combobox', { name: 'LTC target node' })
-      expect(await screen.findByText('node-x is not a configured audio.node; saving is refused until you deselect it.')).toBeInTheDocument()
+      expect(await screen.findByText('Audio node node-x is not set up. Deselect it to save.')).toBeInTheDocument()
     })
 
     it('never writes the deprecated singular target key on either audio or announcement', async () => {

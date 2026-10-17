@@ -246,7 +246,7 @@ func decodeShowMacroStep(raw json.RawMessage, field string, macroShow string, re
 	if !ok {
 		return ShowMacroStep{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: field + ".action",
-			Detail: fmt.Sprintf("action %q does not resolve to an existing show.action object", action),
+			Detail: fmt.Sprintf("Action %s does not exist. Create it first, or pick another action.", action),
 		}
 	}
 	if actionShow != macroShow {
@@ -299,7 +299,7 @@ func decodeLocalFallback(fields map[string]json.RawMessage, field string) (ShowM
 	if class == showMacroLocalFallbackReduced {
 		return ShowMacroLocalFallback{}, &ValidationError{
 			Code: ValidationCodeLocalFallbackReduced, Field: field + ".class",
-			Detail: "localFallback class \"reduced\" is not available yet. Choose another class.",
+			Detail: "The reduced local fallback is not available yet. Choose another class.",
 		}
 	}
 	if !showMacroLocalFallbackClasses[class] {

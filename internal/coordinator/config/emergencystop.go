@@ -179,7 +179,7 @@ func decodeEmergencyStopLevel(top map[string]json.RawMessage, field string, acti
 		if !actionResolver(id) {
 			return EmergencyStopLevelConfig{}, &ValidationError{
 				Code: ValidationCodeFieldUnknownReference, Field: itemField,
-				Detail: fmt.Sprintf("action %q is not a configured show.action; create it first", id),
+				Detail: fmt.Sprintf("Action %s does not exist. Create it first.", id),
 			}
 		}
 	}

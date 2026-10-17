@@ -53,7 +53,7 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 		ResourceKind: &kind, ResourceID: &instanceID, Signal: &sig,
 	})
 	if err != nil {
-		return nil, "", false, string(observation.StateCollectionFailed), "reading " + signal + " for confirmation: " + err.Error()
+		return nil, "", false, string(observation.StateCollectionFailed), "FPP's " + fppSignalName(signal) + " could not be read, so the command could not be confirmed."
 	}
 
 	var candidates []observation.Observation
@@ -64,7 +64,7 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 		candidates = append(candidates, o)
 	}
 	if len(candidates) == 0 {
-		return nil, "", false, string(observation.StateNotCollected), fmt.Sprintf("no %s observation is recorded for this instance yet", signal)
+		return nil, "", false, string(observation.StateNotCollected), "FPP has not reported its " + fppSignalName(signal) + " yet."
 	}
 
 	// ResolveObservations groups by (Resource, Signal); every candidate
@@ -83,20 +83,29 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 		// this is the fence Step 7 seam C review defect 2 added, and the
 		// 179-microsecond false confirm it closes (see this file's own top
 		// comment).
-		return nil, src, false, string(observation.StateNotCollected), fmt.Sprintf(
-			"No %s reading has arrived since this was sent at %s. The latest, from %s via %s, is from before it was sent.",
-			signal, notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
+		return nil, src, false, string(observation.StateNotCollected), "FPP has not reported its " + fppSignalName(signal) + " since the command was sent. Check again in a moment."
 	}
 
 	state := o.StateAt(now)
 	if state == observation.StateCurrent {
 		return o.Value, src, true, string(state), ""
 	}
-	reason := o.Reason
-	if reason == "" {
-		reason = fmt.Sprintf("%s reading is %s", signal, state)
+	return o.Value, src, false, string(state), "FPP's " + fppSignalName(signal) + " is out of date, so the command could not be confirmed."
+}
+
+// fppSignalName is how an operator names a confirmation signal.
+func fppSignalName(signal string) string {
+	switch signal {
+	case fppStatusSignal:
+		return "play state"
+	case fppPlaylistNameSignal:
+		return "playlist name"
+	case fppPlaylistIndexSignal:
+		return "playlist position"
+	case fppVolumeSignal:
+		return "volume"
 	}
-	return o.Value, src, false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
+	return "status"
 }
 
 // evaluateFPPStatusEvidence is Step 7 seam C review defects 2 and 3's
@@ -108,7 +117,7 @@ func resolveConfirmationEvidence(ctx context.Context, lister ObservationLister, 
 // and every existing test's assertions against it are unchanged by this
 // refactor.
 func evaluateFPPStatusEvidence(ctx context.Context, lister ObservationLister, instanceID, wantValue string, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
-	value, source, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
+	value, _, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
 	if !current {
 		return false, state, reason
 	}
@@ -119,9 +128,9 @@ func evaluateFPPStatusEvidence(ctx context.Context, lister ObservationLister, in
 		// confirmed OR unconfirmed, and an empty reason here was the code
 		// disagreeing with a contract it does not own (this fix stays
 		// inside fppcommand_evidence.go; that contract is not touched).
-		return true, state, fmt.Sprintf("Reached the expected state (fpp.status %q, via %s).", wantValue, source)
+		return true, state, fmt.Sprintf("FPP is now %s.", wantValue)
 	}
-	return false, state, fmt.Sprintf("Not yet: fpp.status is %v, want %q (via %s).", value, wantValue, source)
+	return false, state, fmt.Sprintf("FPP is still %v and should be %s.", value, wantValue)
 }
 
 // evaluateStartPlaylistEvidence is startPlaylist's own predicate (capture
@@ -136,18 +145,17 @@ func evaluateFPPStatusEvidence(ctx context.Context, lister ObservationLister, in
 // independently through [resolveConfirmationEvidence], so a stale name
 // alongside a fresh, matching status still reports unconfirmed.
 func evaluateStartPlaylistEvidence(ctx context.Context, lister ObservationLister, instanceID, wantName string, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
-	statusVal, statusSource, statusCurrent, statusState, statusReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
+	statusVal, _, statusCurrent, statusState, statusReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
 	if !statusCurrent {
 		return false, statusState, statusReason
 	}
 	if statusVal != fppStatusValuePlaying {
-		return false, statusState, fmt.Sprintf(
-			"Not yet: fpp.status is %v, want %q (via %s).", statusVal, fppStatusValuePlaying, statusSource)
+		return false, statusState, fmt.Sprintf("FPP is %v and is not playing yet.", statusVal)
 	}
 
-	nameVal, nameSource, nameCurrent, nameState, nameReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppPlaylistNameSignal, notBefore, now)
+	nameVal, _, nameCurrent, nameState, nameReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppPlaylistNameSignal, notBefore, now)
 	if !nameCurrent {
-		return false, nameState, fmt.Sprintf("fpp.status is %q, but %s", fppStatusValuePlaying, nameReason)
+		return false, nameState, nameReason
 	}
 	if nameVal != wantName {
 		// ADR-001: FPP is the authoritative scheduler and may have started
@@ -155,15 +163,11 @@ func evaluateStartPlaylistEvidence(ctx context.Context, lister ObservationLister
 		// alone must never be credited to this command (the same shape as
 		// Step 7's 179-microsecond defect; see this file's own top
 		// comment).
-		return false, nameState, fmt.Sprintf(
-			"fpp.status is %q, but a DIFFERENT playlist is playing: fpp.playlist.name is %v (via %s), want %q.",
-			fppStatusValuePlaying, nameVal, nameSource, wantName)
+		return false, nameState, fmt.Sprintf("FPP is playing %v instead of %s.", nameVal, wantName)
 	}
 	// Finding 6 (Step 8 review): state the confirming evidence even on
 	// success — see [evaluateFPPStatusEvidence]'s identical note.
-	return true, nameState, fmt.Sprintf(
-		"Playing the requested playlist (fpp.status %q via %s, fpp.playlist.name %q via %s).",
-		fppStatusValuePlaying, statusSource, wantName, nameSource)
+	return true, nameState, fmt.Sprintf("FPP is playing %s.", wantName)
 }
 
 // evaluateFPPStopGracefullyEvidence is stopPlaylistGracefully's own
@@ -180,14 +184,14 @@ func evaluateStartPlaylistEvidence(ctx context.Context, lister ObservationLister
 // Outcome is "confirmed", so an operator reading this response cannot
 // mistake "confirmed" for "the show has stopped."
 func evaluateFPPStopGracefullyEvidence(ctx context.Context, lister ObservationLister, instanceID string, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
-	value, source, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
+	value, _, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
 	if !current {
 		return false, state, reason
 	}
 	valStr, _ := value.(string)
 	switch valStr {
 	case fppStatusValueIdle:
-		return true, state, fmt.Sprintf("The graceful stop completed; playback has ended (fpp.status %q, via %s).", fppStatusValueIdle, source)
+		return true, state, "FPP has stopped playing."
 	case fppStatusValueStoppingGracefully, fppStatusValueStoppingGracefullyAfterLoop:
 		// Capture section 3.3 measured a graceful stop's terminal state as
 		// bounded by the currently playing item's own remaining runtime
@@ -198,11 +202,9 @@ func evaluateFPPStopGracefullyEvidence(ctx context.Context, lister ObservationLi
 		// even though Outcome is "confirmed": this is the exact defect the
 		// owner's own live UI test caught (CLAUDE.md), and an operator
 		// reading "confirmed" must never conclude playback has ended.
-		return true, state, fmt.Sprintf(
-			"FPP accepted the graceful stop. The show has NOT stopped yet: it's still running and will stop once "+
-				"the current item finishes (fpp.status %q, via %s).", valStr, source)
+		return true, state, "FPP accepted the stop. The show is still running and will stop when the current item finishes."
 	default:
-		return false, state, fmt.Sprintf("fpp.status is %v, not yet stopping or idle (via %s).", value, source)
+		return false, state, fmt.Sprintf("FPP is %v and has not started stopping.", value)
 	}
 }
 
@@ -264,12 +266,10 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 		// counter also moves on FPP's own item boundaries, so the operator
 		// needs to know it can advance on its own, not a longer
 		// explanation of attribution.
-		return true, indexState, fmt.Sprintf(
-			"The item advanced. Note: this counter also moves on its own (fpp.playlist.index %v -> %v, via %s).",
-			baseline.IndexValue, indexVal, indexSource)
+		return true, indexState, "FPP moved to the next item. FPP can also move on by itself."
 	}
 
-	statusVal, statusSource, statusCurrent, statusState, statusReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
+	statusVal, _, statusCurrent, statusState, statusReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
 	idleBranchAvailable := baseline.StatusKnown && baseline.StatusValue != fppStatusValueIdle
 	if idleBranchAvailable && statusCurrent {
 		if s, _ := statusVal.(string); s == fppStatusValueIdle {
@@ -279,15 +279,13 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 			// transitions on FPP's own item/playlist boundaries, hence the
 			// same short "moves on its own" note as the index-movement
 			// branch above.
-			return true, statusState, fmt.Sprintf(
-				"That was the last item, so Next ends the playlist. Note: this also moves on its own (fpp.status %q to %q, via %s).",
-				baseline.StatusValue, fppStatusValueIdle, statusSource)
+			return true, statusState, "That was the last item, so the playlist ended. FPP can also end a playlist by itself."
 		}
 	}
 
 	if !baseline.IndexKnown && !baseline.StatusKnown {
 		return false, string(observation.StateNotCollected),
-			"No pre-dispatch reading of fpp.playlist.index or fpp.status was available, so movement can't be evaluated."
+			"FPP's play state and playlist position were not known before the command, so a move could not be checked."
 	}
 	if baseline.StatusKnown && baseline.StatusValue == fppStatusValueIdle {
 		// Finding 1: the idle branch is deliberately unavailable here —
@@ -295,40 +293,32 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 		// measured no-op: "Next Playlist Item" while idle does nothing),
 		// so fpp.status reading idle afterwards is not evidence this
 		// command had any effect.
-		alreadyIdleNote := "the host was ALREADY idle before dispatch, and Next Playlist Item does nothing while idle"
+		alreadyIdleNote := "FPP was already idle, and Next does nothing while idle."
 		switch {
 		case !baseline.IndexKnown:
-			return false, string(observation.StateNotCollected), fmt.Sprintf(
-				"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated, and %s.", alreadyIdleNote)
+			return false, string(observation.StateNotCollected), "FPP's playlist position was not known before the command. " + alreadyIdleNote
 		case sourceFlipped:
-			return false, indexState, fmt.Sprintf(
-				"The playlist position was read from %s after the command and %s before, so it cannot be compared, and %s.",
-				indexSource, baseline.IndexSource, alreadyIdleNote)
+			return false, indexState, "FPP's playlist position came from two different sources, so it could not be compared. " + alreadyIdleNote
 		case !indexCurrent:
-			return false, indexState, fmt.Sprintf("%s, and %s.", indexReason, alreadyIdleNote)
+			return false, indexState, indexReason + " " + alreadyIdleNote
 		default:
-			return false, indexState, fmt.Sprintf(
-				"fpp.playlist.index is unchanged (%v, via %s), and %s.", baseline.IndexValue, baseline.IndexSource, alreadyIdleNote)
+			return false, indexState, "FPP's playlist position did not change. " + alreadyIdleNote
 		}
 	}
 	if !baseline.IndexKnown {
 		return false, string(observation.StateNotCollected),
-			"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated, and fpp.status has not reached idle."
+			"FPP's playlist position was not known before the command, so a move could not be checked."
 	}
 	if sourceFlipped {
-		return false, indexState, fmt.Sprintf(
-			"The playlist position was read from %s after the command and %s (%v) before, so it cannot be compared. FPP has not reached %q.", indexSource, baseline.IndexSource, baseline.IndexValue, fppStatusValueIdle)
+		return false, indexState, "FPP's playlist position came from two different sources, so it could not be compared."
 	}
 	if !indexCurrent {
 		return false, indexState, indexReason
 	}
 	if !statusCurrent {
-		return false, statusState, fmt.Sprintf(
-			"fpp.playlist.index is unchanged (%v, via %s), and %s", baseline.IndexValue, indexSource, statusReason)
+		return false, statusState, "FPP's playlist position did not change. " + statusReason
 	}
-	return false, indexState, fmt.Sprintf(
-		"fpp.playlist.index is unchanged (%v, via %s), and fpp.status is %v (via %s), not %q.",
-		baseline.IndexValue, indexSource, statusVal, statusSource, fppStatusValueIdle)
+	return false, indexState, fmt.Sprintf("FPP's playlist position did not change, and FPP is still %v.", statusVal)
 }
 
 // evaluatePrevItemEvidence is prevPlaylistItem's own predicate (capture
@@ -355,28 +345,22 @@ func evaluateNextItemEvidence(ctx context.Context, lister ObservationLister, ins
 func evaluatePrevItemEvidence(ctx context.Context, lister ObservationLister, instanceID string, baseline fppBaseline, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	if !baseline.IndexKnown {
 		return false, string(observation.StateNotCollected),
-			"No pre-dispatch fpp.playlist.index reading was available, so movement can't be evaluated."
+			"FPP's playlist position was not known before the command, so a move could not be checked."
 	}
 	indexVal, indexSource, indexCurrent, indexState, indexReason := resolveConfirmationEvidence(ctx, lister, instanceID, fppPlaylistIndexSignal, notBefore, now)
 	if !indexCurrent {
 		return false, indexState, indexReason
 	}
 	if indexVal == nil || baseline.IndexValue == nil {
-		return false, indexState, fmt.Sprintf(
-			"fpp.playlist.index carries no value (via %s), so movement can't be confirmed.", indexSource)
+		return false, indexState, "FPP's playlist position had no value, so a move could not be confirmed."
 	}
 	if indexSource != baseline.IndexSource {
-		return false, indexState, fmt.Sprintf(
-			"The playlist position was read from %s after the command and %s (%v) before, so it cannot be compared.",
-			indexSource, baseline.IndexSource, baseline.IndexValue)
+		return false, indexState, "FPP's playlist position came from two different sources, so it could not be compared."
 	}
 	if fmt.Sprint(indexVal) != fmt.Sprint(baseline.IndexValue) {
-		return true, indexState, fmt.Sprintf(
-			"The item moved back. Note: this counter also moves on its own (fpp.playlist.index %v -> %v, via %s).",
-			baseline.IndexValue, indexVal, indexSource)
+		return true, indexState, "FPP moved back an item. FPP can also move on by itself."
 	}
-	return false, indexState, fmt.Sprintf(
-		"fpp.playlist.index is unchanged (%v, via %s).", baseline.IndexValue, indexSource)
+	return false, indexState, "FPP's playlist position did not change."
 }
 
 // toInt64 coerces an observation value to int64 for a numeric comparison,
@@ -425,7 +409,7 @@ func toInt64(v any) (int64, bool) {
 // 4): fpp.volume == the requested value, current, collected at-or-after
 // dispatch.
 func evaluateSetVolumeEvidence(ctx context.Context, lister ObservationLister, instanceID string, wantVolume int64, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
-	value, source, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppVolumeSignal, notBefore, now)
+	value, _, current, state, reason := resolveConfirmationEvidence(ctx, lister, instanceID, fppVolumeSignal, notBefore, now)
 	if !current {
 		return false, state, reason
 	}
@@ -434,12 +418,12 @@ func evaluateSetVolumeEvidence(ctx context.Context, lister ObservationLister, in
 		// This coordinator never truncates a fractional reading into a
 		// coincidental match — see [toInt64]'s own doc comment (Finding
 		// 10) for why exactness, not rounding or truncation, is the rule.
-		return false, state, fmt.Sprintf("fpp.volume is %v, which is not a whole number, so it can't confirm or refute this request (via %s).", value, source)
+		return false, state, fmt.Sprintf("FPP's volume is %v, which is not a whole number, so it cannot confirm this request.", value)
 	}
 	if got != wantVolume {
-		return false, state, fmt.Sprintf("fpp.volume is %d, want %d (via %s).", got, wantVolume, source)
+		return false, state, fmt.Sprintf("FPP's volume is %d and should be %d.", got, wantVolume)
 	}
 	// Finding 6 (Step 8 review): state the confirming evidence even on
 	// success — see [evaluateFPPStatusEvidence]'s identical note.
-	return true, state, fmt.Sprintf("Reached the expected volume (fpp.volume %d, via %s).", got, source)
+	return true, state, fmt.Sprintf("FPP's volume is now %d.", got)
 }

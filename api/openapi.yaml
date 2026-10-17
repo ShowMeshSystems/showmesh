@@ -12450,7 +12450,7 @@ components:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
          instanceUuidChange, duplicateInstanceUuidEndpointIds,
-         showParticipation, playlistObservationRefused]
+         showParticipation, playlistObservationRefused, plugin]
       properties:
         instanceId:
           type: string
@@ -12517,6 +12517,30 @@ components:
             a plugin reinstall or a wiped state directory). Cleared by
             this instance's next accepted report or by
             DELETE .../playlist-entry-observations/{instanceUuid}.
+        plugin:
+          $ref: "#/components/schemas/FPPPluginStatus"
+    FPPPluginStatus:
+      type: object
+      description: >-
+        Whether the ShowMesh plugin on this FPP is reporting to this
+        coordinator, separate from `health`, which is what FPP's own API
+        says. `not_paired` means no pairing is remembered and nothing was
+        ever accepted; `not_reported` means paired but nothing was ever
+        accepted; `stopped` means FPP is playing and the last accepted
+        report is more than ten minutes old; `reporting` is the rest,
+        including an idle FPP. Pairing is remembered only for the
+        coordinator process's lifetime.
+      required: [state, lastReportedAt]
+      properties:
+        state:
+          type: string
+          enum: [not_paired, not_reported, stopped, reporting]
+        lastReportedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When a playlist definition or playlist-entry report was last
+            accepted from this plugin, or null when none ever was.
     FPPPlaylistObservationRefused:
       type: object
       description: >-
@@ -21789,7 +21813,7 @@ components:
         show-config-not-implemented). show/sequence/target are the same
         asset identity night.session's own background-audio items resolve
         against (ADR-028); show must equal the playlist's own show.
-      required: [kind, show, sequence, target]
+      required: [kind, show, sequence]
       properties:
         kind:
           type: string
@@ -21803,6 +21827,10 @@ components:
         target:
           type: string
           minLength: 1
+          description: >-
+            Optional. Names one node's own upload of the file. Omitted, the
+            item is the sequence's audio, and each playing node uses its
+            own upload, then the show-wide upload, then another node's.
     ConfigMediaPlaylist:
       type: object
       description: >-
@@ -21965,7 +21993,7 @@ components:
         operator-visible (pinned against pkg/audio.PlaylistItem on Track
         C's branch, Track F seam F1): unlike position in the array, it
         survives a reorder. Must be unique within the list.
-      required: [itemId, show, sequence, target]
+      required: [itemId, show, sequence]
       properties:
         itemId:
           type: string
@@ -21980,7 +22008,12 @@ components:
           type: string
           minLength: 1
           description: >-
-            Which registered copy of the file this item uses. When the
+            Optional. Omitted, the item is the sequence's audio: it plays on
+            the bed's own targets, or on the show's audioNodes when the bed
+            names none, and each node uses its own upload, then the
+            show-wide upload, then another node's. Saving such an item is
+            refused when neither list names a node. When present, this
+            names which registered copy of the file this item uses. When the
             bed's own targets (ADR-049) is absent or empty, this also
             decides where the item plays: items are not required to
             share one target, and every distinct target among them is
@@ -23127,7 +23160,7 @@ components:
           format: date-time
     NightBackgroundAudioPlanItem:
       type: object
-      required: [position, itemId, show, sequence, target]
+      required: [position, itemId, show, sequence]
       properties:
         position:
           type: integer
@@ -23140,7 +23173,9 @@ components:
           type: string
         target:
           type: string
-          description: The audio node that holds this item's file.
+          description: >-
+            The audio node that holds this item's file. Absent when the
+            item names only its sequence.
     NightBackgroundAudioPlan:
       type: object
       description: >-

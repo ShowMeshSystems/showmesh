@@ -301,13 +301,22 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+/** One pickable audio track. target is '' for a track (plays on the bed's nodes) and a node id only for an item pinned to that node's own upload. */
 export type AudioAssetOption = { id: string; sequence: string; target: string }
 
-/** `assets` filtered current/audio/node: what an audio-asset picker offers. Shared by the night session's background-audio item editor and Shows/Media Playlists' item editor (both bind an item to the same asset identity, ADR-028). */
+/** Every current audio track in `assets`, one per sequence and whatever it was uploaded for, followed by each node's own upload so a pinned item still resolves. Shared by the night session's background-audio editor and Shows/Media Playlists. */
 export function audioAssetOptions(assets: readonly { id: string; current: boolean; mediaType: string; targetKind: string; sequence: string; target: string }[]): AudioAssetOption[] {
-  return assets
-    .filter((asset) => asset.current && asset.mediaType === 'audio' && asset.targetKind === 'node')
-    .map((asset) => ({ id: asset.id, sequence: asset.sequence, target: asset.target }))
+  const audio = assets.filter((asset) => asset.current && asset.mediaType === 'audio')
+  const sequences = Array.from(new Set(audio.map((asset) => asset.sequence))).sort((a, b) => a.localeCompare(b))
+  return [
+    ...sequences.map((sequence) => ({ id: `track:${sequence}`, sequence, target: '' })),
+    ...audio.filter((asset) => asset.targetKind === 'node').map((asset) => ({ id: asset.id, sequence: asset.sequence, target: asset.target })),
+  ]
+}
+
+/** Whether a stored item's (sequence, target) still names a current audio upload. An unset sequence is not dead. */
+export function audioItemResolves(options: readonly AudioAssetOption[], sequence: string, target: string): boolean {
+  return sequence === '' || options.some((option) => option.sequence === sequence && option.target === target)
 }
 
 export type AssetIdentityKey = string

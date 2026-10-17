@@ -203,7 +203,7 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	// all conditional on identity having been established.
 	if obs.Unavailable != "" {
 		result.Outcome = OutcomeIdentityUnavailable
-		result.Reason = fmt.Sprintf("FPP could not establish identity for this observation (%s); its filenames are never used to select an entry", obs.Unavailable)
+		result.Reason = "FPP did not say which playlist entry is playing. Restart FPP or re-import the playlist."
 		return result, nil
 	}
 
@@ -226,7 +226,7 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	}
 	if len(candidates) == 0 {
 		result.Outcome = OutcomeUnbound
-		result.Reason = "no ShowMesh output was ever authorized by this instance: no fpp-runner show.playlist names it"
+		result.Reason = "No ShowMesh playlist uses this FPP. Add a playlist that runs on it."
 		return result, nil
 	}
 
@@ -257,9 +257,7 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	// Step 2: compare the hash. The old binding is held, not remapped.
 	if binding.payload.FPP.PlaylistHash != obs.PlaylistHash {
 		result.Outcome = OutcomeStaleImport
-		result.Reason = fmt.Sprintf(
-			"the observed playlistHash (%s) differs from the bound playlistHash (%s); the FPP playlist was edited and re-imported",
-			obs.PlaylistHash, binding.payload.FPP.PlaylistHash)
+		result.Reason = "The FPP playlist was changed after it was imported. Re-import it."
 		return result, nil
 	}
 
@@ -267,7 +265,7 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	matched, ok := matchEntryByKey(binding.payload, obs.EntryKey)
 	if !ok {
 		result.Outcome = OutcomeUnknownEntry
-		result.Reason = "no entry of the bound playlist derives an entry key matching the observation's"
+		result.Reason = "FPP is playing an entry that is not in the imported playlist. Re-import the playlist."
 		var defErr error
 		result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
 		if defErr != nil {
@@ -299,9 +297,9 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	if !activeNow.Configured || binding.payload.Show != activeNow.ShowID {
 		result.Outcome = OutcomeCrossShow
 		if !activeNow.Configured {
-			result.Reason = "no active show is currently configured"
+			result.Reason = "No show is active."
 		} else {
-			result.Reason = fmt.Sprintf("the bound playlist's show (%s) is not the currently active show (%s)", binding.payload.Show, activeNow.ShowID)
+			result.Reason = fmt.Sprintf("This playlist belongs to show %s, not the active show %s.", binding.payload.Show, activeNow.ShowID)
 		}
 		var defErr error
 		result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
@@ -313,7 +311,7 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 
 	// Step 6: resolved.
 	result.Outcome = OutcomeResolved
-	result.Reason = "the observation names exactly one Playlist, entry, and Cue"
+	result.Reason = "FPP is playing a known playlist entry."
 	result.EntryID = matched.ID
 	result.CueID = matched.Cue
 	cueObj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, matched.Cue)
@@ -442,10 +440,10 @@ func evidenceMismatchReason(entry config.ShowPlaylistEntry, obs store.FPPPlaylis
 		return ""
 	}
 	if entry.FPP.ExpectedSequenceFilename != "" && entry.FPP.ExpectedSequenceFilename != obs.SequenceFilename {
-		return fmt.Sprintf("expected sequence filename %q does not match the observed %q", entry.FPP.ExpectedSequenceFilename, obs.SequenceFilename)
+		return fmt.Sprintf("FPP is playing sequence %s, not %s.", obs.SequenceFilename, entry.FPP.ExpectedSequenceFilename)
 	}
 	if entry.FPP.ExpectedMediaFilename != "" && entry.FPP.ExpectedMediaFilename != obs.MediaFilename {
-		return fmt.Sprintf("expected media filename %q does not match the observed %q", entry.FPP.ExpectedMediaFilename, obs.MediaFilename)
+		return fmt.Sprintf("FPP is playing media %s, not %s.", obs.MediaFilename, entry.FPP.ExpectedMediaFilename)
 	}
 	return ""
 }

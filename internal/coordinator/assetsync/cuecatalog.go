@@ -290,7 +290,7 @@ type CatalogConflict struct {
 // the shared resource in plain words; the raw claim key is kept by the
 // override record and its API response, not by this string.
 func (c CatalogConflict) Detail() string {
-	return fmt.Sprintf("Cues %q and %q both use %s", c.CueA, c.CueB, claimInWords(c.Claim))
+	return fmt.Sprintf("Cues %s and %s both use %s", c.CueA, c.CueB, claimInWords(c.Claim))
 }
 
 // claimInWords names a claim's resource without the route or node internals
@@ -300,7 +300,7 @@ func claimInWords(claim config.ShowCueClaim) string {
 	case config.ShowCueClaimKindProgramAudioRoute:
 		return fmt.Sprintf("the program audio output on %s", claim.Node)
 	case config.ShowCueClaimKindRenderSurface:
-		return fmt.Sprintf("the render surface %q", claim.Resource)
+		return fmt.Sprintf("the render surface %s", claim.Resource)
 	case config.ShowCueClaimKindLTCOutput:
 		return fmt.Sprintf("the LTC output on %s", claim.Node)
 	case config.ShowCueClaimKindAnnouncementSession:

@@ -54,7 +54,8 @@ func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.Night
 
 // nightBedAudioFallbackAssets borrows, for nodeID, a node-scoped row from
 // another declared target of the SAME bed, for any sequence still
-// uncovered. The first other target (in declared order) holding one wins.
+// uncovered. The first other target (in declared order) holding one wins,
+// then any node's row, matching [BedAudioCopyFor].
 func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]borrowedAsset, error) {
 	showAudioNodes, err := ShowAudioNodes(ctx, st, showID)
 	if err != nil {
@@ -131,6 +132,7 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 			}
 			seenSequences[seq] = true
 
+			found := false
 			for _, t := range resolvedTargets {
 				if t == nodeID {
 					continue
@@ -143,7 +145,6 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 					}
 					rowsByTarget[t] = rows
 				}
-				found := false
 				for _, rec := range rows {
 					if rec.SequenceID == seq && rec.MediaType == audioMediaType {
 						out = append(out, borrowedAsset{AssetRecord: rec, ReferencedBy: obj.ID})
@@ -153,6 +154,15 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 				}
 				if found {
 					break
+				}
+			}
+			if !found {
+				rec, ok, err := anyNodeAudioCopy(ctx, st, showID, seq)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					out = append(out, borrowedAsset{AssetRecord: rec, ReferencedBy: obj.ID})
 				}
 			}
 		}

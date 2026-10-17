@@ -238,7 +238,7 @@ func TestRedeemReusedCodeIs410(t *testing.T) {
 		t.Fatalf("first redeem: %d %s", resp.StatusCode, raw)
 	}
 	resp, raw := h.redeem(t, minted.Code)
-	if resp.StatusCode != http.StatusGone || !strings.Contains(problemDetail(t, raw), "already been used") {
+	if resp.StatusCode != http.StatusGone || !strings.Contains(problemDetail(t, raw), "already used") {
 		t.Fatalf("second redeem: status = %d, body %s; want 410 saying it was used", resp.StatusCode, raw)
 	}
 }

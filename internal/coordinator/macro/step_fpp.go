@@ -60,7 +60,7 @@ func (e *Executor) dispatchFPPStep(ctx context.Context, run store.MacroRunRecord
 		return stepResult{
 			outcome:       outcomeFailed,
 			outcomeState:  "internal_error",
-			outcomeReason: "this step was not sent because of an internal coordinator error",
+			outcomeReason: "The step was not sent because of a ShowMesh error. Run it again or do it by hand.",
 			resolvedAt:    ptrTime(e.now()),
 		}
 	}

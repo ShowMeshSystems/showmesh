@@ -280,22 +280,22 @@ func fppBrightnessExcludedRangesOutcome(want []v1.FPPChannelRange, written fppco
 	switch {
 	case writeErr != nil && written.StatusCode == http.StatusNotFound:
 		return outcomeWordFailed, string(observation.StateUnsupported),
-			"This player's plugin cannot exclude channels. Update the ShowMesh plugin."
+			"The ShowMesh plugin on this FPP cannot exclude channels. Update the plugin."
 	case writeErr != nil && written.Refusal != "":
 		return outcomeWordFailed, string(observation.StateCollectionFailed),
-			"The player refused the excluded channels: " + written.Refusal
+			"FPP refused the excluded channels: " + strings.TrimRight(written.Refusal, ".") + "."
 	case writeErr != nil && written.StatusCode != 0:
 		return outcomeWordFailed, string(observation.StateCollectionFailed),
-			fmt.Sprintf("The player answered %d and saved nothing. Check the ShowMesh plugin on it.", written.StatusCode)
+			"FPP saved nothing. Check the ShowMesh plugin on FPP."
 	case writeErr != nil:
 		return outcomeWordFailed, string(observation.StateCollectionFailed),
-			"The player could not be reached, so nothing was saved. Check it is on and try again."
+			"FPP could not be reached, so nothing was saved. Check that FPP is on and try again."
 	case readBack != nil:
 		return outcomeWordConfirmed, string(observation.StateCurrent),
-			"The player reports excluded channels: " + formatFPPChannelRanges(*readBack)
+			"FPP reports excluded channels: " + formatFPPChannelRanges(*readBack) + "."
 	default:
 		return outcomeWordUnconfirmed, string(observation.StateNotCollected),
-			fmt.Sprintf("The player took %s and has not reported it back yet. Check again shortly.", formatFPPChannelRanges(want))
+			fmt.Sprintf("FPP took %s and has not reported it back yet. Check again shortly.", formatFPPChannelRanges(want))
 	}
 }
 

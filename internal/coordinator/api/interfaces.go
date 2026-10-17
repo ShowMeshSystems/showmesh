@@ -84,6 +84,11 @@ type FPPInstanceView struct {
 	// PlaylistObservationRefused is non-nil exactly when this endpoint's
 	// current instance uuid carries a persisted sequence-regression marker.
 	PlaylistObservationRefused *FPPPlaylistObservationRefusal
+
+	// PluginLastReportedAt is when this instance's plugin last had a
+	// playlist definition or playlist-entry observation accepted. Nil when
+	// it never has.
+	PluginLastReportedAt *time.Time
 }
 
 // FPPPlaylistObservationRefusal is [FPPInstanceView.PlaylistObservationRefused]'s

@@ -98,7 +98,7 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	if !strings.Contains(applyOut, "confirmed:") {
 		t.Fatalf("render apply stdout = %q, want a confirmed outcome", applyOut)
 	}
-	if !strings.Contains(applyOut, `"running"`) {
+	if !strings.Contains(applyOut, "running.") {
 		t.Fatalf("render apply stdout = %q, want it to name the confirmed running state", applyOut)
 	}
 
@@ -135,7 +135,7 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 
 	// --- clear: stops the real pipeline and confirms stopped. ---
 	clearOut := mustCtl(t, coord, token, []string{"render", "clear"}, nodeID, surfaceID)
-	if !strings.Contains(clearOut, "confirmed:") || !strings.Contains(clearOut, `"stopped"`) {
+	if !strings.Contains(clearOut, "confirmed:") || !strings.Contains(clearOut, "stopped.") {
 		t.Fatalf("render clear stdout = %q, want a confirmed stopped outcome", clearOut)
 	}
 }

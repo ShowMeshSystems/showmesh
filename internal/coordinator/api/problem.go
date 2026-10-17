@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -585,9 +584,7 @@ func cueCatalogClaimConflictProblem(nodeID string, conflicts []assetsync.Catalog
 		Type:   ProblemTypeCueCatalogClaimConflict,
 		Title:  "Cue catalog deploy refused: conflicting exclusive claims",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"The Cue list for node %q has a conflict: %s. Fix the Cues, or deploy anyway with override.",
-			nodeID, strings.Join(details, "; ")),
+		Detail: cueCatalogConflictDetail(details),
 	}
 }
 
@@ -669,9 +666,7 @@ func fppCommandReplayConflictProblem(existingID, existingAction, existingTargetI
 		// An idempotency key is scoped to the exact (action, instanceId) it
 		// was first used against — this is that scope stated in the wire
 		// text, not a citation of where the rule is defined.
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
-			existingID, existingAction, existingTargetID, requestedAction, requestedTargetID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -697,9 +692,7 @@ func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existin
 		// An idempotency key names ONE intended operation — this is that
 		// rule stated in the wire text, not a citation of where it is
 		// defined.
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q) with params %s, not %s. Use a new key.",
-			existingID, action, targetID, existingParamsJSON, requestedParamsJSON),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 
@@ -718,8 +711,8 @@ func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string
 		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",
-			instanceID, signal, reason, fppIfBusyReplace),
+			"Cannot tell whether %s is busy because its %s is out of date. Retry, or send ifBusy=%s to start anyway.",
+			instanceID, fppSignalName(signal), fppIfBusyReplace),
 	}
 }
 
@@ -746,8 +739,8 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 		Title:  "Start Playlist refused: a different playlist is currently playing",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"%q is playing %q, so this was refused (ifBusy=%q). Send ifBusy=%q to replace it, or wait.",
-			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
+			"%s is playing %s, so the start was refused. Send ifBusy=%s to replace it, or wait.",
+			instanceID, currentlyPlaying, fppIfBusyReplace),
 	}
 }
 
@@ -826,4 +819,18 @@ func fppPairingPrincipalUnusableProblem(detail string) v1.Problem {
 		Status: http.StatusConflict,
 		Detail: detail,
 	}
+}
+
+const (
+	replayedKeyDifferentCommandDetail  = "This request was already used for a different command. Try again."
+	replayedKeyDifferentSettingsDetail = "This request was already used with different settings. Try again."
+)
+
+// cueCatalogConflictDetail names the first conflict and counts the rest.
+func cueCatalogConflictDetail(details []string) string {
+	first := details[0]
+	if n := len(details) - 1; n > 0 {
+		first += fmt.Sprintf(", and %d more conflicting %s", n, map[bool]string{true: "pair", false: "pairs"}[n == 1])
+	}
+	return first + ". Fix the cues, or deploy anyway with override."
 }

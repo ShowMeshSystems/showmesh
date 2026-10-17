@@ -204,7 +204,7 @@ func DecodeShowSurfacePayload(raw string, showExists func(string) bool, nodeDecl
 	if !nodeDeclared(node) {
 		return ShowSurfacePayload{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "node",
-			Detail: fmt.Sprintf("node %q is not a declared node", node),
+			Detail: fmt.Sprintf("Node %s is not declared. Declare it first.", node),
 		}
 	}
 
@@ -450,14 +450,14 @@ func CheckShowSurfaceConflict(id string, candidate ShowSurfacePayload, others []
 		if candStart <= end && start <= candEnd {
 			return &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "channelRange",
-				Detail: fmt.Sprintf("The surface %q already uses channels %d to %d on this node. Choose other channels.",
+				Detail: fmt.Sprintf("The surface %s already uses channels %d to %d on this node. Choose other channels.",
 					p.Name, start, end),
 			}
 		}
 		if candidate.Output.NDI != nil && p.Output.NDI != nil && strings.EqualFold(strings.TrimSpace(candidate.Output.NDI.SourceName), strings.TrimSpace(p.Output.NDI.SourceName)) {
 			return &ValidationError{
 				Code: ValidationCodeFieldInvalid, Field: "output.ndi.sourceName",
-				Detail: fmt.Sprintf("The NDI name %q is already used by the surface %q on this node. Choose a different NDI name.",
+				Detail: fmt.Sprintf("The NDI name %s is already used by the surface %s on this node. Choose a different NDI name.",
 					strings.TrimSpace(candidate.Output.NDI.SourceName), p.Name),
 			}
 		}

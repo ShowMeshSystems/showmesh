@@ -196,8 +196,8 @@ func TestPollDecodeErrorProducesCollectionFailed(t *testing.T) {
 	if reachable.Absence != observation.StateCollectionFailed {
 		t.Errorf("resolume.reachable Absence = %q, want collection_failed", reachable.Absence)
 	}
-	if reachable.Reason != "decode error" {
-		t.Errorf("resolume.reachable Reason = %q, want %q", reachable.Reason, "decode error")
+	if reachable.Reason != "Resolume sent an answer ShowMesh could not read. Check the Resolume version." {
+		t.Errorf("resolume.reachable Reason = %q, want %q", reachable.Reason, "Resolume sent an answer ShowMesh could not read. Check the Resolume version.")
 	}
 }
 

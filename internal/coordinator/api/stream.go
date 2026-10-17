@@ -105,6 +105,7 @@ type Hub struct {
 	identitySvc identity.Service
 	clock       func() time.Time
 	logger      *slog.Logger
+	fppPairings *fppPairingStore
 
 	tickInterval      time.Duration
 	keepaliveInterval time.Duration
@@ -515,7 +516,7 @@ func (h *Hub) render(ctx context.Context) {
 		for _, fv := range views {
 			key := "fpp:" + fv.InstanceID
 			present[key] = struct{}{}
-			inst := mapFPPInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now)
+			inst := h.fppPairings.mapInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now)
 			proj := fppInstanceDiffProjection(inst)
 
 			// fullChanged is EXACTLY the pre-ADR-023 gate, unmodified: it
