@@ -304,6 +304,15 @@ type fppInstance struct {
 	// PlaylistObservationRefused is non-nil exactly when this instance's
 	// playlist-entry reports are currently being refused.
 	PlaylistObservationRefused *fppPlaylistObservationRefused `json:"playlistObservationRefused"`
+
+	// Plugin is the ShowMesh plugin's reporting state, separate from Health.
+	Plugin fppPluginStatus `json:"plugin"`
+}
+
+// fppPluginStatus is fppInstance.Plugin's shape.
+type fppPluginStatus struct {
+	State          string     `json:"state"`
+	LastReportedAt *time.Time `json:"lastReportedAt"`
 }
 
 // fppInstanceUUIDChange is fppInstance.InstanceUUIDChange's shape.

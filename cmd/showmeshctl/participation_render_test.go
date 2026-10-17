@@ -241,3 +241,10 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+func TestFPPTablePrintsThePluginState(t *testing.T) {
+	got := renderFPPWithParticipation(t, `"plugin":{"state":"not_reported","lastReportedAt":null}`)
+	if !strings.Contains(got, "PLUGIN") || !strings.Contains(got, "not_reported") {
+		t.Errorf("the plugin state is missing from the FPP table:\n%s", got)
+	}
+}
