@@ -65,7 +65,7 @@ func TestFramesObservedAtStaysCurrentPastTheStaleWindow(t *testing.T) {
 	}, "node asset manifest to become ready so the FSEQ is on the node before apply")
 
 	applyOut := mustCtl(t, coord, token, []string{"render", "apply"}, nodeID, surfaceID, "opener")
-	if !strings.Contains(applyOut, "confirmed:") || !strings.Contains(applyOut, `"running"`) {
+	if !strings.Contains(applyOut, "confirmed:") || !strings.Contains(applyOut, "running.") {
 		t.Fatalf("render apply stdout = %q, want a confirmed running outcome", applyOut)
 	}
 

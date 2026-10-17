@@ -2,15 +2,6 @@
 # One line per rule and source, tab separated. A violation that is not here
 # fails the tests. A line a full run no longer produces is only reported;
 # rerun the whole package with SHOWMESH_COPYCHECK_UPDATE=1 to drop it.
-quoted-name	problem asset-pinned in handleDeleteAsset
-capital	problem asset-resync-publish-failed in handlePostResyncNodeAssets
-full-stop	problem asset-resync-publish-failed in handlePostResyncNodeAssets
-hex	problem asset-resync-publish-failed in handlePostResyncNodeAssets
-quoted-name	problem asset-resync-publish-failed in handlePostResyncNodeAssets
-capital	problem asset-target-required in handlePostAssetUpload
-full-stop	problem asset-target-required in handlePostAssetUpload
-joined	problem asset-target-required in handlePostAssetUpload
-quoted-name	problem asset-target-required in handlePostAssetUpload
 capital	problem audio-node-channel-overlap in handlePutAudioNode
 full-stop	problem audio-node-channel-overlap in handlePutAudioNode
 joined	problem audio-node-channel-overlap in handlePutAudioNode
@@ -105,35 +96,10 @@ sentences	problem config-revision-precondition-failed in handlePutShowSurface
 kind-name	problem config-revision-precondition-failed in writeConfigDeleteResponse
 quoted-name	problem config-revision-precondition-failed in writeConfigDeleteResponse
 sentences	problem config-revision-precondition-failed in writeConfigDeleteResponse
-capital	problem conflict in dispatchAudioSessionCommand
-hex	problem conflict in dispatchAudioSessionCommand
-kind-name	problem conflict in dispatchAudioSessionCommand
-length	problem conflict in dispatchAudioSessionCommand
-quoted-name	problem conflict in dispatchAudioSessionCommand
-capital	problem conflict in dispatchRenderCommand
-hex	problem conflict in dispatchRenderCommand
-kind-name	problem conflict in dispatchRenderCommand
-length	problem conflict in dispatchRenderCommand
-quoted-name	problem conflict in dispatchRenderCommand
 quoted-name	problem conflict in handleAcknowledgeFPPInstanceUUIDChange
-capital	problem conflict in handleAudioNodeSilence
-hex	problem conflict in handleAudioNodeSilence
-kind-name	problem conflict in handleAudioNodeSilence
-length	problem conflict in handleAudioNodeSilence
-quoted-name	problem conflict in handleAudioNodeSilence
-capital	problem conflict in handleDispatchResolumeAction
-hex	problem conflict in handleDispatchResolumeAction
-kind-name	problem conflict in handleDispatchResolumeAction
-length	problem conflict in handleDispatchResolumeAction
-quoted-name	problem conflict in handleDispatchResolumeAction
 capital	problem conflict in handleEmergencyStopFire
 full-stop	problem conflict in handleEmergencyStopFire
 joined	problem conflict in handleEmergencyStopFire
-capital	problem conflict in handleFPPCommand
-hex	problem conflict in handleFPPCommand
-kind-name	problem conflict in handleFPPCommand
-length	problem conflict in handleFPPCommand
-quoted-name	problem conflict in handleFPPCommand
 capital	problem conflict in handleInvokeAction
 hex	problem conflict in handleInvokeAction
 joined	problem conflict in handleInvokeAction
@@ -143,13 +109,6 @@ quoted-name	problem conflict in handleInvokeAction
 capital	problem conflict in handlePostFPPPlaylistEntryObservation
 full-stop	problem conflict in handlePostFPPPlaylistEntryObservation
 joined	problem conflict in handlePostFPPPlaylistEntryObservation
-capital	problem conflict in handlePostNodeCueCatalogDeploy
-quoted-name	problem conflict in handlePostNodeCueCatalogDeploy
-capital	problem conflict in handlePostRemoveNodeAsset
-full-stop	problem conflict in handlePostRemoveNodeAsset
-hex	problem conflict in handlePostRemoveNodeAsset
-length	problem conflict in handlePostRemoveNodeAsset
-quoted-name	problem conflict in handlePostRemoveNodeAsset
 joined	problem conflict in handlePutAssetsSettingsConfig
 joined	problem conflict in handlePutFPPEndpointsConfig
 joined	problem conflict in handlePutFPPMQTTConfig
@@ -164,13 +123,10 @@ quoted-name	problem conflict in writeEnrollmentError
 capital	problem credential-in-url in withIdentity
 full-stop	problem credential-in-url in withIdentity
 joined	problem credential-in-url in withIdentity
-length	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
-quoted-name	problem cue-catalog-claim-conflict in handlePostNodeCueCatalogDeploy
 capital	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 full-stop	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 hex	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
 length	problem definition-hash-mismatch in handlePostFPPPlaylistDefinition
-full-stop	problem enrollment-code-gone in writeEnrollmentError
 capital	problem forbidden in readAnyGuard
 full-stop	problem forbidden in readAnyGuard
 vocabulary	problem forbidden in readAnyGuard
@@ -304,14 +260,6 @@ capital	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
 full-stop	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
 quoted-name	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
 vocabulary	problem invalid-parameter in handlePostNodeCueCatalogAcknowledge
-capital	problem invalid-parameter in handlePostNodeCueCatalogDeploy
-full-stop	problem invalid-parameter in handlePostNodeCueCatalogDeploy
-joined	problem invalid-parameter in handlePostNodeCueCatalogDeploy
-quoted-name	problem invalid-parameter in handlePostNodeCueCatalogDeploy
-capital	problem invalid-parameter in handlePostRemoveNodeAsset
-full-stop	problem invalid-parameter in handlePostRemoveNodeAsset
-joined	problem invalid-parameter in handlePostRemoveNodeAsset
-quoted-name	problem invalid-parameter in handlePostRemoveNodeAsset
 capital	problem invalid-parameter in handlePostResolumeCompositionUpload
 full-stop	problem invalid-parameter in handlePostResolumeCompositionUpload
 quoted-name	problem invalid-parameter in handlePostResolumeCompositionUpload
@@ -403,7 +351,6 @@ quoted-name	problem invalid-parameter in writeEnrollmentError
 capital	problem method-not-allowed in WriteHeader
 full-stop	problem method-not-allowed in WriteHeader
 joined	problem method-not-allowed in WriteHeader
-joined	problem node-enrollment-unavailable in writeEnrollmentError
 capital	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
 full-stop	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
 hex	problem observation-entry-key-mismatch in handlePostFPPPlaylistEntryObservation
@@ -747,20 +694,8 @@ full-stop	v1.NodeAssetManifestResponse manifest.resyncRequest.outcomeReason
 capital	v1.NodeResponse node.controlPlane.reason
 full-stop	v1.NodeResponse node.controlPlane.reason
 vocabulary	v1.NodeResponse node.controlPlane.reason
-capital	v1.NodeResponse node.render[].reason
-full-stop	v1.NodeResponse node.render[].reason
-hex	v1.NodeResponse node.render[].reason
-length	v1.NodeResponse node.render[].reason
-quoted-name	v1.NodeResponse node.render[].reason
-sentences	v1.NodeResponse node.render[].reason
 capital	v1.NodesResponse nodes[].controlPlane.reason
 full-stop	v1.NodesResponse nodes[].controlPlane.reason
-capital	v1.RemoveNodeAssetResponse command.reason
-full-stop	v1.RemoveNodeAssetResponse command.reason
-capital	v1.RenderCommandResponse command.outcomeReason
-full-stop	v1.RenderCommandResponse command.outcomeReason
-kind-name	v1.RenderCommandResponse command.outcomeReason
-quoted-name	v1.RenderCommandResponse command.outcomeReason
 capital	v1.ResolumeActionResponse result.outcomeReason
 full-stop	v1.ResolumeActionResponse result.outcomeReason
 vocabulary	v1.ResolumeActionResponse result.outcomeReason

@@ -631,7 +631,7 @@ func TestDeleteAssetRefusedWhenPinnedByShowActionAnnouncementMedia(t *testing.T)
 	if err := json.Unmarshal(body, &p); err != nil {
 		t.Fatalf("decode problem: %v; body: %s", err, body)
 	}
-	const want = `This asset is the announcement media for "Welcome announcement". Choose different media for that action, then delete it.`
+	const want = `This file is the announcement media for Welcome announcement. Choose different media for that action, then delete the file.`
 	if p.Detail != want {
 		t.Errorf("detail = %q, want %q", p.Detail, want)
 	}

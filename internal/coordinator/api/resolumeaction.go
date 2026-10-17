@@ -144,9 +144,7 @@ func resolumeActionReplayConflictProblem(existingID, existingAction, requestedAc
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a different action",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (action %q), not action %q. Use a new key.",
-			existingID, existingAction, requestedAction),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -159,9 +157,7 @@ func resolumeActionReplayParamsConflictProblem(existingID, action, existingParam
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q) with params %s, not %s. Use a new key.",
-			existingID, action, existingParamsJSON, requestedParamsJSON),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 
