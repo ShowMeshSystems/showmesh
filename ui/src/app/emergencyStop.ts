@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   armEmergencyStopHardStop,
@@ -49,19 +49,31 @@ export function useEmergencyStop(model: Model) {
   const [hardStopArmError, setHardStopArmError] = useState<string | null>(null)
   const [armTick, setArmTick] = useState(0)
 
+  const latestRun = useRef(0)
+  const hardStopRun = useRef(0)
+
+  // Requests overlap: only the newest clears busy, and a hard stop's outcome is never replaced by an older stop's.
   const run = useCallback((level: EmergencyLevel, call: () => Promise<EmergencyStopResult>) => {
+    const id = ++latestRun.current
+    if (level === 'hard-stop') hardStopRun.current = id
+    const show = (next: EmergencyOutcomeState) => {
+      if (level !== 'hard-stop' && hardStopRun.current > id) return
+      setOutcome(next)
+    }
     setBusy(level)
     call()
-      .then((result) => setOutcome({ kind: 'result', level, result }))
+      .then((result) => show({ kind: 'result', level, result }))
       .catch((err: unknown) =>
-        setOutcome({
+        show({
           kind: 'error',
           level,
           message: describeApiError(err),
           hadHttpStatus: err instanceof ApiError && err.status !== undefined,
         }),
       )
-      .finally(() => setBusy(false))
+      .finally(() => {
+        if (latestRun.current === id) setBusy(false)
+      })
   }, [])
 
   const stop = useCallback(() => run('stop', emergencyStop), [run])
