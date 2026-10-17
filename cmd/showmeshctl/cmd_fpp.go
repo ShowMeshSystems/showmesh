@@ -96,6 +96,9 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		if args[0] == "pairing" {
 			return cmdFPPPairing(args[1:], stdout, stderr, clock)
 		}
+		if args[0] == "brightness" {
+			return cmdFPPBrightness(args[1:], stdout, stderr, clock)
+		}
 	}
 
 	fs, g := newFlagSet("showmeshctl fpp", stderr)
@@ -116,9 +119,10 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  set-volume                 <instance-id> <volume 0-100>")
 		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --confirm <instance-id>  (TRACK-H-H2-SPEC.md §5.1)")
 		_, _ = fmt.Fprintln(stderr, "  acknowledge-instance-uuid-change --confirm <instance-id> ")
-		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <instance-id> <percent 0-100> [--fade-seconds N] [--request-id KEY]")
+		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <percent 0-100> [--fade-seconds N] [--request-id KEY]  (every FPP)")
 		_, _ = fmt.Fprintln(stderr, "  republish-playlist-definitions <instance-id> [--request-id KEY]")
-		_, _ = fmt.Fprintln(stderr, "  set-brightness-ceiling     <instance-id> <ceiling 0-100> [--request-id KEY]")
+		_, _ = fmt.Fprintln(stderr, "  set-brightness-ceiling     <percent 0-100> [--fade-seconds N]  (every FPP)")
+		_, _ = fmt.Fprintln(stderr, "  brightness                 (the display ceiling and each FPP's state)")
 		_, _ = fmt.Fprintln(stderr, "  set-brightness-excluded-ranges <instance-id> <ranges, like \"1-512, 1025-512\" or none>")
 		_, _ = fmt.Fprintln(stderr, "  pair                       <instance-id> <code XXXX-XXXX>")
 		_, _ = fmt.Fprintln(stderr, "  pairing                    <instance-id>")

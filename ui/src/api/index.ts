@@ -47,10 +47,11 @@ export type {
   EventSeq,
   FPPEndpointsConfigResponse,
   FPPCommandResult,
-  // Pairing an FPP plugin by code, and its brightness ceiling write.
+  // Pairing an FPP plugin by code, and the display brightness ceiling.
   FPPPairingStateResponse,
   FPPPairingResponse,
-  FPPBrightnessCeilingResponse,
+  FPPBrightnessResponse,
+  FPPBrightnessPlayer,
   FPPChannelRange,
   FPPBrightnessExcludedRangesResponse,
   // The three-level emergency stop and its hard-stop arm/fire gate.
@@ -360,7 +361,8 @@ export {
   getFPPEndpointsConfigRevisions,
   getFPPPairing,
   postFPPPairing,
-  postFPPBrightnessCeiling,
+  getFPPBrightness,
+  putFPPBrightnessCeiling,
   putFPPBrightnessExcludedRanges,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,

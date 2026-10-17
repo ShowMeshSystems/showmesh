@@ -249,3 +249,62 @@ func TestAnEmptyExcludedListIsNotApplicableAndAMissingOneIsNotCollected(t *testi
 		}
 	}
 }
+
+func TestPollHandsTheReadingToOnReading(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		check  func(t *testing.T, r Reading)
+	}{
+		{"new plugin", 200, `{"ceiling":40,"fadeActive":true,"updatedAtMillis":1700000000000,"ceilingTarget":20,"ceilingFadeEndMillis":1700000030000,"ceilingChangedAtMillis":1699999990000}`,
+			func(t *testing.T, r Reading) {
+				if r.Err != nil || r.NotFound || *r.Ceiling != 40 || *r.CeilingTarget != 20 ||
+					*r.CeilingFadeEndMillis != 1700000030000 || *r.CeilingChangedAtMillis != 1699999990000 || *r.UpdatedAtMillis != 1700000000000 {
+					t.Fatalf("reading = %+v", r)
+				}
+			}},
+		{"old plugin", 200, okBody, func(t *testing.T, r Reading) {
+			if r.Err != nil || r.CeilingTarget != nil || r.CeilingChangedAtMillis != nil || *r.Ceiling != 60 {
+				t.Fatalf("reading = %+v, want the old fields only", r)
+			}
+		}},
+		{"no plugin", 404, "", func(t *testing.T, r Reading) {
+			if !r.NotFound || r.Err != nil {
+				t.Fatalf("reading = %+v, want NotFound", r)
+			}
+		}},
+		{"plugin failed", 500, "", func(t *testing.T, r Reading) {
+			if r.NotFound || r.Err == nil {
+				t.Fatalf("reading = %+v, want Err", r)
+			}
+		}},
+		{"unread document", 200, `{"ceiling":0,"updatedAtMillis":0}`, func(t *testing.T, r Reading) {
+			if r.Err == nil {
+				t.Fatalf("reading = %+v, want Err for an all-zero document", r)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			var got []Reading
+			c, err := New("bench-fpp", srv.URL, Options{OnReading: func(r Reading) { got = append(got, r) }})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			c.Poll(context.Background())
+			if len(got) != 1 {
+				t.Fatalf("OnReading called %d times, want 1", len(got))
+			}
+			if got[0].InstanceID != "bench-fpp" || got[0].ReceivedAt.IsZero() {
+				t.Fatalf("reading identity = %+v", got[0])
+			}
+			tc.check(t, got[0])
+		})
+	}
+}

@@ -227,50 +227,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/fpp/{instanceId}/brightness/transition-gain": {
+    "/fpp/brightness": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description Same ID syntax as a node ID (contract section 7). */
-                instanceId: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Write one FPP host's brightness transition gain
-         * @description Behind `fpp:command`, the same scope dispatching an FPP command needs: this is an operator writing a live output value to one FPP host, the blast radius that scope already governs. Writes the brightness transition gain, a 0-100 multiplier that composes with FPP's own scheduled brightness ceiling as `effective output = round(ceiling * gain / 100)`. ShowMesh owns the gain and never the ceiling, so this write can never overwrite a limit FPP's own schedule set.
-         *     The `200` body is the applied state the FPP plugin returned, never a bare success: `gainStart`, `gainTarget`, `fadeSeconds`, `ceiling` and `effectiveOutput` are what the host is now doing. `applied: false` is part of that success, not an error - it is what a repeated `requestId` returns, the idempotency key working, with the gain unchanged and the current state reported.
-         *     An out-of-range `targetPercent` or `fadeSeconds` is refused with `400`, never clamped, so a mistyped value stays visible. An instance id that names no configured `fpp.endpoints` entry is `404`. A write that reaches a configured host but does not take is `502`, carrying the host's own refusal text verbatim.
+         * Read the display brightness ceiling and how each FPP follows it
+         * @description Behind `fpp:read`. The display has one brightness ceiling that every FPP in `fpp.endpoints` follows (ADR-062). `ceiling` is the desired ceiling, or `null` before one has been set. `players` has one entry per configured FPP with the ceiling it last reported and its `state`: `following`, `catchingUp` while the coordinator brings it to the ceiling, `notReporting` when it does not answer or has no ShowMesh plugin, or `pluginTooOld` when it follows but a change made on it cannot be shared with the others. Every state but `following` carries an operator sentence in `reason`.
          */
-        post: operations["setFPPTransitionGain"];
+        get: operations["getFPPBrightness"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/fpp/{instanceId}/brightness/ceiling": {
+    "/fpp/brightness/ceiling": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description Same ID syntax as a node ID (contract section 7). */
-                instanceId: string;
-            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the display brightness ceiling every FPP follows
+         * @description Behind `fpp:command`, audited as `fpp.set_brightness_ceiling`. Sets the display's one brightness ceiling, persisted across restarts. The coordinator then sends the plugin's `ShowMesh: Set Brightness Ceiling` FPP command to every FPP whose reported ceiling differs, until each reports it. A fade carries its end time, so an FPP that is written late gets only the remaining seconds and every FPP reaches the target together. A change made on any FPP afterwards, newer than this one, becomes the display ceiling in turn.
+         *     The `200` body is the same document `GET /fpp/brightness` returns, read right after the change; FPPs read `catchingUp` until their next brightness poll shows the new ceiling. An out-of-range `targetPercent` or `fadeSeconds` is refused with `400`, never clamped.
+         */
+        put: operations["setFPPBrightnessCeiling"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fpp/brightness/transition-gain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         get?: never;
         put?: never;
         /**
-         * Write one FPP host's brightness ceiling
-         * @description Behind `fpp:command`, the scope an operator write to one FPP host already needs. Dispatches FPP's own `ShowMesh: Set Brightness Ceiling` command, registered by the resident ShowMesh plugin, through the same FPP command client every other command goes through. This writes the CEILING; the transition gain is a separate value with its own route and is never written from here.
-         *     FPP answering `200` is never confirmation on its own: `ceiling` is present, and `command.outcome` is `confirmed`, only when the plugin's own brightness route reported the new value within the read-back window. Otherwise the command still reached FPP and `command.outcome` is `unconfirmed`.
-         *     An out-of-range `ceiling` is refused with `400`, never clamped. An instance id that names no configured `fpp.endpoints` entry is `404`. A command that did not reach the host is `502`.
+         * Write the brightness transition gain to every FPP
+         * @description Behind `fpp:command`, audited as `fpp.set_transition_gain`. Writes the brightness transition gain, a 0-100 multiplier that composes with the brightness ceiling as `effective output = round(ceiling * gain / 100)`, to every FPP in `fpp.endpoints` (ADR-062 decision 7). Each FPP's write carries its own `requestId`, derived from the request's as `<requestId>:<instanceId>`. One FPP failing or unreachable does not stop the others.
+         *     The `200` body has one entry per FPP. `outcome` is `applied`, `alreadyApplied` (that `requestId` already took on that FPP, a success with the gain unchanged), or `failed` with an operator sentence in `reason`. The numbers are the applied state the plugin returned. An out-of-range `targetPercent` or `fadeSeconds` is refused with `400`, never clamped. With no FPP configured the answer is `409`.
          */
-        post: operations["setFPPBrightnessCeiling"];
+        post: operations["setFPPTransitionGain"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4339,53 +4351,100 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["ResolumeInstance"];
         };
-        /** @description The body of POST /fpp/{instanceId}/brightness/transition-gain (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2). Out of range is refused, never clamped. */
+        /** @description The body of POST /fpp/brightness/transition-gain (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2). Out of range is refused, never clamped. */
         FPPTransitionGainRequest: {
-            /** @description The gain, a multiplier over FPP's own scheduled brightness ceiling - never the ceiling itself. Required; an explicit `null` is a `400`, distinct from omitting it, and `0` is a real value (blackout) rather than a missing one. */
+            /** @description The gain, a multiplier over the brightness ceiling, never the ceiling itself. Required; an explicit `null` is a `400`, and `0` is a real value (blackout). */
             targetPercent: number;
-            /** @description Fade duration; `0` applies immediately. Required, with the same absent/null/zero distinction `targetPercent` documents. */
+            /** @description Fade duration; `0` applies immediately. Required. */
             fadeSeconds: number;
-            /** @description Caller-minted idempotency key. Optional: supply one and a retry of an unanswered request is safe, because a repeat of an id already applied changes nothing and comes back with `applied: false` and the gain as it stands. Omit it and the coordinator mints one, which makes the request a new fade rather than a retry of any earlier one; the minted value is echoed on the response. Present but empty is a `400`. */
+            /** @description Caller-minted idempotency key. Supply one and a retry of an unanswered request is safe: each FPP that already applied it answers `alreadyApplied`. Omit it and the coordinator mints one. Present but empty is a `400`. */
             requestId?: string;
         };
-        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/brightness/transition-gain. */
+        /** @description The 200 body of POST /fpp/brightness/transition-gain, one entry per FPP. */
         FPPTransitionGainResponse: {
             /** Format: date-time */
             serverTime: string;
-            transitionGain: components["schemas"]["FPPTransitionGainResult"];
+            players: components["schemas"]["FPPTransitionGainResult"][];
         };
-        /** @description The applied state the FPP plugin returned, carried through unchanged so a caller has evidence of what the host is now doing rather than only "the request did not error". */
+        /** @description One FPP's outcome. The numbers are the applied state the plugin returned, present unless `outcome` is `failed`. */
         FPPTransitionGainResult: {
             instanceId: string;
-            /** @description The idempotency key this write actually carried, whether the caller supplied it or the coordinator minted it. */
+            /** @description The idempotency key this FPP's write carried. */
             requestId: string;
-            /** @description `false` is a SUCCESS, not a failure: an idempotent repeat of a `requestId` already applied, with nothing changed and the fields below reporting the gain as it stands. A client that treats `false` as an error will retry a write that already took. */
-            applied: boolean;
+            /**
+             * @description `alreadyApplied` is a success: that `requestId` already took on this FPP and nothing changed.
+             * @enum {string}
+             */
+            outcome: "applied" | "alreadyApplied" | "failed";
+            /** @description An operator sentence, present when `outcome` is `failed`. */
+            reason?: string;
             /** @description The gain the fade now running started from. */
-            gainStart: number;
+            gainStart?: number;
             /** @description The gain the fade now running is heading to. */
-            gainTarget: number;
+            gainTarget?: number;
             /** @description The fade duration the plugin is actually running. */
-            fadeSeconds: number;
-            /** @description FPP's own scheduled brightness ceiling, as the plugin sees it. */
-            ceiling: number;
-            /** @description `round(ceiling * gain / 100)`, the value actually reaching the channels. Carried because the gain alone does not say what the audience sees. */
-            effectiveOutput: number;
+            fadeSeconds?: number;
+            /** @description The FPP's brightness ceiling, as its plugin sees it. */
+            ceiling?: number;
+            /** @description `round(ceiling * gain / 100)`, the value reaching the channels. */
+            effectiveOutput?: number;
         };
-        /** @description The body of POST /fpp/{instanceId}/brightness/ceiling. Out of range is refused, never clamped. */
+        /** @description The body of PUT /fpp/brightness/ceiling. Out of range is refused, never clamped. */
         FPPBrightnessCeilingRequest: {
-            /** @description The brightness ceiling, the limit the host's output is held under. Required; an explicit `null` is a `400`, distinct from omitting it, and `0` is a real value (blackout) rather than a missing one. */
-            ceiling: number;
-            /** @description Caller-minted idempotency key, echoed on the response. Omit it and the coordinator mints one. Present but empty is a `400`. */
-            requestId?: string;
+            /** @description The display brightness ceiling. Required; an explicit `null` is a `400`, and `0` is a real value (blackout). */
+            targetPercent: number;
+            /** @description Fade duration in seconds. Omitted means `0`, applied at once. */
+            fadeSeconds?: number;
         };
-        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/brightness/ceiling: the dispatched command's own result, plus the ceiling the plugin read back. */
-        FPPBrightnessCeilingResponse: {
+        /** @description GET /fpp/brightness, also the 200 body of PUT /fpp/brightness/ceiling: the display ceiling and every configured FPP's place against it. */
+        FPPBrightnessResponse: {
             /** Format: date-time */
             serverTime: string;
-            command: components["schemas"]["FPPCommandResult"];
-            /** @description Present only when the plugin's own brightness route reported the new value within the read-back window. Absent means the value was not read back in time, never that the write failed: `command.outcome` is then `unconfirmed`. */
+            /** @description The display's desired ceiling, or `null` before the first one is set. */
+            ceiling: components["schemas"]["FPPBrightnessCeiling"] | null;
+            players: components["schemas"]["FPPBrightnessPlayer"][];
+        };
+        /** @description The display's desired brightness ceiling. */
+        FPPBrightnessCeiling: {
+            targetPercent: number;
+            /**
+             * Format: date-time
+             * @description When the fade to `targetPercent` ends, or `null` for no fade.
+             */
+            fadeEndsAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the ceiling was set, on the coordinator's clock.
+             */
+            changedAt: string;
+            changedBy: {
+                /**
+                 * @description `operator` for a change through the API, `fpp` for a change made on an FPP and taken up as the display ceiling.
+                 * @enum {string}
+                 */
+                kind: "operator" | "fpp";
+                /** @description The principal id, or the FPP instance id. */
+                id: string;
+                /** @description The principal's name, when `kind` is `operator`. */
+                name?: string;
+            };
+        };
+        /** @description One configured FPP against the display ceiling. */
+        FPPBrightnessPlayer: {
+            instanceId: string;
+            /** @enum {string} */
+            state: "following" | "catchingUp" | "notReporting" | "pluginTooOld";
+            /** @description An operator sentence, present for every state but `following`. */
+            reason?: string;
+            /** @description The FPP's ceiling as it last reported it. */
             ceiling?: number;
+            /** @description Where a fade on the FPP is going. Absent from a plugin too old to report it. */
+            ceilingTarget?: number;
+            /**
+             * Format: date-time
+             * @description When the coordinator received that report.
+             */
+            reportedAt?: string;
         };
         /** @description One run of channels: a first channel, counted from 1, and how many channels follow from it. */
         FPPChannelRange: {
@@ -6768,7 +6827,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/preview-gateway-unavailable" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/fpp-pairing-not-waiting" | "https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed" | "https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/assets-settings-not-stored" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed" | "https://showmesh.dev/problems/enrollment-code-gone" | "https://showmesh.dev/problems/node-enrollment-unavailable";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/not-implemented" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/preview-gateway-unavailable" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/fpp-pairing-not-waiting" | "https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/assets-settings-not-stored" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/asset-pinned" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed" | "https://showmesh.dev/problems/enrollment-code-gone" | "https://showmesh.dev/problems/node-enrollment-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -9581,14 +9640,95 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getFPPBrightness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPBrightnessResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The coordinator was started without the display brightness. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setFPPBrightnessCeiling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPBrightnessCeilingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPBrightnessResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The coordinator was started without the display brightness. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     setFPPTransitionGain: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description Same ID syntax as a node ID (contract section 7). */
-                instanceId: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -9609,59 +9749,6 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
-            403: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-            /** @description The request was valid and the instance is configured, but the write to the FPP host's plugin did not take. `type` is `https://showmesh.dev/problems/fpp-transition-gain-write-failed` and `detail` carries the host's own error text verbatim. */
-            502: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    setFPPBrightnessCeiling: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Same ID syntax as a node ID (contract section 7). */
-                instanceId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FPPBrightnessCeilingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FPPBrightnessCeilingResponse"];
-                };
-            };
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
             /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6). */
             403: {
                 headers: {
@@ -9672,19 +9759,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
-            /** @description The request was valid and the instance is configured, but the command did not reach the FPP host. `type` is `https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed`. */
-            502: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     setFPPBrightnessExcludedRanges: {
