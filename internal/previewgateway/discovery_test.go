@@ -170,6 +170,8 @@ func TestDiscoveryThatFailsAtStartIsNotRunning(t *testing.T) {
 	for runs.Load() < 5 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
+	// Read before cancelling: shutdown ends the last run, which reads as a restart.
+	got := d.Unavailable()
 	cancel()
 	<-done
 	if runs.Load() < 5 {
@@ -178,7 +180,7 @@ func TestDiscoveryThatFailsAtStartIsNotRunning(t *testing.T) {
 	if sawRunning.Load() {
 		t.Fatal("discovery reported running while the monitor kept failing at start")
 	}
-	if got := d.Unavailable(); got != msgCannotStart {
+	if got != msgCannotStart {
 		t.Fatalf("Unavailable = %q, want %q", got, msgCannotStart)
 	}
 }
