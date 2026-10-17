@@ -4220,6 +4220,17 @@ export interface components {
             duplicateInstanceUuidEndpointIds: string[];
             /** @description Non-null exactly when this instance's playlist-entry reports are currently being refused (a sequence regression, most often a plugin reinstall or a wiped state directory). Cleared by this instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}. */
             playlistObservationRefused: components["schemas"]["FPPPlaylistObservationRefused"] | null;
+            plugin: components["schemas"]["FPPPluginStatus"];
+        };
+        /** @description Whether the ShowMesh plugin on this FPP is reporting to this coordinator, separate from `health`, which is what FPP's own API says. `not_paired` means no pairing is remembered and nothing was ever accepted; `not_reported` means paired but nothing was ever accepted; `stopped` means FPP is playing and the last accepted report is more than ten minutes old; `reporting` is the rest, including an idle FPP. Pairing is remembered only for the coordinator process's lifetime. */
+        FPPPluginStatus: {
+            /** @enum {string} */
+            state: "not_paired" | "not_reported" | "stopped" | "reporting";
+            /**
+             * Format: date-time
+             * @description When a playlist definition or playlist-entry report was last accepted from this plugin, or null when none ever was.
+             */
+            lastReportedAt: string | null;
         };
         /** @description The operator-facing reason this instance's playlist-entry reports are currently being refused, and when it was recorded. */
         FPPPlaylistObservationRefused: {

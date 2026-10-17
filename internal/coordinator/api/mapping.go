@@ -711,6 +711,7 @@ func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipati
 		LastPollError:                    fv.LastPollError,
 		DuplicateInstanceUUIDEndpointIDs: fv.DuplicateInstanceUUIDEndpointIDs,
 		ShowParticipation:                participation,
+		Plugin:                           fppPluginStatus(fv.PluginLastReportedAt, resolved, now),
 	}
 	if inst.DuplicateInstanceUUIDEndpointIDs == nil {
 		inst.DuplicateInstanceUUIDEndpointIDs = []string{}
@@ -734,6 +735,35 @@ func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipati
 		}
 	}
 	return inst
+}
+
+// fppPluginStaleAfter is how long a playing FPP may go without an accepted
+// plugin report before the plugin is called stopped. The plugin sends nothing
+// while FPP is idle, so silence alone proves nothing.
+const fppPluginStaleAfter = 10 * time.Minute
+
+// fppPluginStatus never returns "not_paired": only a handler knows pairing,
+// see [handlers.mapFPPInstance].
+func fppPluginStatus(lastReportedAt *time.Time, resolved []observation.Observation, now time.Time) v1.FPPPluginStatus {
+	if lastReportedAt == nil {
+		return v1.FPPPluginStatus{State: "not_reported"}
+	}
+	status := v1.FPPPluginStatus{State: "reporting", LastReportedAt: formatTimePtr(lastReportedAt)}
+	if now.Sub(*lastReportedAt) > fppPluginStaleAfter && fppIsPlaying(resolved) {
+		status.State = "stopped"
+	}
+	return status
+}
+
+func fppIsPlaying(resolved []observation.Observation) bool {
+	for _, o := range resolved {
+		if o.Signal != "fpp.playlist.name" || o.Absence != "" {
+			continue
+		}
+		name, ok := o.Value.(string)
+		return ok && name != ""
+	}
+	return false
 }
 
 // --- Resolume instances ---

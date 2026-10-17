@@ -659,3 +659,48 @@ func TestMapResolumeInstanceResolvesMultiSourceObservations(t *testing.T) {
 		t.Errorf("Composition = %+v, want nil when the caller passed nil", inst.Composition)
 	}
 }
+
+func TestFPPPluginStatusStates(t *testing.T) {
+	now := time.Now()
+	recent := now.Add(-time.Minute)
+	old := now.Add(-time.Hour)
+	playing := []observation.Observation{{Signal: "fpp.playlist.name", Value: "main"}}
+
+	tests := []struct {
+		name     string
+		lastAt   *time.Time
+		observed []observation.Observation
+		want     string
+	}{
+		{"never reported", nil, nil, "not_reported"},
+		{"recent report", &recent, playing, "reporting"},
+		{"old report, FPP idle", &old, nil, "reporting"},
+		{"old report, FPP playing", &old, playing, "stopped"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fppPluginStatus(tt.lastAt, tt.observed, now).State; got != tt.want {
+				t.Errorf("state = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFPPPairingStoreMapInstanceSeparatesNotPairedFromNotReported(t *testing.T) {
+	now := time.Now()
+	store := newFPPPairingStore()
+	fv := FPPInstanceView{InstanceID: "player-01", Endpoint: "http://10.0.1.20"}
+
+	if got := store.mapInstance(fv, v1.InstanceShowParticipation{}, now).Plugin.State; got != "not_paired" {
+		t.Errorf("unpaired state = %q, want not_paired", got)
+	}
+	store.markPaired(fppPendingPairing{instanceID: "player-01"}, now)
+	if got := store.mapInstance(fv, v1.InstanceShowParticipation{}, now).Plugin.State; got != "not_reported" {
+		t.Errorf("paired state = %q, want not_reported", got)
+	}
+	reported := now.Add(-time.Minute)
+	fv.PluginLastReportedAt = &reported
+	if got := store.mapInstance(fv, v1.InstanceShowParticipation{}, now).Plugin.State; got != "reporting" {
+		t.Errorf("reporting state = %q, want reporting", got)
+	}
+}
