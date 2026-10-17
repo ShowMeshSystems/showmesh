@@ -63,7 +63,7 @@ func (h *handlers) handleGetResolumeInstancesConfig(w http.ResponseWriter, r *ht
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.ResolumeInstancesMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"No Resolume instances are stored: the data volume is unwritable. See GET /api/v1/resolume/instances. Fix it, restart, and do not clear SHOWMESH_RESOLUME_URL."))
+				"No Resolume instances are stored because the data volume cannot be written. Fix the volume and restart, and keep the existing environment setting until then."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(

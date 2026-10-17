@@ -101,7 +101,7 @@ func assetStorageFullProblem() v1.Problem {
 		Type:   problemBaseURI + "storage-full",
 		Title:  "Storage full",
 		Status: http.StatusInsufficientStorage,
-		Detail: "this coordinator's asset storage is full; the upload was discarded and nothing was registered",
+		Detail: "The asset storage is full, so the upload was discarded. Free some space and upload again.",
 	}
 }
 

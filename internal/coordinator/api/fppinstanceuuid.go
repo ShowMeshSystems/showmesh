@@ -70,7 +70,7 @@ func (h *handlers) handleAcknowledgeFPPInstanceUUIDChange(w http.ResponseWriter,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrFPPInstanceUUIDNotFound) {
-			writeProblem(w, h.logger, now, resourceNotFoundProblem("no FPP instance with id "+strconv.Quote(instanceID)+" has ever reported an instance uuid"))
+			writeProblem(w, h.logger, now, resourceNotFoundProblem("FPP "+instanceID+" has not reported yet."))
 			return
 		}
 		if errors.Is(err, store.ErrFPPInstanceUUIDNoUnacknowledgedChange) {
