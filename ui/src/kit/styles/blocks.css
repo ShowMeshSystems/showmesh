@@ -1606,3 +1606,40 @@ a.sm-tile:hover {
     gap: 4px 0;
   }
 }
+
+/* A version's changed fields: path, then what changed and the before and after values. */
+.sm-revdiff {
+  display: grid;
+  gap: var(--s-2);
+  margin: var(--s-2) 0 0;
+  padding: var(--s-3);
+  border-left: 2px solid var(--border);
+}
+
+.sm-revdiff__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
+  gap: var(--s-3);
+}
+
+.sm-revdiff__row dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sm-revdiff__kind {
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-revdiff__old { text-decoration: line-through; color: var(--text-muted); }
+
+@media (max-width: 600px) {
+  .sm-revdiff__row { grid-template-columns: 1fr; gap: var(--s-1); }
+}

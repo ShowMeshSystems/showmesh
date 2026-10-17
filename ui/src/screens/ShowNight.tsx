@@ -1349,7 +1349,6 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const [error, setError] = useState<string | null>(null)
   const [backgroundAudioTargetsError, setBackgroundAudioTargetsError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [revision, setRevision] = useState<NightSessionConfigResponse | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -1382,7 +1381,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }, [reloadKey, showId])
 
   const selectDefinition = (id: string) => {
-    setSelected(id); setError(null); setBackgroundAudioTargetsError(null); setRevision(null); setDeleteError(null)
+    setSelected(id); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null)
     if (id === '') { setLoaded(null); setDraft(blankDefinition(showId)); return }
     getNightSessionConfig(id)
       .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)) })
@@ -1457,7 +1456,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   ])).sort()
   const fppIds = (retained: string) => Array.from(new Set([...(retained === '' ? [] : [retained]), ...fppInstances.map((instance) => instance.instanceId)])).sort()
 
-  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setRevision(null); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null) }
+  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setError(null); setBackgroundAudioTargetsError(null); setDeleteError(null) }
   return <div id="sn-definitions" className="sm-night-session-workspace">
     <div className="sm-night-session-heading">
       <div><h2 className="sm-section__title">Night session definitions</h2><p className="sm-small sm-muted">How the night enters the show and returns to resting.</p></div>
@@ -1661,8 +1660,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             ))}
           </div>
           {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
-          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
-          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing version', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }]} />}
+          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} fetchRevision={(n) => getNightSessionConfigRevision(loaded.id, n)} />}
           <div className="sm-inspector__actions"><span className="sm-small sm-muted">{loaded === null ? 'Creates version 1' : `Creates version ${loaded.revision + 1}`}</span><div className="sm-btn-row"><Button variant="quiet" onClick={closeInspector}>Cancel</Button><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div></div>
           {loaded !== null && (
             <DeletePanel
