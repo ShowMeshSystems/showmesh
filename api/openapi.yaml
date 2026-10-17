@@ -5429,7 +5429,13 @@ paths:
         exactly as a node before this seam existed (RES-019). Optionally
         carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
         refused with `409` when the precondition names a revision that is
-        no longer current.
+        no longer current. When the node advertises the `clock.ptp`
+        capability, a `managed` or `external` write is refused with `400`
+        (field `interface`) unless `interface` is one of the network
+        interfaces that capability lists, and a `managed` write is refused
+        (field `provider`) when the capability's `externalProvider` is
+        true, because a PTP service outside ShowMesh already runs on that
+        node. A node that has not advertised `clock.ptp` is not checked.
       parameters:
         - name: id
           in: path
