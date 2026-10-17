@@ -169,6 +169,13 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: list show-wide assets: %w", nodeID, err)
 	}
 	showAssets = preferNodeOverShowAudioAssets(nodeAssets, showAssets)
+	isAudioNode, err := declaredAudioNode(ctx, st, nodeID)
+	if err != nil {
+		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
+	}
+	if !isAudioNode {
+		showAssets = withoutAudio(showAssets)
+	}
 
 	covered := make(map[string]bool, len(nodeAssets)+len(showAssets))
 	for _, rec := range nodeAssets {

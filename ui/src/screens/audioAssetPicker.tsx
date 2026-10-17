@@ -1,10 +1,9 @@
 /**
- * The audio-asset picker one background-audio item binds against: a
- * `Select` over the show's current, node-targeted audio assets, keyed by
- * asset id but reporting back the (sequence, target) pair the wire shape
- * actually stores. Shared by the night session's inline background-audio
- * item editor and Shows/Media Playlists' item editor (both bind an item to
- * the same asset identity, ADR-028).
+ * The audio-track picker one background-audio item binds against: one
+ * entry per track in the show, saved with no node so the bed's own nodes
+ * decide where it plays. An item already pinned to one node's upload keeps
+ * that entry so it still shows. Shared by the night session's inline
+ * background-audio editor and Shows/Media Playlists' item editor.
  */
 import { Select } from '../kit'
 import type { AudioAssetOption } from './showsModel'
@@ -21,17 +20,18 @@ export function AudioAssetPicker({
   target: string
   onPick: (asset: AudioAssetOption | null) => void
 } & Omit<Parameters<typeof Select>[0], 'value' | 'onChange' | 'onSelect' | 'children'>) {
-  const selectedId = assets.find((asset) => asset.sequence === sequence && asset.target === target)?.id ?? ''
+  const visible = assets.filter((asset) => asset.target === '' || (asset.sequence === sequence && asset.target === target))
+  const selectedId = visible.find((asset) => asset.sequence === sequence && asset.target === target)?.id ?? ''
   return (
     <Select
       {...selectProps}
       value={selectedId}
-      onChange={(e) => onPick(assets.find((asset) => asset.id === e.target.value) ?? null)}
+      onChange={(e) => onPick(visible.find((asset) => asset.id === e.target.value) ?? null)}
     >
-      <option value="">Select an audio asset…</option>
-      {assets.map((asset) => (
+      <option value="">Select an audio track…</option>
+      {visible.map((asset) => (
         <option key={asset.id} value={asset.id}>
-          {asset.sequence} · {asset.target}
+          {asset.target === '' ? asset.sequence : `${asset.sequence} · ${asset.target} only`}
         </option>
       ))}
     </Select>

@@ -29,7 +29,7 @@ type ConfigNightSessionBackgroundAudioItem struct {
 	ItemID   string `json:"itemId"`
 	Show     string `json:"show"`
 	Sequence string `json:"sequence"`
-	Target   string `json:"target"`
+	Target   string `json:"target,omitempty"`
 }
 
 // ConfigNightSessionBackgroundAudio is

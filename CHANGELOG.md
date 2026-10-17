@@ -11,6 +11,19 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+### Audio
+
+- A background music track, in a night session or a media playlist, is now
+  any audio file in the show. Upload it once, show-wide, and pick it by name.
+  It plays on the night session's own nodes, or on the show's audio nodes
+  when the session names none; each node uses its own upload of the track if
+  it has one, then the show-wide upload, then another node's copy. Items
+  already pinned to one node keep working.
+- A show-wide audio file is sent only to audio nodes, so it no longer shows
+  Missing for FPP players and render nodes.
+- The "Background audio files on every node" readiness check now counts a
+  show-wide upload.
+
 ## 0.4.1 - 2026-10-16
 
 Patch release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
