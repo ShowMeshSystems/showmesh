@@ -2135,7 +2135,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/fpp.mqtt", h.writeGuard(&scopeConfigWrite, h.handlePutFPPMQTTConfig))
 	mux.HandleFunc("GET /api/v1/config/fpp.mqtt/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPMQTTConfigRevisions))
 
-	// ADR-060: the gateway and camera kinds are config:write like every other
+	// ADR-060: the gateway, camera and NDI source kinds are config:write like every other
 	// kind. The dashboard layout holds no secret, so it reads under
 	// observation:read and writes under dashboard:write, which operators hold.
 	// The preview routes require observation:read even when reads are open.
@@ -2147,6 +2147,11 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/preview.camera/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutPreviewCamera))
 	mux.HandleFunc("DELETE /api/v1/config/preview.camera/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeletePreviewCamera))
 	mux.HandleFunc("GET /api/v1/config/preview.camera/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewCameraRevisions))
+	mux.HandleFunc("GET /api/v1/config/preview.ndi", h.requireScope(identity.ScopeConfigWrite, h.handleListPreviewNDISources))
+	mux.HandleFunc("GET /api/v1/config/preview.ndi/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewNDISource))
+	mux.HandleFunc("PUT /api/v1/config/preview.ndi/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutPreviewNDISource))
+	mux.HandleFunc("DELETE /api/v1/config/preview.ndi/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeletePreviewNDISource))
+	mux.HandleFunc("GET /api/v1/config/preview.ndi/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewNDISourceRevisions))
 	mux.HandleFunc("GET /api/v1/config/dashboard.layout", h.requireScope(identity.ScopeObservationRead, h.handleGetDashboardLayoutConfig))
 	mux.HandleFunc("PUT /api/v1/config/dashboard.layout", h.writeGuard(&scopeDashboardWrite, h.handlePutDashboardLayoutConfig))
 	mux.HandleFunc("GET /api/v1/config/dashboard.layout/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetDashboardLayoutConfigRevisions))

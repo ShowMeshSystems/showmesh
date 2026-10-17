@@ -7,6 +7,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/preview"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -40,6 +41,7 @@ func TestPreviewSettingsSourceLoadsConfigurationCredentialsAndSurfaces(t *testin
 	if err := st.SetCredential(ctx, config.PreviewCameraConfigKind, "driveway", "url", "rtsp://h:1/a"); err != nil {
 		t.Fatal(err)
 	}
+	putPreviewRevision(t, st, config.PreviewNDIConfigKind, "arena-far", `{"label":"Arena far","ndiName":"ARENA-02 (Composition)","address":"10.0.20.15:5961","enabled":true}`)
 	putPreviewRevision(t, st, config.DashboardLayoutConfigKind, "default", `{"previews":{"order":["camera:driveway"],"hidden":[]}}`)
 	putPreviewRevision(t, st, config.ShowSurfaceConfigKind, "matrix-main", `{"show":"s","name":"Matrix","node":"node-01","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40,"output":{"transport":"ndi","ndi":{"sourceName":"matrix-main"}}}`)
 	putPreviewRevision(t, st, config.ShowActiveConfigKind, config.ShowActiveObjectID, `{"show":"s"}`)
@@ -55,6 +57,9 @@ func TestPreviewSettingsSourceLoadsConfigurationCredentialsAndSurfaces(t *testin
 	}
 	if len(got.Cameras) != 1 || got.Cameras[0].URL != "rtsp://h:1/a" || got.Cameras[0].Name != "Driveway" || !got.Cameras[0].Enabled {
 		t.Fatalf("cameras = %+v", got.Cameras)
+	}
+	if want := (preview.NDISource{ID: "arena-far", Label: "Arena far", Name: "ARENA-02 (Composition)", Address: "10.0.20.15:5961", Enabled: true}); len(got.NDISources) != 1 || got.NDISources[0] != want {
+		t.Fatalf("NDI sources = %+v", got.NDISources)
 	}
 	if len(got.Layout.Order) != 1 || got.Layout.Order[0] != "camera:driveway" {
 		t.Fatalf("layout = %+v", got.Layout)

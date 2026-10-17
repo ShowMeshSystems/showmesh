@@ -16,19 +16,24 @@ import (
 
 func newFeedHarness(t *testing.T, script string) (*httptest.Server, *fakeSources, string) {
 	t.Helper()
+	return newFeedHarnessFor(t, script, StreamSpec{Key: "ndi:A", Kind: KindNDI, NDIName: "A (x)"})
+}
+
+func newFeedHarnessFor(t *testing.T, script string, spec StreamSpec) (*httptest.Server, *fakeSources, string) {
+	t.Helper()
 	src := &fakeSources{ok: true, names: map[string]bool{"A (x)": true}}
 	m := newTestManager(newFakeEngine(), src)
-	m.Set(context.Background(), []StreamSpec{{Key: "ndi:A", Kind: KindNDI, NDIName: "A (x)"}})
+	m.Set(context.Background(), []StreamSpec{spec})
 	f := NewFeed("sec", m, src, quietLog())
-	f.Command = func(ctx context.Context, name string) (*exec.Cmd, error) {
-		if name != "A (x)" {
-			t.Errorf("command built for %q", name)
+	f.Command = func(ctx context.Context, name, address string) (*exec.Cmd, error) {
+		if name != spec.NDIName || address != spec.NDIAddress {
+			t.Errorf("command built for %q at %q", name, address)
 		}
 		return exec.CommandContext(ctx, "sh", "-c", script), nil
 	}
 	ts := httptest.NewServer(f.Handler())
 	t.Cleanup(ts.Close)
-	return ts, src, "/ndi/sec/" + streamID("ndi:A")
+	return ts, src, "/ndi/sec/" + streamID(spec.Key)
 }
 
 func TestFeedStreamsVideoAndStopsPipelineOnDisconnect(t *testing.T) {
@@ -87,5 +92,19 @@ func TestFeedRefusals(t *testing.T) {
 	src.ok = false
 	if c := get(path); c != 503 {
 		t.Errorf("no NDI runtime: %d", c)
+	}
+}
+
+func TestFeedReachesASourceByAddressWithoutDiscovery(t *testing.T) {
+	ts, src, path := newFeedHarnessFor(t, "printf TS", StreamSpec{Key: "ndi:B", Kind: KindNDI, NDIName: "B (y)", NDIAddress: "10.0.20.15:5961"})
+	src.ok, src.names = false, map[string]bool{}
+	resp, err := http.Get(ts.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "TS" {
+		t.Fatalf("status %d body %q", resp.StatusCode, body)
 	}
 }

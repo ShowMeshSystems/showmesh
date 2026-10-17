@@ -13,13 +13,19 @@ import (
 // NDIPipelineArgs is the gst-launch-1.0 argument vector for one NDI source:
 // lowest bandwidth, 640x360 at 10 fps, H.264 in MPEG-TS on stdout. The name is
 // a single argument that gst-launch takes as one token.
-func NDIPipelineArgs(name string) ([]string, error) {
+func NDIPipelineArgs(name, address string) ([]string, error) {
 	if err := ValidateNDIName(name); err != nil {
 		return nil, err
 	}
-	return []string{
-		"-q",
-		"ndisrc", "ndi-name=" + name, "bandwidth=0", "!",
+	src := []string{"ndisrc", "ndi-name=" + name}
+	if address != "" {
+		if err := ValidateNDIAddress(address); err != nil {
+			return nil, err
+		}
+		src = append(src, "url-address="+address)
+	}
+	return append(append([]string{"-q"}, src...),
+		"bandwidth=0", "!",
 		"ndisrcdemux", "name=d", "d.video", "!",
 		"queue", "max-size-buffers=4", "leaky=downstream", "!",
 		"videoconvert", "!", "videoscale", "!", "videorate", "!",
@@ -29,7 +35,7 @@ func NDIPipelineArgs(name string) ([]string, error) {
 		"h264parse", "config-interval=-1", "!",
 		"mpegtsmux", "!",
 		"fdsink", "fd=1",
-	}, nil
+	), nil
 }
 
 // Feed serves each NDI stream's video to go2rtc over loopback. go2rtc connects
@@ -39,16 +45,16 @@ type Feed struct {
 	log     *slog.Logger
 	manager *Manager
 	sources SourceProvider
-	// Command builds the process for one NDI name; tests replace it.
-	Command func(ctx context.Context, name string) (*exec.Cmd, error)
+	// Command builds the process for one NDI source; tests replace it.
+	Command func(ctx context.Context, name, address string) (*exec.Cmd, error)
 }
 
 func NewFeed(secret string, m *Manager, sources SourceProvider, log *slog.Logger) *Feed {
 	return &Feed{secret: secret, log: log, manager: m, sources: sources, Command: gstreamerCommand}
 }
 
-func gstreamerCommand(ctx context.Context, name string) (*exec.Cmd, error) {
-	args, err := NDIPipelineArgs(name)
+func gstreamerCommand(ctx context.Context, name, address string) (*exec.Cmd, error) {
+	args, err := NDIPipelineArgs(name, address)
 	if err != nil {
 		return nil, err
 	}
@@ -68,21 +74,24 @@ func (f *Feed) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	name, ok := f.manager.NDIName(r.PathValue("id"))
+	name, address, ok := f.manager.NDISource(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	announced, available := f.sources.Announced()
-	if !available {
-		http.Error(w, "NDI is not available", http.StatusServiceUnavailable)
-		return
+	// A source with an address is reached directly, so discovery need not see it.
+	if address == "" {
+		announced, available := f.sources.Announced()
+		if !available {
+			http.Error(w, "NDI is not available", http.StatusServiceUnavailable)
+			return
+		}
+		if !announced[name] {
+			http.NotFound(w, r)
+			return
+		}
 	}
-	if !announced[name] {
-		http.NotFound(w, r)
-		return
-	}
-	cmd, err := f.Command(r.Context(), name)
+	cmd, err := f.Command(r.Context(), name, address)
 	if err != nil {
 		http.Error(w, "bad source", http.StatusInternalServerError)
 		return

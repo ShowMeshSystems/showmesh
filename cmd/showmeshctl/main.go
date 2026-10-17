@@ -538,6 +538,10 @@ Commands:
                            add or change a camera; its address is read from a file (write)
   preview camera remove <id>
                            remove a camera and its stored address (write)
+  preview ndi add <id> --ndi-name <name> [--label <label>] [--address <host:port>]
+                           add or change an NDI source that discovery cannot reach (write)
+  preview ndi remove <id>
+                           remove an NDI source added by hand (write)
   preview layout move <key> --to <index>
                            move a tile to a position, counting from 0 (write)
   preview layout hide <key>

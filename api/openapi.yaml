@@ -114,7 +114,7 @@ info:
     **A per-object configuration kind can be deleted; a singleton kind
     cannot.** `audio.node`, `show`, `show.surface`, `show.action`,
     `show.macro`, `show.cue`, `show.playlist`, `night.session`,
-    `media.playlist`, and `preview.camera` each hold many independently identified objects, and
+    `media.playlist`, `preview.camera`, and `preview.ndi` each hold many independently identified objects, and
     each of their `{id}`
     paths carries a `DELETE` operation: a tombstone, not a hard delete, so
     `config_revisions` stays immutable and readable through that kind's own
@@ -11227,6 +11227,175 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/preview.ndi:
+    get:
+      operationId: listPreviewNDISources
+      summary: Enumerate preview.ndi objects
+      description: >-
+        Requires `config:write`. Each summary's `label` is the source's
+        label, or its NDI name when it has none, and `show` is empty.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.ndi/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The id the operator chose: 1 to 64 lowercase letters, digits or
+          hyphens. The tile key is `ndi:<NDI name>`, shared with a
+          discovered source of the same name.
+    get:
+      operationId: getPreviewNDISource
+      summary: One preview.ndi object's active revision
+      description: >-
+        Requires `config:write`. An NDI source added by hand, for a sender
+        that discovery cannot reach. It is not a credential.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewNDIConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putPreviewNDISource
+      summary: Write a new preview.ndi revision
+      description: >-
+        Requires `config:write`. A partial update: a key absent from the
+        body keeps its stored value, except that creating a source
+        requires `ndiName`. `address` is the sender's `host:port`, passed
+        to the gateway so the source need not be announced; empty finds
+        it by name. `enabled` defaults to true on creation. Allowed while
+        show mode is on.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigPreviewNDIPutRequest"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewNDIConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deletePreviewNDISource
+      summary: Delete a preview.ndi object (tombstone)
+      description: >-
+        Requires `config:write`. Requires an explicit `{"confirm":true}`
+        body. A tombstone: the revisions stay readable. Optionally
+        carries `If-Match`.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigObjectDeleteRequest"
+      responses:
+        "204":
+          description: The object was tombstoned.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.ndi/{id}/revisions:
+    get:
+      operationId: getPreviewNDISourceRevisions
+      summary: preview.ndi revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only. `200` with an empty array
+        for an id that has never been saved.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/dashboard.layout:
     get:
       operationId: getDashboardLayoutConfig
@@ -15588,7 +15757,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, dashboard.layout]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
         revisions:
           type: array
           items:
@@ -15692,6 +15861,64 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigPreviewCameraPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigPreviewNDIPayload:
+      type: object
+      description: >-
+        The "preview.ndi" kind's payload: one NDI source added by hand.
+        `address` is `host:port`, or empty to find the source by name.
+      required: [label, ndiName, address, enabled]
+      properties:
+        label:
+          type: string
+        ndiName:
+          type: string
+        address:
+          type: string
+        enabled:
+          type: boolean
+    ConfigPreviewNDIPutRequest:
+      type: object
+      description: >-
+        The request body of PUT /config/preview.ndi/{id}. Every field is
+        optional on an existing source; creating one requires `ndiName`.
+      properties:
+        label:
+          type: string
+        ndiName:
+          type: string
+        address:
+          type: string
+        enabled:
+          type: boolean
+    PreviewNDIConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/preview.ndi/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: preview.ndi
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigPreviewNDIPayload"
         updatedAt:
           type: string
           format: date-time
@@ -19023,7 +19250,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock, preview.camera]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock, preview.camera, preview.ndi]
         objects:
           type: array
           items:

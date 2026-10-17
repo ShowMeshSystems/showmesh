@@ -40,13 +40,18 @@ NDI. Neither go2rtc nor MediaMTX reads NDI (RES-010), so GStreamer must.
    image runs standalone with its own compose file. The coordinator reaches it
    by a configured address. On Linux it uses host networking, because NDI
    discovery is mDNS and WebRTC media is UDP.
-4. **Two kinds of source.** NDI sources are discovered by the gateway and
+4. **Three kinds of source.** NDI sources are discovered by the gateway and
    appear on their own; a source that matches a render node's surface output is
    labelled with that node and surface. RTSP cameras are added by the operator
    as a generic URL; a Scrypted rebroadcast URL is the reference case. A camera
    URL is a credential: stored like the `fpp.mqtt` password
    ([ADR-039](ADR-039-operator-configuration-is-store-backed.md) decision 7),
    accepted on write, never returned on read.
+   Amended 2026-10-16 (owner ruling): three kinds of source. Discovery cannot
+   reach a sender on another subnet or VLAN, so the operator can also add an
+   NDI source by hand, by NDI name and an optional `host:port` address, as
+   `preview.ndi`. It is not a credential. It shares the tile of a discovered
+   source with the same name.
 5. **Only the gateway's own API is on the network.** go2rtc's API and web UI
    listen on loopback inside the gateway. The gateway's API takes structured
    stream descriptions, never a command line, and builds every GStreamer

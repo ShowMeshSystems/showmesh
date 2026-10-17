@@ -25,8 +25,10 @@ import type {
   ConfigDashboardLayoutPutRequest,
   ConfigPreviewCameraPutRequest,
   ConfigPreviewGatewayPutRequest,
+  ConfigPreviewNDIPutRequest,
   DashboardLayoutConfigResponse,
   PreviewCameraConfigResponse,
+  PreviewNDIConfigResponse,
   PreviewGatewayConfigResponse,
   PreviewsResponse,
   AcknowledgeFPPInstanceUUIDChangeResponse,
@@ -775,7 +777,8 @@ export function listConfigObjects(
     | 'media.playlist'
     | 'night.session'
     | 'node.clock'
-    | 'preview.camera',
+    | 'preview.camera'
+    | 'preview.ndi',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -794,6 +797,7 @@ export function listConfigObjects(
     | 'night.session'
     | 'node.clock'
     | 'preview.camera'
+    | 'preview.ndi'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
@@ -1248,6 +1252,18 @@ export function putPreviewCamera(id: string, request: ConfigPreviewCameraPutRequ
 
 export function deletePreviewCamera(id: string): Promise<void> {
   return store.deletePreviewCamera(id)
+}
+
+export function getPreviewNDI(id: string): Promise<PreviewNDIConfigResponse> {
+  return store.getPreviewNDI(id)
+}
+
+export function putPreviewNDI(id: string, request: ConfigPreviewNDIPutRequest): Promise<PreviewNDIConfigResponse> {
+  return store.putPreviewNDI(id, request)
+}
+
+export function deletePreviewNDI(id: string): Promise<void> {
+  return store.deletePreviewNDI(id)
 }
 
 export function getDashboardLayout(): Promise<DashboardLayoutConfigResponse> {
