@@ -1035,11 +1035,6 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	if !foundState {
 		return false, string(observation.StateNotCollected), fmt.Sprintf("Node %s has not reported this output yet.", nodeID), false
 	}
-	src := o.Source
-	if src == "" {
-		src = "unknown source"
-	}
-
 	// A surface this node explicitly stops reporting, with a reason
 	// (noderender.Collector.Poll's dropped-surface absence — see that
 	// package), IS evidence the pipeline is gone: ADR-003's "evidence that
@@ -1057,14 +1052,6 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 			return false, string(observation.StateNotCollected), "The node has not reported this output since the command was sent. Check again in a moment.", false
 		}
 		if wantState == mqttproto.RenderPipelineStateStopped {
-			reason := o.Reason
-			if reason == "" {
-				reason = "surface.pipeline.state was explicitly reported absent"
-			}
-			// Formatted with the same `surface.pipeline.state = %q` prefix
-			// the value-observation branch below uses, so a caller reading
-			// the outcome reason sees the desired state was reached either
-			// way — only the parenthetical names how it was confirmed.
 			return true, string(observation.StateCurrent), fmt.Sprintf("The output is now %s.", wantState), false
 		}
 		return false, string(o.Absence), fmt.Sprintf("The node no longer reports this output, and it should be %s.", wantState), false

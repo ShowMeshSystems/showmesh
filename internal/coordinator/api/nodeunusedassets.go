@@ -523,10 +523,6 @@ func (h *handlers) writeAssetRemoveAudit(ctx context.Context, now time.Time, kin
 // that does not name the cue is not usable, because the operator cannot
 // act on it.
 func assetInUseByCueProblem(nodeID, contentHash string, cueIDs []string) v1.Problem {
-	quoted := make([]string, 0, len(cueIDs))
-	for _, id := range cueIDs {
-		quoted = append(quoted, strconv.Quote(id))
-	}
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
 		Title:  "Asset removal refused: still referenced by a Cue",
