@@ -2174,9 +2174,7 @@ describe('Settings › Node routing › PTP clock', () => {
   }
 
   function commitNewClockNodeId(id: string) {
-    const input = screen.getByLabelText('New node id')
-    fireEvent.change(input, { target: { value: id } })
-    fireEvent.blur(input)
+    fireEvent.change(screen.getByLabelText('Set up a node'), { target: { value: id } })
   }
 
   it('renders provider-specific fields for managed and hides external/fpp fields', async () => {
@@ -2184,7 +2182,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed', hardwareTimestamping: true, priority1: 128 }))
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
@@ -2200,7 +2199,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed' }))
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
@@ -2218,7 +2218,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed' }))
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
@@ -2227,28 +2228,19 @@ describe('Settings › Node routing › PTP clock', () => {
     expect(screen.getByLabelText('FPP base URL')).toBeInTheDocument()
   })
 
-  it('does not read the node.clock object until the new node id is committed on blur, not on every keystroke', async () => {
-    setUpNodeRouting()
-    let getCalls = 0
-    stubs.getNodeClock = () => {
-      getCalls += 1
-      return Promise.resolve(nodeClockConfig())
-    }
+  it('sets up clock settings only for a node the coordinator knows that has none yet', async () => {
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', objects: [{ id: 'ptp-node-01', label: 'managed', show: '', currentRevision: 1, updatedAt: '2026-09-12T18:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [] })
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig())
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
-    renderAt('/settings/node-routing', { nodes: [] })
-    await waitFor(() => expect(screen.getByLabelText('New node id')).toBeInTheDocument())
+    renderAt('/settings/node-routing', { nodes: [makeNode('ptp-node-01'), makeNode('render-node-02')] })
 
-    const input = screen.getByLabelText('New node id')
-    const target = 'audio-node-01'
-    for (let i = 1; i <= target.length; i += 1) {
-      fireEvent.change(input, { target: { value: target.slice(0, i) } })
-    }
-    expect(getCalls).toBe(0)
-
-    fireEvent.change(input, { target: { value: 'audio-node-01' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(getCalls).toBeGreaterThan(0))
+    const setUp = (await screen.findByLabelText('Set up a node')) as HTMLSelectElement
+    await waitFor(() => expect(Array.from(setUp.options).map((o) => o.value)).toEqual(['', 'render-node-02']))
+    expect(screen.queryByRole('textbox', { name: /node id/i })).not.toBeInTheDocument()
   })
 
   it('lists and selects an existing node.clock object through listConfigObjects', async () => {
@@ -2276,7 +2268,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(nodeClockConfig({ interface: 'eth1', domain: 3 }))
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
@@ -2297,7 +2290,8 @@ describe('Settings › Node routing › PTP clock', () => {
     }
     stubs.putNodeClock = () => Promise.reject(new Error('should not be called: the id was already taken'))
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByText(/has no clock settings/)).toBeInTheDocument())
@@ -2319,7 +2313,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(nodeClockConfig({ provider: 'external', interface: 'eth2' }))
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
@@ -2341,7 +2336,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(nodeClockConfig({ provider: 'external', interface: 'eth2', phcDevice: '/dev/ptp0' }))
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toHaveValue('/dev/ptp0'))
@@ -2362,7 +2358,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(nodeClockConfig({ provider: 'external', phcDevice: '/dev/ptp0' }))
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument())
@@ -2379,7 +2376,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
     stubs.putNodeClock = () => Promise.reject(new Error('should not be called: invalid phcDevice must be refused client-side'))
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument())
@@ -2396,7 +2394,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
     stubs.putNodeClock = () => Promise.reject(new Error('should not be called: a device path in Interface must be refused client-side'))
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Interface')).toBeInTheDocument())
@@ -2418,7 +2417,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(nodeClockConfig({ provider: 'managed' }))
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
@@ -2436,7 +2436,8 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClock = () => Promise.resolve(nodeClockConfig())
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
@@ -2469,7 +2470,8 @@ describe('Settings › Node routing › PTP clock', () => {
       return Promise.resolve(current)
     }
 
-    renderAt('/settings/node-routing', { nodes: [] })
+    renderAt('/settings/node-routing', { nodes: [makeNode('audio-node-01')] })
+    await screen.findByRole('option', { name: 'audio-node-01' })
     commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())

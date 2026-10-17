@@ -140,10 +140,6 @@ export function SettingsNodeRouting() {
   // picker above rather than reused from `selectedId`.
   const [nodeClockObjectsState, setNodeClockObjectsState] = useState<NodeClockObjectsState>({ kind: 'loading' })
   const [clockNodeId, setClockNodeId] = useState('')
-  // Only committed to `clockNodeId` on blur/Enter: a GET fired per keystroke
-  // would fire once per character typed, and a partial id that fails the id
-  // syntax check would flash a read-failed strip mid-typing.
-  const [newClockNodeIdDraft, setNewClockNodeIdDraft] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -182,11 +178,10 @@ export function SettingsNodeRouting() {
     nodesState.kind === 'loaded' ? model.nodes.filter((n) => hasAudioCapability(n) && !nodesState.nodes.some((s) => s.id === n.nodeId)) : []
   const shownId = selectedId ?? unconfiguredAudioNodes[0]?.nodeId ?? null
 
-  const commitNewClockNodeId = () => {
-    const trimmed = newClockNodeIdDraft.trim()
-    if (trimmed === '') return
-    setClockNodeId(trimmed)
-  }
+  // Only nodes the coordinator knows and that have no clock settings yet, so a
+  // mistyped or invented node id cannot be set up.
+  const clocklessNodes =
+    nodeClockObjectsState.kind === 'loaded' ? model.nodes.filter((n) => !nodeClockObjectsState.objects.some((o) => o.id === n.nodeId)) : []
 
   return (
     <>
@@ -269,20 +264,21 @@ export function SettingsNodeRouting() {
             </Field>
           )
         )}
-        <Field label="New node id">
+        <Field label="Set up a node">
           {(props) => (
-            <Input
+            <Select
               {...props}
-              value={newClockNodeIdDraft}
-              onChange={(e) => setNewClockNodeIdDraft(e.target.value)}
-              onBlur={commitNewClockNodeId}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commitNewClockNodeId()
-                }
-              }}
-            />
+              value={clocklessNodes.some((n) => n.nodeId === clockNodeId) ? clockNodeId : ''}
+              disabled={clocklessNodes.length === 0}
+              onChange={(e) => setClockNodeId(e.target.value)}
+            >
+              <option value="">{clocklessNodes.length === 0 ? 'Every node already has clock settings' : 'Select a node…'}</option>
+              {clocklessNodes.map((n) => (
+                <option key={n.nodeId} value={n.nodeId}>
+                  {n.nodeId}
+                </option>
+              ))}
+            </Select>
           )}
         </Field>
       </Section>
