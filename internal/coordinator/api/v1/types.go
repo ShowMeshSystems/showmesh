@@ -512,6 +512,17 @@ type FPPInstance struct {
 	// playlist-entry reports are currently being refused. Cleared by the
 	// next accepted report or by the observation reset route.
 	PlaylistObservationRefused *FPPPlaylistObservationRefused `json:"playlistObservationRefused"`
+
+	// Plugin is the state of the ShowMesh plugin's reports to this
+	// coordinator, separate from Health, which is what FPP's own API says.
+	Plugin FPPPluginStatus `json:"plugin"`
+}
+
+// FPPPluginStatus is [FPPInstance.Plugin]'s shape. State is one of
+// "not_paired", "not_reported", "stopped" or "reporting".
+type FPPPluginStatus struct {
+	State          string  `json:"state"`
+	LastReportedAt *string `json:"lastReportedAt"`
 }
 
 // FPPInstanceUUIDChange is [FPPInstance.InstanceUUIDChange]'s shape: the

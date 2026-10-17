@@ -54,7 +54,11 @@
         "reason": "no asset manifest store is configured on this coordinator"
       },
       "duplicateInstanceUuidEndpointIds": [],
-      "playlistObservationRefused": null
+      "playlistObservationRefused": null,
+      "plugin": {
+        "state": "not_paired",
+        "lastReportedAt": null
+      }
     }
   ]
 }

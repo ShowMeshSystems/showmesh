@@ -380,7 +380,7 @@ func (h *handlers) handleFPPList(w http.ResponseWriter, r *http.Request) {
 	participation := h.resolveInstanceParticipation(r.Context())
 	instances := make([]v1.FPPInstance, 0, len(views))
 	for _, fv := range views {
-		instances = append(instances, mapFPPInstance(fv, participation.forFPP(fv.InstanceID), now))
+		instances = append(instances, h.fppPairings.mapInstance(fv, participation.forFPP(fv.InstanceID), now))
 	}
 	jsonWrite(w, v1.FPPResponse{ServerTime: formatTime(now), Instances: instances})
 }
@@ -408,7 +408,7 @@ func (h *handlers) handleFPPInstance(w http.ResponseWriter, r *http.Request) {
 	participation := h.resolveInstanceParticipation(r.Context())
 	for _, fv := range views {
 		if fv.InstanceID == instanceID {
-			jsonWrite(w, v1.FPPInstanceResponse{ServerTime: formatTime(now), Instance: mapFPPInstance(fv, participation.forFPP(fv.InstanceID), now)})
+			jsonWrite(w, v1.FPPInstanceResponse{ServerTime: formatTime(now), Instance: h.fppPairings.mapInstance(fv, participation.forFPP(fv.InstanceID), now)})
 			return
 		}
 	}
@@ -661,7 +661,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	instanceParticipation := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	instances := make([]v1.FPPInstance, 0, len(fppViews))
 	for _, fv := range fppViews {
-		instances = append(instances, mapFPPInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now))
+		instances = append(instances, h.fppPairings.mapInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now))
 	}
 
 	collectorViews, err := h.deps.Collectors.CollectorStatuses(ctx)

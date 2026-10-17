@@ -62,6 +62,28 @@ function lastReport(iso: string | null, nowIso: string | null): string {
   return `${formatDuration(age)} ago`
 }
 
+export type PluginNote = { problem: boolean; text: string }
+
+/** What the ShowMesh plugin on one FPP is doing, in operator words. */
+export function pluginNote(instance: FPPInstance, nowIso: string | null): PluginNote {
+  const { state, lastReportedAt } = instance.plugin
+  const name = instance.instanceId
+  const age = ageMs(lastReportedAt, nowIso)
+  switch (state) {
+    case 'not_paired':
+      return { problem: true, text: `The ShowMesh plugin on ${name} is not paired with this coordinator. Pair it from the plugin's page in FPP.` }
+    case 'not_reported':
+      return { problem: true, text: `The ShowMesh plugin on ${name} has not reported since it was paired. Check the coordinator address on the plugin's page in FPP.` }
+    case 'stopped': {
+      const minutes = age === null ? null : Math.max(1, Math.round(age / 60_000))
+      const when = minutes === null ? 'a while ago' : `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`
+      return { problem: true, text: `The ShowMesh plugin on ${name} last reported ${when}. Check that FPP is running and the plugin is enabled.` }
+    }
+    default:
+      return { problem: false, text: age === null ? 'The plugin has reported.' : `The plugin last reported ${formatDuration(age)} ago.` }
+  }
+}
+
 /**
  * One table instead of three lists. Kind is a column, because the question an
  * operator asks is about the installation, not about a resource type.
@@ -70,15 +92,17 @@ export function fleetRows(model: Model, nowIso: string | null): FleetRow[] {
   const rows: FleetRow[] = []
 
   for (const instance of model.fpp) {
+    const plugin = pluginNote(instance, nowIso)
+    const tone: Tone = HEALTH_TONE[instance.health] ?? 'unknown'
     rows.push({
       key: `fpp:${instance.instanceId}`,
       kind: 'fpp',
       kindLabel: 'FPP',
       name: instance.instanceId,
       detail: instance.instanceUuidChange === null ? instance.endpoint : `${instance.endpoint} · bindings held`,
-      tone: HEALTH_TONE[instance.health] ?? 'unknown',
-      health: instance.health,
-      healthNote: 'as FPP reports',
+      tone: plugin.problem && tone === 'good' ? 'warn' : tone,
+      health: plugin.problem && tone === 'good' ? 'degraded' : instance.health,
+      healthNote: plugin.problem ? plugin.text : `As FPP reports. ${plugin.text}`,
       lastReport: lastReport(instance.lastPollAt, nowIso),
       to: `/monitor/fleet/fpp/${instance.instanceId}`,
     })

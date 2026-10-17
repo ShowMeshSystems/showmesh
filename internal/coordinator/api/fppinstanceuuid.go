@@ -88,7 +88,7 @@ func (h *handlers) handleAcknowledgeFPPInstanceUUIDChange(w http.ResponseWriter,
 	}
 	for _, fv := range views {
 		if fv.InstanceID == instanceID {
-			instance := mapFPPInstance(fv, h.resolveInstanceParticipation(ctx).forFPP(fv.InstanceID), now)
+			instance := h.fppPairings.mapInstance(fv, h.resolveInstanceParticipation(ctx).forFPP(fv.InstanceID), now)
 			jsonWrite(w, v1.AcknowledgeFPPInstanceUUIDChangeResponse{ServerTime: formatTime(now), Instance: &instance})
 			return
 		}

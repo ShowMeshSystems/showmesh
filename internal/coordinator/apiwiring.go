@@ -356,10 +356,25 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 		// The refusal marker is keyed by FPP's own SystemUUID, not the
 		// endpoint id, so it can only be looked up once instanceUUID is known.
 		var playlistObservationRefused *api.FPPPlaylistObservationRefusal
+		var pluginLastReportedAt *time.Time
 		if instanceUUID != nil {
+			defs, err := l.st.ListFPPPlaylistDefinitionsByInstance(ctx, instanceUUID.UUID)
+			if err != nil {
+				return nil, fmt.Errorf("coordinator: list fpp playlist definitions for %q: %w", ep.ID, err)
+			}
+			for _, d := range defs {
+				if pluginLastReportedAt == nil || d.ReceivedAt.After(*pluginLastReportedAt) {
+					at := d.ReceivedAt
+					pluginLastReportedAt = &at
+				}
+			}
 			obsRec, err := l.st.GetFPPPlaylistEntryObservation(ctx, instanceUUID.UUID)
 			switch {
 			case err == nil:
+				if pluginLastReportedAt == nil || obsRec.ReceivedAt.After(*pluginLastReportedAt) {
+					at := obsRec.ReceivedAt
+					pluginLastReportedAt = &at
+				}
 				if obsRec.EvidenceBrokenAt != nil {
 					playlistObservationRefused = &api.FPPPlaylistObservationRefusal{
 						Reason: fmt.Sprintf(
@@ -385,6 +400,7 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 			InstanceUUID:                     instanceUUID,
 			DuplicateInstanceUUIDEndpointIDs: duplicatesByEndpoint[ep.ID],
 			PlaylistObservationRefused:       playlistObservationRefused,
+			PluginLastReportedAt:             pluginLastReportedAt,
 		})
 	}
 	return views, nil
