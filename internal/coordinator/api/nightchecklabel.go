@@ -34,6 +34,7 @@ var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{nightBackgroundAudioNodeSetupPrefix, "Background audio settings on "},
 	{nightShowCueAudioTargetsPrefix, "Cue audio nodes in playlist "},
 	{"audio:alignment:", "Audio alignment on "},
+	{nightAudioClockCheckPrefix, "Audio clock on "},
 	{nightCatalogCurrentCheckPrefix + ":", "Cue list on "},
 	{nightParticipationCheckPrefix + ":fpp:", "FPP "},
 	{nightParticipationCheckPrefix + ":resolume:", "Resolume "},

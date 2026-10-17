@@ -1775,6 +1775,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// every configured audio.node, not gated on backgroundAudio being
 	// configured: alignment is a node-level fact.
 	checks = append(checks, h.nightCheckAudioAlignment(ctx, now)...)
+	checks = append(checks, h.nightCheckAudioClock(ctx, now)...)
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, h.nightCheckAnnouncementAssets(ctx, allCues, payload))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))

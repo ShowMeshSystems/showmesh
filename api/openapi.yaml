@@ -22555,6 +22555,14 @@ components:
         resolved cue list gives a cue timecode without its audio, since
         the node refuses every such activation.
 
+        Every configured `audio.node` also gets `audio:clock:<nodeId>`,
+        which fails when the node plays through PipeWire
+        (`node.audio.engine.sink_backend` is `pipewiresink`) on
+        GStreamer's default clock (`node.audio.engine.clock_source` is
+        `default`). That node stalls the whole PipeWire graph and plays
+        nothing while its engine still reports usable. It is
+        `not_verifiable` while the node has not reported both signals.
+
         It also checks every configured `audio.node` object's measured
         program-to-LTC alignment against `audio.settings`'
         `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded`
