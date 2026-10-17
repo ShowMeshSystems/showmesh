@@ -227,9 +227,8 @@ export function describeApiError(err: unknown): string {
     // longer agree. Naming a browser version here sent an operator to
     // update Chrome 151 over a reverse-proxy misconfiguration.
     return (
-      'This page and the coordinator disagree about which host you are on, ' +
-      'so the sign-in was refused as a cross-site request. This is usually a ' +
-      'proxy in front of ShowMesh rewriting the Host header. Check that, or ' +
+      'This page and the coordinator disagree about which address you are on, ' +
+      'so the sign-in was refused. Check the proxy in front of ShowMesh, or ' +
       'use the "Use a token instead" option below.'
     )
   }
@@ -237,7 +236,7 @@ export function describeApiError(err: unknown): string {
     // ADR-024 decision 8: never a lockout, always transient, the
     // message must say so explicitly rather than reading like a ban.
     const wait = err.retryAfterSeconds === null ? 'a few seconds' : `${err.retryAfterSeconds}s`
-    return `Too many attempts from this network right now. Wait ${wait} and try again; this is a rate limit, not a lockout.`
+    return `Too many attempts from this network right now. Wait ${wait} and try again. This is not a lockout.`
   }
   if (err instanceof ForbiddenError) {
     return err.message

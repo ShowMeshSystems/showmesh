@@ -128,7 +128,7 @@ describe('describeApiError', () => {
     // naming a browser version here sent an operator to update Chrome 151
     // over a reverse-proxy misconfiguration.
     expect(text).not.toMatch(/Safari|16\.4/i)
-    expect(text).toMatch(/host/i) // the cause an operator can actually act on
+    expect(text).toMatch(/address/i) // the cause an operator can actually act on
     expect(text).toMatch(/token/i) // must point at the break-glass workaround
   })
 
