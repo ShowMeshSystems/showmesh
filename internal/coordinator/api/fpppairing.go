@@ -548,3 +548,17 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 		CoordinatorPublicKey: h.deps.CoordinatorPublicKey,
 	})
 }
+
+// mapInstance is [mapFPPInstance] plus the one fact only this store knows:
+// whether the plugin was ever paired. Pairing is remembered in memory only,
+// so after a coordinator restart a working plugin that has not yet reported
+// again reads as not paired. A nil store leaves the state at not reported.
+func (s *fppPairingStore) mapInstance(fv FPPInstanceView, participation v1.InstanceShowParticipation, now time.Time) v1.FPPInstance {
+	inst := mapFPPInstance(fv, participation, now)
+	if s != nil && inst.Plugin.State == "not_reported" {
+		if state, _, _ := s.state(fv.InstanceID, now); state != fppPairingStatePaired {
+			inst.Plugin.State = "not_paired"
+		}
+	}
+	return inst
+}

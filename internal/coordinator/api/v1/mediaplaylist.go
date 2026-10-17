@@ -11,7 +11,7 @@ type ConfigMediaPlaylistItem struct {
 	Kind     string `json:"kind"`
 	Show     string `json:"show"`
 	Sequence string `json:"sequence"`
-	Target   string `json:"target"`
+	Target   string `json:"target,omitempty"`
 }
 
 // ConfigMediaPlaylist is the "media.playlist" configuration kind's decoded

@@ -507,7 +507,7 @@ func TestOperatorArrangesTheGridButCannotChangeGatewayOrCameras(t *testing.T) {
 	if resp, body := send(t, api, http.MethodPut, layout, `{"previews":{"order":[]}}`, viewer); resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "dashboard:write") {
 		t.Fatalf("viewer PUT layout = %d: %s", resp.StatusCode, body)
 	}
-	for _, path := range []string{"/api/v1/config/preview.gateway", "/api/v1/config/preview.camera/c1"} {
+	for _, path := range []string{"/api/v1/config/preview.gateway", "/api/v1/config/preview.camera/c1", "/api/v1/config/preview.ndi/n1"} {
 		if resp, _ := send(t, api, http.MethodPut, path, `{}`, operator); resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("operator PUT %s = %d, want 403", path, resp.StatusCode)
 		}
@@ -536,4 +536,82 @@ func TestPreviewsReportsAConnectingGateway(t *testing.T) {
 		t.Fatalf("status = %d: %s", resp.StatusCode, body)
 	}
 	assertMatchesSchema(t, c, "PreviewsResponse", body)
+}
+
+func TestPreviewNDISourceRoundTripsAndMatchesTheSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	svc := &fakePreviewService{}
+	api, _, admin, viewer := previewTestAPI(t, svc)
+	path := "/api/v1/config/preview.ndi/far-barn"
+	if resp, _ := send(t, api, http.MethodPut, path, `{"ndiName":"BARN-02 (Composition)"}`, viewer); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer PUT = %d, want 403", resp.StatusCode)
+	}
+	resp, body := send(t, api, http.MethodPut, path, `{"label":"Far barn","ndiName":"BARN-02 (Composition)","address":"10.0.20.15:5961"}`, admin)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "PreviewNDIConfigResponse", body)
+	if svc.notified == 0 {
+		t.Fatal("a saved NDI source did not wake the preview service")
+	}
+	p := decodeMap(t, body)["payload"].(map[string]any)
+	if p["label"] != "Far barn" || p["ndiName"] != "BARN-02 (Composition)" || p["address"] != "10.0.20.15:5961" || p["enabled"] != true {
+		t.Fatalf("payload = %v", p)
+	}
+
+	resp, body = send(t, api, http.MethodPut, path, `{"enabled":false,"address":""}`, admin)
+	p = decodeMap(t, body)["payload"].(map[string]any)
+	if resp.StatusCode != http.StatusOK || p["enabled"] != false || p["address"] != "" || p["ndiName"] != "BARN-02 (Composition)" {
+		t.Fatalf("partial update = %d: %v", resp.StatusCode, p)
+	}
+
+	resp, body = doRequest(t, api.Handler, http.MethodGet, path, bearer(admin))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET = %d: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "PreviewNDIConfigResponse", body)
+	resp, body = doRequest(t, api.Handler, http.MethodGet, "/api/v1/config/preview.ndi", bearer(admin))
+	objs, _ := decodeMap(t, body)["objects"].([]any)
+	if resp.StatusCode != http.StatusOK || len(objs) != 1 || objs[0].(map[string]any)["label"] != "Far barn" {
+		t.Fatalf("list = %d: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "ConfigObjectsListResponse", body)
+
+	if resp, body := send(t, api, http.MethodDelete, path, `{"confirm":true}`, admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE = %d: %s", resp.StatusCode, body)
+	}
+	if resp, _ := doRequest(t, api.Handler, http.MethodGet, path, bearer(admin)); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET after delete = %d, want 404", resp.StatusCode)
+	}
+	resp, body = doRequest(t, api.Handler, http.MethodGet, path+"/revisions", bearer(admin))
+	if resp.StatusCode != http.StatusOK || len(decodeMap(t, body)["revisions"].([]any)) != 2 {
+		t.Fatalf("revisions = %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPreviewNDISourceRefusesBadWrites(t *testing.T) {
+	api, _, admin, _ := previewTestAPI(t, nil)
+	cases := []struct{ name, path, body string }{
+		{"no NDI name on create", "/api/v1/config/preview.ndi/s1", `{"label":"S"}`},
+		{"blank NDI name", "/api/v1/config/preview.ndi/s1", `{"ndiName":"  "}`},
+		{"quote in NDI name", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A\" ! filesink"}`},
+		{"address without port", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","address":"10.0.20.15"}`},
+		{"address out of range", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","address":"10.0.20.15:70000"}`},
+		{"null address", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","address":null}`},
+		{"enabled not boolean", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","enabled":"yes"}`},
+		{"unknown field", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","url":"x"}`},
+		{"long label", "/api/v1/config/preview.ndi/s1", `{"ndiName":"A (x)","label":"` + strings.Repeat("x", 81) + `"}`},
+		{"bad id", "/api/v1/config/preview.ndi/Bad_Id", `{"ndiName":"A (x)"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := send(t, api, http.MethodPut, tc.path, tc.body, admin)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", resp.StatusCode, body)
+			}
+		})
+	}
+	if resp, _ := doRequest(t, api.Handler, http.MethodGet, "/api/v1/config/preview.ndi/s1", bearer(admin)); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a refused write created the source: GET status = %d", resp.StatusCode)
+	}
 }

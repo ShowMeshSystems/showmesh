@@ -208,7 +208,7 @@ describe('Shows workspace shell', () => {
     fireEvent.change(showInstance, { target: { value: 'barn-player' } })
     expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()
     expect(within(screen.getByRole('combobox', { name: 'Resting sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
-    expect(within(screen.getByRole('combobox', { name: 'Resting target' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Read the length from' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
   })
 
   it('authors the complete transition and background-audio controls from real Show inventory', async () => {
@@ -231,7 +231,7 @@ describe('Shows workspace shell', () => {
     expect(screen.getByLabelText('Blackout hold (ms)')).toBeInTheDocument()
     expect(screen.getByLabelText('Blackout after show (ms)')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Inline items' }))
-    expect(within(screen.getByRole('combobox', { name: 'Audio asset' })).getByRole('option', { name: 'arrival-bed · audio-front' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Audio asset' })).getByRole('option', { name: 'arrival-bed' })).toBeInTheDocument()
     expect(screen.getByLabelText('Maximum gain (dB)')).toBeInTheDocument()
   })
 })

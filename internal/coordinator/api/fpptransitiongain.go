@@ -8,17 +8,18 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
-	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // The operator-facing brightness transition-gain write:
-// POST /api/v1/fpp/{instanceId}/brightness/transition-gain,
+// POST /api/v1/fpp/brightness/transition-gain,
 // FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2. It is the hand-driven
 // sibling of the night session's own write (nightlightinggain.go), on the
 // same client and the same contract.
@@ -76,24 +77,13 @@ func writeFPPTransitionGain(ctx context.Context, baseURL string, targetPercent, 
 	return client.SetTransitionGain(ctx, targetPercent, fadeSeconds, requestID)
 }
 
-// handleFPPTransitionGain serves POST
-// /api/v1/fpp/{instanceId}/brightness/transition-gain, behind
-// writeGuard(&scopeFPPTransitionGain, ...).
-//
-// The 200 body is the plugin's own applied state, never a bare success.
-// applied=false is part of that success: it is what a repeated requestId
-// returns, the idempotency key working, with the gain unchanged and the
-// current state reported. Answering an error there would tell a caller to
-// retry a write that already took.
+// handleFPPTransitionGain serves POST /api/v1/fpp/brightness/transition-gain
+// and writes the gain to every FPP in fpp.endpoints (ADR-062 decision 7).
+// Each FPP gets its own requestId; one failing does not stop the others, and
+// each FPP's outcome is reported on its own.
 func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
-
-	instanceID := r.PathValue("instanceId")
-	if err := mqttproto.ValidateNodeID(instanceID); err != nil {
-		writeProblem(w, h.logger, now, invalidParameterProblem("instanceId is not a syntactically valid instance ID: "+err.Error()))
-		return
-	}
 
 	req, problem := decodeFPPTransitionGainBody(r)
 	if problem != nil {
@@ -103,14 +93,12 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 	targetPercent, fadeSeconds := *req.TargetPercent, *req.FadeSeconds
 	if targetPercent < fppTransitionGainMinPercent || targetPercent > fppTransitionGainMaxPercent {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"targetPercent %d is outside [%d, %d]; an out-of-range gain is refused, never clamped",
-			targetPercent, fppTransitionGainMinPercent, fppTransitionGainMaxPercent)))
+			"The gain %d%% is outside 0 to 100. Send a value from 0 to 100.", targetPercent)))
 		return
 	}
 	if fadeSeconds < 0 || fadeSeconds > fppTransitionGainMaxFadeSeconds {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"fadeSeconds %d is outside [0, %d]; an out-of-range fade is refused, never clamped",
-			fadeSeconds, fppTransitionGainMaxFadeSeconds)))
+			"The fade of %d seconds is outside 0 to %d. Send a fade within that range.", fadeSeconds, fppTransitionGainMaxFadeSeconds)))
 		return
 	}
 
@@ -119,24 +107,14 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 		h.writeInternalError(w, now, "list fpp endpoints for a transition gain write", err)
 		return
 	}
-	baseURL := ""
-	for _, ep := range endpoints {
-		if ep.ID == instanceID {
-			baseURL = ep.URL
-			break
-		}
-	}
-	if baseURL == "" {
-		writeProblem(w, h.logger, now, resourceNotFoundProblem(
-			fmt.Sprintf("no configured FPP endpoint has instance id %q", instanceID)))
+	if len(endpoints) == 0 {
+		writeProblem(w, h.logger, now, v1.Problem{
+			Type: ProblemTypeConflict, Title: "No FPP players", Status: http.StatusConflict,
+			Detail: "No FPP players are configured. Add one in Settings, Connections.",
+		})
 		return
 	}
 
-	// A caller-supplied requestId is what makes a retry of an unanswered
-	// request safe, so it is accepted verbatim. Absent, one is minted: a
-	// hand-driven write with no key is a fresh operator action, the same
-	// reading POST /cues/{id}/activate already takes, and the minted value
-	// is echoed on the response so a caller can still retry with it.
 	requestID := req.RequestID
 	if requestID == "" {
 		requestID = uuid.NewString()
@@ -148,7 +126,7 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 	if !h.writeAuditOrFail(ctx, w, now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
-		Action: auditActionFPPTransitionGain, Target: instanceID,
+		Action: auditActionFPPTransitionGain, Target: "display",
 		Kind: identity.AuditDispatch, CommandID: commandID, IdempotencyKey: requestID,
 		Params: auditParams,
 	}) {
@@ -159,36 +137,56 @@ func (h *handlers) handleFPPTransitionGain(w http.ResponseWriter, r *http.Reques
 	if write == nil {
 		write = writeFPPTransitionGain
 	}
-	outcome, writeErr := write(ctx, baseURL, targetPercent, fadeSeconds, requestID)
-	h.auditFPPTransitionGainOutcome(r, ac, commandID, instanceID, auditParams, outcome, writeErr)
-	if writeErr != nil {
-		h.logger.Warn("transition gain write failed", "instance", instanceID, "error", writeErr)
-		writeProblem(w, h.logger, h.now(), fppTransitionGainWriteFailedProblem(instanceID, writeErr))
-		return
+	results := make([]v1.FPPTransitionGainResult, len(endpoints))
+	errs := make([]error, len(endpoints))
+	var wg sync.WaitGroup
+	for i, ep := range endpoints {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := requestID + ":" + ep.ID
+			outcome, writeErr := write(ctx, ep.URL, targetPercent, fadeSeconds, id)
+			results[i], errs[i] = fppTransitionGainResult(ep.ID, id, outcome, writeErr), writeErr
+		}()
 	}
-	// Only a write the player accepted makes a pending lights write give way.
+	wg.Wait()
+
+	var current *store.NightSessionRecord
 	if h.deps.NightSessions != nil {
 		if cur, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx); err == nil && ok {
-			h.nightLightsYield(cur.ID, instanceID)
+			current = &cur
+		}
+	}
+	for i, ep := range endpoints {
+		h.auditFPPTransitionGainOutcome(r, ac, commandID, ep.ID, auditParams, results[i], errs[i])
+		// Only a write the player accepted makes a pending lights write give way.
+		if errs[i] == nil && current != nil {
+			h.nightLightsYield(current.ID, ep.ID)
 		}
 	}
 
-	jsonWrite(w, v1.FPPTransitionGainResponse{
-		ServerTime: formatTime(h.now()),
-		TransitionGain: v1.FPPTransitionGainResult{
-			InstanceID: instanceID, RequestID: requestID,
-			Applied: outcome.Applied, GainStart: outcome.GainStart, GainTarget: outcome.GainTarget,
-			FadeSeconds: outcome.FadeSeconds, Ceiling: outcome.Ceiling, EffectiveOutput: outcome.EffectiveOutput,
-		},
-	})
+	jsonWrite(w, v1.FPPTransitionGainResponse{ServerTime: formatTime(h.now()), Players: results})
 }
 
-// auditFPPTransitionGainOutcome records what the write actually did.
-// applied=false is recorded as its own outcome word rather than folded
-// into "applied": an investigator reading the log must be able to see that
-// a repeat changed nothing, which is exactly the case where an operator
-// did not get their answer the first time.
-func (h *handlers) auditFPPTransitionGainOutcome(r *http.Request, ac authContext, commandID, instanceID string, params map[string]any, outcome fppcommand.TransitionGainOutcome, writeErr error) {
+func fppTransitionGainResult(instanceID, requestID string, outcome fppcommand.TransitionGainOutcome, err error) v1.FPPTransitionGainResult {
+	res := v1.FPPTransitionGainResult{InstanceID: instanceID, RequestID: requestID}
+	if err != nil {
+		res.Outcome = v1.FPPTransitionGainFailed
+		res.Reason = fmt.Sprintf("The gain on the player %s was not set. Check that it is on and its ShowMesh plugin is installed.", instanceID)
+		return res
+	}
+	res.Outcome = v1.FPPTransitionGainApplied
+	if !outcome.Applied {
+		res.Outcome = v1.FPPTransitionGainAlreadyApplied
+	}
+	gs, gt, fs, c, eo := int(outcome.GainStart), int(outcome.GainTarget), int(outcome.FadeSeconds), int(outcome.Ceiling), int(outcome.EffectiveOutput)
+	res.GainStart, res.GainTarget, res.FadeSeconds, res.Ceiling, res.EffectiveOutput = &gs, &gt, &fs, &c, &eo
+	return res
+}
+
+// auditFPPTransitionGainOutcome records what one FPP's write did. A repeat
+// that changed nothing is recorded as such.
+func (h *handlers) auditFPPTransitionGainOutcome(r *http.Request, ac authContext, commandID, instanceID string, params map[string]any, res v1.FPPTransitionGainResult, writeErr error) {
 	entry := identity.AuditEntry{
 		Timestamp: h.now(), PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
@@ -200,14 +198,14 @@ func (h *handlers) auditFPPTransitionGainOutcome(r *http.Request, ac authContext
 	case writeErr != nil:
 		entry.Outcome = outcomeWordFailed
 		entry.OutcomeReason = writeErr.Error()
-	case outcome.Applied:
+	case res.Outcome == v1.FPPTransitionGainApplied:
 		entry.Outcome = outcomeWordConfirmed
 		entry.OutcomeReason = fmt.Sprintf("gain %d to %d over %ds; ceiling %d, effective output %d",
-			outcome.GainStart, outcome.GainTarget, outcome.FadeSeconds, outcome.Ceiling, outcome.EffectiveOutput)
+			*res.GainStart, *res.GainTarget, *res.FadeSeconds, *res.Ceiling, *res.EffectiveOutput)
 	default:
 		entry.Outcome = outcomeWordConfirmed
 		entry.OutcomeReason = fmt.Sprintf("this requestId was already applied; nothing changed. gain %d, ceiling %d, effective output %d",
-			outcome.GainTarget, outcome.Ceiling, outcome.EffectiveOutput)
+			*res.GainTarget, *res.Ceiling, *res.EffectiveOutput)
 	}
 	if err := h.deps.Identity.WriteAudit(r.Context(), entry); err != nil {
 		h.logWarn("failed to audit a transition gain outcome", "instanceId", instanceID, "commandId", commandID, "error", err)

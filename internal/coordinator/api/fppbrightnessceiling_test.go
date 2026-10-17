@@ -1,100 +1,54 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/displayceiling"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
-// This file drives POST /api/v1/fpp/{instanceId}/brightness/ceiling
-// through a real [API] against an HTTP fake standing in for FPP and its
-// resident plugin, so the real command client and the real read-back are
-// what these tests exercise.
+// This file drives GET /api/v1/fpp/brightness and PUT
+// /api/v1/fpp/brightness/ceiling through a real [API] with a real
+// displayceiling.Reconciler over the real store.
 
-// fakeCeilingFPP answers FPP's own POST /api/command and the plugin's
-// GET brightness route. readBack is what the plugin reports; nil means
-// the plugin is not installed and the GET is a 404.
-type fakeCeilingFPP struct {
-	mu        sync.Mutex
-	commands  []string
-	readBack  *int
-	applyOnce bool
-}
-
-func newFakeCeilingFPP(t *testing.T, readBack *int, applyOnce bool) (*httptest.Server, *fakeCeilingFPP) {
-	t.Helper()
-	f := &fakeCeilingFPP{readBack: readBack, applyOnce: applyOnce}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/command":
-			raw := make([]byte, 4096)
-			n, _ := r.Body.Read(raw)
-			f.mu.Lock()
-			f.commands = append(f.commands, string(raw[:n]))
-			if f.applyOnce {
-				var req struct {
-					Args []string `json:"args"`
-				}
-				if err := json.Unmarshal(raw[:n], &req); err == nil && len(req.Args) == 1 {
-					var applied int
-					if _, err := fmt.Sscanf(req.Args[0], "%d", &applied); err == nil {
-						f.readBack = &applied
-					}
-				}
-			}
-			f.mu.Unlock()
-			_, _ = w.Write([]byte("Brightness Ceiling Set"))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/plugin-apis/showmesh/brightness":
-			f.mu.Lock()
-			got := f.readBack
-			f.mu.Unlock()
-			if got == nil {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"schemaVersion":1,"ceiling":%d,"transitionGain":100,"effectiveOutput":%d,"fadeActive":false,"updatedAtMillis":1}`, *got, *got)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv, f
-}
-
-func (f *fakeCeilingFPP) commandCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.commands)
-}
-
-func (f *fakeCeilingFPP) lastCommand() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.commands) == 0 {
-		return ""
-	}
-	return f.commands[len(f.commands)-1]
-}
-
+// ceilingAPI wires a coordinator with one FPP endpoint at fppURL, a
+// reconciler over the test store, and an operator token.
 func ceilingAPI(t *testing.T, fppURL string) (*API, *fppCommandTestSetup, string) {
 	t.Helper()
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppURL}}
-	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	deps := setup.deps()
+	deps.DisplayCeiling = newTestReconciler(setup)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	return api, setup, mustIssueToken(t, setup.svc, operator.ID)
 }
 
-func ceilingRequest(t *testing.T, instanceID, body, token string) *http.Request {
+func newTestReconciler(setup *fppCommandTestSetup) *displayceiling.Reconciler {
+	return displayceiling.New(displayceiling.Options{
+		Store: setup.st,
+		Endpoints: func(ctx context.Context) ([]displayceiling.Endpoint, error) {
+			eps, err := currentFPPEndpoints(ctx, setup.fppLister)
+			out := make([]displayceiling.Endpoint, 0, len(eps))
+			for _, ep := range eps {
+				out = append(out, displayceiling.Endpoint{ID: ep.ID, URL: ep.URL})
+			}
+			return out, err
+		},
+		Write:  func(context.Context, string, int, int) error { return nil },
+		Now:    fixedClock(testNow),
+		Logger: testLogger(),
+	})
+}
+
+func brightnessRequest(t *testing.T, method, path, body, token string) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/fpp/"+instanceID+"/brightness/ceiling", strings.NewReader(body))
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -102,176 +56,149 @@ func ceilingRequest(t *testing.T, instanceID, body, token string) *http.Request 
 	return req
 }
 
-type ceilingResponseForTest struct {
-	Command struct {
-		Action        string `json:"action"`
-		Outcome       string `json:"outcome"`
-		OutcomeState  string `json:"outcomeState"`
-		OutcomeReason string `json:"outcomeReason"`
-	} `json:"command"`
-	Ceiling *int `json:"ceiling"`
+func ceilingRequest(t *testing.T, body, token string) *http.Request {
+	return brightnessRequest(t, http.MethodPut, "/api/v1/fpp/brightness/ceiling", body, token)
 }
 
-func decodeCeiling(t *testing.T, body []byte) ceilingResponseForTest {
+type brightnessDocForTest struct {
+	Ceiling *struct {
+		TargetPercent int     `json:"targetPercent"`
+		FadeEndsAt    *string `json:"fadeEndsAt"`
+		ChangedBy     struct {
+			Kind, ID, Name string
+		} `json:"changedBy"`
+	} `json:"ceiling"`
+	Players []struct {
+		InstanceID string `json:"instanceId"`
+		State      string `json:"state"`
+		Reason     string `json:"reason"`
+	} `json:"players"`
+}
+
+func decodeBrightnessDoc(t *testing.T, body []byte) brightnessDocForTest {
 	t.Helper()
-	var out ceilingResponseForTest
+	var out brightnessDocForTest
 	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode ceiling response: %v; body: %s", err, body)
+		t.Fatalf("decode brightness document: %v; body: %s", err, body)
 	}
 	return out
 }
 
-// TestBrightnessCeilingDispatchesFPPsOwnCommandAndReadsItBack.
-func TestBrightnessCeilingDispatchesFPPsOwnCommandAndReadsItBack(t *testing.T) {
-	srv, fpp := newFakeCeilingFPP(t, nil, true)
-	api, _, token := ceilingAPI(t, srv.URL)
-
-	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":60}`, token))
+func TestBrightnessDocumentBeforeAnyCeiling(t *testing.T) {
+	api, _, token := ceilingAPI(t, "http://127.0.0.1:9")
+	resp, body := doRawRequest(t, api.Handler, brightnessRequest(t, http.MethodGet, "/api/v1/fpp/brightness", "", token))
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ceiling write status = %d, want 200; body: %s", resp.StatusCode, body)
+		t.Fatalf("status = %d; body: %s", resp.StatusCode, body)
 	}
-	if got := fpp.lastCommand(); !strings.Contains(got, `"command":"ShowMesh: Set Brightness Ceiling"`) || !strings.Contains(got, `"args":["60"]`) {
-		t.Fatalf("dispatched command = %s, want the plugin's own command with one argument", got)
+	if !strings.Contains(string(body), `"ceiling":null`) {
+		t.Errorf("body = %s, want ceiling null before the first one", body)
 	}
-	got := decodeCeiling(t, body)
-	if got.Ceiling == nil || *got.Ceiling != 60 {
-		t.Fatalf("ceiling = %v, want 60 read back", got.Ceiling)
-	}
-	if got.Command.Outcome != outcomeWordConfirmed || got.Command.Action != fppBrightnessCeilingAction {
-		t.Fatalf("command = %+v, want a confirmed setBrightnessCeiling", got.Command)
+	doc := decodeBrightnessDoc(t, body)
+	if len(doc.Players) != 1 || doc.Players[0].InstanceID != "bench-fpp" || doc.Players[0].State != "notReporting" || doc.Players[0].Reason == "" {
+		t.Errorf("players = %+v, want bench-fpp not reporting with a reason", doc.Players)
 	}
 }
 
-// TestBrightnessCeilingIsUnconfirmedWhenThePluginNeverReportsIt: FPP
-// answering 200 is not confirmation, and the response must not pretend it
-// is.
-func TestBrightnessCeilingIsUnconfirmedWhenThePluginNeverReportsIt(t *testing.T) {
-	srv, _ := newFakeCeilingFPP(t, nil, false)
-	api, _, token := ceilingAPI(t, srv.URL)
-
-	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":40}`, token))
+func TestSetBrightnessCeilingStoresAuditsAndReturnsTheDocument(t *testing.T) {
+	api, setup, token := ceilingAPI(t, "http://127.0.0.1:9")
+	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, `{"targetPercent":60,"fadeSeconds":30}`, token))
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ceiling write status = %d, want 200; body: %s", resp.StatusCode, body)
+		t.Fatalf("status = %d; body: %s", resp.StatusCode, body)
 	}
-	got := decodeCeiling(t, body)
-	if got.Ceiling != nil {
-		t.Fatalf("ceiling = %v, want absent when the plugin never reported it", *got.Ceiling)
-	}
-	if got.Command.Outcome != outcomeWordUnconfirmed {
-		t.Fatalf("outcome = %q, want unconfirmed", got.Command.Outcome)
-	}
-}
-
-// TestBrightnessCeilingRefusesOutOfRangeAndDispatchesNothing.
-func TestBrightnessCeilingRefusesOutOfRangeAndDispatchesNothing(t *testing.T) {
-	for _, body := range []string{`{"ceiling":101}`, `{"ceiling":-1}`, `{"ceiling":null}`, `{}`, `{"ceiling":"60"}`, `{"ceiling":60,"nope":1}`} {
-		srv, fpp := newFakeCeilingFPP(t, nil, true)
-		api, _, token := ceilingAPI(t, srv.URL)
-
-		resp, got := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", body, token))
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("body %s status = %d, want 400; response: %s", body, resp.StatusCode, got)
-		}
-		if fpp.commandCount() != 0 {
-			t.Fatalf("body %s dispatched %d commands, want none", body, fpp.commandCount())
-		}
-	}
-}
-
-// TestBrightnessCeilingRefusesAnUnconfiguredInstance.
-func TestBrightnessCeilingRefusesAnUnconfiguredInstance(t *testing.T) {
-	srv, fpp := newFakeCeilingFPP(t, nil, true)
-	api, _, token := ceilingAPI(t, srv.URL)
-
-	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "no-such-fpp", `{"ceiling":50}`, token))
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("unconfigured instance status = %d, want 404; body: %s", resp.StatusCode, body)
-	}
-	if fpp.commandCount() != 0 {
-		t.Fatalf("an unconfigured instance dispatched %d commands, want none", fpp.commandCount())
-	}
-}
-
-// TestBrightnessCeilingReportsAHostThatRefusedTheCommand.
-func TestBrightnessCeilingReportsAHostThatRefusedTheCommand(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("No Command: ShowMesh: Set Brightness Ceiling"))
-	}))
-	t.Cleanup(srv.Close)
-	api, _, token := ceilingAPI(t, srv.URL)
-
-	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":50}`, token))
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("refused command status = %d, want 502; body: %s", resp.StatusCode, body)
-	}
-}
-
-// TestBrightnessCeilingCarriesFPPsOwnRefusalText: an FPP without the
-// plugin installed answers 500 "No Command", and an operator needs that
-// sentence, not a coordinator paraphrase.
-func TestBrightnessCeilingCarriesFPPsOwnRefusalText(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("No Command: ShowMesh: Set Brightness Ceiling"))
-	}))
-	t.Cleanup(srv.Close)
-	api, setup, token := ceilingAPI(t, srv.URL)
-
-	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":50}`, token))
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body: %s", resp.StatusCode, body)
-	}
-	if !strings.Contains(string(body), "did not accept") {
-		t.Fatalf("the refusal did not carry FPP's own text: %s", body)
+	doc := decodeBrightnessDoc(t, body)
+	if doc.Ceiling == nil || doc.Ceiling.TargetPercent != 60 || doc.Ceiling.FadeEndsAt == nil ||
+		doc.Ceiling.ChangedBy.Kind != displayceiling.ChangedByOperator || doc.Ceiling.ChangedBy.Name != "operator-1" {
+		t.Fatalf("ceiling = %+v, want 60 fading, set by operator-1", doc.Ceiling)
 	}
 
-	entries, err := setup.svc.ListAuditNewestFirst(t.Context(), 0, 10)
+	rec, ok, err := setup.st.GetDisplayCeiling(context.Background())
+	if err != nil || !ok || rec.TargetPercent != 60 {
+		t.Fatalf("stored = %+v ok %v err %v, want 60", rec, ok, err)
+	}
+
+	entries, err := setup.svc.ListAudit(context.Background(), 0, 100)
 	if err != nil {
-		t.Fatalf("list audit: %v", err)
+		t.Fatal(err)
 	}
-	found := false
+	var kinds []identity.AuditKind
 	for _, e := range entries {
-		if e.Action == auditActionFPPSetBrightnessCeiling && e.Kind == identity.AuditOutcome {
-			found = true
-			if e.Outcome != outcomeWordFailed {
-				t.Errorf("audited outcome = %q, want failed", e.Outcome)
-			}
-			if !strings.Contains(e.OutcomeReason, "did not accept") {
-				t.Errorf("audited reason = %q, want FPP's own text", e.OutcomeReason)
-			}
+		if e.Action == auditActionFPPSetBrightnessCeiling {
+			kinds = append(kinds, e.Kind)
 		}
 	}
-	if !found {
-		t.Error("no outcome audit entry was written for a refused ceiling write")
+	if len(kinds) != 2 {
+		t.Errorf("audit entries for %s = %v, want a dispatch and an outcome", auditActionFPPSetBrightnessCeiling, kinds)
+	}
+
+	// Omitted fade means none.
+	_, body = doRawRequest(t, api.Handler, ceilingRequest(t, `{"targetPercent":0}`, token))
+	if doc := decodeBrightnessDoc(t, body); doc.Ceiling.TargetPercent != 0 || doc.Ceiling.FadeEndsAt != nil {
+		t.Errorf("ceiling = %+v, want 0 with no fade", doc.Ceiling)
 	}
 }
 
-// TestBrightnessCeilingReportsWhatFPPActuallyAnswered when the plugin
-// never reports the value back: FPP's own answer is evidence the command
-// ran, and it is not evidence the ceiling changed.
-func TestBrightnessCeilingReportsWhatFPPActuallyAnswered(t *testing.T) {
-	srv, _ := newFakeCeilingFPP(t, nil, false)
-	api, _, token := ceilingAPI(t, srv.URL)
-
-	_, body := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":40}`, token))
-	got := decodeCeiling(t, body)
-	if !strings.Contains(got.Command.OutcomeReason, "has not reported 40") {
-		t.Fatalf("outcomeReason = %q, want FPP's own answer quoted", got.Command.OutcomeReason)
-	}
-	if !strings.Contains(got.Command.OutcomeReason, "40") {
-		t.Fatalf("outcomeReason = %q, want the ceiling that was not read back", got.Command.OutcomeReason)
+func TestSetBrightnessCeilingRefusesBadInputAndStoresNothing(t *testing.T) {
+	for _, tt := range []struct{ name, body, wantIn string }{
+		{"above 100", `{"targetPercent":101}`, "101%"},
+		{"below 0", `{"targetPercent":-1}`, "-1%"},
+		{"fade too long", `{"targetPercent":50,"fadeSeconds":86401}`, "86401 seconds"},
+		{"negative fade", `{"targetPercent":50,"fadeSeconds":-1}`, "-1 seconds"},
+		{"missing", `{"fadeSeconds":0}`, "brightness is missing"},
+		{"null", `{"targetPercent":null}`, "not a whole number"},
+		{"fractional", `{"targetPercent":50.5}`, "not a whole number"},
+		{"unknown field", `{"targetPercent":50,"instanceId":"bench-fpp"}`, "instanceId"},
+		{"not an object", `[]`, "not a JSON object"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			api, setup, token := ceilingAPI(t, "http://127.0.0.1:9")
+			resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, tt.body, token))
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+			}
+			if detail, _ := decodeMap(t, body)["detail"].(string); !strings.Contains(detail, tt.wantIn) {
+				t.Errorf("detail = %q, want it to contain %q", detail, tt.wantIn)
+			}
+			if _, ok, _ := setup.st.GetDisplayCeiling(context.Background()); ok {
+				t.Error("a refused request stored a ceiling")
+			}
+		})
 	}
 }
 
-// TestBrightnessCeilingNeverTouchesTheTransitionGainRoute: the two
-// values have separate writers and this one must not reach the other.
-func TestBrightnessCeilingNeverTouchesTheTransitionGainRoute(t *testing.T) {
-	srv, fpp := newFakeCeilingFPP(t, nil, true)
-	api, _, token := ceilingAPI(t, srv.URL)
+func TestBrightnessScopes(t *testing.T) {
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	deps := setup.deps()
+	deps.DisplayCeiling = newTestReconciler(setup)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	viewer := mustCreatePrincipal(t, setup.svc, "viewer-1", identity.RoleViewer)
+	token := mustIssueToken(t, setup.svc, viewer.ID)
 
-	doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":25}`, token))
-	if got := fpp.lastCommand(); strings.Contains(strings.ToLower(got), "gain") {
-		t.Fatalf("the ceiling write reached the transition gain: %s", got)
+	if resp, body := doRawRequest(t, api.Handler, brightnessRequest(t, http.MethodGet, "/api/v1/fpp/brightness", "", token)); resp.StatusCode != http.StatusOK {
+		t.Errorf("viewer GET status = %d, want 200 under fpp:read; body: %s", resp.StatusCode, body)
+	}
+	resp, body := doRawRequest(t, api.Handler, ceilingRequest(t, `{"targetPercent":50}`, token))
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "fpp:command") {
+		t.Errorf("viewer PUT status = %d body %s, want 403 naming fpp:command", resp.StatusCode, body)
+	}
+}
+
+func TestBrightnessWithoutAReconcilerIsUnavailable(t *testing.T) {
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	resp, body := doRawRequest(t, api.Handler, brightnessRequest(t, http.MethodGet, "/api/v1/fpp/brightness", "", token))
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPerFPPBrightnessWritesAreGone(t *testing.T) {
+	api, _, token := ceilingAPI(t, "http://127.0.0.1:9")
+	for _, path := range []string{"/api/v1/fpp/bench-fpp/brightness/ceiling", "/api/v1/fpp/bench-fpp/brightness/transition-gain"} {
+		resp, body := doRawRequest(t, api.Handler, brightnessRequest(t, http.MethodPost, path, `{"ceiling":50}`, token))
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want the route gone; body: %s", path, resp.StatusCode, body)
+		}
 	}
 }

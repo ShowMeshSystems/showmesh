@@ -122,6 +122,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
 | `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
 | `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
+| `preview.ndi` | operator-chosen | shipped | ADR-060: one NDI source added by hand, by NDI name and optional address |
 | `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
@@ -403,6 +404,7 @@ above was added for.
 | `audio.output.dante` | shipped | ARCHITECTURE section 6 |
 | `timecode.ltc.observe` | shipped | ARCHITECTURE section 6 |
 | `process.supervise` | shipped | ARCHITECTURE section 6 |
+| `clock.ptp` | shipped | Version 1 attributes: `interfaces` (each `name`, plus `phcDevice` when that interface has a PTP hardware clock) and `externalProvider` (a PTP service outside ShowMesh runs on the node). Read by Node routing and node.clock validation. |
 | `audio.playback.background` | shipped | Lane 17a SM-201 |
 | `audio.playback.announcement` | shipped | Lane 17a SM-201 |
 | `audio.playback.playlist` | shipped | Lane 17a SM-201 |
@@ -664,7 +666,7 @@ register entry comes from the code and never from a plan.
 | `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
 | `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 | `fpp.pair` | shipped | FPP plugin pairing: the dispatch entry when an operator opens a pairing, and the outcome entry when the plugin claims its token |
-| `fpp.set_brightness_ceiling` | shipped | the operator write of one FPP host's brightness ceiling, dispatching the plugin's own FPP command |
+| `fpp.set_brightness_ceiling` | shipped | an operator set the display brightness ceiling every FPP follows (ADR-062); target `display` |
 | `fpp.set_brightness_excluded_ranges` | shipped | an operator changed the channel ranges the brightness ceiling leaves alone on one FPP player |
 | `node.enrollment.create` | reserved | ADR-055: an enrollment code was minted for a node ID |
 | `node.enrollment.cancel` | reserved | ADR-055: an unused enrollment code was cancelled |
@@ -1486,7 +1488,8 @@ The store schema version, bumped by migrations in
 | v47 | shipped | `fallback_executor_keys`: the public key a paired FPP plugin registers, one per FPP instance, which the coordinator carries in that FPP's signed fallback program (ADR-048 decision 3) |
 | v48 | shipped | `fallback_player_states`: the latest fallback state an FPP plugin reported for its player, one row per FPP instance, with when the coordinator stopped waiting on it (ADR-048 decision 4) |
 | v49 | shipped | `companion_reports`: files ShowMesh Companions uploaded, newest 200 per companion (ADR-059) |
-| v50+ | unallocated | free |
+| v50 | shipped | `display_brightness_ceiling`: the one brightness ceiling every FPP follows, one row, with when and by whom it was set (ADR-062) |
+| v51+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

@@ -1,8 +1,8 @@
 package v1
 
 // FPPTransitionGainRequest is the body of
-// POST /api/v1/fpp/{instanceId}/brightness/transition-gain: the operator
-// write of one FPP host's brightness transition gain,
+// POST /api/v1/fpp/brightness/transition-gain: the operator write of the
+// brightness transition gain to every FPP,
 // FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2.
 //
 // TargetPercent and FadeSeconds are pointers so the handler can tell an
@@ -31,43 +31,34 @@ type FPPTransitionGainRequest struct {
 	RequestID string `json:"requestId,omitempty"`
 }
 
-// FPPTransitionGainResponse is the body of a successful (200) response
-// from POST /api/v1/fpp/{instanceId}/brightness/transition-gain. See
-// [NodeResponse]'s doc comment for why ServerTime is present with no
-// exception.
+// FPPTransitionGainResponse is the 200 body of
+// POST /api/v1/fpp/brightness/transition-gain: one result per FPP.
 type FPPTransitionGainResponse struct {
-	ServerTime     string                  `json:"serverTime"`
-	TransitionGain FPPTransitionGainResult `json:"transitionGain"`
+	ServerTime string                    `json:"serverTime"`
+	Players    []FPPTransitionGainResult `json:"players"`
 }
 
-// FPPTransitionGainResult is the applied state contract section 2.2
-// requires the plugin to return, carried through to the caller unchanged.
-// It exists so a client has evidence of what the FPP host is now doing
-// rather than only "the request did not error".
+// One FPP's transition gain outcome.
+const (
+	FPPTransitionGainApplied        = "applied"
+	FPPTransitionGainAlreadyApplied = "alreadyApplied"
+	FPPTransitionGainFailed         = "failed"
+)
+
+// FPPTransitionGainResult is one FPP's outcome. The numbers are the plugin's
+// applied state (contract section 2.2), present unless the write failed.
+// alreadyApplied is a success: that requestId already took on this FPP.
 type FPPTransitionGainResult struct {
 	InstanceID string `json:"instanceId"`
+	RequestID  string `json:"requestId"`
+	Outcome    string `json:"outcome"`
+	// Reason is an operator sentence, present when the write failed.
+	Reason string `json:"reason,omitempty"`
 
-	// RequestID is the idempotency key this write actually carried,
-	// whether the caller supplied it or the coordinator minted it. Echoed
-	// so a caller that let the coordinator mint one can still retry with
-	// the same key.
-	RequestID string `json:"requestId"`
-
-	// Applied is false for an idempotent repeat of a requestId already
-	// applied. That is a SUCCESS, not a failure: nothing was changed and
-	// the fields below report the gain as it stands. A client that treats
-	// false as an error will retry a write that already took.
-	Applied bool `json:"applied"`
-
-	// GainStart and GainTarget bound the fade the plugin is now running.
-	GainStart   int `json:"gainStart"`
-	GainTarget  int `json:"gainTarget"`
-	FadeSeconds int `json:"fadeSeconds"`
-
-	// Ceiling is FPP's own scheduled ceiling as the plugin sees it, and
-	// EffectiveOutput is round(ceiling * gain / 100) - the value actually
-	// reaching the channels. Both are carried because the gain alone does
-	// not say what the audience sees.
-	Ceiling         int `json:"ceiling"`
-	EffectiveOutput int `json:"effectiveOutput"`
+	GainStart   *int `json:"gainStart,omitempty"`
+	GainTarget  *int `json:"gainTarget,omitempty"`
+	FadeSeconds *int `json:"fadeSeconds,omitempty"`
+	// Ceiling is the FPP's ceiling and EffectiveOutput what reaches its channels.
+	Ceiling         *int `json:"ceiling,omitempty"`
+	EffectiveOutput *int `json:"effectiveOutput,omitempty"`
 }

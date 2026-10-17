@@ -152,6 +152,20 @@ http://localhost:8081
 
 This container is a client, not a dependency: the coordinator, the broker, and any running show are unaffected by the `ui` service being stopped, restarted, rebuilt, or removed from `docker-compose.yml` entirely. There is no `depends_on` between them in either direction, and its healthcheck never contacts the coordinator — a coordinator outage shows up as the *application* reporting disconnected, not as this container reporting unhealthy.
 
+## Bridging to a Home Assistant broker
+
+When Home Assistant runs its own MQTT broker, the bundled broker can bridge to it so FPP's `falcon/player/#` topics flow both ways: Home Assistant sees every FPP topic, including FPP's `homeassistant/` discovery announcements, and the commands and `set/` requests Home Assistant publishes reach FPP. The FPP login in `mosquitto/acl.conf` may publish anywhere under `falcon/player/` and `homeassistant/` and subscribe to any topic, so nothing FPP sends is held back. No second client or credential is needed on the ShowMesh side.
+
+On a coordinator installed with `showmesh-install`, set it up with the installer's `--home-assistant` options (see `deploy/install/README.md`). On a hand-run Compose bundle, run the script the installer uses:
+
+```sh
+sudo ./mosquitto/add-home-assistant-bridge.sh --host <home-assistant> --user <login> --password-file <file>
+```
+
+The login is one you create on the Home Assistant broker for this bridge. The script writes `mosquitto/conf.d/home-assistant-bridge.conf`, readable only by the broker, restarts the broker container (nodes show offline for a few seconds and reconnect on their own), and reports whether the bridge connected. Add `--share-showmesh` to also mirror `showmesh/#` to Home Assistant read-only. `--remove` takes the bridge down. The built-in broker keeps serving the show when the Home Assistant broker is unreachable; the bridge reconnects on its own.
+
+The shipped `mosquitto.conf` loads every `*.conf` file in `mosquitto/conf.d`, and an installer upgrade keeps that directory, so the bridge survives upgrades.
+
 ## Using an external broker
 
 If you already run Mosquitto (or another MQTT broker) elsewhere on the show network, point the coordinator at it instead of the bundled one:

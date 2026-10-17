@@ -4,30 +4,19 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"time"
 )
 
-// cmdFPPSetTransitionGain implements "showmeshctl fpp
-// set-transition-gain <instance-id> <percent>": POST
-// /api/v1/fpp/{instanceId}/brightness/transition-gain, behind
-// fpp:command. Writes the brightness transition gain, a 0-100 multiplier
-// that composes with FPP's own scheduled ceiling as
-// round(ceiling * gain / 100). ShowMesh owns the gain and never the
-// ceiling, so this can never overwrite a limit FPP's own schedule set.
+// cmdFPPSetTransitionGain implements "showmeshctl fpp set-transition-gain
+// <percent>": POST /api/v1/fpp/brightness/transition-gain, writing the
+// brightness transition gain to every FPP. The gain is a 0-100 multiplier
+// over the ceiling, round(ceiling * gain / 100), and is never the ceiling.
 //
-// Unlike every other "fpp <verb>" this does NOT dispatch an FPP command
-// and does not go through cmd_fpp_command.go's dispatch core: the gain has
-// exactly one writer by contract, and it is not reachable as an FPP
-// Action. It also needs no confirmation wait, so it keeps the ordinary
-// --timeout rather than that core's own larger floor - the response
-// already carries the applied state.
-//
-// An out-of-range value is refused here, before dispatch, and by the
-// coordinator, and by the plugin. Three refusals and no clamping anywhere,
-// so a mistyped value stays visible instead of silently becoming a
-// brightness nobody asked for.
+// Unlike every other "fpp <verb>" this does NOT dispatch an FPP command:
+// the gain has exactly one writer by contract, and it is not reachable as
+// an FPP Action. An out-of-range value is refused here, by the coordinator
+// and by the plugin, never clamped.
 func cmdFPPSetTransitionGain(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fpp set-transition-gain", stderr)
 	var fadeSeconds int
@@ -35,16 +24,14 @@ func cmdFPPSetTransitionGain(args []string, stdout, stderr io.Writer, clock func
 	fs.IntVar(&fadeSeconds, "fade-seconds", 0, "fade duration in seconds, 0-86400; 0 applies immediately")
 	fs.StringVar(&requestID, "request-id", "", "idempotency key; minted fresh per invocation when omitted")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp set-transition-gain [flags] <instance-id> <percent>")
-		_, _ = fmt.Fprintln(stderr, "\nWrite one FPP host's brightness transition gain (POST")
-		_, _ = fmt.Fprintln(stderr, "/api/v1/fpp/{instanceId}/brightness/transition-gain, behind the fpp:command")
-		_, _ = fmt.Fprintln(stderr, "scope). <percent> is 0-100 and multiplies FPP's own scheduled brightness")
-		_, _ = fmt.Fprintln(stderr, "ceiling: effective output = round(ceiling * gain / 100). This never writes")
-		_, _ = fmt.Fprintln(stderr, "the ceiling, so it cannot overwrite a limit FPP's own schedule set.")
-		_, _ = fmt.Fprintln(stderr, "\nPrints the applied state the FPP host reported - the fade's start and")
-		_, _ = fmt.Fprintln(stderr, "target gain, its duration, the host's ceiling, and the effective output -")
-		_, _ = fmt.Fprintln(stderr, "never a bare \"ok\". A repeated --request-id reports applied=false with the")
-		_, _ = fmt.Fprintln(stderr, "gain unchanged: that is the idempotency key working, and it exits 0.")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp set-transition-gain [flags] <percent>")
+		_, _ = fmt.Fprintln(stderr, "\nWrite the brightness transition gain to every FPP (POST")
+		_, _ = fmt.Fprintln(stderr, "/api/v1/fpp/brightness/transition-gain, behind the fpp:command scope).")
+		_, _ = fmt.Fprintln(stderr, "<percent> is 0-100 and multiplies the brightness ceiling:")
+		_, _ = fmt.Fprintln(stderr, "effective output = round(ceiling * gain / 100). It never writes the ceiling.")
+		_, _ = fmt.Fprintln(stderr, "\nPrints each FPP's applied state. A repeated --request-id reports")
+		_, _ = fmt.Fprintln(stderr, "\"unchanged\" on an FPP that already took it, and exits 0. Exits 12 when")
+		_, _ = fmt.Fprintln(stderr, "any FPP did not take the gain.")
 		_, _ = fmt.Fprintln(stderr, "\nAn out-of-range percent or fade is refused, never clamped.")
 		fs.PrintDefaults()
 	}
@@ -55,11 +42,11 @@ func cmdFPPSetTransitionGain(args []string, stdout, stderr io.Writer, clock func
 		return reportError(stderr, "fpp set-transition-gain", err)
 	}
 	rest := fs.Args()
-	if len(rest) != 2 {
+	if len(rest) != 1 {
 		fs.Usage()
 		return exitUsage
 	}
-	instanceID, percentArg := rest[0], rest[1]
+	percentArg := rest[0]
 
 	percent, err := strconv.Atoi(percentArg)
 	if err != nil {
@@ -90,34 +77,48 @@ func cmdFPPSetTransitionGain(args []string, stdout, stderr io.Writer, clock func
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	path := "/api/v1/fpp/" + url.PathEscape(instanceID) + "/brightness/transition-gain"
 	var resp fppTransitionGainResponse
-	if err := c.postJSON(ctx, path,
+	if err := c.postJSON(ctx, "/api/v1/fpp/brightness/transition-gain",
 		fppTransitionGainRequest{TargetPercent: percent, FadeSeconds: fadeSeconds, RequestID: requestID}, &resp); err != nil {
 		return reportError(stderr, "fpp set-transition-gain", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
 
+	failed := false
+	for _, p := range resp.Players {
+		failed = failed || p.Outcome == "failed"
+	}
 	if g.output == outputJSON {
 		if err := printJSON(stdout, resp); err != nil {
 			return reportError(stderr, "fpp set-transition-gain", err)
 		}
-		return exitOK
+	} else {
+		for _, p := range resp.Players {
+			printFPPTransitionGainResult(stdout, p)
+		}
 	}
-	printFPPTransitionGainResult(stdout, resp.TransitionGain)
+	// Any FPP that did not take the gain is an attempt that failed; the others took it.
+	if failed {
+		return exitActionFailed
+	}
 	return exitOK
 }
 
-// printFPPTransitionGainResult prints the composed result the FPP host
-// reported, never a bare success. applied=false gets its own leading word
-// rather than a failure: nothing changed because this requestId had
-// already been applied, and the numbers that follow are the gain as it
-// stands.
+// printFPPTransitionGainResult prints one FPP's applied state, never a bare
+// success. A repeat of an applied requestId reads "unchanged".
 func printFPPTransitionGainResult(stdout io.Writer, r fppTransitionGainResult) {
+	switch {
+	case r.Outcome == "failed":
+		_, _ = fmt.Fprintf(stdout, "failed: %s (request %s)\n", r.Reason, r.RequestID)
+		return
+	case r.GainStart == nil || r.GainTarget == nil || r.FadeSeconds == nil || r.Ceiling == nil || r.EffectiveOutput == nil:
+		_, _ = fmt.Fprintf(stdout, "%s: %s (request %s)\n", r.Outcome, r.InstanceID, r.RequestID)
+		return
+	}
 	lead := "applied"
-	if !r.Applied {
+	if r.Outcome == "alreadyApplied" {
 		lead = "unchanged (this requestId was already applied)"
 	}
 	_, _ = fmt.Fprintf(stdout, "%s: %s gain %d -> %d over %ds; ceiling %d, effective output %d (request %s)\n",
-		lead, r.InstanceID, r.GainStart, r.GainTarget, r.FadeSeconds, r.Ceiling, r.EffectiveOutput, r.RequestID)
+		lead, r.InstanceID, *r.GainStart, *r.GainTarget, *r.FadeSeconds, *r.Ceiling, *r.EffectiveOutput, r.RequestID)
 }

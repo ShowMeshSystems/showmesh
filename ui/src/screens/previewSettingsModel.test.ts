@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cameraDraftError, cameraRequest, gatewayRequest, gatewayUrlError } from './previewSettingsModel'
+import { cameraDraftError, cameraRequest, gatewayRequest, gatewayUrlError, NDI_ADDRESS_ERROR, ndiDraftError, ndiRequest } from './previewSettingsModel'
 
 const draft = { id: 'driveway', name: 'Driveway', enabled: true, url: 'rtsp://10.0.0.5:554/live' }
 
@@ -40,5 +40,25 @@ describe('preview settings model', () => {
   it('leaves the address out of a camera write unless one was typed', () => {
     expect(cameraRequest({ ...draft, url: '' })).toEqual({ name: 'Driveway', enabled: true })
     expect(cameraRequest(draft)).toEqual({ name: 'Driveway', enabled: true, url: 'rtsp://10.0.0.5:554/live' })
+  })
+})
+
+describe('ndiDraftError', () => {
+  const draft = { id: 'far-barn', label: '', ndiName: 'BARN-02 (Composition)', address: '', enabled: true }
+  it('accepts a source found by name, or reached by host:port', () => {
+    expect(ndiDraftError(draft, 'new', [])).toBeNull()
+    expect(ndiDraftError({ ...draft, address: '10.0.20.15:5961' }, 'new', [])).toBeNull()
+    expect(ndiDraftError({ ...draft, address: '[fe80::1]:5961' }, 'new', [])).toBeNull()
+  })
+  it('refuses a missing name, a taken id and a malformed address', () => {
+    expect(ndiDraftError({ ...draft, ndiName: ' ' }, 'new', [])).toMatch(/NDI name/)
+    expect(ndiDraftError(draft, 'new', ['far-barn'])).toMatch(/already exists/)
+    expect(ndiDraftError({ ...draft, id: '' }, 'new', [])).toMatch(/id/)
+    for (const address of ['10.0.20.15', '10.0.20.15:0', '10.0.20.15:70000', 'a b:1', 'host:port']) {
+      expect(ndiDraftError({ ...draft, address }, 'edit', [])).toBe(NDI_ADDRESS_ERROR)
+    }
+  })
+  it('sends every field so a cleared address is cleared', () => {
+    expect(ndiRequest({ ...draft, label: ' Far ', address: ' ' })).toEqual({ label: 'Far', ndiName: 'BARN-02 (Composition)', address: '', enabled: true })
   })
 })

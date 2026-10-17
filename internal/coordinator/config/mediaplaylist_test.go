@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -198,5 +199,23 @@ func TestDecodeMediaPlaylistPayloadUnknownTopLevelKeyRejected(t *testing.T) {
 	_, verr := DecodeMediaPlaylistPayload(raw, alwaysTrueShowExists, alwaysTrueAssetCurrent)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key for an unrecognized top-level field, got %+v", verr)
+	}
+}
+
+func TestDecodeMediaPlaylistPayloadUntargetedItem(t *testing.T) {
+	raw := strings.Replace(validMediaPlaylistJSON(), `"sequence": "bg-track-1", "target": "audio-node-1"}`, `"sequence": "bg-track-1"}`, 1)
+	p, verr := DecodeMediaPlaylistPayload(raw, alwaysTrueShowExists, alwaysTrueAssetCurrent)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.Items[0].Asset.Target != "" {
+		t.Fatalf("target = %q, want empty", p.Items[0].Asset.Target)
+	}
+	encoded, err := json.Marshal(p.Items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"target"`) {
+		t.Fatalf("encoded item %s, want no target key", encoded)
 	}
 }

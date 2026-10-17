@@ -114,7 +114,7 @@ info:
     **A per-object configuration kind can be deleted; a singleton kind
     cannot.** `audio.node`, `show`, `show.surface`, `show.action`,
     `show.macro`, `show.cue`, `show.playlist`, `night.session`,
-    `media.playlist`, and `preview.camera` each hold many independently identified objects, and
+    `media.playlist`, `preview.camera`, and `preview.ndi` each hold many independently identified objects, and
     each of their `{id}`
     paths carries a `DELETE` operation: a tombstone, not a hard delete, so
     `config_revisions` stays immutable and readable through that kind's own
@@ -603,39 +603,134 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
-  /fpp/{instanceId}/brightness/transition-gain:
-    parameters:
-      - name: instanceId
-        in: path
+  /fpp/brightness:
+    get:
+      operationId: getFPPBrightness
+      summary: Read the display brightness ceiling and how each FPP follows it
+      description: >-
+        Behind `fpp:read`. The display has one brightness ceiling that
+        every FPP in `fpp.endpoints` follows (ADR-062). `ceiling` is the
+        desired ceiling, or `null` before one has been set. `players` has
+        one entry per configured FPP with the ceiling it last reported and
+        its `state`: `following`, `catchingUp` while the coordinator brings
+        it to the ceiling, `notReporting` when it does not answer or has no
+        ShowMesh plugin, or `pluginTooOld` when it follows but a change made
+        on it cannot be shared with the others. Every state but
+        `following` carries an operator sentence in `reason`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPBrightnessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: The coordinator was started without the display brightness.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /fpp/brightness/ceiling:
+    put:
+      operationId: setFPPBrightnessCeiling
+      summary: Set the display brightness ceiling every FPP follows
+      description: >-
+        Behind `fpp:command`, audited as `fpp.set_brightness_ceiling`. Sets
+        the display's one brightness ceiling, persisted across restarts.
+        The coordinator then sends the plugin's
+        `ShowMesh: Set Brightness Ceiling` FPP command to every FPP whose
+        reported ceiling differs, until each reports it. A fade carries its
+        end time, so an FPP that is written late gets only the remaining
+        seconds and every FPP reaches the target together. A change made on
+        any FPP afterwards, newer than this one, becomes the display
+        ceiling in turn.
+
+        The `200` body is the same document `GET /fpp/brightness` returns,
+        read right after the change; FPPs read `catchingUp` until their
+        next brightness poll shows the new ceiling. An out-of-range
+        `targetPercent` or `fadeSeconds` is refused with `400`, never
+        clamped.
+      requestBody:
         required: true
-        schema:
-          type: string
-        description: Same ID syntax as a node ID (contract section 7).
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPBrightnessCeilingRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPBrightnessResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the authenticated principal does not hold `fpp:command`
+            (ADR-024 decision 4, `detail` names the missing scope), or a
+            cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: The coordinator was started without the display brightness.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /fpp/brightness/transition-gain:
     post:
       operationId: setFPPTransitionGain
-      summary: Write one FPP host's brightness transition gain
+      summary: Write the brightness transition gain to every FPP
       description: >-
-        Behind `fpp:command`, the same scope dispatching an FPP command
-        needs: this is an operator writing a live output value to one FPP
-        host, the blast radius that scope already governs. Writes the
-        brightness transition gain, a 0-100 multiplier that composes with
-        FPP's own scheduled brightness ceiling as
-        `effective output = round(ceiling * gain / 100)`. ShowMesh owns
-        the gain and never the ceiling, so this write can never overwrite
-        a limit FPP's own schedule set.
+        Behind `fpp:command`, audited as `fpp.set_transition_gain`. Writes
+        the brightness transition gain, a 0-100 multiplier that composes
+        with the brightness ceiling as
+        `effective output = round(ceiling * gain / 100)`, to every FPP in
+        `fpp.endpoints` (ADR-062 decision 7). Each FPP's write carries its
+        own `requestId`, derived from the request's as
+        `<requestId>:<instanceId>`. One FPP failing or unreachable does not
+        stop the others.
 
-        The `200` body is the applied state the FPP plugin returned, never
-        a bare success: `gainStart`, `gainTarget`, `fadeSeconds`,
-        `ceiling` and `effectiveOutput` are what the host is now doing.
-        `applied: false` is part of that success, not an error - it is
-        what a repeated `requestId` returns, the idempotency key working,
-        with the gain unchanged and the current state reported.
-
-        An out-of-range `targetPercent` or `fadeSeconds` is refused with
-        `400`, never clamped, so a mistyped value stays visible. An
-        instance id that names no configured `fpp.endpoints` entry is
-        `404`. A write that reaches a configured host but does not take is
-        `502`, carrying the host's own refusal text verbatim.
+        The `200` body has one entry per FPP. `outcome` is `applied`,
+        `alreadyApplied` (that `requestId` already took on that FPP, a
+        success with the gain unchanged), or `failed` with an operator
+        sentence in `reason`. The numbers are the applied state the plugin
+        returned. An out-of-range `targetPercent` or `fadeSeconds` is
+        refused with `400`, never clamped. With no FPP configured the
+        answer is `409`.
       requestBody:
         required: true
         content:
@@ -661,89 +756,6 @@ paths:
             Either the authenticated principal does not hold `fpp:command`
             (ADR-024 decision 4, `detail` names the missing scope), or a
             cookie-authenticated write was missing
-            `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a
-            bearer-token-authenticated request never receives the latter.
-            Both share this one `Problem`-shaped response.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
-        "405":
-          $ref: "#/components/responses/MethodNotAllowed"
-        "500":
-          $ref: "#/components/responses/InternalError"
-        "502":
-          description: >-
-            The request was valid and the instance is configured, but the
-            write to the FPP host's plugin did not take. `type` is
-            `https://showmesh.dev/problems/fpp-transition-gain-write-failed`
-            and `detail` carries the host's own error text verbatim.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-  /fpp/{instanceId}/brightness/ceiling:
-    parameters:
-      - name: instanceId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Same ID syntax as a node ID (contract section 7).
-    post:
-      operationId: setFPPBrightnessCeiling
-      summary: Write one FPP host's brightness ceiling
-      description: >-
-        Behind `fpp:command`, the scope an operator write to one FPP host
-        already needs. Dispatches FPP's own
-        `ShowMesh: Set Brightness Ceiling` command, registered by the
-        resident ShowMesh plugin, through the same FPP command client
-        every other command goes through. This writes the CEILING; the
-        transition gain is a separate value with its own route and is
-        never written from here.
-
-        FPP answering `200` is never confirmation on its own: `ceiling` is
-        present, and `command.outcome` is `confirmed`, only when the
-        plugin's own brightness route reported the new value within the
-        read-back window. Otherwise the command still reached FPP and
-        `command.outcome` is `unconfirmed`.
-
-        An out-of-range `ceiling` is refused with `400`, never clamped. An
-        instance id that names no configured `fpp.endpoints` entry is
-        `404`. A command that did not reach the host is `502`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/FPPBrightnessCeilingRequest"
-      responses:
-        "200":
-          description: OK
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FPPBrightnessCeilingResponse"
-        "400":
-          $ref: "#/components/responses/InvalidParameter"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          description: >-
-            Either the authenticated principal does not hold `fpp:command`
-            (ADR-024 decision 4, `detail` names the missing scope), or a
-            cookie-authenticated write was missing
             `Sec-Fetch-Site: same-origin` (ADR-024 decision 6).
           headers:
             ShowMesh-API-Version:
@@ -752,24 +764,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "404":
-          $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
-        "502":
-          description: >-
-            The request was valid and the instance is configured, but the
-            command did not reach the FPP host. `type` is
-            `https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed`.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /fpp/{instanceId}/brightness/excluded-ranges:
     parameters:
       - name: instanceId
@@ -5429,7 +5429,13 @@ paths:
         exactly as a node before this seam existed (RES-019). Optionally
         carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
         refused with `409` when the precondition names a revision that is
-        no longer current.
+        no longer current. When the node advertises the `clock.ptp`
+        capability, a `managed` or `external` write is refused with `400`
+        (field `interface`) unless `interface` is one of the network
+        interfaces that capability lists, and a `managed` write is refused
+        (field `provider`) when the capability's `externalProvider` is
+        true, because a PTP service outside ShowMesh already runs on that
+        node. A node that has not advertised `clock.ptp` is not checked.
       parameters:
         - name: id
           in: path
@@ -11221,6 +11227,175 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/preview.ndi:
+    get:
+      operationId: listPreviewNDISources
+      summary: Enumerate preview.ndi objects
+      description: >-
+        Requires `config:write`. Each summary's `label` is the source's
+        label, or its NDI name when it has none, and `show` is empty.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.ndi/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The id the operator chose: 1 to 64 lowercase letters, digits or
+          hyphens. The tile key is `ndi:<NDI name>`, shared with a
+          discovered source of the same name.
+    get:
+      operationId: getPreviewNDISource
+      summary: One preview.ndi object's active revision
+      description: >-
+        Requires `config:write`. An NDI source added by hand, for a sender
+        that discovery cannot reach. It is not a credential.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewNDIConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putPreviewNDISource
+      summary: Write a new preview.ndi revision
+      description: >-
+        Requires `config:write`. A partial update: a key absent from the
+        body keeps its stored value, except that creating a source
+        requires `ndiName`. `address` is the sender's `host:port`, passed
+        to the gateway so the source need not be announced; empty finds
+        it by name. `enabled` defaults to true on creation. Allowed while
+        show mode is on.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigPreviewNDIPutRequest"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewNDIConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deletePreviewNDISource
+      summary: Delete a preview.ndi object (tombstone)
+      description: >-
+        Requires `config:write`. Requires an explicit `{"confirm":true}`
+        body. A tombstone: the revisions stay readable. Optionally
+        carries `If-Match`.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigObjectDeleteRequest"
+      responses:
+        "204":
+          description: The object was tombstoned.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/preview.ndi/{id}/revisions:
+    get:
+      operationId: getPreviewNDISourceRevisions
+      summary: preview.ndi revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only. `200` with an empty array
+        for an id that has never been saved.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/dashboard.layout:
     get:
       operationId: getDashboardLayoutConfig
@@ -12275,7 +12450,7 @@ components:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
          instanceUuidChange, duplicateInstanceUuidEndpointIds,
-         showParticipation, playlistObservationRefused]
+         showParticipation, playlistObservationRefused, plugin]
       properties:
         instanceId:
           type: string
@@ -12342,6 +12517,30 @@ components:
             a plugin reinstall or a wiped state directory). Cleared by
             this instance's next accepted report or by
             DELETE .../playlist-entry-observations/{instanceUuid}.
+        plugin:
+          $ref: "#/components/schemas/FPPPluginStatus"
+    FPPPluginStatus:
+      type: object
+      description: >-
+        Whether the ShowMesh plugin on this FPP is reporting to this
+        coordinator, separate from `health`, which is what FPP's own API
+        says. `not_paired` means no pairing is remembered and nothing was
+        ever accepted; `not_reported` means paired but nothing was ever
+        accepted; `stopped` means FPP is playing and the last accepted
+        report is more than ten minutes old; `reporting` is the rest,
+        including an idle FPP. Pairing is remembered only for the
+        coordinator process's lifetime.
+      required: [state, lastReportedAt]
+      properties:
+        state:
+          type: string
+          enum: [not_paired, not_reported, stopped, reporting]
+        lastReportedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When a playlist definition or playlist-entry report was last
+            accepted from this plugin, or null when none ever was.
     FPPPlaylistObservationRefused:
       type: object
       description: >-
@@ -12623,7 +12822,7 @@ components:
           $ref: "#/components/schemas/ResolumeInstance"
     FPPTransitionGainRequest:
       description: >-
-        The body of POST /fpp/{instanceId}/brightness/transition-gain
+        The body of POST /fpp/brightness/transition-gain
         (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2). Out of range is
         refused, never clamped.
       type: object
@@ -12635,64 +12834,55 @@ components:
           minimum: 0
           maximum: 100
           description: >-
-            The gain, a multiplier over FPP's own scheduled brightness
-            ceiling - never the ceiling itself. Required; an explicit
-            `null` is a `400`, distinct from omitting it, and `0` is a
-            real value (blackout) rather than a missing one.
+            The gain, a multiplier over the brightness ceiling, never the
+            ceiling itself. Required; an explicit `null` is a `400`, and
+            `0` is a real value (blackout).
         fadeSeconds:
           type: integer
           minimum: 0
           maximum: 86400
-          description: >-
-            Fade duration; `0` applies immediately. Required, with the
-            same absent/null/zero distinction `targetPercent` documents.
+          description: Fade duration; `0` applies immediately. Required.
         requestId:
           type: string
           minLength: 1
           description: >-
-            Caller-minted idempotency key. Optional: supply one and a
-            retry of an unanswered request is safe, because a repeat of an
-            id already applied changes nothing and comes back with
-            `applied: false` and the gain as it stands. Omit it and the
-            coordinator mints one, which makes the request a new fade
-            rather than a retry of any earlier one; the minted value is
-            echoed on the response. Present but empty is a `400`.
+            Caller-minted idempotency key. Supply one and a retry of an
+            unanswered request is safe: each FPP that already applied it
+            answers `alreadyApplied`. Omit it and the coordinator mints
+            one. Present but empty is a `400`.
     FPPTransitionGainResponse:
-      description: >-
-        The body of a successful (200) response from
-        POST /fpp/{instanceId}/brightness/transition-gain.
+      description: The 200 body of POST /fpp/brightness/transition-gain, one entry per FPP.
       type: object
-      required: [serverTime, transitionGain]
+      required: [serverTime, players]
       properties:
         serverTime:
           type: string
           format: date-time
-        transitionGain:
-          $ref: "#/components/schemas/FPPTransitionGainResult"
+        players:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPTransitionGainResult"
     FPPTransitionGainResult:
       description: >-
-        The applied state the FPP plugin returned, carried through
-        unchanged so a caller has evidence of what the host is now doing
-        rather than only "the request did not error".
+        One FPP's outcome. The numbers are the applied state the plugin
+        returned, present unless `outcome` is `failed`.
       type: object
-      required:
-        [instanceId, requestId, applied, gainStart, gainTarget, fadeSeconds, ceiling, effectiveOutput]
+      required: [instanceId, requestId, outcome]
       properties:
         instanceId:
           type: string
         requestId:
           type: string
+          description: The idempotency key this FPP's write carried.
+        outcome:
+          type: string
+          enum: [applied, alreadyApplied, failed]
           description: >-
-            The idempotency key this write actually carried, whether the
-            caller supplied it or the coordinator minted it.
-        applied:
-          type: boolean
-          description: >-
-            `false` is a SUCCESS, not a failure: an idempotent repeat of a
-            `requestId` already applied, with nothing changed and the
-            fields below reporting the gain as it stands. A client that
-            treats `false` as an error will retry a write that already
-            took.
+            `alreadyApplied` is a success: that `requestId` already took on
+            this FPP and nothing changed.
+        reason:
+          type: string
+          description: An operator sentence, present when `outcome` is `failed`.
         gainStart:
           type: integer
           description: The gain the fade now running started from.
@@ -12704,58 +12894,112 @@ components:
           description: The fade duration the plugin is actually running.
         ceiling:
           type: integer
-          description: FPP's own scheduled brightness ceiling, as the plugin sees it.
+          description: The FPP's brightness ceiling, as its plugin sees it.
         effectiveOutput:
           type: integer
-          description: >-
-            `round(ceiling * gain / 100)`, the value actually reaching the
-            channels. Carried because the gain alone does not say what the
-            audience sees.
+          description: "`round(ceiling * gain / 100)`, the value reaching the channels."
     FPPBrightnessCeilingRequest:
       description: >-
-        The body of POST /fpp/{instanceId}/brightness/ceiling. Out of
-        range is refused, never clamped.
+        The body of PUT /fpp/brightness/ceiling. Out of range is refused,
+        never clamped.
       type: object
       additionalProperties: false
-      required: [ceiling]
+      required: [targetPercent]
       properties:
-        ceiling:
+        targetPercent:
           type: integer
           minimum: 0
           maximum: 100
           description: >-
-            The brightness ceiling, the limit the host's output is held
-            under. Required; an explicit `null` is a `400`, distinct from
-            omitting it, and `0` is a real value (blackout) rather than a
-            missing one.
-        requestId:
-          type: string
-          minLength: 1
-          description: >-
-            Caller-minted idempotency key, echoed on the response. Omit it
-            and the coordinator mints one. Present but empty is a `400`.
-    FPPBrightnessCeilingResponse:
+            The display brightness ceiling. Required; an explicit `null` is
+            a `400`, and `0` is a real value (blackout).
+        fadeSeconds:
+          type: integer
+          minimum: 0
+          maximum: 86400
+          description: Fade duration in seconds. Omitted means `0`, applied at once.
+    FPPBrightnessResponse:
       description: >-
-        The body of a successful (200) response from
-        POST /fpp/{instanceId}/brightness/ceiling: the dispatched
-        command's own result, plus the ceiling the plugin read back.
+        GET /fpp/brightness, also the 200 body of PUT
+        /fpp/brightness/ceiling: the display ceiling and every configured
+        FPP's place against it.
       type: object
-      required: [serverTime, command]
+      required: [serverTime, ceiling, players]
       properties:
         serverTime:
           type: string
           format: date-time
-        command:
-          $ref: "#/components/schemas/FPPCommandResult"
+        ceiling:
+          description: The display's desired ceiling, or `null` before the first one is set.
+          oneOf:
+            - $ref: "#/components/schemas/FPPBrightnessCeiling"
+            - type: "null"
+        players:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPBrightnessPlayer"
+    FPPBrightnessCeiling:
+      description: The display's desired brightness ceiling.
+      type: object
+      required: [targetPercent, fadeEndsAt, changedAt, changedBy]
+      properties:
+        targetPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        fadeEndsAt:
+          description: When the fade to `targetPercent` ends, or `null` for no fade.
+          type: [string, "null"]
+          format: date-time
+        changedAt:
+          type: string
+          format: date-time
+          description: When the ceiling was set, on the coordinator's clock.
+        changedBy:
+          type: object
+          required: [kind, id]
+          properties:
+            kind:
+              type: string
+              enum: [operator, fpp]
+              description: >-
+                `operator` for a change through the API, `fpp` for a change
+                made on an FPP and taken up as the display ceiling.
+            id:
+              type: string
+              description: The principal id, or the FPP instance id.
+            name:
+              type: string
+              description: The principal's name, when `kind` is `operator`.
+    FPPBrightnessPlayer:
+      description: One configured FPP against the display ceiling.
+      type: object
+      required: [instanceId, state]
+      properties:
+        instanceId:
+          type: string
+        state:
+          type: string
+          enum: [following, catchingUp, notReporting, pluginTooOld]
+        reason:
+          type: string
+          description: An operator sentence, present for every state but `following`.
         ceiling:
           type: integer
           minimum: 0
           maximum: 100
+          description: The FPP's ceiling as it last reported it.
+        ceilingTarget:
+          type: integer
+          minimum: 0
+          maximum: 100
           description: >-
-            Present only when the plugin's own brightness route reported
-            the new value within the read-back window. Absent means the
-            value was not read back in time, never that the write failed:
-            `command.outcome` is then `unconfirmed`.
+            Where a fade on the FPP is going. Absent from a plugin too old
+            to report it.
+        reportedAt:
+          type: string
+          format: date-time
+          description: When the coordinator received that report.
     FPPChannelRange:
       description: >-
         One run of channels: a first channel, counted from 1, and how many
@@ -15582,7 +15826,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, dashboard.layout]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
         revisions:
           type: array
           items:
@@ -15686,6 +15930,64 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigPreviewCameraPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigPreviewNDIPayload:
+      type: object
+      description: >-
+        The "preview.ndi" kind's payload: one NDI source added by hand.
+        `address` is `host:port`, or empty to find the source by name.
+      required: [label, ndiName, address, enabled]
+      properties:
+        label:
+          type: string
+        ndiName:
+          type: string
+        address:
+          type: string
+        enabled:
+          type: boolean
+    ConfigPreviewNDIPutRequest:
+      type: object
+      description: >-
+        The request body of PUT /config/preview.ndi/{id}. Every field is
+        optional on an existing source; creating one requires `ndiName`.
+      properties:
+        label:
+          type: string
+        ndiName:
+          type: string
+        address:
+          type: string
+        enabled:
+          type: boolean
+    PreviewNDIConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/preview.ndi/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: preview.ndi
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigPreviewNDIPayload"
         updatedAt:
           type: string
           format: date-time
@@ -18763,10 +19065,8 @@ components:
             - https://showmesh.dev/problems/sequence-filename-claim-duplicate
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
             - https://showmesh.dev/problems/fpp-start-playlist-busy
-            - https://showmesh.dev/problems/fpp-transition-gain-write-failed
             - https://showmesh.dev/problems/fpp-definition-republish-failed
             - https://showmesh.dev/problems/fpp-pairing-not-waiting
-            - https://showmesh.dev/problems/fpp-brightness-ceiling-write-failed
             - https://showmesh.dev/problems/fpp-brightness-excluded-ranges-write-failed
             - https://showmesh.dev/problems/show-config-body-invalid
             - https://showmesh.dev/problems/show-config-field-required
@@ -19017,7 +19317,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock, preview.camera]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist, node.clock, preview.camera, preview.ndi]
         objects:
           type: array
           items:
@@ -21513,7 +21813,7 @@ components:
         show-config-not-implemented). show/sequence/target are the same
         asset identity night.session's own background-audio items resolve
         against (ADR-028); show must equal the playlist's own show.
-      required: [kind, show, sequence, target]
+      required: [kind, show, sequence]
       properties:
         kind:
           type: string
@@ -21527,6 +21827,10 @@ components:
         target:
           type: string
           minLength: 1
+          description: >-
+            Optional. Names one node's own upload of the file. Omitted, the
+            item is the sequence's audio, and each playing node uses its
+            own upload, then the show-wide upload, then another node's.
     ConfigMediaPlaylist:
       type: object
       description: >-
@@ -21689,7 +21993,7 @@ components:
         operator-visible (pinned against pkg/audio.PlaylistItem on Track
         C's branch, Track F seam F1): unlike position in the array, it
         survives a reorder. Must be unique within the list.
-      required: [itemId, show, sequence, target]
+      required: [itemId, show, sequence]
       properties:
         itemId:
           type: string
@@ -21704,7 +22008,12 @@ components:
           type: string
           minLength: 1
           description: >-
-            Which registered copy of the file this item uses. When the
+            Optional. Omitted, the item is the sequence's audio: it plays on
+            the bed's own targets, or on the show's audioNodes when the bed
+            names none, and each node uses its own upload, then the
+            show-wide upload, then another node's. Saving such an item is
+            refused when neither list names a node. When present, this
+            names which registered copy of the file this item uses. When the
             bed's own targets (ADR-049) is absent or empty, this also
             decides where the item plays: items are not required to
             share one target, and every distinct target among them is
@@ -21853,6 +22162,11 @@ components:
           type: string
           minLength: 1
         timelineAsset:
+          description: >-
+            The resting sequence. Its length, read from the copy on target,
+            sets how long resting runs. Any render node that has this
+            sequence draws it during resting; target does not choose render
+            nodes.
           $ref: "#/components/schemas/ConfigNightSessionAssetRef"
         endOfNightRepeat:
           type: boolean
@@ -22121,6 +22435,11 @@ components:
           type: string
           minLength: 1
         timelineAsset:
+          description: >-
+            The resting sequence. Its length, read from the copy on target,
+            sets how long resting runs. Any render node that has this
+            sequence draws it during resting; target does not choose render
+            nodes.
           $ref: "#/components/schemas/ConfigNightSessionAssetRef"
         endOfNightRepeat:
           type: boolean
@@ -22551,6 +22870,31 @@ components:
         online, a missing item-transition capability reads `failed`
         immediately, even during that same post-connect window.
 
+        Every node the background audio resolves to also gets
+        `resting:background-audio-node-setup:<node>`, which fails when
+        that node has no `audio.node` object or no longer finds its
+        program route, because such a node confirms every command and
+        plays to no connected output. When the show's `audioNodes`
+        decide where background audio plays,
+        `resting:background-audio-item-targets` warns about each item
+        whose own target node is not among them.
+
+        Each show playlist of this session's show gets
+        `show:cue-audio-targets:<playlistId>`, the same audio routing
+        rule as the playlist readiness conditions `audio-target-unbound`,
+        `audio-target-unresolved` and `audio-ltc-emitter-ambiguous`.
+        `catalog:node-catalog-stale:<node>` also fails when a node's
+        resolved cue list gives a cue timecode without its audio, since
+        the node refuses every such activation.
+
+        Every configured `audio.node` also gets `audio:clock:<nodeId>`,
+        which fails when the node plays through PipeWire
+        (`node.audio.engine.sink_backend` is `pipewiresink`) on
+        GStreamer's default clock (`node.audio.engine.clock_source` is
+        `default`). That node stalls the whole PipeWire graph and plays
+        nothing while its engine still reports usable. It is
+        `not_verifiable` while the node has not reported both signals.
+
         It also checks every configured `audio.node` object's measured
         program-to-LTC alignment against `audio.settings`'
         `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded`
@@ -22816,7 +23160,7 @@ components:
           format: date-time
     NightBackgroundAudioPlanItem:
       type: object
-      required: [position, itemId, show, sequence, target]
+      required: [position, itemId, show, sequence]
       properties:
         position:
           type: integer
@@ -22829,7 +23173,9 @@ components:
           type: string
         target:
           type: string
-          description: The audio node that holds this item's file.
+          description: >-
+            The audio node that holds this item's file. Absent when the
+            item names only its sequence.
     NightBackgroundAudioPlan:
       type: object
       description: >-
@@ -23786,7 +24132,11 @@ components:
         show.playlist entry naming this Cue whose
         fpp.expectedSequenceFilename is set, plus this Cue's own resolved
         render output filename when it has one. Always present, an empty
-        array when there is no trigger yet.
+        array when there is no trigger yet. A render node that holds the
+        active night session's resting sequence also has one entry whose
+        cueId is "resting:" followed by the sequence id (ADR-061). It is
+        not a Cue: it has only a render output, cueRevision 1, and no
+        triggers.
       additionalProperties: false
       required: [cueId, cueRevision, outputs, triggers]
       properties:

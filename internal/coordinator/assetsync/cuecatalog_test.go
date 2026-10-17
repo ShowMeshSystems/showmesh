@@ -895,7 +895,7 @@ func TestCueCatalogRevisionAgreesAfterWireRoundTrip(t *testing.T) {
 func assertRoundTripRevisionAgrees(t *testing.T, catalog Catalog) {
 	t.Helper()
 	raw, err := json.Marshal(cueCatalogDeployWireParamsForTest{
-		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.Entries,
+		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.AllEntries(),
 	})
 	if err != nil {
 		t.Fatalf("marshal cuecatalog.deploy wire params: %v", err)

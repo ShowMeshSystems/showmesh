@@ -66,7 +66,7 @@ const blankBed = (): BedDraft => ({
 function draftFromPlaylist(payload: ConfigMediaPlaylist): BedDraft {
   return {
     label: payload.label,
-    items: payload.items.length === 0 ? [blankItem()] : payload.items.map((i) => ({ sequence: i.sequence, target: i.target })),
+    items: payload.items.length === 0 ? [blankItem()] : payload.items.map((i) => ({ sequence: i.sequence, target: i.target ?? '' })),
     repeat: payload.repeat, resume: payload.resume, itemTransition: payload.itemTransition,
     crossfadeMs: payload.crossfadeMs === undefined ? '' : String(payload.crossfadeMs),
     maxGainDb: String(payload.maxGainDb),
@@ -80,10 +80,11 @@ function buildMediaPlaylistPayload(show: string, draft: BedDraft): { ok: true; v
   if (draft.label.trim() === '') return { ok: false, error: 'Label is required.' }
   const items: ConfigMediaPlaylistItem[] = []
   for (const [index, item] of draft.items.entries()) {
-    if (item.sequence.trim() === '' || item.target.trim() === '') {
-      return { ok: false, error: `Item ${index + 1} needs an audio asset selected.` }
+    if (item.sequence.trim() === '') {
+      return { ok: false, error: `Item ${index + 1} needs an audio track selected.` }
     }
-    items.push({ kind: 'asset', show, sequence: item.sequence.trim(), target: item.target.trim() })
+    const target = item.target.trim()
+    items.push({ kind: 'asset', show, sequence: item.sequence.trim(), ...(target === '' ? {} : { target }) })
   }
   if (items.length === 0) return { ok: false, error: 'A media playlist needs at least one item.' }
   const maxGainDb = Number(draft.maxGainDb)

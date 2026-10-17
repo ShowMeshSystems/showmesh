@@ -70,10 +70,26 @@ const (
 // performs before a dispatch, run here so a missing or wrong-typed asset
 // is visible before start-night rather than only at the first dispatch
 // failure.
+//
+// An item without a target needs the bed to resolve to a node list and the
+// show to hold some audio upload of its sequence.
 func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	name := "resting:background-audio-assets"
+	_, resolvedFrom := ba.ResolvedPlaybackNodeIDs(h.showAudioNodes(ctx)(show))
 	for _, item := range ba.Items {
-		if _, err := h.nightBuildBackgroundPlaylistItems(ctx, show, []config.NightSessionBackgroundAudioItem{item}); err != nil {
+		if item.Asset.Target == "" {
+			if resolvedFrom == config.AudioNodeResolutionDefault {
+				return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+					"No audio nodes are set for this show, so %s has nowhere to play. Set the show's audio nodes.", item.Asset.Sequence)}
+			}
+			_, ok, err := assetsync.BedAudioCopyFor(ctx, h.deps.Assets, show, item.Asset.Sequence, "", nil)
+			if err != nil || !ok {
+				return nightReadinessCheck{name: name, health: nightHealthFailed(), cause: err, reason: fmt.Sprintf(
+					"No audio file is uploaded for %s. Upload it on the Assets page.", item.Asset.Sequence)}
+			}
+			continue
+		}
+		if _, err := h.nightBuildBackgroundPlaylistItems(ctx, show, item.Asset.Target, nil, []config.NightSessionBackgroundAudioItem{item}); err != nil {
 			return nightReadinessCheck{name: name, health: nightHealthFailed(), cause: err, reason: fmt.Sprintf(
 				"The background audio file for %s on node %s is missing or is not audio. Upload it or pick another.",
 				item.Asset.Sequence, item.Asset.Target)}
@@ -341,7 +357,11 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 			reason: "The show has no audio nodes set, so background audio plays on the default node. Set the show's audio nodes.",
 		})
 	}
+	if check, ok := nightCheckBackgroundAudioItemTargets(resolved, resolvedNodeIDs, resolvedFrom); ok {
+		checks = append(checks, check)
+	}
 	for _, nodeID := range resolvedNodeIDs {
+		checks = append(checks, h.nightCheckBackgroundAudioNodeSetup(ctx, now, nodeID))
 		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, resolved))
 		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, resolved))
 	}
@@ -355,7 +375,7 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 // configured item's file, whether that copy is its own registered row or
 // borrowed from another listed target's row - the same registered-copy
 // rule assetsync/nightaudiofallback.go applies at delivery time
-// ([nightBedResolveDeliverableCopy] below, working from the SAME resolved
+// ([assetsync.BedAudioCopyFor], working from the SAME resolved
 // ba this check was called with, not a second read of whatever night.session
 // config revision happens to be current in the store right now).
 //
@@ -409,7 +429,7 @@ func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Contex
 		}
 
 		for _, item := range ba.Items {
-			rec, ok, err := nightBedResolveDeliverableCopy(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
+			rec, ok, err := assetsync.BedAudioCopyFor(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
 			if err != nil {
 				return unreadable(nodeID, err)
 			}
@@ -440,32 +460,6 @@ func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Contex
 	default:
 		return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 	}
-}
-
-// nightBedResolveDeliverableCopy resolves the registered [store.AssetRecord]
-// the bed's registered-copy rule would deliver to nodeID for (show,
-// sequence): nodeID's own current row if it has one, else the first other
-// bed target's own current row, in targets' own declared order. ok is
-// false when no listed target holds any row for this (show, sequence) at
-// all - the "nothing anywhere to borrow" case, independent of any node's
-// own inventory evidence.
-func nightBedResolveDeliverableCopy(ctx context.Context, lister nightAssetLister, show, sequence, nodeID string, targets []string) (store.AssetRecord, bool, error) {
-	if rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, nodeID); err != nil {
-		return store.AssetRecord{}, false, err
-	} else if ok {
-		return rec, true, nil
-	}
-	for _, other := range targets {
-		if other == nodeID {
-			continue
-		}
-		if rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, other); err != nil {
-			return store.AssetRecord{}, false, err
-		} else if ok {
-			return rec, true, nil
-		}
-	}
-	return store.AssetRecord{}, false, nil
 }
 
 // nightInventoryHoldsUnderFilename reports whether inventory holds

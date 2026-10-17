@@ -397,7 +397,6 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	result.Reason = audioWireReason(pkgaudio.Outcome(result.Outcome), result.Reason)
 	jsonWrite(w, v1.AudioSessionCommandResponse{ServerTime: formatTime(h.now()), Command: result})
 }
 
@@ -854,7 +853,7 @@ func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 		if v, ok := res.Evidence.Value.(map[string]any); ok {
 			if o, ok := v["outcome"].(string); ok && o != "" {
 				if err := pkgaudio.Outcome(o).Validate(); err != nil {
-					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("node reported an outcome value this coordinator does not recognize: %q", o)
+					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("The node answered %s, which this coordinator does not know. Update the node to the coordinator's version.", o)
 				}
 				r, _ := v["reason"].(string)
 				result := pkgaudio.OutcomeResult{Outcome: pkgaudio.Outcome(o), Reason: r}
@@ -939,22 +938,4 @@ func (h *handlers) nowNotBefore(start time.Time) time.Time {
 		return t
 	}
 	return start
-}
-
-// audioWireReason replaces the node's own reason, which names agent
-// internals, with one sentence an operator can act on. A good outcome keeps
-// no reason.
-func audioWireReason(outcome pkgaudio.Outcome, reason string) string {
-	if reason == "" {
-		return reason
-	}
-	switch outcome {
-	case pkgaudio.OutcomeRefused:
-		return "The node refused the command. Check the audio settings on the node."
-	case pkgaudio.OutcomeFailed:
-		return "The node could not carry out the command. Check the audio output on the node."
-	case pkgaudio.OutcomeUnconfirmable:
-		return "The node did not confirm the command. Check that audio is playing."
-	}
-	return reason
 }

@@ -50,6 +50,9 @@ var capabilityDetector = detectCapabilities
 // pass" — see runProbe's ctx.Done() branch in pipeline/probe.go.
 func detectCapabilities(ctx context.Context) capability.Set {
 	set := capability.Set{}
+	if c, ok := detectClockPTPCapability(); ok {
+		set = append(set, c)
+	}
 
 	if _, ok, _ := pipeline.ResolveGstLaunch(); !ok {
 		// No gst-launch-1.0 at all: every probe below shells out to it, so

@@ -114,7 +114,7 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	jsonWrite(w, v1.CueCatalogResponse{
 		ServerTime: formatTime(now), Node: catalog.Node, Configured: true,
 		Show: catalog.Show, Generation: &generation, Revision: catalog.Revision,
-		Entries:              mapCueCatalogEntries(catalog.Entries),
+		Entries:              mapCueCatalogEntries(catalog.AllEntries()),
 		AcknowledgedStatus:   ackStatus,
 		AcknowledgedRevision: ackRevision,
 		AcknowledgedAt:       ackAt,

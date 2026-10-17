@@ -653,10 +653,20 @@ func nightResolveBackgroundAudioFor(ctx context.Context, deps Dependencies, rec 
 // Each item's own media names what the asset-sync manifest currently
 // delivers ([assetsync.ResolveAudioMedia]), not the pinned asset record's
 // original filename/hash, so this bed and the manifest never disagree.
-func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show string, items []config.NightSessionBackgroundAudioItem) ([]pkgaudio.PlaylistItem, error) {
+//
+// An item without a target resolves to nodeID's copy of its sequence's
+// audio ([assetsync.BedAudioCopyFor]), borrowing from targets in order.
+func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show, nodeID string, targets []string, items []config.NightSessionBackgroundAudioItem) ([]pkgaudio.PlaylistItem, error) {
 	out := make([]pkgaudio.PlaylistItem, 0, len(items))
 	for i, item := range items {
-		rec, ok, err := nightResolveCurrentAsset(ctx, h.deps.Assets, show, item.Asset.Sequence, item.Asset.Target)
+		var rec store.AssetRecord
+		var ok bool
+		var err error
+		if item.Asset.Target == "" {
+			rec, ok, err = assetsync.BedAudioCopyFor(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
+		} else {
+			rec, ok, err = nightResolveCurrentAsset(ctx, h.deps.Assets, show, item.Asset.Sequence, item.Asset.Target)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resolve backgroundAudio item %q: %w", item.ItemID, err)
 		}
@@ -679,6 +689,12 @@ func (h *handlers) nightBuildBackgroundPlaylistItems(ctx context.Context, show s
 		})
 	}
 	return out, nil
+}
+
+// nightBedPlaylistItemsFor builds the items nodeID plays for ba.
+func (h *handlers) nightBedPlaylistItemsFor(ctx context.Context, show, nodeID string, ba *config.NightSessionBackgroundAudio, showAudioNodes []string) ([]pkgaudio.PlaylistItem, error) {
+	targets, _ := ba.ResolvedPlaybackNodeIDs(showAudioNodes)
+	return h.nightBuildBackgroundPlaylistItems(ctx, show, nodeID, targets, ba.ResolvedPlaybackItemsFor(nodeID, showAudioNodes))
 }
 
 // nightBackgroundSuspendKind is the ONE decision both an ordinary exit
@@ -1034,7 +1050,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		return
 	}
 
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, showAudioNodes))
+	items, err := h.nightBedPlaylistItemsFor(ctx, show, nodeID, ba, showAudioNodes)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to resolve playlist items", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 		return
@@ -1540,7 +1556,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 			h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
 			return
 		}
-		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, showAudioNodes))
+		items, err := h.nightBedPlaylistItemsFor(ctx, show, nodeID, ba, showAudioNodes)
 		if err != nil {
 			return
 		}
@@ -2296,7 +2312,7 @@ func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Ti
 // nodeID's own first configured item. Never the bed's own real session -
 // this is what lets the clock read leave a paused bed session paused.
 func (h *handlers) nightBedProbeMedia(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio, nodeID string, bookmark nightBedBookmark) (pkgaudio.MediaRef, error) {
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, h.showAudioNodes(ctx)(show)))
+	items, err := h.nightBedPlaylistItemsFor(ctx, show, nodeID, ba, h.showAudioNodes(ctx)(show))
 	if err != nil {
 		return pkgaudio.MediaRef{}, err
 	}

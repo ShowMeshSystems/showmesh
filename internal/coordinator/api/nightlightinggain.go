@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand"
@@ -55,65 +57,99 @@ func (h *handlers) writeNightTransitionGain(ctx context.Context, target config.S
 	return client.SetTransitionGain(ctx, fade.TargetPercent, fade.FadeSeconds, requestID)
 }
 
-// nightGainResult is what one gain write leaves for the outbox row.
-// note is always non-empty once a write was attempted; failed marks a
-// write that did not take, so the row can never read as a clean success.
+// nightGainResult is what one cue's gain writes leave for the outbox row.
+// note is always non-empty once a write was attempted; failed marks any FPP
+// whose write did not take, so the row can never read as a clean success.
 type nightGainResult struct {
 	note   string
 	failed bool
-	// What the write reported. Logged, never shown.
+	// accepted lists the FPPs whose write took.
+	accepted []string
+	// What the first accepted write reported. Logged, never shown.
 	applied                  bool
 	ceiling, effectiveOutput int
 }
 
-// nightApplyLightingFade performs fade's gain write for one cue and
-// reports what to record.
+// nightGainRequestID is one FPP's requestId for a cue's gain write. It is
+// derived from the cue's idempotency key alone, so a resume after a restart
+// regenerates it and the plugin treats the repeat as a no-op.
+func nightGainRequestID(cueKey, instanceID string) string {
+	return cueKey + ":" + instanceID
+}
+
+// nightApplyLightingFade writes fade's gain to every FPP in fpp.endpoints
+// (ADR-062 decision 7) and reports what to record. One FPP failing does not
+// stop the others.
 //
-// requestID is the cue's own [nightCueIdempotencyKey], the SAME string
-// already dispatched as idemKey, and the two must never become
-// independent values. That key derives from cue identity alone ("session
-// + cycle + phase + cue", and its own doc comment already says it doubles
-// as the FPP command's IdempotencyKey), so a resume after a coordinator
-// restart regenerates exactly the same string; the plugin then treats the
-// repeat as an idempotent no-op, returning applied:false with the gain
-// unchanged rather than restarting the fade. A separately minted id would
-// restart a fade every resume.
+// requestID is the cue's own [nightCueIdempotencyKey]; each FPP's write
+// carries [nightGainRequestID] of it, never a freshly minted id, which
+// would restart a fade on every resume.
 //
 // This is a direct client call and not a dispatchable action on purpose:
 // FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.1 makes the transition
-// gain the coordinator's alone, and a registered FPP Action would be
-// discoverable and schedulable in FPP's own UI, handing every operator
-// and every schedule entry a way to fight the coordinator over one value.
-// Do not "fix" this into an operation; that reintroduces the second
-// writer.
+// gain the coordinator's alone. Do not "fix" this into an operation; that
+// reintroduces the second writer.
 func (h *handlers) nightApplyLightingFade(ctx context.Context, cueName string, target config.ShowActionTarget, fade nightLightingFade, requestID string) nightGainResult {
 	if target.Integration != config.ShowActionIntegrationFPP {
-		// The gain lives in the FPP plugin, so a cue whose action targets
-		// anything else has nowhere to write it. No write, and the cue
-		// still runs on its own action's outcome.
+		// A cue whose action targets anything else is not a lighting fade
+		// on FPP. No write, and the cue still runs on its own action's outcome.
 		h.logWarn("night loop: lighting fade not performed because this cue's action does not target an FPP instance",
 			"cue", cueName, "integration", target.Integration)
 		return nightGainResult{}
+	}
+	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
+	if err != nil || len(endpoints) == 0 {
+		h.logWarn("night loop: lighting fade has no FPP to write to", "cue", cueName, "error", err)
+		return nightGainResult{
+			note:   fmt.Sprintf("The lights could not be faded to %d%% because no FPP player is configured. Check the FPP players in Settings.", fade.TargetPercent),
+			failed: true,
+		}
 	}
 
 	write := h.nightGainWriter
 	if write == nil {
 		write = h.writeNightTransitionGain
 	}
-	outcome, err := write(ctx, target, fade, requestID)
-	if err != nil {
-		h.logWarn("night loop: lighting fade could not be written", "cue", cueName, "targetPercent", fade.TargetPercent, "error", err)
-		return nightGainResult{
-			note:   fmt.Sprintf("The lights could not be faded to %d%%. Check the brightness on FPP.", fade.TargetPercent),
-			failed: true,
+	outcomes := make([]fppcommand.TransitionGainOutcome, len(endpoints))
+	errs := make([]error, len(endpoints))
+	var wg sync.WaitGroup
+	for i, ep := range endpoints {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := config.ShowActionTarget{Integration: config.ShowActionIntegrationFPP, InstanceID: ep.ID}
+			outcomes[i], errs[i] = write(ctx, t, fade, nightGainRequestID(requestID, ep.ID))
+		}()
+	}
+	wg.Wait()
+
+	var res nightGainResult
+	var failedOn []string
+	for i, ep := range endpoints {
+		if errs[i] != nil {
+			h.logWarn("night loop: lighting fade could not be written", "cue", cueName, "instanceId", ep.ID, "targetPercent", fade.TargetPercent, "error", errs[i])
+			failedOn = append(failedOn, ep.ID)
+			continue
 		}
+		if len(res.accepted) == 0 {
+			res.applied, res.ceiling, res.effectiveOutput = outcomes[i].Applied, int(outcomes[i].Ceiling), int(outcomes[i].EffectiveOutput)
+		}
+		res.accepted = append(res.accepted, ep.ID)
+		h.logDebug("night loop: lighting fade written", "cue", cueName, "instanceId", ep.ID, "applied", outcomes[i].Applied, "ceiling", outcomes[i].Ceiling, "effectiveOutput", outcomes[i].EffectiveOutput)
 	}
-	h.logDebug("night loop: lighting fade written", "cue", cueName, "applied", outcome.Applied, "ceiling", outcome.Ceiling, "effectiveOutput", outcome.EffectiveOutput)
+	if len(failedOn) > 0 {
+		failed := strings.Join(failedOn, ", ")
+		res.failed = true
+		res.note = fmt.Sprintf("The lights on %s could not be faded to %d%%. Check the brightness on those players.", failed, fade.TargetPercent)
+		if len(res.accepted) > 0 {
+			res.note = fmt.Sprintf("The lights on %s could not be faded to %d%%, but %s took the fade. Check the brightness on %s.",
+				failed, fade.TargetPercent, strings.Join(res.accepted, ", "), failed)
+		}
+		return res
+	}
 	// Recorded on a repeat too, so a resumed transition shows it acted.
-	return nightGainResult{
-		note:    fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds),
-		applied: outcome.Applied, ceiling: int(outcome.Ceiling), effectiveOutput: int(outcome.EffectiveOutput),
-	}
+	res.note = fmt.Sprintf("The lights are fading to %d%% over %d seconds.", fade.TargetPercent, fade.FadeSeconds)
+	return res
 }
 
 // nightCueReasonWith appends a gain note to a dispatch's own reason,
