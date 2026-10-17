@@ -413,39 +413,8 @@ func (e *DecodeError) Error() string {
 
 func (e *DecodeError) Unwrap() error { return e.Err }
 
-// maxClassifiedErrorLen bounds ClassifyError's fallthrough — the only
-// branch that returns anything derived from err itself rather than a
-// fixed short string. Review finding G (2026-08-14): this function's own
-// doc comment promised "never a full error dump," and the fallthrough
-// broke that promise by returning err.Error() whole. A *url.Error (Go's
-// own http.Client wraps every transport error in one) formats as
-// `Get "http://host:port/api/v1/product": dial tcp 127.0.0.1:9080:
-// connect: connection refused` — carrying the full request URL and dial
-// detail — and this string reaches [observation.Reason], which is
-// operator-facing. Bounded the same way StatusError.Body is bounded
-// (maxErrorBodyBytes), for the identical reason: a verbose wrapped error
-// must never become a rendering hazard even though it was never
-// classified into one of the short reasons above.
-const maxClassifiedErrorLen = 160
-
-// ClassifyError renders err as a short, operator-useful failure class
-// suitable for [observation.Reason]. Every branch above the fallthrough
-// returns a FIXED short string carrying no data from err at all. The
-// fallthrough, for an error shape none of those branches recognizes,
-// still calls err.Error() — there is no fixed string to substitute,
-// because this project's own "absent evidence is stated, never omitted"
-// rule (CLAUDE.md) means an operator seeing an unclassified failure needs
-// SOME detail, not silence — but it is bounded to maxClassifiedErrorLen
-// rather than returned whole, which is what keeps this function's own
-// "never a full error dump" claim true instead of aspirational. Also
-// never leaks more of the URL than the operator already configured:
-// NewClient rejects any base URL carrying userinfo, so there is
-// structurally nothing of that kind to leak here regardless of length.
-//
-// Mirrors internal/coordinator/collector/fpp's own classifyFetchError,
-// which as of this writing carries the IDENTICAL unbounded fallthrough —
-// a divergence recorded here rather than fixed in that package, which
-// this seam does not own.
+// ClassifyError renders err as one operator sentence for [observation.Reason].
+// Every branch returns a fixed sentence and carries no data from err.
 func ClassifyError(err error) string {
 	if err == nil {
 		return ""
@@ -464,36 +433,32 @@ func ClassifyError(err error) string {
 			// left to the bare-status-code fallthrough below, so an
 			// operator-facing reason says something a person can act on
 			// instead of "http status 412".
-			return "the composition is locked, or still loading (http 412)"
+			return "Resolume's composition is locked or still loading. Wait a moment."
 		}
-		return fmt.Sprintf("http status %d", statusErr.StatusCode)
+		return fmt.Sprintf("Resolume answered with error %d. Check Resolume.", statusErr.StatusCode)
 	}
 
 	var decodeErr *DecodeError
 	if errors.As(err, &decodeErr) {
-		return "decode error"
+		return "Resolume sent an answer ShowMesh could not read. Check the Resolume version."
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+		return "Resolume did not answer in time. Check that Resolume is running."
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
+		return "Resolume did not answer in time. Check that Resolume is running."
 	}
 
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "dns error"
+		return "Resolume's address could not be found. Check the address in Settings."
 	}
 
 	if errors.Is(err, syscall.ECONNREFUSED) {
-		return "connection refused"
+		return "Resolume refused the connection. Check that Resolume is running."
 	}
 
-	s := err.Error()
-	if len(s) > maxClassifiedErrorLen {
-		s = s[:maxClassifiedErrorLen] + "…(truncated)"
-	}
-	return s
+	return "Resolume could not be reached. Check that Resolume is running."
 }

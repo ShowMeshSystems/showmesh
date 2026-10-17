@@ -35,7 +35,7 @@
           "value": 120,
           "unit": null,
           "state": "stale",
-          "reason": "value has not been reconfirmed within its 30s validity window",
+          "reason": "This value was not refreshed within 30s. Wait for the next report.",
           "observedAt": "2026-08-10T21:00:00-05:00",
           "collectedAt": "2026-08-10T21:14:22.6-05:00",
           "source": "fpp-rest",
@@ -51,10 +51,14 @@
       "showParticipation": {
         "state": "not_configured",
         "show": "",
-        "reason": "no asset manifest store is configured on this coordinator"
+        "reason": "The coordinator cannot tell which FPP instances take part in the show."
       },
       "duplicateInstanceUuidEndpointIds": [],
-      "playlistObservationRefused": null
+      "playlistObservationRefused": null,
+      "plugin": {
+        "state": "not_paired",
+        "lastReportedAt": null
+      }
     }
   ]
 }

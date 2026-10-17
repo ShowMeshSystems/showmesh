@@ -87,7 +87,7 @@ func (e *Executor) dispatchResolumeStep(ctx context.Context, run store.MacroRunR
 		res = stepResult{
 			outcome:       outcomeFailed,
 			outcomeState:  "internal_error",
-			outcomeReason: "this step was not sent because of an internal coordinator error",
+			outcomeReason: "The step was not sent because of a ShowMesh error. Run it again or do it by hand.",
 		}
 	} else {
 		res = mapResolumeActionResult(result)

@@ -3,7 +3,6 @@ package resolume
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,8 +149,8 @@ func TestClassifyErrorNames(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"status error", &StatusError{StatusCode: 404, Path: "/product", Body: "not found"}, "http status 404"},
-		{"decode error", &DecodeError{Path: "/product", Err: errors.New("unexpected EOF")}, "decode error"},
+		{"status error", &StatusError{StatusCode: 404, Path: "/product", Body: "not found"}, "Resolume answered with error 404. Check Resolume."},
+		{"decode error", &DecodeError{Path: "/product", Err: errors.New("unexpected EOF")}, "Resolume sent an answer ShowMesh could not read. Check the Resolume version."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,44 +158,6 @@ func TestClassifyErrorNames(t *testing.T) {
 				t.Errorf("ClassifyError(%v) = %q, want %q", tt.err, got, tt.want)
 			}
 		})
-	}
-}
-
-// TestClassifyErrorFallthroughIsBounded is the direct reproduction of
-// review finding G (2026-08-14): ClassifyError's doc comment promises
-// "never a full error dump," but the fallthrough for an unclassified
-// error shape returned err.Error() whole, unbounded. A verbose wrapped
-// error (this test builds one comfortably longer than
-// maxClassifiedErrorLen) must come back truncated.
-//
-// Before trusting this test, the truncation ("if len(s) >
-// maxClassifiedErrorLen { s = s[:maxClassifiedErrorLen] + ... }") was
-// temporarily removed, returning err.Error() whole again, and this test
-// was re-run: it failed, with ClassifyError's output exceeding the bound.
-// Restored afterward.
-func TestClassifyErrorFallthroughIsBounded(t *testing.T) {
-	long := strings.Repeat("x", maxClassifiedErrorLen*3)
-	err := fmt.Errorf("resolume: some unclassified wrapped failure: %s", long)
-
-	got := ClassifyError(err)
-	if len(got) > maxClassifiedErrorLen+len("…(truncated)") {
-		t.Fatalf("ClassifyError(long error) returned %d bytes, want at most %d (maxClassifiedErrorLen plus the truncation marker)",
-			len(got), maxClassifiedErrorLen+len("…(truncated)"))
-	}
-	if !strings.Contains(got, "truncated") {
-		t.Errorf("ClassifyError(long error) = %q, want it to signal truncation", got)
-	}
-}
-
-// TestClassifyErrorFallthroughStillClassifiesShortUnknownErrors is the
-// paired non-regression check: an ordinary short, unclassified error must
-// still come back unchanged (not padded, not marked "truncated") — the
-// bound in TestClassifyErrorFallthroughIsBounded must fire only when it is
-// actually needed.
-func TestClassifyErrorFallthroughStillClassifiesShortUnknownErrors(t *testing.T) {
-	err := errors.New("some short unclassified failure")
-	if got := ClassifyError(err); got != err.Error() {
-		t.Errorf("ClassifyError(short error) = %q, want %q unchanged", got, err.Error())
 	}
 }
 
@@ -591,7 +552,7 @@ func TestClassifyErrorConnectionRefused(t *testing.T) {
 	if pErr == nil {
 		t.Fatalf("Product() error = nil, want a connection-refused error against a closed server")
 	}
-	if got := ClassifyError(pErr); got != "connection refused" {
-		t.Errorf("ClassifyError(%v) = %q, want %q", pErr, got, "connection refused")
+	if got := ClassifyError(pErr); got != "Resolume refused the connection. Check that Resolume is running." {
+		t.Errorf("ClassifyError(%v) = %q, want %q", pErr, got, "Resolume refused the connection. Check that Resolume is running.")
 	}
 }

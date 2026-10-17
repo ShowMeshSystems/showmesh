@@ -77,7 +77,7 @@
     "showParticipation": {
       "state": "not_configured",
       "show": "",
-      "reason": "no asset manifest store is configured on this coordinator"
+      "reason": "The coordinator cannot tell which nodes take part in the show."
     },
     "render": [],
     "audio": [],

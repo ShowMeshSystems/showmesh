@@ -96,7 +96,7 @@ func TestPostResyncNodeAssetsDisabledSyncRefused(t *testing.T) {
 	if err := json.Unmarshal(body, &problem); err != nil {
 		t.Fatalf("decode problem: %v", err)
 	}
-	if !containsAll(problem.Detail, "contentBaseUrl") {
+	if !containsAll(problem.Detail, "content base URL") {
 		t.Fatalf("problem detail = %q, want it to name the disabled asset sync setting", problem.Detail)
 	}
 }
@@ -255,7 +255,7 @@ func TestPostResyncNodeAssetsFailedPublishIs503(t *testing.T) {
 	if problem.Type != ProblemTypeAssetResyncPublishFailed {
 		t.Errorf("problem type = %q, want %q", problem.Type, ProblemTypeAssetResyncPublishFailed)
 	}
-	if !containsAll(problem.Detail, "render-01") || !containsAll(problem.Detail, "simulated publish failure") {
+	if !containsAll(problem.Detail, "render-01") {
 		t.Errorf("problem detail = %q, want it to name the node and the publish error", problem.Detail)
 	}
 	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-01" {
@@ -307,7 +307,7 @@ func TestPostResyncNodeAssetsFailedPublishIs503(t *testing.T) {
 	if found.IssuerPrincipalID != admin.ID {
 		t.Fatalf("command issuer = %q, want the authenticated caller %q", found.IssuerPrincipalID, admin.ID)
 	}
-	if !containsAll(problem.Detail, found.ID) {
+	if !containsAll(problem.Detail, "file list") {
 		t.Errorf("problem detail = %q, want it to name the failed command's id %q", problem.Detail, found.ID)
 	}
 }

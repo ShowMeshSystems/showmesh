@@ -599,7 +599,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 			result := v1.AudioSessionCommandResult{
 				CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 				NodeID: in.NodeID, SessionID: in.SessionID,
-				Outcome: "unconfirmable", Reason: "no result received from the node before the deadline",
+				Outcome: "unconfirmable", Reason: "The node did not answer in time. Check that the node is online.",
 				DispatchedAt: formatTime(dispatchedAt),
 			}
 			outcomeDegraded := h.writeBestEffortAuditBounded(bgCtx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
@@ -785,9 +785,7 @@ func audioSessionReplayConflictProblem(existingID, existingAction, existingNodeI
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q on %q), not %q on %q. Use a new key.",
-			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -801,9 +799,7 @@ func audioSessionReplayParamsConflictProblem(existingID, action, existingParamsJ
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used with different parameters",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s (%q) with params %s, not %s. Use a new key.",
-			existingID, action, existingParamsJSON, requestedParamsJSON),
+		Detail: replayedKeyDifferentSettingsDetail,
 	}
 }
 
@@ -853,7 +849,7 @@ func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 		if v, ok := res.Evidence.Value.(map[string]any); ok {
 			if o, ok := v["outcome"].(string); ok && o != "" {
 				if err := pkgaudio.Outcome(o).Validate(); err != nil {
-					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("node reported an outcome value this coordinator does not recognize: %q", o)
+					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("The node answered %s, which this coordinator does not know. Update the node to the coordinator's version.", o)
 				}
 				r, _ := v["reason"].(string)
 				result := pkgaudio.OutcomeResult{Outcome: pkgaudio.Outcome(o), Reason: r}

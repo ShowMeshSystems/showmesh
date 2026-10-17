@@ -1924,6 +1924,7 @@ func New(deps Dependencies, opts Options) *API {
 		redeemLimiter:             newRedeemLimiter(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
+	hub.fppPairings = h.fppPairings
 	// A write whose result is visible in a streamed resource has to say so
 	// here; nothing else connects a handler to the hub. Both wirings are
 	// live: they are the same rule reached two ways, and neither is

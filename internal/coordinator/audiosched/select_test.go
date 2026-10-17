@@ -172,7 +172,7 @@ func TestSelectRefusesEmptyTargetsAndNegativeSettings(t *testing.T) {
 
 func TestDescribeUnscheduledNeverReadsAsSuccess(t *testing.T) {
 	got := DescribeUnscheduled(&ErrNoUsableClock{Reason: "provider is not locked"})
-	if !strings.Contains(got, "NOT aligned") || !strings.Contains(got, "provider is not locked") {
-		t.Errorf("DescribeUnscheduled = %q, want it to say plainly that the start was not aligned, and why", got)
+	if !strings.Contains(got, "not at one shared time") {
+		t.Errorf("DescribeUnscheduled = %q, want it to say plainly that the start was not aligned", got)
 	}
 }

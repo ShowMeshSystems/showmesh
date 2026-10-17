@@ -140,7 +140,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	// field must never decode silently as "absent".
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string?,"override":boolean?}`))
+		writeProblem(w, h.logger, now, invalidParameterProblem("The request is not valid. Check it and try again."))
 		return
 	}
 
@@ -254,7 +254,7 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("resolve active show: %w", err)}
 	}
 	if !active.Configured {
-		p := invalidParameterProblem("no active show is configured; there is no catalog to deploy")
+		p := invalidParameterProblem("No show is active, so there is no cue list to deploy.")
 		return dispatchCueCatalogDeployResult{Problem: &p}
 	}
 	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
@@ -382,7 +382,8 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 		// failed) — an honest "unconfirmed" outcome, not a caller error.
 		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{DispatchedAt: &dispatchedAt})
 		resolvedAt := h.now()
-		reason := err.Error()
+		h.logWarn("node command was not confirmed", "node", nodeID, "error", err)
+		reason := "The node did not answer in time. Check that the node is online."
 		resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason})
 		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 			ResolvedAt: &resolvedAt, State: strPtr("resolved"), ResultJSON: strPtr(string(resultJSON)),
@@ -564,9 +565,7 @@ func cueCatalogDeployReplayUndecodableProblem(existingID, nodeID string) v1.Prob
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s on node %q, not a Cue list deploy. Use a new key.",
-			existingID, nodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 
@@ -590,9 +589,7 @@ func cueCatalogDeployReplayAllZeroIdentityProblem(existingID, nodeID string) v1.
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a record this route cannot replay",
 		Status: http.StatusConflict,
-		Detail: fmt.Sprintf(
-			"idempotencyKey already belongs to command %s on node %q, which is not a cue list deploy. Use a new key.",
-			existingID, nodeID),
+		Detail: replayedKeyDifferentCommandDetail,
 	}
 }
 

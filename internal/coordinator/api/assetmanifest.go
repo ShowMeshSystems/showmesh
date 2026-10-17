@@ -283,7 +283,7 @@ func mapLastFetch(nodeID, contentHash string, failures AssetFetchFailureSource) 
 		out.DispatchedAt = &dispatchedAt
 	}
 	if rec.State == assetsync.LastFetchFailed {
-		reason := rec.FailureReason
+		reason := assetFetchFailedNote
 		out.FailureReason = &reason
 		failedAt := formatTime(rec.FailedAt)
 		out.FailedAt = &failedAt
@@ -299,7 +299,9 @@ func mapLastFetch(nodeID, contentHash string, failures AssetFetchFailureSource) 
 // G-4 moved contentBaseUrl from SHOWMESH_ASSET_CONTENT_BASE_URL into this
 // store-backed configuration kind (ADR-039); this note names the kind
 // rather than the now-retired environment variable.
-const assetSyncDisabledNote = "asset sync is disabled (assets.settings' contentBaseUrl is not set): this coordinator will never deliver these assets to the node over the network"
+const assetSyncDisabledNote = "Set the content base URL in the asset settings to turn file sync on."
+
+const assetFetchFailedNote = "The last download failed, so check that the node can reach the content server."
 
 // notReadyReason summarizes ALREADY-COMPUTED missing/gap counts, plus
 // [assetSyncDisabledNote] when syncEnabled is false, into one operator-facing
@@ -315,20 +317,31 @@ const assetSyncDisabledNote = "asset sync is disabled (assets.settings' contentB
 // its own content hash and, for whichever ones have a known failure on
 // record, appends the real cause instead of leaving the reader to guess.
 func notReadyReason(nodeID string, missing []v1.MissingAsset, gaps []v1.AssetGap, syncEnabled bool, failures AssetFetchFailureSource) string {
-	var parts []string
+	var facts []string
 	if n := len(missing); n > 0 {
-		parts = append(parts, fmt.Sprintf("missing %d expected asset(s)", n))
+		facts = append(facts, fmt.Sprintf("%d %s missing", n, plural(n, "file is", "files are")))
 	}
 	if n := len(gaps); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d sequence(s) with no coverage on this node at all", n))
+		facts = append(facts, fmt.Sprintf("%d %s no files", n, plural(n, "sequence has", "sequences have")))
 	}
-	if s := fetchFailureSummary(nodeID, missing, failures); s != "" {
-		parts = append(parts, s)
+	if len(facts) == 0 {
+		return ""
 	}
-	if !syncEnabled {
-		parts = append(parts, assetSyncDisabledNote)
+	reason := strings.Join(facts, " and ") + " on this node."
+	switch {
+	case fetchFailureSummary(nodeID, missing, failures) != "":
+		return reason + " " + assetFetchFailedNote
+	case !syncEnabled:
+		return reason + " " + assetSyncDisabledNote
 	}
-	return strings.Join(parts, "; ")
+	return reason
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // fetchFailureSummary reports, for whichever of missing's assets

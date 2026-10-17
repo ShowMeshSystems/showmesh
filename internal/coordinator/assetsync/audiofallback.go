@@ -43,6 +43,29 @@ func preferNodeOverShowAudioAssets(nodeAssets, showAssets []store.AssetRecord) [
 	return filtered
 }
 
+// declaredAudioNode reports whether nodeID has a live audio.node object.
+// Only such a node plays audio, so only it receives show-wide audio files.
+func declaredAudioNode(ctx context.Context, st *store.Store, nodeID string) (bool, error) {
+	obj, err := st.GetConfigObject(ctx, config.AudioNodeConfigKind, nodeID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get audio.node %q: %w", nodeID, err)
+	}
+	return obj.CurrentRevision != 0, nil
+}
+
+func withoutAudio(recs []store.AssetRecord) []store.AssetRecord {
+	out := make([]store.AssetRecord, 0, len(recs))
+	for _, rec := range recs {
+		if rec.MediaType != audioMediaType {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // effectiveAudioTargets resolves an audio or announcement output's
 // declared Targets to the node ids it actually concerns, applying ADR-049
 // decision 10's full three-tier order via [config.ResolveAudioNodes]

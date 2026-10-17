@@ -169,6 +169,13 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: list show-wide assets: %w", nodeID, err)
 	}
 	showAssets = preferNodeOverShowAudioAssets(nodeAssets, showAssets)
+	isAudioNode, err := declaredAudioNode(ctx, st, nodeID)
+	if err != nil {
+		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
+	}
+	if !isAudioNode {
+		showAssets = withoutAudio(showAssets)
+	}
 
 	covered := make(map[string]bool, len(nodeAssets)+len(showAssets))
 	for _, rec := range nodeAssets {
@@ -641,26 +648,25 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	if !active.Configured {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseNoActiveShow
-		m.Reason = "no active show is configured"
+		m.Reason = "No show is active."
 		return m
 	}
 	if report == nil {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseNeverReported
-		m.Reason = "no inventory report has ever been received from this node"
+		m.Reason = "This node has not reported its files yet. Wait for the node to report."
 		return m
 	}
 	if !reportFresh {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseStaleReport
-		m.Reason = fmt.Sprintf("this inventory report is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
-			report.ReportedAt.Format(time.RFC3339))
+		m.Reason = "This node's file report is older than the last change and may be out of date. Wait for the node to report again."
 		return m
 	}
 	if !report.Complete {
 		m.State = ManifestUnknown
 		m.UnknownCause = UnknownCauseReportIncomplete
-		m.Reason = fmt.Sprintf("the node's last inventory report could not fully enumerate its own asset directory: %s", report.Reason)
+		m.Reason = "The node could not list all of its files. Check the asset folder on the node."
 		return m
 	}
 

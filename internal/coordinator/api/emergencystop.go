@@ -309,7 +309,7 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 			InstanceID:    emergencyStopInstanceListUnavailableID,
 			TargetKind:    v1.EmergencyStopTargetKindFPP,
 			Outcome:       "failed",
-			OutcomeReason: fmt.Sprintf("could not list configured FPP instances, so no stop was sent to any of them: %v", err),
+			OutcomeReason: "The FPP list could not be read, so no stop was sent. Stop each FPP by hand.",
 		}}, false
 	}
 	if len(endpoints) == 0 {
@@ -334,11 +334,11 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: "this stop was not sent because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: "The stop was not sent because of a ShowMesh error. Stop this FPP by hand."}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "refused", OutcomeReason: problem.Detail}
 			case outcome.DispatchFailed:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: fmt.Sprintf("the request to %s did not succeed, so this stop never reached it", instanceID), DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: fmt.Sprintf("The stop never reached %s. Stop it by hand.", instanceID), DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
 			default:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: outcome.Outcome, OutcomeReason: outcome.OutcomeReason, DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
 			}
@@ -416,7 +416,7 @@ func (h *handlers) emergencyStopAllAudioNodes(ctx context.Context, now time.Time
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "this silence was not sent because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "The silence was not sent because of a ShowMesh error. Silence this node by hand."}
 			case problem != nil:
 				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "refused", OutcomeReason: problem.Detail}
 			default:
@@ -481,7 +481,7 @@ func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now ti
 			defer wg.Done()
 			result, err := h.deps.ResolumeActions.Dispatch(ctx, emergencyStopResolumeBlackoutAction, map[string]any{}, now)
 			if err != nil {
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: "failed", OutcomeReason: "this blackout was not sent because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: "failed", OutcomeReason: "The blackout was not sent because of a ShowMesh error. Black out Resolume by hand."}
 				return
 			}
 			out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: mapResolumeOutcomeWord(result.Outcome), OutcomeReason: result.Reason, DispatchedAt: formatTimePtr(result.DispatchedAt)}
@@ -556,7 +556,7 @@ func (h *handlers) emergencyStopRunOneFollowUp(ctx context.Context, idempotencyK
 	rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, actionID)
 	if err != nil {
 		h.logWarn("emergency stop: failed to resolve follow-up action", "actionId", actionID, "error", err)
-		return v1.EmergencyStopFollowUpResult{ActionID: actionID, OutcomeReason: "this follow-up action could not be resolved because of an internal coordinator error"}
+		return v1.EmergencyStopFollowUpResult{ActionID: actionID, OutcomeReason: "The follow-up action did not run because of a ShowMesh error. Run it by hand."}
 	}
 	if problem != nil {
 		return v1.EmergencyStopFollowUpResult{ActionID: actionID, OutcomeReason: "this follow-up action no longer exists: " + problem.Detail}
@@ -944,7 +944,7 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 	switch h.emergencyStopArms.consume(ac.result.Principal.ID, top.ArmToken, now) {
 	case emergencyStopArmConsumeNotArmed:
 		writeProblem(w, h.logger, now, emergencyStopHardStopNotArmedProblem(
-			"no valid, unexpired armed hard-stop token for this principal; call the arm endpoint again, then fire promptly"))
+			"The hard stop is not ready to fire. Arm it again, then fire it right away."))
 		return
 	case emergencyStopArmConsumeAlreadyConsumed:
 		writeProblem(w, h.logger, now, v1.Problem{

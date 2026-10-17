@@ -156,7 +156,7 @@ func evidenceReason(o observation.Observation, state observation.State, now time
 	}
 	switch state {
 	case observation.StateUnknownAge:
-		return "observation time is unknown (e.g. a retained MQTT delivery replayed on reconnect)"
+		return "The time of this reading is unknown."
 	case observation.StateStale:
 		// Deliberately NOT a computed age (contract section 6.2 forbids a
 		// precomputed age anywhere in a payload, in as many words). This
@@ -178,7 +178,7 @@ func evidenceReason(o observation.Observation, state observation.State, now time
 		// See fppInstanceDiffProjection in stream.go for the other half of
 		// this same fix (masking observedAt/source churn for
 		// otherwise-unchanged current-state evidence).
-		return fmt.Sprintf("value has not been reconfirmed within its %s validity window", o.ValidFor)
+		return fmt.Sprintf("This value was not refreshed within %s. Wait for the next report.", o.ValidFor)
 	default:
 		// Unreachable: StateNotCollected/StateCollectionFailed/StateUnsupported
 		// are exactly the absence states Validate requires a non-empty Reason
@@ -186,7 +186,7 @@ func evidenceReason(o observation.Observation, state observation.State, now time
 		// Kept as an honest fallback, not a panic, in case a hand-built
 		// Observation skipped Validate — see that method's own defensive
 		// branches for the same posture.
-		return "no current value"
+		return "There is no current value."
 	}
 }
 
@@ -258,7 +258,7 @@ func helloObservation(nodeID string, rec *store.HelloRecord, fallbackCollectedAt
 	res := nodeResourceRef(nodeID)
 	if rec == nil {
 		return mustObservation(observation.NotCollected(res, signalNodeHello,
-			"no hello has ever been observed for this node",
+			"This node has not said hello yet.",
 			observation.WithSource(sourceInventory), observation.WithCollectedAt(fallbackCollectedAt)))
 	}
 	if rec.ObservedAt == nil {
@@ -290,7 +290,7 @@ func lastWillObservation(nodeID string, rec *store.LWTRecord, fallbackCollectedA
 	res := nodeResourceRef(nodeID)
 	if rec == nil {
 		return mustObservation(observation.NotCollected(res, signalNodeLastWill,
-			"no last-will evidence has ever been observed for this node",
+			"This node has not sent an offline notice.",
 			observation.WithSource(sourceInventory), observation.WithCollectedAt(fallbackCollectedAt)))
 	}
 	if rec.ObservedAt == nil {
@@ -324,7 +324,7 @@ func heartbeatObservation(nodeID string, rec *store.HealthRecord, fallbackCollec
 	res := nodeResourceRef(nodeID)
 	if rec == nil {
 		return mustObservation(observation.NotCollected(res, signalNodeHeartbeat,
-			"no health heartbeat has ever been observed for this node",
+			"This node has not sent a health report yet.",
 			observation.WithSource(sourceInventory), observation.WithCollectedAt(fallbackCollectedAt)))
 	}
 	if rec.ObservedAt == nil {
@@ -711,6 +711,7 @@ func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipati
 		LastPollError:                    fv.LastPollError,
 		DuplicateInstanceUUIDEndpointIDs: fv.DuplicateInstanceUUIDEndpointIDs,
 		ShowParticipation:                participation,
+		Plugin:                           fppPluginStatus(fv.PluginLastReportedAt, resolved, now),
 	}
 	if inst.DuplicateInstanceUUIDEndpointIDs == nil {
 		inst.DuplicateInstanceUUIDEndpointIDs = []string{}
@@ -734,6 +735,35 @@ func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipati
 		}
 	}
 	return inst
+}
+
+// fppPluginStaleAfter is how long a playing FPP may go without an accepted
+// plugin report before the plugin is called stopped. The plugin sends nothing
+// while FPP is idle, so silence alone proves nothing.
+const fppPluginStaleAfter = 10 * time.Minute
+
+// fppPluginStatus never returns "not_paired": only a handler knows pairing,
+// see [handlers.mapFPPInstance].
+func fppPluginStatus(lastReportedAt *time.Time, resolved []observation.Observation, now time.Time) v1.FPPPluginStatus {
+	if lastReportedAt == nil {
+		return v1.FPPPluginStatus{State: "not_reported"}
+	}
+	status := v1.FPPPluginStatus{State: "reporting", LastReportedAt: formatTimePtr(lastReportedAt)}
+	if now.Sub(*lastReportedAt) > fppPluginStaleAfter && fppIsPlaying(resolved) {
+		status.State = "stopped"
+	}
+	return status
+}
+
+func fppIsPlaying(resolved []observation.Observation) bool {
+	for _, o := range resolved {
+		if o.Signal != "fpp.playlist.name" || o.Absence != "" {
+			continue
+		}
+		name, ok := o.Value.(string)
+		return ok && name != ""
+	}
+	return false
 }
 
 // --- Resolume instances ---

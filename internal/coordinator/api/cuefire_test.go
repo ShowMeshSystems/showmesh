@@ -384,8 +384,8 @@ func TestHandleActivateCueNodeIgnoredSharedInstantReportsUnaligned(t *testing.T)
 	if !found {
 		t.Fatalf("nodes = %+v, want an entry for audio-second", resp.Nodes)
 	}
-	if !second.Confirmed || second.UnalignedReason != unalignedReason {
-		t.Fatalf("audio-second node outcome = %+v, want Confirmed true and UnalignedReason %q", second, unalignedReason)
+	if !second.Confirmed || second.UnalignedReason != cueNodeUnalignedSentence(unalignedReason) {
+		t.Fatalf("audio-second node outcome = %+v, want Confirmed true and UnalignedReason %q", second, cueNodeUnalignedSentence(unalignedReason))
 	}
 	if resp.Aligned {
 		t.Fatalf("Aligned = true, want false: audio-second confirmed but did not honor the shared instant this Cue's own scheduling round chose")
