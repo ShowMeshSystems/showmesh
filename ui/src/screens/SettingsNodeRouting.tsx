@@ -330,6 +330,7 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
     : manualRefusal !== null
       ? 'choices'
       : (modeOverride ?? defaultRoutingEntryMode(choices))
+  const pipewireOutputs = choices?.routes.filter((r) => r.source === 'pipewire') ?? []
   const routeChoice = entryMode === 'choices' ? (choices?.routes.find((r) => r.route === programRoute) ?? null) : null
 
   const removeNode = () => {
@@ -691,16 +692,37 @@ function NodeRoutingForm({ nodeId, saveGate, onDeleted }: { nodeId: string; save
           />
           {sinkBackend === 'pipewiresink' && (
             <Field label="PipeWire target node">
-              {(props) => (
-                <Input
-                  {...props}
-                  value={pipewireTargetNode}
-                  onChange={(e) => {
-                    setPipewireTargetNode(e.target.value)
-                    setDirty(true)
-                  }}
-                />
-              )}
+              {(props) =>
+                pipewireOutputs.length > 0 ? (
+                  <Select
+                    {...props}
+                    value={pipewireTargetNode}
+                    onChange={(e) => {
+                      setPipewireTargetNode(e.target.value)
+                      setDirty(true)
+                    }}
+                  >
+                    <option value="">PipeWire's default output</option>
+                    {pipewireTargetNode !== '' && !pipewireOutputs.some((r) => r.route === pipewireTargetNode) && (
+                      <option value={pipewireTargetNode}>{pipewireTargetNode}, no longer reported by this node</option>
+                    )}
+                    {pipewireOutputs.map((r) => (
+                      <option key={r.route} value={r.route} title={r.route}>
+                        {routeName(r.route, r.shortName)}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    {...props}
+                    value={pipewireTargetNode}
+                    onChange={(e) => {
+                      setPipewireTargetNode(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )
+              }
             </Field>
           )}
         </div>
