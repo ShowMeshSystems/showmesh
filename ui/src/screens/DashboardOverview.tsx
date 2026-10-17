@@ -27,7 +27,7 @@ export function DashboardOverview({ session }: { session: NightSessionState | nu
       <Section id="db-smpte" title="SMPTE timecode">
         <Tiles>
           <StatTile label="Source" value={smpte.source.value} detail={smpte.source.detail} />
-          <StatTile label="Lock" value={smpte.lock.value} detail={smpte.lock.detail} />
+          <StatTile label="Lock" value="" detail="The coordinator does not report timecode lock yet." notWired />
           <StatTile label="Frame rate" value="" detail="The coordinator does not report the frame rate yet." notWired />
           <StatTile label="Offset" value="" detail="The coordinator does not report the offset yet." notWired />
         </Tiles>

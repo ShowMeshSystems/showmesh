@@ -38,19 +38,14 @@ export function audioRouteTile(nodes: readonly Node[]): OverviewTile {
   return { value: `${locked} / ${audio.length}`, detail: locked === audio.length ? 'all locked' : `${audio.length - locked} not locked` }
 }
 
-/** The first fresh LTC timecode any node reports, and that node's sync line. */
-export function smpteTiles(nodes: readonly Node[], nowMs: number): { source: OverviewTile; lock: OverviewTile } {
+/** The first fresh LTC timecode any node reports. */
+export function smpteTiles(nodes: readonly Node[], nowMs: number): { source: OverviewTile } {
   for (const node of audioNodes(nodes)) {
     const timecode = nodePlaybackStatus(node, nowMs).ltcTimecode
     if (timecode.kind !== 'value') continue
-    const line = nodeSyncStatus(node).syncLine
-    return {
-      source: { value: timecode.value.text, detail: `from ${node.label ?? node.nodeId}` },
-      lock: line.kind === 'value' ? { value: line.value.replace(/^Sync: /, ''), detail: node.label ?? node.nodeId } : { value: line.label, detail: line.fact },
-    }
+    return { source: { value: timecode.value.text, detail: `from ${node.label ?? node.nodeId}` } }
   }
   return {
     source: { value: 'No timecode', detail: 'No node is reporting a timecode.' },
-    lock: { value: 'No timecode', detail: 'Lock is shown once a node reports a timecode.' },
   }
 }

@@ -71,8 +71,8 @@ describe('DashboardOverview', () => {
   it('shows empty states and Not wired stamps on an empty model', () => {
     renderOverview({})
     expect(screen.getByText('Not heard from')).toBeInTheDocument()
-    expect(screen.getAllByText('No timecode', { selector: '.sm-tile__value' }).length).toBe(2)
-    expect(screen.getAllByText("Not wired").length).toBe(4)
+    expect(screen.getAllByText('No timecode', { selector: '.sm-tile__value' }).length).toBe(1)
+    expect(screen.getAllByText("Not wired").length).toBe(5)
   })
 
   it('shows lifecycle, playback and timecode when the model has them', () => {
