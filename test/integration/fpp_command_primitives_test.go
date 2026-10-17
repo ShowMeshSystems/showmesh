@@ -363,7 +363,7 @@ func TestStopPlaylistGracefullyConfirmsWhileShowStillRunning(t *testing.T) {
 		t.Fatalf("bench fppd status_name = %q at the moment stopPlaylistGracefully confirmed, want a stopping state "+
 			"(capture section 3.1)", gotStatus)
 	}
-	if !strings.Contains(graceRes.OutcomeReason, "has NOT stopped") {
+	if !strings.Contains(graceRes.OutcomeReason, "still running") {
 		t.Fatalf("stopPlaylistGracefully confirmed with outcomeReason = %q, want it to say plainly that the show has "+
 			"NOT stopped yet — an operator reading \"confirmed\" alone must not be able to conclude playback has "+
 			"ended", graceRes.OutcomeReason)
@@ -425,8 +425,7 @@ func TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms(t *testing.T) {
 	// the playlist ending, or the item position advancing.
 	endedBranch := strings.Contains(nextRes.OutcomeReason, "ends the playlist") ||
 		strings.Contains(nextRes.OutcomeReason, "playlist ended")
-	advancedBranch := strings.Contains(nextRes.OutcomeReason, "advanced") ||
-		strings.Contains(nextRes.OutcomeReason, "fpp.playlist.index")
+	advancedBranch := strings.Contains(nextRes.OutcomeReason, "moved to the next item")
 	if !endedBranch && !advancedBranch {
 		t.Errorf("nextPlaylistItem's outcomeReason = %q, want it to name which branch confirmed — the playlist "+
 			"ending, or the item position advancing (evaluateNextItemEvidence's two valid branches)", nextRes.OutcomeReason)
