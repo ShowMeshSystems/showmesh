@@ -75,7 +75,7 @@ func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConf
 		return "", nil, fmt.Errorf("api: get audio.settings config revision %d: %w", obj.CurrentRevision, err)
 	}
 	if _, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON); verr != nil {
-		detail := fmt.Sprintf("the engine-wide audio.settings revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
+		detail := "The audio settings are invalid. Open Settings and fix them."
 		return AudioConfigPushUnusable, &detail, nil
 	}
 	return AudioConfigPushUsable, nil, nil
@@ -91,7 +91,7 @@ func audioConfigPushStatusDegradeOnError(ctx context.Context, cs ConfigStore, lo
 		if logger != nil {
 			logger.Warn("audio.settings config push status read failed; reporting unknown", "action", action, "error", err)
 		}
-		detail := "the coordinator could not read its stored audio.settings configuration; see the coordinator log"
+		detail := "The audio settings could not be read. Check the coordinator log."
 		return AudioConfigPushUnknown, &detail
 	}
 	return state, reason

@@ -236,8 +236,8 @@ func TestDispatchOneCueActivationSurfacesUnalignedReasonFromNodeResult(t *testin
 	if !wire.Confirmed || wire.Outcome != outcomeWordConfirmed {
 		t.Fatalf("wire outcome = %+v, want Confirmed true and Outcome %q", wire, outcomeWordConfirmed)
 	}
-	if wire.UnalignedReason != wantReason {
-		t.Fatalf("wire.UnalignedReason = %q, want %q (the per-node Fire response outcome)", wire.UnalignedReason, wantReason)
+	if wire.UnalignedReason != cueNodeUnalignedSentence(wantReason) {
+		t.Fatalf("wire.UnalignedReason = %q, want %q (the per-node Fire response outcome)", wire.UnalignedReason, cueNodeUnalignedSentence(wantReason))
 	}
 }
 

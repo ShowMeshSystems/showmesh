@@ -195,7 +195,7 @@ func TestStartPlaylistUnconfirmedWhenPlayingButNameDiffers(t *testing.T) {
 			"scheduler starting a DIFFERENT playlist", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "DIFFERENT playlist") {
+	if !strings.Contains(reason, "instead of") {
 		t.Errorf("outcomeReason = %q, want it to name the mismatch (ADR-001)", reason)
 	}
 }
@@ -359,7 +359,7 @@ func TestStartPlaylistRefusedWhenStatusUnknown(t *testing.T) {
 	}
 	m := decodeMap(t, respBody)
 	detail, _ := m["detail"].(string)
-	if !strings.Contains(detail, fppStatusValueUnknown) {
+	if !strings.Contains(detail, "out of date") {
 		t.Errorf("detail = %q, want it to name the unknown status", detail)
 	}
 }
@@ -449,7 +449,7 @@ func TestStartPlaylistRefusedWhenEvidenceNotCurrent(t *testing.T) {
 	}
 	m := decodeMap(t, respBody)
 	detail, _ := m["detail"].(string)
-	if !strings.Contains(detail, "is not current") {
+	if !strings.Contains(detail, "out of date") {
 		t.Errorf("detail = %q, want it to say current evidence is required", detail)
 	}
 }
@@ -503,7 +503,7 @@ func TestStopPlaylistGracefullyConfirmsOnStoppingStateAndSaysNotStopped(t *testi
 		t.Fatalf("outcome = %v, want \"confirmed\" (FPP entered a stopping state)", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "NOT stopped") {
+	if !strings.Contains(reason, "still running") {
 		t.Errorf("outcomeReason = %q, want it to say plainly the show has NOT stopped despite being confirmed", reason)
 	}
 }
@@ -534,7 +534,7 @@ func TestStopPlaylistGracefullyConfirmsOnIdle(t *testing.T) {
 		t.Fatalf("outcome = %v, want \"confirmed\"", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "completed") {
+	if !strings.Contains(reason, "stopped playing") {
 		t.Errorf("outcomeReason = %q, want it to say the graceful stop completed", reason)
 	}
 }
@@ -759,7 +759,7 @@ func TestNextPlaylistItemConfirmsOnIdleFallbackAtLastItem(t *testing.T) {
 		t.Fatalf("outcome = %v, want \"confirmed\" via the idle fallback (Next past the last item ends the playlist); reason=%v", cmd["outcome"], cmd["outcomeReason"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "ends the playlist") {
+	if !strings.Contains(reason, "playlist ended") {
 		t.Errorf("outcomeReason = %q, want it to explain the idle-fallback reasoning", reason)
 	}
 }
@@ -805,7 +805,7 @@ func TestNextPlaylistItemUnconfirmedWhenAlreadyIdleAtBaseline(t *testing.T) {
 			"anything", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "ALREADY idle") {
+	if !strings.Contains(reason, "already idle") {
 		t.Errorf("outcomeReason = %q, want it to say the host was already idle before dispatch", reason)
 	}
 }
@@ -856,7 +856,7 @@ func TestNextPlaylistItemDoesNotConfirmOnSourceFlip(t *testing.T) {
 			"confirming read must never render as movement", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "cannot be compared") {
+	if !strings.Contains(reason, "could not be compared") {
 		t.Errorf("outcomeReason = %q, want it to name the source flip", reason)
 	}
 }
@@ -886,7 +886,7 @@ func TestNextPlaylistItemUnconfirmedWithNoBaseline(t *testing.T) {
 		t.Fatalf("outcome = %v, want \"unconfirmed\" — no baseline was available and status never reached idle", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "movement can't be evaluated") {
+	if !strings.Contains(reason, "could not be checked") {
 		t.Errorf("outcomeReason = %q, want it to say no baseline was available", reason)
 	}
 }
@@ -951,7 +951,7 @@ func TestPrevPlaylistItemDoesNotConfirmOnSourceFlip(t *testing.T) {
 			"FLIP, not FPP's own counter moving", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "cannot be compared") {
+	if !strings.Contains(reason, "could not be compared") {
 		t.Errorf("outcomeReason = %q, want it to name the source flip", reason)
 	}
 }
@@ -978,7 +978,7 @@ func TestPrevPlaylistItemUnconfirmedWithNoBaseline(t *testing.T) {
 		t.Fatalf("outcome = %v, want \"unconfirmed\" — no baseline was available", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "movement can't be evaluated") {
+	if !strings.Contains(reason, "could not be checked") {
 		t.Errorf("outcomeReason = %q, want it to say no baseline was available", reason)
 	}
 }
@@ -1042,7 +1042,7 @@ func TestSetVolumeUnconfirmedOnMismatch(t *testing.T) {
 		t.Fatalf("outcome = %v, want \"unconfirmed\"", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "want 55") {
+	if !strings.Contains(reason, "should be 55") {
 		t.Errorf("outcomeReason = %q, want it to name the requested value", reason)
 	}
 }

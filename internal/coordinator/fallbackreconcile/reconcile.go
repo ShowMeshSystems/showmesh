@@ -89,9 +89,8 @@ type Signer = fallbackcompile.Signer
 
 // CatalogDeployer attempts to deploy nodeID's currently-required cue
 // catalog when doing so is safe, called by [Service.autoDeployStaleCatalogs]
-// once per candidate node after a reconcile pass observes
-// fallbackcompile.OutcomeMissingCatalogAcknowledgement (Part 2's own
-// trigger, see reconcileOnce/reconcileHost below). Best-effort and
+// once per node whose acknowledgement is not current, on every reconcile
+// pass (see reconcileOnce below). Best-effort and
 // synchronous from this package's point of view: it returns nothing, and
 // a slow or failing attempt for one node must never hold up the rest of
 // this reconcile pass or any other host's own compile.
@@ -204,19 +203,11 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 		s.logger.Warn("fallback reconcile: list participating fpp hosts failed", "error", err)
 		return
 	}
-	var missingAck bool
 	for _, instanceUUID := range hosts {
-		if s.reconcileHost(ctx, instanceUUID) {
-			missingAck = true
-		}
+		s.reconcileHost(ctx, instanceUUID)
 	}
-	// Part 2's own trigger: reuse the exact condition reconcileHost's own
-	// Compile call just detected (fallbackcompile.OutcomeMissingCatalogAcknowledgement),
-	// rather than a second detector on its own schedule. Compile's own
-	// Result only ever names the first node it happened to refuse a given
-	// host's program on, never the complete set, so autoDeployStaleCatalogs
-	// resolves the full candidate list itself.
-	if missingAck && s.catalogDeployer != nil {
+	// Runs every pass, not only after a compile refusal: a re-uploaded asset changes a catalog even when no compile reaches the acknowledgement check.
+	if s.catalogDeployer != nil {
 		s.autoDeployStaleCatalogs(ctx, s.now())
 	}
 	s.withdrawNonParticipating(ctx, hosts)
@@ -318,16 +309,13 @@ func (s *Service) upsertObservation(ctx context.Context, obs observation.Observa
 // program for instanceUUID. A refusal is logged and audited, and leaves
 // whatever was previously published untouched, TRACK-J-fpp-fallback.md
 // J1: "A refusal is a visible, reported condition, never a silently
-// smaller program." Its own return reports only whether THIS host's
-// compile refused specifically with
-// fallbackcompile.OutcomeMissingCatalogAcknowledgement, reconcileOnce's
-// own signal for whether an auto-deploy pass is worth running this cycle.
-func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
+// smaller program."
+func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
 	now := s.now()
 	result, err := fallbackcompile.CompileWithAddresses(ctx, s.st, s.signer, s.nodeAddresses, instanceUUID, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: compile failed", "fppInstanceUuid", instanceUUID, "error", err)
-		return false
+		return
 	}
 	if result.Outcome != fallbackcompile.OutcomePublished {
 		s.logger.Warn("fallback reconcile: compile refused", "fppInstanceUuid", instanceUUID,
@@ -338,16 +326,16 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
 			Params:        map[string]any{"outcome": string(result.Outcome)},
 			OutcomeReason: result.Reason,
 		})
-		return result.Outcome == fallbackcompile.OutcomeMissingCatalogAcknowledgement
+		return
 	}
 
 	changed, err := s.publishIfChanged(ctx, result.Program, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: publish failed", "fppInstanceUuid", instanceUUID, "error", err)
-		return false
+		return
 	}
 	if !changed {
-		return false
+		return
 	}
 	s.writeAudit(ctx, identity.AuditEntry{
 		Timestamp: now, PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
@@ -355,7 +343,6 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
 		Params:        map[string]any{"packageId": result.Program.Program.PackageID, "revision": result.Program.Program.Revision},
 		OutcomeReason: "published",
 	})
-	return false
 }
 
 // autoDeployStaleCatalogs resolves the active show's full participating-

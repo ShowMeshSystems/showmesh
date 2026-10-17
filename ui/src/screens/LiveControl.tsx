@@ -219,8 +219,8 @@ function WeatherDelayOutcomePanel() {
   if (outcome.kind === 'error') {
     const headline =
       outcome.status !== undefined
-        ? `${WEATHER_DELAY_ACTION_LABEL[outcome.action]} was refused: ${outcome.message}`
-        : `${WEATHER_DELAY_ACTION_LABEL[outcome.action]}: the coordinator reported no outcome: ${outcome.message}`
+        ? `${WEATHER_DELAY_ACTION_LABEL[outcome.action]} was refused. ${outcome.message}`
+        : `${WEATHER_DELAY_ACTION_LABEL[outcome.action]}: the coordinator reported no outcome. ${outcome.message}`
     return <Notice tone="bad" headline={headline} />
   }
   const { action, result } = outcome
@@ -948,26 +948,26 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
       {state.aligned && state.scheduledAtNs !== null && (
         <p className="sm-small">
           <StatusPair tone="good" label="Aligned" />
-          {' Every node was started at the same shared instant.'}
+          {' Every node started at the same shared time.'}
         </p>
       )}
       {!state.aligned && (
         <p className="sm-small">
           <StatusPair tone="warn" label="Unaligned" />
-          {state.unalignedReason !== '' ? `: ${state.unalignedReason}` : ' Started on arrival, not to a shared instant.'}
+          {state.unalignedReason !== '' ? ` ${state.unalignedReason}` : ' Started on arrival, not to a shared time.'}
         </p>
       )}
       {state.nodes.map((n) => (
         <p key={n.nodeId} className="sm-small">
           <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
-          {n.outcomeReason !== undefined && n.outcomeReason !== '' ? `: ${n.outcomeReason}` : ''}
+          {n.outcomeReason !== undefined && n.outcomeReason !== '' ? ` ${n.outcomeReason}` : ''}
           {describeStartTrigger(n) !== null ? ` ${describeStartTrigger(n)}` : ''}
         </p>
       ))}
       {state.actions.map((a) => (
         <p key={a.actionId} className="sm-small">
           <StatusPair tone={instanceOutcomeTone(a.outcome)} label={`${a.label ?? a.actionId}: ${a.outcome}`} />
-          {a.outcomeReason !== undefined && a.outcomeReason !== '' ? `: ${a.outcomeReason}` : ''}
+          {a.outcomeReason !== undefined && a.outcomeReason !== '' ? ` ${a.outcomeReason}` : ''}
         </p>
       ))}
     </div>
@@ -1284,9 +1284,8 @@ function parseAudioSessionApplyParams(raw: string): { params: Record<string, unk
   let parsed: unknown
   try {
     parsed = JSON.parse(trimmed)
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    return { error: `Not sent. The payload is not valid JSON: ${reason}.` }
+  } catch {
+    return { error: 'Not sent. The text is not valid JSON.' }
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     const kind = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed
@@ -1838,7 +1837,7 @@ function ResolumeOutcome({ result }: { result: ResolumeActionResult }) {
   return (
     <div className="sm-outcome">
       <StatusPair tone={resolumeTone(result)} label={resolumeLabel(result)} />
-      <p className="sm-outcome__detail">{result.outcomeReason || 'The prior dispatch is still resolving.'}{result.replay ? ' This response reuses the original dispatch.' : ''}{result.attributionDegraded ? ' Attribution is degraded because the audit record could not be written.' : ''}</p>
+      <p className="sm-outcome__detail">{result.outcomeReason || 'The earlier command is still running.'}{result.replay ? ' This repeats an earlier command.' : ''}{result.attributionDegraded ? ' The audit record could not be written.' : ''}</p>
     </div>
   )
 }

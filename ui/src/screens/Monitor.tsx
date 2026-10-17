@@ -33,7 +33,7 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail, type ParticipationState } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, resolumeDetail, type ParticipationState } from './dashboardModel'
 
 /** The operator-facing sentence for each participation state but "absent", which says nothing. */
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
@@ -54,6 +54,7 @@ import {
   fleetSummary,
   fppInspector,
   monitorConnection,
+  pluginNote,
   type FleetKind,
   type FleetRow,
 } from './monitorModel'
@@ -164,11 +165,11 @@ export function Monitor() {
         <div>
           <Tiles>
             <StatTile label="Nodes" value={`${counts.nodesOnline} / ${counts.nodesTotal}`} detail={nodesDetail(counts)} />
-            <StatTile label="FPP players" value={`${counts.fppHealthy} / ${counts.fppTotal}`} detail={fppDetail(model.fpp)} />
+            <StatTile label="FPP" value={`${counts.fppHealthy} / ${counts.fppTotal}`} detail={fppDetail(model.fpp)} />
             <StatTile
               label="Resolume"
               value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
-              detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
+              detail={resolumeDetail(counts)}
             />
             <SignalsTile counts={counts.signals} />
           </Tiles>
@@ -381,7 +382,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   // Tied to the instanceUuid each was fetched for, so another instance's
   // verdict or error never renders under a newly selected one.
   const [reconciliation, setReconciliation] = useState<{ instanceUuid: string; response: FPPPlaylistEntryReconciliationResponse } | null>(null)
-  const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string } | null>(null)
+  const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string; notFound: boolean } | null>(null)
   // Keyed on the numeric sequence, not the observation object: it is a
   // new identity every snapshot.
   const latestObservationSequence =
@@ -404,12 +405,13 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
         // A failed refetch must not leave the previous success showing
         // beside the failure strip.
         setReconciliation(null)
-        setReconciliationError({ instanceUuid, message: describeApiError(err) })
+        setReconciliationError({ instanceUuid, message: describeApiError(err), notFound: err instanceof ApiError && err.status === 404 })
       })
     return () => { cancelled = true }
   }, [instance.instanceUuid, latestObservationSequence])
   const currentReconciliation = reconciliation?.instanceUuid === instance.instanceUuid ? reconciliation.response : null
-  const currentReconciliationError = reconciliationError?.instanceUuid === instance.instanceUuid ? reconciliationError.message : null
+  const currentReconciliationError = reconciliationError?.instanceUuid === instance.instanceUuid ? reconciliationError : null
+  const plugin = pluginNote(instance, nowIso)
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
@@ -483,7 +485,11 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
           <p className="sm-small sm-faint">{`Checked ${formatClock(currentReconciliation.serverTime) ?? 'at an unrecorded time'}`}</p>
         </div>
       )}
-      {currentReconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={currentReconciliationError} />}
+      {plugin.problem && <RuledStrip absence="failed" label="Plugin not reporting" fact={plugin.text} />}
+      {!plugin.problem && currentReconciliationError?.notFound === true && (
+        <p className="sm-small sm-faint">{`${instance.instanceId} is idle. ${plugin.text.replace('reported', 'reported its playlists')}`}</p>
+      )}
+      {!plugin.problem && currentReconciliationError?.notFound === false && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={currentReconciliationError.message} />}
     </div>
   )
 }
@@ -563,22 +569,22 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
         <RuledStrip
           absence="empty"
           label="None"
-          fact="No instance UUID"
+          fact="No FPP UUID"
           detail="This FPP has not reported its UUID, so it cannot take a fallback program."
         />
       ) : list.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading this host's fallback program." />
+        <RuledStrip absence="loading" label="Reading" fact="Reading the fallback program on this FPP." />
       ) : list.kind === 'unavailable' ? (
         <RuledStrip
           absence="unavailable"
           label="Unavailable"
           fact="This coordinator does not support fallback programs."
-          detail="Update the coordinator to see this host's program."
+          detail="Update the coordinator to see the program on this FPP."
         />
       ) : list.kind === 'failed' ? (
         <RuledStrip absence="failed" label="Read failed" fact={list.message} />
       ) : list.entry === null ? (
-        <RuledStrip absence="empty" label="Empty" fact="No fallback program exists for this host." />
+        <RuledStrip absence="empty" label="Empty" fact="No fallback program exists for this FPP." />
       ) : (
         <>
           {fallbackProgramMetadataRows(list.entry).map((row) => (
@@ -588,7 +594,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
             </div>
           ))}
           {detail.kind === 'loading' ? (
-            <RuledStrip absence="loading" label="Reading" fact="Reading this host's acknowledgement." />
+            <RuledStrip absence="loading" label="Reading" fact="Reading the acknowledgement from this FPP." />
           ) : detail.kind === 'noPermission' ? (
             <RuledStrip
               absence="noPermission"
@@ -604,7 +610,7 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
               return (
                 <>
                   <div className="sm-inspector__row">
-                    <span className="sm-inspector__label sm-data">Host holds</span>
+                    <span className="sm-inspector__label sm-data">FPP holds</span>
                     <div>
                       <p className="sm-inspector__state">
                         <StatusPair tone={ack.tone} label={ack.label} />

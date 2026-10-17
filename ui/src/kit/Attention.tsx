@@ -33,14 +33,18 @@ type TileProps = {
   value: ReactNode
   detail: ReactNode
   to?: string
+  /** Replaces the value with the Not wired stamp: the coordinator serves nothing to show here. */
+  notWired?: boolean
 }
 
 /** A counted fact that links to the screen that explains it. */
-export function StatTile({ label, value, detail, to }: TileProps) {
+export function StatTile({ label, value, detail, to, notWired = false }: TileProps) {
   const body = (
     <>
       <p className="sm-tile__label">{label}</p>
-      <p className="sm-tile__value">{value}</p>
+      <p className="sm-tile__value">
+        {notWired ? <span className="sm-nowire__stamp sm-tile__nowire">Not wired</span> : value}
+      </p>
       <p className="sm-tile__detail">{detail}</p>
     </>
   )

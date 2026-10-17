@@ -860,17 +860,17 @@ func (c *Collector) fetch(ctx context.Context, path string) ([]byte, error) {
 func classifyFetchError(err error) string {
 	var statusErr *httpStatusError
 	if errors.As(err, &statusErr) {
-		return statusErr.Error()
+		return fmt.Sprintf("FPP answered with error %d. Check FPP.", statusErr.StatusCode)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+		return "FPP did not answer in time. Check that FPP is on."
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
+		return "FPP did not answer in time. Check that FPP is on."
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
-		return "connection refused"
+		return "FPP refused the connection. Check that FPP is running."
 	}
-	return err.Error()
+	return "FPP could not be reached. Check that FPP is on."
 }

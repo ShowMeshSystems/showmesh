@@ -59,7 +59,7 @@ import type {
   CurrentRunsResponse,
   EmergencyStopArmResponse,
   EmergencyStopResult,
-  FPPBrightnessCeilingResponse,
+  FPPBrightnessResponse,
   FPPBrightnessExcludedRangesResponse,
   FPPChannelRange,
   FPPCommandResult,
@@ -234,8 +234,12 @@ export function postFPPPairing(instanceId: string, code: string): Promise<FPPPai
   return store.postFPPPairing(instanceId, code)
 }
 
-export function postFPPBrightnessCeiling(instanceId: string, ceiling: number): Promise<FPPBrightnessCeilingResponse> {
-  return store.postFPPBrightnessCeiling(instanceId, ceiling)
+export function getFPPBrightness(): Promise<FPPBrightnessResponse> {
+  return store.getFPPBrightness()
+}
+
+export function putFPPBrightnessCeiling(targetPercent: number, fadeSeconds: number): Promise<FPPBrightnessResponse> {
+  return store.putFPPBrightnessCeiling(targetPercent, fadeSeconds)
 }
 
 export function putFPPBrightnessExcludedRanges(instanceId: string, ranges: FPPChannelRange[]): Promise<FPPBrightnessExcludedRangesResponse> {

@@ -29,6 +29,8 @@ export { DeletePanel } from './DeletePanel'
 export { CopyButton } from './CopyButton'
 export { OneTimeSecret } from './OneTimeSecret'
 export { RevisionHistory } from './RevisionHistory'
+export { RevisionDiff } from './RevisionDiff'
+export { diffPayloads, type FieldChange } from './diffPayloads'
 export {
   ChromeBar,
   ChromeProgress,

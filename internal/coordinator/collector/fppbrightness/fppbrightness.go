@@ -104,6 +104,27 @@ type Options struct {
 	RequestTimeout time.Duration
 	ValidFor       time.Duration
 	Now            func() time.Time
+
+	// OnReading, when set, receives every poll's outcome, so the display
+	// ceiling reconciler works from this poll instead of a second one.
+	OnReading func(Reading)
+}
+
+// Reading is one poll's outcome for the display ceiling reconciler. Err is
+// set when the poll failed; NotFound when the host answered 404.
+type Reading struct {
+	InstanceID string
+	ReceivedAt time.Time
+	NotFound   bool
+	Err        error
+
+	Ceiling         *int64
+	FadeActive      *bool
+	UpdatedAtMillis *int64
+	// Absent from a plugin older than contract section 2.8.
+	CeilingTarget          *int64
+	CeilingFadeEndMillis   *int64
+	CeilingChangedAtMillis *int64
 }
 
 func (o Options) withDefaults() Options {
@@ -139,6 +160,7 @@ type Collector struct {
 
 	requestTimeout time.Duration
 	validFor       time.Duration
+	onReading      func(Reading)
 }
 
 // CollectorID is the collector.Runner key for one instance's brightness
@@ -181,6 +203,7 @@ func New(instanceID, baseURL string, opts Options) (*Collector, error) {
 		now:            o.Now,
 		requestTimeout: o.RequestTimeout,
 		validFor:       o.ValidFor,
+		onReading:      o.OnReading,
 	}, nil
 }
 
@@ -198,6 +221,10 @@ type brightnessDocument struct {
 	EffectiveOutput *int64 `json:"effectiveOutput"`
 	FadeActive      *bool  `json:"fadeActive"`
 	UpdatedAtMillis *int64 `json:"updatedAtMillis"`
+
+	CeilingTarget          *int64 `json:"ceilingTarget"`
+	CeilingFadeEndMillis   *int64 `json:"ceilingFadeEndMillis"`
+	CeilingChangedAtMillis *int64 `json:"ceilingChangedAtMillis"`
 	// ExcludedRanges is decoded on its own so a malformed list costs only
 	// its signal, never the four brightness values beside it.
 	ExcludedRanges json.RawMessage `json:"excludedRanges"`
@@ -227,22 +254,34 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	now := c.now()
 
 	body, err := c.fetch(ctx)
+	reading := Reading{InstanceID: c.instanceID, ReceivedAt: c.now()}
 	if err != nil {
 		var statusErr *httpStatusError
 		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+			reading.NotFound = true
+			c.report(reading)
 			return c.absentAll(observation.StateUnsupported, absentOn404Reason, now), true
 		}
+		reading.Err = err
+		c.report(reading)
 		return c.absentAll(observation.StateCollectionFailed, classifyFetchError(err), now), true
 	}
 
 	var doc brightnessDocument
 	if err := json.Unmarshal(body, &doc); err != nil {
+		reading.Err = err
+		c.report(reading)
 		return c.absentAll(observation.StateCollectionFailed, "decode error: "+err.Error(), now), true
 	}
 
 	if doc.UpdatedAtMillis != nil && *doc.UpdatedAtMillis == 0 {
+		reading.Err = errors.New("the plugin could not read its brightness")
+		c.report(reading)
 		return c.absentAll(observation.StateCollectionFailed, absentOnUnreadReason, now), true
 	}
+	reading.Ceiling, reading.FadeActive, reading.UpdatedAtMillis = doc.Ceiling, doc.FadeActive, doc.UpdatedAtMillis
+	reading.CeilingTarget, reading.CeilingFadeEndMillis, reading.CeilingChangedAtMillis = doc.CeilingTarget, doc.CeilingFadeEndMillis, doc.CeilingChangedAtMillis
+	c.report(reading)
 
 	obs := make([]observation.Observation, 0, len(AllSignals))
 	for _, f := range []struct {
@@ -268,6 +307,12 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	}
 	obs = append(obs, c.excludedRanges(doc.ExcludedRanges, now))
 	return obs, true
+}
+
+func (c *Collector) report(r Reading) {
+	if c.onReading != nil {
+		c.onReading(r)
+	}
 }
 
 func (c *Collector) excludedRanges(raw json.RawMessage, now time.Time) observation.Observation {
@@ -378,19 +423,19 @@ func (e *httpStatusError) Error() string {
 func classifyFetchError(err error) string {
 	var statusErr *httpStatusError
 	if errors.As(err, &statusErr) {
-		return statusErr.Error()
+		return fmt.Sprintf("FPP answered with error %d. Check FPP.", statusErr.StatusCode)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+		return "FPP did not answer in time. Check that FPP is on."
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
+		return "FPP did not answer in time. Check that FPP is on."
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
-		return "connection refused"
+		return "FPP refused the connection. Check that FPP is running."
 	}
-	return err.Error()
+	return "FPP could not be reached. Check that FPP is on."
 }
 
 // init fails at package load rather than at the first poll if a signal

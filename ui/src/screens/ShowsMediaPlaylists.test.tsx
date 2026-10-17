@@ -180,7 +180,7 @@ describe('Shows · Playlists tab, media rows', () => {
 
       pickMediaPlaylistType()
       fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Chase bed' } })
-      fireEvent.change(screen.getByRole('combobox', { name: /Audio asset for item 1/ }), { target: { value: 'asset-1' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /Audio asset for item 1/ }), { target: { value: 'track:winter-loop' } })
       fireEvent.change(screen.getByLabelText('Maximum gain (dB)'), { target: { value: '-6' } })
 
       stubs.getMediaPlaylist = () => Promise.reject(new ApiError('not found', 404, 'not-found'))
@@ -195,7 +195,7 @@ describe('Shows · Playlists tab, media rows', () => {
       const payload = sent as ConfigMediaPlaylist
       expect(payload.label).toBe('Chase bed')
       expect(payload.show).toBe('winter-ridge-2026')
-      expect(payload.items).toEqual([{ kind: 'asset', show: 'winter-ridge-2026', sequence: 'winter-loop', target: 'node-1' }])
+      expect(payload.items).toEqual([{ kind: 'asset', show: 'winter-ridge-2026', sequence: 'winter-loop' }])
     })
   })
 

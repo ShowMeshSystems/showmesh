@@ -215,13 +215,13 @@ type NightSessionFPPPlaylist struct {
 }
 
 // NightSessionAssetRef is ADR-028's asset identity as a night.session
-// needs to name one: show, sequence, and target. TargetKind is always
-// "node" here - a resting timeline or background-audio asset is always
-// resolved per rendering/playout target, never per show.
+// needs to name one: show, sequence, and target. Target names a node's own
+// upload. A background-audio or media-playlist item may leave it empty to
+// mean the sequence's audio, resolved per playing node.
 type NightSessionAssetRef struct {
 	Show     string `json:"show"`
 	Sequence string `json:"sequence"`
-	Target   string `json:"target"`
+	Target   string `json:"target,omitempty"`
 }
 
 // NightSessionResting is night.session.resting.
@@ -251,7 +251,7 @@ func (i NightSessionBackgroundAudioItem) MarshalJSON() ([]byte, error) {
 		ItemID   string `json:"itemId"`
 		Show     string `json:"show"`
 		Sequence string `json:"sequence"`
-		Target   string `json:"target"`
+		Target   string `json:"target,omitempty"`
 	}{ItemID: i.ItemID, Show: i.Asset.Show, Sequence: i.Asset.Sequence, Target: i.Asset.Target})
 }
 
@@ -381,7 +381,7 @@ func (b NightSessionBackgroundAudio) OutputNodeIDs() []string {
 	seen := make(map[string]bool, len(b.Items))
 	var out []string
 	for _, item := range b.Items {
-		if !seen[item.Asset.Target] {
+		if item.Asset.Target != "" && !seen[item.Asset.Target] {
 			seen[item.Asset.Target] = true
 			out = append(out, item.Asset.Target)
 		}
@@ -508,7 +508,8 @@ func EncodeNightSessionPayload(p NightSessionPayload) (string, error) {
 
 // AssetCurrent reports whether a current (non-superseded) asset exists for
 // the given (show, sequence, target) tuple, with an implied TargetKind of
-// "node" - the shape every night.session asset reference needs.
+// "node". An empty target asks whether any current audio asset exists for
+// the sequence, show-wide or for any node.
 // Caller-supplied, like every cross-object reference check in this
 // package (this file's own top doc comment).
 type AssetCurrent func(show, sequence, target string) bool
@@ -756,6 +757,16 @@ func decodeNightSessionFPPPlaylist(fields map[string]json.RawMessage, path strin
 // decodeNightSessionBackgroundAudio (each item) for the two call sites'
 // own key sets.
 func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, sessionShow string, assetCurrent AssetCurrent) (NightSessionAssetRef, *ValidationError) {
+	return decodeAssetRef(fields, path, sessionShow, assetCurrent, false)
+}
+
+// decodeAudioItemAssetRef is [decodeNightSessionAssetRef] with "target"
+// optional: an item without one names the sequence's audio.
+func decodeAudioItemAssetRef(fields map[string]json.RawMessage, path, sessionShow string, assetCurrent AssetCurrent) (NightSessionAssetRef, *ValidationError) {
+	return decodeAssetRef(fields, path, sessionShow, assetCurrent, true)
+}
+
+func decodeAssetRef(fields map[string]json.RawMessage, path, sessionShow string, assetCurrent AssetCurrent, targetOptional bool) (NightSessionAssetRef, *ValidationError) {
 	show, verr := decodeRequiredString(fields, "show", path+".show")
 	if verr != nil {
 		return NightSessionAssetRef{}, verr
@@ -770,11 +781,20 @@ func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, session
 	if verr != nil {
 		return NightSessionAssetRef{}, verr
 	}
-	target, verr := decodeRequiredString(fields, "target", path+".target")
-	if verr != nil {
-		return NightSessionAssetRef{}, verr
+	var target string
+	if _, present := fields["target"]; present || !targetOptional {
+		target, verr = decodeRequiredString(fields, "target", path+".target")
+		if verr != nil {
+			return NightSessionAssetRef{}, verr
+		}
 	}
 	if !assetCurrent(show, sequence, target) {
+		if target == "" {
+			return NightSessionAssetRef{}, &ValidationError{
+				Code: ValidationCodeFieldUnknownReference, Field: path,
+				Detail: fmt.Sprintf("No audio file is uploaded for %s. Upload it on the Assets page.", sequence),
+			}
+		}
 		return NightSessionAssetRef{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: path,
 			Detail: fmt.Sprintf("no current asset for show %q sequence %q target %q", show, sequence, target),
@@ -918,7 +938,7 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		}
 		seenIDs[itemID] = true
 
-		asset, verr := decodeNightSessionAssetRef(itemFields, field, sessionShow, assetCurrent)
+		asset, verr := decodeAudioItemAssetRef(itemFields, field, sessionShow, assetCurrent)
 		if verr != nil {
 			return NightSessionBackgroundAudio{}, verr
 		}
@@ -966,12 +986,37 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 	if verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
+	if verr := requireNodesForUntargetedItems(items, targets, showAudioNodes, excludeNodes, validateExcludeNodes); verr != nil {
+		return NightSessionBackgroundAudio{}, verr
+	}
 
 	return NightSessionBackgroundAudio{
 		Items: items, Repeat: repeat, Resume: resume, ItemTransition: itemTransition,
 		CrossfadeMs: crossfadeMs, MaxGainDb: maxGainDb,
 		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs, Targets: targets, ExcludeNodes: excludeNodes,
 	}, nil
+}
+
+// requireNodesForUntargetedItems refuses an item without a target when the
+// bed resolves to no node list, since such an item plays only on a listed
+// node. A stored-row read-back (validate false) is not checked.
+func requireNodesForUntargetedItems(items []NightSessionBackgroundAudioItem, targets, showAudioNodes, excludeNodes []string, validate bool) *ValidationError {
+	if !validate {
+		return nil
+	}
+	for _, item := range items {
+		if item.Asset.Target != "" {
+			continue
+		}
+		if nodes, from := ResolveAudioNodes(targets, showAudioNodes, excludeNodes, nil); from == AudioNodeResolutionDefault || len(nodes) == 0 {
+			return &ValidationError{
+				Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.targets",
+				Detail: "No audio nodes are set for this show, so the background music has nowhere to play. Set the show's audio nodes.",
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // decodeNightSessionBackgroundAudioRef decodes the reference form:

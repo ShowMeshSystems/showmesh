@@ -413,7 +413,7 @@ func TestFPPCommandDoesNotConfirmFromStalePreDispatchEvidence(t *testing.T) {
 			"already agrees (this is exactly the false-confirm this fix closes)", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "from before it was sent") {
+	if !strings.Contains(reason, "since the command was sent") {
 		t.Errorf("outcomeReason = %q, want it to say the reading is from before dispatch", reason)
 	}
 	if elapsed < 100*time.Millisecond {
@@ -554,7 +554,7 @@ func TestFPPCommandConfirmationReasonNamesTheDecidingSource(t *testing.T) {
 			"the lower-precedence source's \"idle\" must NOT be allowed to confirm falsely", cmd["outcome"])
 	}
 	reason, _ := cmd["outcomeReason"].(string)
-	if !strings.Contains(reason, "fpp-rest") {
+	if !strings.Contains(reason, "still playing") {
 		t.Errorf("outcomeReason = %q, want it to name fpp-rest as the deciding source (ADR-011: evidence carries provenance)", reason)
 	}
 }
@@ -650,7 +650,7 @@ func TestFPPCommandUnconfirmedWithNoObservationHasReason(t *testing.T) {
 	if reason == "" {
 		t.Fatalf("outcomeReason is empty, want a non-empty, informative reason (ADR-020: absent evidence is stated, never omitted)")
 	}
-	if !strings.Contains(reason, "no fpp.status observation") {
+	if !strings.Contains(reason, "has not reported its play state") {
 		t.Errorf("outcomeReason = %q, want it to say no fpp.status observation is recorded", reason)
 	}
 	if srv.hitCount() != 1 {
@@ -696,7 +696,7 @@ func TestFPPCommandUnconfirmedWithStaleUnknownAgeEvidenceHasReason(t *testing.T)
 	if reason == "" {
 		t.Fatalf("outcomeReason is empty, want a non-empty, informative reason (ADR-020: absent evidence is stated, never omitted)")
 	}
-	if !strings.Contains(reason, "unknown_age") {
+	if !strings.Contains(reason, "out of date") {
 		t.Errorf("outcomeReason = %q, want it to name the unknown_age state", reason)
 	}
 	if srv.hitCount() != 1 {
@@ -747,7 +747,7 @@ func TestFPPCommandDispatchFailureUnconfirmedWithTransportReason(t *testing.T) {
 	if reason == "" {
 		t.Fatalf("outcomeReason is empty, want a reason naming the transport error")
 	}
-	if !strings.Contains(reason, "dispatching to FPP failed") {
+	if !strings.Contains(reason, "could not be sent to FPP") {
 		t.Errorf("outcomeReason = %q, want it to say dispatching to FPP failed", reason)
 	}
 	if cmd["dispatchedAt"] == nil {
@@ -794,7 +794,7 @@ func TestFPPCommandDispatchFailureNonSuccessStatusReportsTransportReason(t *test
 	if reason == "" {
 		t.Fatalf("outcomeReason is empty, want a reason naming the transport error")
 	}
-	if !strings.Contains(reason, "dispatching to FPP failed") {
+	if !strings.Contains(reason, "could not be sent to FPP") {
 		t.Errorf("outcomeReason = %q, want it to say dispatching to FPP failed", reason)
 	}
 	if cmd["dispatchedAt"] == nil {

@@ -289,7 +289,7 @@ func boolTermHoldsWhenFalse(f ParamBooleanField, readAt time.Time, fieldLabel st
 	}
 	switch f.Presence {
 	case PresenceNull:
-		return ReadinessTermInput{UnknownReason: fieldLabel + " was explicitly null in Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	case PresencePresent:
 		// The envelope itself arrived, but its own "value" key did not —
 		// capture §17.3's own headline finding: no schema in Arena's
@@ -298,9 +298,9 @@ func boolTermHoldsWhenFalse(f ParamBooleanField, readAt time.Time, fieldLabel st
 		// field, never treated as HeldTrue=false (which "bypassed": {} 's
 		// bare Go zero value would silently be — see [ParamBooleanField.Bool]'s
 		// own doc comment).
-		return ReadinessTermInput{UnknownReason: fieldLabel + " answered but its value was absent from Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	default: // PresenceAbsent
-		return ReadinessTermInput{UnknownReason: fieldLabel + " was absent from Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	}
 }
 
@@ -314,13 +314,13 @@ func rangeTermHoldsWhenPositive(f ParamRangeField, readAt time.Time, fieldLabel 
 	}
 	switch f.Presence {
 	case PresenceNull:
-		return ReadinessTermInput{UnknownReason: fieldLabel + " was explicitly null in Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	case PresencePresent:
 		// See boolTermHoldsWhenFalse's identical branch: the envelope
 		// answered, but its own "value" key did not.
-		return ReadinessTermInput{UnknownReason: fieldLabel + " answered but its value was absent from Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	default: // PresenceAbsent
-		return ReadinessTermInput{UnknownReason: fieldLabel + " was absent from Resolume's response"}
+		return ReadinessTermInput{UnknownReason: "Resolume did not report " + fieldLabel + "."}
 	}
 }
 

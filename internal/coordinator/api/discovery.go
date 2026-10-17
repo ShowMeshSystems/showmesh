@@ -222,7 +222,7 @@ func declarationOnlyNodeView(nodeID string, decl store.NodeDeclarationRecord) in
 		FirstSeenAt:    decl.DeclaredAt,
 		UpdatedAt:      decl.UpdatedAt,
 		Liveness:       inventory.LivenessUnknown,
-		LivenessReason: "declared but never observed: no agent hello, last-will, or health heartbeat has ever been recorded for this node id",
+		LivenessReason: "This node is declared but has never reported. Check that its agent is running.",
 	}
 }
 

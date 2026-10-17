@@ -702,7 +702,8 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 	)
 	if dispatchErr != nil {
 		outcomeState = string(observation.StateCollectionFailed)
-		outcomeReason = "dispatching to FPP failed: " + dispatchErr.Error()
+		h.logger.Warn("fpp command dispatch failed", "instance", in.InstanceID, "error", dispatchErr)
+		outcomeReason = "The command could not be sent to FPP. Check that FPP is running and reachable."
 	} else {
 		// Post-dispatch poll nudge — best-effort, rate-limited; its bool
 		// return is deliberately not consulted here (see

@@ -184,15 +184,6 @@ const (
 	// ordinary malformed field.
 	ProblemTypeDefinitionHashMismatch = problemBaseURI + "definition-hash-mismatch"
 
-	// ProblemTypeFPPTransitionGainWriteFailed is
-	// POST /fpp/{instanceId}/brightness/transition-gain's own upstream
-	// failure: the request was valid and the instance is configured, but
-	// the write to the FPP host's plugin did not take. Its own type, and a
-	// 502 rather than a 500, because the fault is on the far side of a
-	// reachable-or-not network hop the operator can act on (is the host
-	// up, is the plugin installed) rather than a coordinator defect.
-	ProblemTypeFPPTransitionGainWriteFailed = problemBaseURI + "fpp-transition-gain-write-failed"
-
 	// ProblemTypeFPPDefinitionRepublishFailed is
 	// POST /fpp/{instanceId}/playlist-definitions/republish's own upstream
 	// failure: the request was valid and the instance is configured, but
@@ -201,8 +192,7 @@ const (
 	// the coordinator will not relay: an undecodable body, an unsupported
 	// schemaVersion, or an applied answer claiming no sweep is owed. The
 	// last of those did apply, so nothing here may call this a refusal.
-	// Its own type, and a 502 rather than a 500, for
-	// [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the fault is on
+	// Its own type, and a 502 rather than a 500, because the fault is on
 	// the far side of a network hop the operator can act on (is the host
 	// up, is the plugin installed and publishing definitions) rather than
 	// a coordinator defect.
@@ -221,15 +211,9 @@ const (
 	// first-save form for it, unlike the plain resource-not-found 404.
 	ProblemTypeAssetsSettingsNotStored = problemBaseURI + "assets-settings-not-stored"
 
-	// ProblemTypeFPPBrightnessCeilingWriteFailed is
-	// POST /fpp/{instanceId}/brightness/ceiling's own upstream failure,
-	// for [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the command
-	// was valid and the instance configured, but FPP did not accept it.
-	ProblemTypeFPPBrightnessCeilingWriteFailed = problemBaseURI + "fpp-brightness-ceiling-write-failed"
-
 	// ProblemTypeFPPBrightnessExcludedRangesWriteFailed is
 	// PUT /fpp/{instanceId}/brightness/excluded-ranges's own upstream
-	// failure, a 502 for [ProblemTypeFPPTransitionGainWriteFailed]'s reason.
+	// failure, a 502 for [ProblemTypeFPPDefinitionRepublishFailed]'s reason.
 	ProblemTypeFPPBrightnessExcludedRangesWriteFailed = problemBaseURI + "fpp-brightness-excluded-ranges-write-failed"
 
 	// ProblemTypeSequenceFilenameClaimDuplicate is
@@ -727,8 +711,8 @@ func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string
 		Title:  "The busy check has no current reading. Retry in a few seconds.",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"Cannot tell if %q is busy: its %s reading is not current (%s). Retry, or send ifBusy=%q to start anyway.",
-			instanceID, signal, reason, fppIfBusyReplace),
+			"Cannot tell whether %s is busy because its %s is out of date. Retry, or send ifBusy=%s to start anyway.",
+			instanceID, fppSignalName(signal), fppIfBusyReplace),
 	}
 }
 
@@ -755,22 +739,8 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 		Title:  "Start Playlist refused: a different playlist is currently playing",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"%q is playing %q, so this was refused (ifBusy=%q). Send ifBusy=%q to replace it, or wait.",
-			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
-	}
-}
-
-// fppTransitionGainWriteFailedProblem reports a transition-gain write that
-// did not take. The underlying error text is carried verbatim: the plugin
-// refuses out-of-range input and an undecodable 200 with its own wording,
-// and paraphrasing that would cost the operator the only description of
-// what the FPP host actually said.
-func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeFPPTransitionGainWriteFailed,
-		Title:  "FPP transition gain write failed",
-		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the brightness transition gain write to FPP instance %q did not take: %v", instanceID, err),
+			"%s is playing %s, so the start was refused. Send ifBusy=%s to replace it, or wait.",
+			instanceID, currentlyPlaying, fppIfBusyReplace),
 	}
 }
 
@@ -822,20 +792,6 @@ func fppPairingClaimTooLargeProblem() v1.Problem {
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
 		Detail: "The request body is too large. A pairing request carries one secret and nothing else.",
-	}
-}
-
-// fppBrightnessCeilingWriteFailedProblem reports a ceiling write that did
-// not take. reason carries the host's own answer verbatim when there was
-// one, for [fppTransitionGainWriteFailedProblem]'s reason: an FPP with no
-// ShowMesh plugin installed says so in its own words, and paraphrasing
-// that would cost the operator the only description of what is wrong.
-func fppBrightnessCeilingWriteFailedProblem(instanceID, reason string) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeFPPBrightnessCeilingWriteFailed,
-		Title:  "FPP brightness ceiling write failed",
-		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("the brightness ceiling write to FPP instance %q did not take: %s", instanceID, reason),
 	}
 }
 

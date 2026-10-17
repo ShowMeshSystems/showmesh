@@ -85,7 +85,7 @@ func (i MediaPlaylistItem) MarshalJSON() ([]byte, error) {
 		Kind     string `json:"kind"`
 		Show     string `json:"show"`
 		Sequence string `json:"sequence"`
-		Target   string `json:"target"`
+		Target   string `json:"target,omitempty"`
 	}{Kind: i.Kind, Show: i.Asset.Show, Sequence: i.Asset.Sequence, Target: i.Asset.Target})
 }
 
@@ -252,7 +252,7 @@ func decodeMediaPlaylistItem(raw json.RawMessage, field, show string, assetCurre
 		}
 	}
 
-	asset, verr := decodeNightSessionAssetRef(fields, field, show, assetCurrent)
+	asset, verr := decodeAudioItemAssetRef(fields, field, show, assetCurrent)
 	if verr != nil {
 		return MediaPlaylistItem{}, verr
 	}

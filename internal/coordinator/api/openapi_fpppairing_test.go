@@ -15,7 +15,7 @@ func TestOpenAPIFPPPairingDocumentIsWellFormed(t *testing.T) {
 	for _, name := range []string{
 		"FPPPairingRequest", "FPPPairingResponse", "FPPPairingStateResponse",
 		"FPPPairingClaimRequest", "FPPPairingClaimResponse",
-		"FPPBrightnessCeilingRequest", "FPPBrightnessCeilingResponse",
+		"FPPBrightnessCeilingRequest", "FPPBrightnessResponse",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -50,19 +50,18 @@ func TestOpenAPIFPPPairingResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "Problem", malformed)
 }
 
-func TestOpenAPIFPPBrightnessCeilingResponsesMatchRealResponses(t *testing.T) {
+func TestOpenAPIFPPBrightnessResponsesMatchRealResponses(t *testing.T) {
 	c := newOpenAPICompiler(t)
-	srv, _ := newFakeCeilingFPP(t, nil, true)
-	api, _, token := ceilingAPI(t, srv.URL)
+	api, _, token := ceilingAPI(t, "http://127.0.0.1:9")
 
-	_, written := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":60}`, token))
-	assertMatchesSchema(t, c, "FPPBrightnessCeilingResponse", written)
+	_, empty := doRawRequest(t, api.Handler, brightnessRequest(t, http.MethodGet, "/api/v1/fpp/brightness", "", token))
+	assertMatchesSchema(t, c, "FPPBrightnessResponse", empty)
 
-	_, refused := doRawRequest(t, api.Handler, ceilingRequest(t, "bench-fpp", `{"ceiling":101}`, token))
+	_, written := doRawRequest(t, api.Handler, ceilingRequest(t, `{"targetPercent":60,"fadeSeconds":10}`, token))
+	assertMatchesSchema(t, c, "FPPBrightnessResponse", written)
+
+	_, refused := doRawRequest(t, api.Handler, ceilingRequest(t, `{"targetPercent":101}`, token))
 	assertMatchesSchema(t, c, "Problem", refused)
-
-	_, missing := doRawRequest(t, api.Handler, ceilingRequest(t, "no-such-fpp", `{"ceiling":50}`, token))
-	assertMatchesSchema(t, c, "Problem", missing)
 }
 
 // The three request-body pointers assertMatchesSchema never reads.
@@ -70,7 +69,7 @@ func TestOpenAPIFPPPairingRequestBodiesReferenceDocumentedSchemas(t *testing.T) 
 	for _, tc := range []struct{ method, path, want string }{
 		{"post", "/fpp/{instanceId}/pairing", "FPPPairingRequest"},
 		{"post", "/integrations/fpp/pairing/claim", "FPPPairingClaimRequest"},
-		{"post", "/fpp/{instanceId}/brightness/ceiling", "FPPBrightnessCeilingRequest"},
+		{"put", "/fpp/brightness/ceiling", "FPPBrightnessCeilingRequest"},
 	} {
 		if got := requestBodySchemaRef(t, tc.method, tc.path); got != tc.want {
 			t.Errorf("%s %s requestBody schema = %q, want %q", tc.method, tc.path, got, tc.want)

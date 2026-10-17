@@ -197,6 +197,9 @@ var migrations = []migration{
 	{version: 48, sql: schemaV48},
 	// v49: adds companion_reports. No existing table is touched.
 	{version: 49, sql: schemaV49},
+	// v50 (ADR-062): adds display_brightness_ceiling. No existing table is
+	// touched.
+	{version: 50, sql: schemaV50},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

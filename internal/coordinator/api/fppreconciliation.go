@@ -75,7 +75,7 @@ func (h *handlers) handleGetFPPPlaylistEntryReconciliation(w http.ResponseWriter
 	if err != nil {
 		if errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound) {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"no accepted playlist-entry observation for instanceUuid "+instanceUUID))
+				"FPP has not reported a playlist entry to this coordinator. Check the ShowMesh plugin on FPP."))
 			return
 		}
 		h.writeInternalError(w, now, "get fpp playlist entry observation", err)

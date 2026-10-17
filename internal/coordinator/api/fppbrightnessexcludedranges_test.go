@@ -237,7 +237,7 @@ func TestExcludedRangesCarriesThePluginsOwnRefusal(t *testing.T) {
 func TestExcludedRangesSaysToUpdateAPluginWithoutTheRoute(t *testing.T) {
 	plugin := &fakeExcludedRangesPlugin{holds: `[]`, status: http.StatusNotFound}
 	resp, body, _ := putExcludedRanges(t, plugin, "bench-fpp", `{"ranges":[]}`)
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "Update the ShowMesh plugin.") {
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "Update the plugin.") {
 		t.Fatalf("status = %d body = %s, want a 502 that says to update the plugin", resp.StatusCode, body)
 	}
 }

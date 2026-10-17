@@ -608,6 +608,10 @@ type Dependencies struct {
 	// not active and refuses writes.
 	WeatherDelay WeatherDelayStore
 
+	// DisplayCeiling holds the display's one brightness ceiling. A nil
+	// field answers the brightness routes with a 503.
+	DisplayCeiling DisplayCeiling
+
 	// WeatherDelayTrigger is ADR-053 decision 12's pending decision and
 	// suppression store, see [WeatherDelayTriggerStore]. A nil field is
 	// replaced by [noWeatherDelayTriggerStore], under which no decision is
@@ -1920,6 +1924,7 @@ func New(deps Dependencies, opts Options) *API {
 		redeemLimiter:             newRedeemLimiter(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
+	hub.fppPairings = h.fppPairings
 	// A write whose result is visible in a streamed resource has to say so
 	// here; nothing else connects a handler to the hub. Both wirings are
 	// live: they are the same rule reached two ways, and neither is
@@ -1969,21 +1974,12 @@ func New(deps Dependencies, opts Options) *API {
 	// fppcommand_handler.go owns everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
 
-	// POST /api/v1/fpp/{instanceId}/brightness/transition-gain: the
-	// operator write of one FPP host's brightness transition gain
-	// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2), behind the same
-	// fpp:command scope dispatching an FPP command needs - see
-	// scopeFPPTransitionGain's own doc comment. fpptransitiongain.go owns
-	// everything past authorization.
-	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
-
-	// POST /api/v1/fpp/{instanceId}/brightness/ceiling: the operator
-	// write of one FPP host's brightness ceiling, behind fpp:command like
-	// every other operator write to one FPP host. Unlike the gain above,
-	// the ceiling IS one of FPP's own commands, registered by the
-	// resident plugin - fppbrightnessceiling.go owns everything past
-	// authorization.
-	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/ceiling", h.writeGuard(&scopeFPPBrightnessCeiling, h.handleFPPBrightnessCeiling))
+	// The display's one brightness ceiling and the transition gain, both
+	// written to every FPP (ADR-062). fppbrightnessceiling.go and
+	// fpptransitiongain.go own everything past authorization.
+	mux.HandleFunc("GET /api/v1/fpp/brightness", h.readGuard(scopeFPPBrightnessRead, h.handleFPPBrightness))
+	mux.HandleFunc("PUT /api/v1/fpp/brightness/ceiling", h.writeGuard(&scopeFPPBrightnessCeiling, h.handleFPPSetBrightnessCeiling))
+	mux.HandleFunc("POST /api/v1/fpp/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
 
 	// PUT /api/v1/fpp/{instanceId}/brightness/excluded-ranges: the
 	// operator write of the channel ranges the ceiling leaves alone,

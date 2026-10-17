@@ -34,6 +34,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodefallback"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/displayceiling"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/enrollment"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackhold"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
@@ -590,6 +591,29 @@ func Run() int {
 	// receiving commands until someone restarted this process.
 	fppEndpoints := newFPPEndpointSource(st, logger)
 
+	// The display's one brightness ceiling (ADR-062): it reads every FPP
+	// through the brightness collectors below and writes any that differ.
+	displayCeiling := displayceiling.New(displayceiling.Options{
+		Store: st,
+		Endpoints: func(ctx context.Context) ([]displayceiling.Endpoint, error) {
+			eps := fppEndpoints.Current(ctx)
+			out := make([]displayceiling.Endpoint, 0, len(eps))
+			for _, ep := range eps {
+				out = append(out, displayceiling.Endpoint{ID: ep.ID, URL: ep.URL})
+			}
+			return out, nil
+		},
+		PollInterval: fppbrightness.DefaultPollInterval,
+		Logger:       logger,
+	})
+	observeBrightness := func(r fppbrightness.Reading) {
+		displayCeiling.Observe(displayceiling.Reading{
+			InstanceID: r.InstanceID, ReceivedAt: r.ReceivedAt, NotFound: r.NotFound, Err: r.Err,
+			Ceiling: r.Ceiling, FadeActive: r.FadeActive, UpdatedAtMillis: r.UpdatedAtMillis,
+			CeilingTarget: r.CeilingTarget, CeilingFadeEndMillis: r.CeilingFadeEndMillis, CeilingChangedAtMillis: r.CeilingChangedAtMillis,
+		})
+	}
+
 	// Track G seam G-2 (ADR-039): resolumeManager owns the live
 	// collector/watcher/action-dispatcher/recovery bundle for whichever
 	// Resolume instance resolume.instances currently names (0 or 1), and
@@ -1010,6 +1034,9 @@ func Run() int {
 		// WeatherDelay reads and writes the stored state through the
 		// keeper above instead of api.noWeatherDelayStore's no-op default.
 		WeatherDelay: weatherDelayState,
+		// DisplayCeiling serves GET /fpp/brightness and PUT
+		// /fpp/brightness/ceiling from the reconciler above.
+		DisplayCeiling: displayCeiling,
 		// WeatherDelayTrigger: *store.Store already satisfies
 		// api.WeatherDelayTriggerStore with no adapter, matching
 		// NightSessions/Discovery/AlignmentRuns' identical wiring above.
@@ -1267,7 +1294,7 @@ func Run() int {
 		// collector on its own faster cadence. It is registered under its
 		// own Runner key, never the bare endpoint id the REST collector
 		// already holds.
-		brightnessCollector, err := fppbrightness.New(ep.ID, ep.URL, fppbrightness.Options{HTTPClient: fppHTTPClient})
+		brightnessCollector, err := fppbrightness.New(ep.ID, ep.URL, fppbrightness.Options{HTTPClient: fppHTTPClient, OnReading: observeBrightness})
 		if err != nil {
 			logger.Error("failed to construct fpp brightness collector", "instance_id", ep.ID, "error", err)
 			_ = bm.Disconnect(ctx)
@@ -1294,7 +1321,7 @@ func Run() int {
 	// its own factory produced, so the two passes never remove each
 	// other's registrations.
 	newFPPBrightnessCollector := func(id, url string) (collector.Collector, error) {
-		return fppbrightness.New(id, url, fppbrightness.Options{HTTPClient: fppHTTPClient})
+		return fppbrightness.New(id, url, fppbrightness.Options{HTTPClient: fppHTTPClient, OnReading: observeBrightness})
 	}
 	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPBrightnessCollector, fppCollectorReconcileInterval, logger)
 
@@ -1349,6 +1376,9 @@ func Run() int {
 	})
 	spawnBackground(func() {
 		fppRunner.Run(ctx)
+	})
+	spawnBackground(func() {
+		displayCeiling.Run(ctx)
 	})
 	spawnBackground(func() {
 		fppPluginRunner.Run(ctx)

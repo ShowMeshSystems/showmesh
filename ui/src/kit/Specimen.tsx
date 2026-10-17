@@ -23,6 +23,7 @@ import {
   ConnectionPill,
   CopyButton,
   DefinitionStrip,
+  RevisionDiff,
   DeletePanel,
   Drawer,
   Field,
@@ -440,6 +441,9 @@ export function Specimen() {
               <Button>Fire and hold the bed</Button>
             </NotWired>
           </ButtonRow>
+          <Tiles>
+            <StatTile label="Enclosure temperature" value="" detail="No source reports this yet." notWired />
+          </Tiles>
           <Callout>
             Amber, not red: nothing has failed. The tag rides on the control, and the control is forced disabled.
           </Callout>
@@ -900,6 +904,22 @@ export function Specimen() {
             <ReorderButtons itemLabel="step 1" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveUpReason="Already first." />
             <ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveDownReason="Already last." />
           </div>
+        </SpecSection>
+        <SpecSection
+          number="19 · Version changes"
+          id="specimen-revision-diff"
+          title="A version says what changed from the one before it"
+          detail="A flat list of changed field paths with before and after. Long values are cut at 80 characters. The first version says it has nothing before it."
+        >
+          <RevisionDiff
+            revision={3}
+            changes={[
+              { path: 'label', kind: 'changed', before: 'Winter Ridge', after: 'Winter Ridge 2' },
+              { path: 'steps[2].name', kind: 'added', before: null, after: 'Blackout' },
+              { path: 'note', kind: 'removed', before: 'Old note', after: null },
+            ]}
+          />
+          <RevisionDiff revision={1} changes={null} />
         </SpecSection>
       </div>
     </div>
