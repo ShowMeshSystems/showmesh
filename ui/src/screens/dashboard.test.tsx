@@ -5,7 +5,7 @@ import type { FPPInstance, Model, NightSessionState, Node, ResolumeInstance } fr
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Dashboard } from './Dashboard'
-import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail } from './dashboardModel'
+import { fleetCounts, fppDetail, nextStartVerdict, nodesDetail, resolumeDetail } from './dashboardModel'
 
 const previewStubs = vi.hoisted(() => ({ getPreviews: vi.fn(() => new Promise(() => {})) }))
 
@@ -292,6 +292,15 @@ describe('Dashboard', () => {
     expect(counts.nodesOnline).toBe(1)
     expect(counts.nodesUnknown).toBe(1)
     expect(nodesDetail(counts)).toBe('1 unknown')
+  })
+
+  it('reports Resolume health from the real counts', () => {
+    const base = { nodesTotal: 0, nodesOnline: 0, nodesUnknown: 0 } as never
+    const detail = (total: number, healthy: number) =>
+      resolumeDetail({ ...(base as object), resolumeTotal: total, resolumeHealthy: healthy } as never)
+    expect(detail(0, 0)).toBe('none configured')
+    expect(detail(1, 0)).toBe('1 not healthy')
+    expect(detail(2, 2)).toBe('all healthy')
   })
 
   it('counts signals by their evidence state', () => {

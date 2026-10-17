@@ -28,8 +28,7 @@ import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
 import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, playlistRows, readinessTone, readyLabel, slugify, type AudioAssetOption } from './showsModel'
 import { MediaPlaylistDraft, MediaPlaylistEditor } from './ShowsMediaPlaylists'
-import { ReimportControl } from './ShowsReimport'
-import { PlaylistMoveNotice, PlaylistMoveReview, usePlaylistMove } from './ShowsPlaylistMove'
+import { PlaylistMoveReview, PlaylistUpdateControl, usePlaylistMove } from './ShowsPlaylistMove'
 
 type Playlist = ShowPlaylistConfigResponse
 type MediaPlaylist = MediaPlaylistConfigResponse
@@ -436,8 +435,17 @@ function FPPPlaylistEditor({
   }, [playlist])
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
-  const reimportGate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
-  const move = usePlaylistMove(playlist, onSaved)
+  const resendGate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
+  const move = usePlaylistMove(
+    playlist,
+    {
+      instanceId: binding === undefined ? null : (model.fpp.find((i) => i.instanceUuid === binding.instanceUuid)?.instanceId ?? null),
+      instanceUuid: binding?.instanceUuid ?? '',
+      playlistName: binding?.playlistName ?? '',
+      resendBlockedReason: resendGate.allowed ? null : resendGate.reason,
+    },
+    onSaved,
+  )
 
   if (binding === undefined) {
     return <RuledStrip absence="unavailable" label="No binding" fact="This FPP-runner playlist has no stored FPP binding." />
@@ -445,7 +453,6 @@ function FPPPlaylistEditor({
 
   const instanceLabel = fppInstanceLabel(model.fpp, binding.instanceUuid)
   const instanceRoute = fppInstanceRoute(model.fpp, binding.instanceUuid)
-  const reimportInstanceId = model.fpp.find((i) => i.instanceUuid === binding.instanceUuid)?.instanceId ?? null
   const moveBlockedReason = !saveGate.allowed
     ? saveGate.reason
     : dirty
@@ -569,17 +576,7 @@ function FPPPlaylistEditor({
             },
           ]}
         />
-        <ReimportControl
-          instanceId={reimportInstanceId}
-          instanceUuid={binding.instanceUuid}
-          playlistName={binding.playlistName}
-          blockedReason={reimportGate.allowed ? null : reimportGate.reason}
-          onLanded={() => {
-            evidence.reload()
-            move.recheck()
-          }}
-        />
-        <PlaylistMoveNotice move={move} blockedReason={moveBlockedReason} />
+        <PlaylistUpdateControl move={move} blockedReason={moveBlockedReason} />
         <PlaylistMoveReview move={move} cues={cues} confirmBlockedReason={moveBlockedReason} />
       </div>
 

@@ -2,6 +2,7 @@ package previewgateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -57,7 +58,7 @@ func (h *harness) do(t *testing.T, method, path, token, body string) (*http.Resp
 func TestAuthRequiredOnEveryV1Route(t *testing.T) {
 	h := newHarness(t)
 	routes := [][2]string{
-		{"GET", "/v1/sources"}, {"PUT", "/v1/streams"}, {"GET", "/v1/streams"},
+		{"GET", "/v1/sources"}, {"GET", "/v1/discovery"}, {"PUT", "/v1/streams"}, {"GET", "/v1/streams"},
 		{"POST", "/v1/streams/k/webrtc"}, {"GET", "/v1/streams/k/snapshot"},
 	}
 	for _, r := range routes {
@@ -269,5 +270,18 @@ func TestHealthzFollowsTheVideoEngineNotAvahi(t *testing.T) {
 	eng.ready = true
 	if rec := get(); rec.Code != http.StatusOK {
 		t.Fatalf("engine up with Avahi down: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDiscoveryRouteReportsWhyNDIIsNotRunning(t *testing.T) {
+	h := newHarness(t)
+	if resp, body := h.do(t, "GET", "/v1/discovery", testToken, ""); resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"running":true,"message":""}` {
+		t.Fatalf("running: %d %s", resp.StatusCode, body)
+	}
+	h.src.ok, h.src.msg = false, msgCannotStart
+	_, body := h.do(t, "GET", "/v1/discovery", testToken, "")
+	var st DiscoveryStatus
+	if err := json.Unmarshal([]byte(body), &st); err != nil || st.Running || st.Message != msgCannotStart {
+		t.Fatalf("not running: %s (%v)", body, err)
 	}
 }

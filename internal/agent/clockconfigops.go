@@ -104,7 +104,7 @@ func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error
 		LocalSocketDir:       b.localSocketDir,
 	}
 	if err := b.mgr.SetConfig(ctx, cfg); err != nil {
-		return fmt.Errorf("node.clock.configure: %w", err)
+		return withOperatorReason(fmt.Errorf("node.clock.configure: %w", err), "%s", clock.RejectionReason(cfg))
 	}
 
 	b.cfg = p

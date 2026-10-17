@@ -1563,7 +1563,7 @@ describe('Show Night', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
-  it('explains on the resting sequence field, not the target field, that the file sets the resting cycle length', async () => {
+  it('explains on the resting sequence field, not the read-the-length-from field, that the file sets the resting cycle length', async () => {
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
@@ -1575,7 +1575,8 @@ describe('Show Night', () => {
     expect(document.getElementById(describedBy!)).toHaveTextContent(helpText)
     // A second copy on Read the length from would still pass a plain text-presence assertion.
     expect(screen.getAllByText(helpText)).toHaveLength(1)
-    expect(screen.getByLabelText('Read the length from').getAttribute('aria-describedby')).toBeNull()
+    const lengthFrom = screen.getByLabelText('Read the length from').getAttribute('aria-describedby')
+    expect(document.getElementById(lengthFrom!)).toHaveTextContent('usually the FPP player')
   })
 
   it('explains the audio asset picker lists store-registered assets by name and node', async () => {

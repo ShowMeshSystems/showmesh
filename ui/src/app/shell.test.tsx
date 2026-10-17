@@ -708,6 +708,24 @@ describe('app shell', () => {
       expect(await popup.findByText('main-player')).toBeInTheDocument()
     })
 
+    it('fires the hard stop while a stop is still pending, and shows the hard stop outcome', async () => {
+      let settleStop: (value: typeof STOPPED) => void = () => {}
+      emergencyStopMock.mockReturnValue(new Promise((resolve) => { settleStop = resolve }))
+      armEmergencyStopHardStopMock.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-2', expiresAt: new Date(Date.now() + 10_000).toISOString() })
+      fireEmergencyStopHardStopMock.mockResolvedValue(STOPPED)
+      const bar = renderBar()
+      fireEvent.click(bar.getByRole('button', { name: 'Emergency stop' }))
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop every configured FPP instance now?' })).getByRole('button', { name: 'Stop' }))
+      const popup = within(await screen.findByRole('dialog', { name: 'Emergency stop' }))
+      fireEvent.click(popup.getByRole('button', { name: 'Arm hard stop' }))
+      await popup.findByText(/Armed\. Fire within/)
+      fireEvent.click(popup.getByRole('button', { name: 'Fire hard stop' }))
+      expect(fireEmergencyStopHardStopMock).toHaveBeenCalledExactlyOnceWith('token-2')
+      expect(await popup.findByText('main-player')).toBeInTheDocument()
+      await act(async () => settleStop({ ...STOPPED, noInstancesConfigured: true }))
+      expect(popup.getByText('main-player')).toBeInTheDocument()
+    })
+
     it('drops the arm on Cancel and on closing the popup, without firing', async () => {
       armEmergencyStopHardStopMock.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: new Date(Date.now() + 10_000).toISOString() })
       const bar = renderBar()

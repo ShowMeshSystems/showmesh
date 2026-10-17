@@ -83,7 +83,7 @@ export function EmergencyStopChrome({ model }: { model: Model }) {
                 <Button
                   variant="danger"
                   size="gloved"
-                  disabled={!gate.allowed || hardStopArm === null || armExpired || busy !== false}
+                  disabled={!gate.allowed || hardStopArm === null || armExpired}
                   onClick={emergency.fireHardStop}
                 >
                   Fire hard stop

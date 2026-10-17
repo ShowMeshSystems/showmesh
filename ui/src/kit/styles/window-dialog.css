@@ -1,0 +1,44 @@
+/* A large window over the page, for one thing the operator wants to see big. Sits with the confirm dialog above the popover. */
+.sm-window-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgb(0 0 0 / 0.6);
+}
+
+.sm-window {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, calc(100vw - 2 * var(--s-4)));
+  max-height: calc(100vh - 2 * var(--s-4));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--raised);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+  overflow: hidden;
+}
+
+.sm-window__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sm-window__title {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.sm-window__body {
+  min-height: 0;
+  padding: var(--s-3);
+  overflow: auto;
+}

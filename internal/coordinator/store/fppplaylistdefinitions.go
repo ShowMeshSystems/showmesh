@@ -158,11 +158,24 @@ func listFPPPlaylistDefinitionsByInstance(ctx context.Context, q querier, instan
 // it was: contract §3.4 step 8, "playlistName and capturedAtMillis on a
 // repeat are ignored rather than overwriting the stored ones: the first
 // report of a given content is the one with provenance."
+// putFPPPlaylistDefinition stores a definition, or, when the same hash is
+// already held, keeps its name and capture time and moves only its receipt
+// time forward: a playlist put back to an earlier version is the FPP's
+// current copy again, and "newest received" must say so.
 func putFPPPlaylistDefinition(ctx context.Context, q querier, rec FPPPlaylistDefinitionRecord) (bool, error) {
+	var existing int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM fpp_playlist_definitions WHERE instance_uuid = ? AND playlist_hash = ?`,
+		rec.InstanceUUID, rec.PlaylistHash).Scan(&existing)
+	if err != nil {
+		return false, fmt.Errorf("store: put fpp playlist definition %q/%q: lookup: %w", rec.InstanceUUID, rec.PlaylistHash, err)
+	}
 	res, err := q.ExecContext(ctx, `
 		INSERT INTO fpp_playlist_definitions (`+fppPlaylistDefinitionColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(instance_uuid, playlist_hash) DO NOTHING
+		ON CONFLICT(instance_uuid, playlist_hash) DO UPDATE SET
+			received_at = excluded.received_at
+		WHERE excluded.received_at > fpp_playlist_definitions.received_at
 	`,
 		rec.InstanceUUID, rec.PlaylistHash, rec.PlaylistName, rec.DefinitionJSON,
 		rec.CapturedAt.UnixMilli(), timeToDB(rec.ReceivedAt),
@@ -170,11 +183,10 @@ func putFPPPlaylistDefinition(ctx context.Context, q querier, rec FPPPlaylistDef
 	if err != nil {
 		return false, fmt.Errorf("store: put fpp playlist definition %q/%q: %w", rec.InstanceUUID, rec.PlaylistHash, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
+	if _, err := res.RowsAffected(); err != nil {
 		return false, fmt.Errorf("store: put fpp playlist definition %q/%q: rows affected: %w", rec.InstanceUUID, rec.PlaylistHash, err)
 	}
-	return n > 0, nil
+	return existing == 0, nil
 }
 
 // PutFPPPlaylistDefinition upserts idempotently on (InstanceUUID,

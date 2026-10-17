@@ -1777,7 +1777,7 @@ export interface paths {
         get: operations["getNodeClock"];
         /**
          * Write a new node.clock revision (Track I seam I1)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current. When the node advertises the `clock.ptp` capability, a `managed` or `external` write is refused with `400` (field `interface`) unless `interface` is one of the network interfaces that capability lists, and a `managed` write is refused (field `provider`) when the capability's `externalProvider` is true, because a PTP service outside ShowMesh already runs on that node. A node that has not advertised `clock.ptp` is not checked.
          */
         put: operations["putNodeClock"];
         post?: never;
@@ -5498,6 +5498,13 @@ export interface components {
             state: "not_configured" | "connecting" | "reachable" | "unreachable";
             /** @description States the fact, then the action. Empty when reachable. */
             message: string;
+            /** @description Whether the gateway can find NDI sources. Omitted while the gateway is not reachable or does not report it. */
+            ndiDiscovery?: {
+                /** @enum {string} */
+                state: "running" | "not_running";
+                /** @description States the fact, then the action. Empty when running. */
+                message: string;
+            };
             /** Format: date-time */
             observedAt: string;
         };
@@ -7802,6 +7809,7 @@ export interface components {
             fppInstanceId: string;
             playlist: string;
             endOfNightPlaylist: string;
+            /** @description The resting sequence. Its length, read from the copy on target, sets how long resting runs. Any render node that has this sequence draws it during resting; target does not choose render nodes. */
             timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
             endOfNightRepeat: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
@@ -7890,6 +7898,7 @@ export interface components {
             fppInstanceId: string;
             playlist: string;
             endOfNightPlaylist?: string;
+            /** @description The resting sequence. Its length, read from the copy on target, sets how long resting runs. Any render node that has this sequence draws it during resting; target does not choose render nodes. */
             timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
             endOfNightRepeat?: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
@@ -8021,6 +8030,9 @@ export interface components {
          * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reasons` say what needs attention, one message per item. A healthy result on one check is never evidence any other check passed.
          *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
+         *     Every node the background audio resolves to also gets `resting:background-audio-node-setup:<node>`, which fails when that node has no `audio.node` object or no longer finds its program route, because such a node confirms every command and plays to no connected output. When the show's `audioNodes` decide where background audio plays, `resting:background-audio-item-targets` warns about each item whose own target node is not among them.
+         *     Each show playlist of this session's show gets `show:cue-audio-targets:<playlistId>`, the same audio routing rule as the playlist readiness conditions `audio-target-unbound`, `audio-target-unresolved` and `audio-ltc-emitter-ambiguous`. `catalog:node-catalog-stale:<node>` also fails when a node's resolved cue list gives a cue timecode without its audio, since the node refuses every such activation.
+         *     Every configured `audio.node` also gets `audio:clock:<nodeId>`, which fails when the node plays through PipeWire (`node.audio.engine.sink_backend` is `pipewiresink`) on GStreamer's default clock (`node.audio.engine.clock_source` is `default`). That node stalls the whole PipeWire graph and plays nothing while its engine still reports usable. It is `not_verifiable` while the node has not reported both signals.
          *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reasons`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
          *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), one item of `reasons` per FPP. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
          */
@@ -8506,7 +8518,7 @@ export interface components {
             ltc?: components["schemas"]["CueCatalogLTCOutput"];
             announcement?: components["schemas"]["CueCatalogAnnouncementOutput"];
         };
-        /** @description One Cue's row in a resolved catalog (Track H seam H3). triggers is the sorted, de-duplicated list of FPP sequence filenames that start this Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it receives a MultiSync START packet naming one of these filenames. Resolved from every bound fpp-runner show.playlist entry naming this Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own resolved render output filename when it has one. Always present, an empty array when there is no trigger yet. */
+        /** @description One Cue's row in a resolved catalog (Track H seam H3). triggers is the sorted, de-duplicated list of FPP sequence filenames that start this Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it receives a MultiSync START packet naming one of these filenames. Resolved from every bound fpp-runner show.playlist entry naming this Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own resolved render output filename when it has one. Always present, an empty array when there is no trigger yet. A render node that holds the active night session's resting sequence also has one entry whose cueId is "resting:" followed by the sequence id (ADR-061). It is not a Cue: it has only a render output, cueRevision 1, and no triggers. */
         CueCatalogEntry: {
             cueId: string;
             cueRevision: number;

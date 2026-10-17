@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { PreviewTile } from '../kit'
+import { PreviewTile, WindowDialog } from '../kit'
 import type { PreviewTile as PreviewTileData } from '../api'
 import { startFeed } from './previewFeed'
 
@@ -49,16 +49,19 @@ type Props = {
   actions?: ReactNode
   handle?: ReactNode
   dragProps?: Partial<React.ComponentProps<typeof PreviewTile>>
+  /** Adds the enlarge icon; the popup shows the same feed in a second tile that has none. */
+  enlargeable?: boolean
 }
 
 /** A tile that connects its video only while it is on screen, and closes the connection when it leaves. */
-export function PreviewWallTile({ tile, withMessage = true, actions, handle, dragProps }: Props) {
+export function PreviewWallTile({ tile, withMessage = true, actions, handle, dragProps, enlargeable = false }: Props) {
   const frameRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const watching = useWatching(frameRef)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [snapshot, setSnapshot] = useState<string | null>(null)
   const [lastFrameAt, setLastFrameAt] = useState<number | null>(null)
+  const [enlarged, setEnlarged] = useState(false)
   const connectable = !NO_PICTURE_STATES.has(tile.state)
 
   useEffect(() => {
@@ -84,7 +87,7 @@ export function PreviewWallTile({ tile, withMessage = true, actions, handle, dra
     ) : undefined
   const frameAge = useSecondsSince(media === undefined ? null : lastFrameAt)
 
-  return (
+  const tileView = (
     <PreviewTile
       label={tile.label}
       state={tile.state}
@@ -94,7 +97,17 @@ export function PreviewWallTile({ tile, withMessage = true, actions, handle, dra
       mediaRef={frameRef}
       actions={actions}
       handle={handle}
+      {...(enlargeable ? { onEnlarge: () => setEnlarged(true) } : {})}
       {...dragProps}
     />
+  )
+  if (!enlargeable) return tileView
+  return (
+    <>
+      {tileView}
+      <WindowDialog open={enlarged} title={tile.label} onClose={() => setEnlarged(false)}>
+        <PreviewWallTile tile={tile} withMessage={withMessage} />
+      </WindowDialog>
+    </>
   )
 }

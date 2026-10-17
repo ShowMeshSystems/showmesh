@@ -217,15 +217,47 @@ need_answer() {
   fail "The installer needs $1 and has no terminal to ask on." "showmesh-install $2 (add it to the command you ran)"
 }
 
+# drop_stray_newlines discards empty lines already waiting on the terminal, such as the
+# line break pasted after an enrollment code, so they do not answer the next question.
+# A non-empty line typed ahead is kept for the next read.
+drop_stray_newlines() {
+  [ -t 0 ] || return 0
+  local __peek
+  while IFS= read -r -t 0; do
+    IFS= read -r -t 1 __peek || break
+    if [ -n "$__peek" ]; then
+      TYPED_AHEAD="$__peek"
+      TYPED_AHEAD_SET=1
+      break
+    fi
+  done
+}
+
+# read_answer VAR [-s] reads one line, using a line kept by drop_stray_newlines first.
+read_answer() {
+  local __ra_var="$1" __ra_silent="${2:-}" __ra_ans
+  if [ "${TYPED_AHEAD_SET:-0}" -eq 1 ]; then
+    __ra_ans="$TYPED_AHEAD"
+    TYPED_AHEAD=""
+    TYPED_AHEAD_SET=0
+  elif [ -n "$__ra_silent" ]; then
+    IFS= read -rs __ra_ans || __ra_ans=""
+  else
+    IFS= read -r __ra_ans || __ra_ans=""
+  fi
+  printf -v "$__ra_var" '%s' "$__ra_ans"
+}
+
 # ask VAR "question" [default]
 ask() {
   local __var="$1" __q="$2" __def="${3:-}" __ans
+  drop_stray_newlines
   if [ -n "$__def" ]; then
     printf '%s [%s]: ' "$__q" "$__def"
   else
     printf '%s: ' "$__q"
   fi
-  IFS= read -r __ans || __ans=""
+  read_answer __ans
   [ -z "$__ans" ] && __ans="$__def"
   printf -v "$__var" '%s' "$__ans"
 }
@@ -233,8 +265,9 @@ ask() {
 # ask_secret VAR "question" reads without echo.
 ask_secret() {
   local __var="$1" __q="$2" __ans
+  drop_stray_newlines
   printf '%s: ' "$__q"
-  IFS= read -rs __ans || __ans=""
+  read_answer __ans -s
   printf '\n'
   printf -v "$__var" '%s' "$__ans"
 }
@@ -242,9 +275,10 @@ ask_secret() {
 # confirm "question" default(y|n); returns 0 for yes.
 confirm() {
   local q="$1" def="${2:-n}" ans hint="[y/N]"
+  drop_stray_newlines
   [ "$def" = "y" ] && hint="[Y/n]"
   printf '%s %s: ' "$q" "$hint"
-  IFS= read -r ans || ans=""
+  read_answer ans
   [ -z "$ans" ] && ans="$def"
   case "$ans" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
