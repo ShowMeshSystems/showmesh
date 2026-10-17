@@ -299,7 +299,8 @@ func (h *handlers) refuseShowIfActive(showID string) func(ctx context.Context, t
 		if payload.Show != showID {
 			return nil
 		}
-		return &errConfigObjectCurrentlyActive{kind: config.ShowConfigKind, id: showID, activeKind: config.ShowActiveConfigKind}
+		return &errConfigObjectCurrentlyActive{kind: config.ShowConfigKind, id: showID, activeKind: config.ShowActiveConfigKind,
+			detail: fmt.Sprintf("The show %s is the active show. Choose another show first, then delete this one.", showID)}
 	}
 }
 

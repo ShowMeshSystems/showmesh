@@ -777,7 +777,7 @@ func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, session
 	if !assetCurrent(show, sequence, target) {
 		return NightSessionAssetRef{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: path,
-			Detail: fmt.Sprintf("no current asset for show %q sequence %q target %q", show, sequence, target),
+			Detail: fmt.Sprintf("No current file exists for show %s, sequence %s and node %s. Upload one first.", show, sequence, target),
 		}
 	}
 	return NightSessionAssetRef{Show: show, Sequence: sequence, Target: target}, nil
@@ -1051,7 +1051,7 @@ func decodeNightSessionBedTargets(fields map[string]json.RawMessage, path string
 		if seen[id] {
 			return nil, &ValidationError{
 				Code: ValidationCodeNightBackgroundAudioTargetDuplicate, Field: itemField,
-				Detail: fmt.Sprintf("target %q is already listed earlier in %s", id, path),
+				Detail: fmt.Sprintf("Node %s is listed more than once. Remove the repeat.", id),
 			}
 		}
 		seen[id] = true
