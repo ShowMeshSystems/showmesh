@@ -163,3 +163,73 @@ func TestAutoDeployCueCatalog_HeldWhenPlaybackEvidenceIsStale(t *testing.T) {
 		t.Fatalf("GetNodeCueCatalogAck after a stale-evidence hold: err = %v, want ErrNodeCueCatalogAckNotFound", err)
 	}
 }
+
+// TestCueCatalogAutoDeployHold_StalePluginReadingUsesThePlayersOwnStatus
+// covers the between-shows case: the plugin reports only on playback
+// changes, so its reading goes stale while FPP sits idle. The player's own
+// current fpp.status then decides.
+func TestCueCatalogAutoDeployHold_StalePluginReadingUsesThePlayersOwnStatus(t *testing.T) {
+	status := func(value any, state, source string) currentrun.Evidence {
+		return currentrun.Evidence{Signal: fppStatusSignal, Value: value, State: state, Source: source}
+	}
+	staleRun := func(evidence ...currentrun.Evidence) currentrun.Run {
+		return currentrun.Run{ID: "fpp:player-01", Runner: currentrun.RunnerFPP, Status: "stopped",
+			Playback:  currentrun.Playback{State: "stopped", Evidence: evidence},
+			Freshness: currentrun.Freshness{State: "stale"}}
+	}
+	tests := []struct {
+		name                  string
+		run                   currentrun.Run
+		wantHold              bool
+		wantEvidenceUncertain bool
+	}{
+		{
+			name: "current idle from the player deploys",
+			run: staleRun(status(nil, "not_collected", "fpp-mqtt"), status("idle", "stale", "fpp-plugin"),
+				status("idle", "current", "fpp-rest")),
+			wantHold: false,
+		},
+		{
+			name:     "current playing from the player holds as busy",
+			run:      staleRun(status("idle", "stale", "fpp-plugin"), status("playing", "current", "fpp-rest")),
+			wantHold: true, wantEvidenceUncertain: false,
+		},
+		{
+			name:     "a second current source reading playing holds",
+			run:      staleRun(status("idle", "current", "fpp-rest"), status("playing", "current", "fpp-mqtt")),
+			wantHold: true, wantEvidenceUncertain: false,
+		},
+		{
+			name:     "only stale status readings hold as uncertain",
+			run:      staleRun(status("idle", "stale", "fpp-plugin"), status("idle", "stale", "fpp-rest")),
+			wantHold: true, wantEvidenceUncertain: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api, _, _, _ := newCueCatalogAutoDeployFixture(t, []currentrun.Run{tt.run})
+			got := api.h.cueCatalogAutoDeployHold(context.Background(), testNow, "render-01")
+			if got.Hold != tt.wantHold || got.EvidenceUncertain != tt.wantEvidenceUncertain {
+				t.Errorf("hold = %+v, want Hold=%v EvidenceUncertain=%v", got, tt.wantHold, tt.wantEvidenceUncertain)
+			}
+		})
+	}
+}
+
+// TestAutoDeployCueCatalog_DeploysBetweenShowsWhenThePlayerIsIdle is the
+// between-shows case end to end: the deploy is dispatched.
+func TestAutoDeployCueCatalog_DeploysBetweenShowsWhenThePlayerIsIdle(t *testing.T) {
+	api, _, pub, _ := newCueCatalogAutoDeployFixture(t, []currentrun.Run{
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP, Status: "stopped",
+			Playback: currentrun.Playback{State: "stopped", Evidence: []currentrun.Evidence{
+				{Signal: fppStatusSignal, Value: "idle", State: "current", Source: "fpp-rest"},
+			}},
+			Freshness: currentrun.Freshness{State: "stale"}},
+	})
+
+	api.AutoDeployCueCatalog(context.Background(), testNow, "render-01")
+
+	if pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1: an idle player between shows must not hold the deploy", pub.count())
+	}
+}
