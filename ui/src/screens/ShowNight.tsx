@@ -85,7 +85,9 @@ import {
   nowPlaying,
   pinnedCeilingFact,
   readinessChecks,
+  readinessOutcome,
   runOfShow,
+  sentOutcome,
   type NightCommandOutcome,
   type RailStep,
 } from './showNightModel'
@@ -181,6 +183,7 @@ export function ShowNight() {
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[], stopOverride?: boolean) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
+      setOutcome(sentOutcome(command))
       dispatchNightCommand(
         command,
         idempotencyKey,
@@ -196,6 +199,10 @@ export function ShowNight() {
           if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
           if (command === 'start-night') setSkipEnterShowLead(false)
           const applied = response.command.outcome === 'applied'
+          if (command === 'run-readiness' && applied) {
+            setOutcome(readinessOutcome(response.session.readiness))
+            return
+          }
           const name = nightCommandLabel(command)
           const lines = [applied ? `${name} was accepted.` : `${name} changed nothing. The night was already there.`]
           if (response.command.reason !== undefined && response.command.reason !== '') lines.push(response.command.reason)

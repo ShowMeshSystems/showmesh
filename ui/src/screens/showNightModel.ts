@@ -1,4 +1,4 @@
-import type { Model, NightBackgroundAudio, NightCue, NightCycleOutcome, NightReadinessCheck, NightSessionState } from '../api'
+import type { Model, NightBackgroundAudio, NightCue, NightCycleOutcome, NightReadiness, NightReadinessCheck, NightSessionState } from '../api'
 import type { Tone } from '../kit'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 import { NIGHT_LIFECYCLE_GROUPS, findSignal, transportState } from './liveControlModel'
@@ -544,4 +544,33 @@ export type NightCommandOutcome = {
   label: string
   lines: string[]
   blocked: readonly { name: string; reason: string }[]
+}
+
+/** What shows while a night command is on its way, before the coordinator answers. */
+export function sentOutcome(command: string): NightCommandOutcome {
+  const line =
+    command === 'run-readiness'
+      ? 'Readiness is running. The result shows here when every check finishes.'
+      : `${nightCommandLabel(command)} was sent. The result shows here when the coordinator answers.`
+  return { tone: 'pending', label: 'Sent', lines: [line], blocked: [] }
+}
+
+const READINESS_OUTCOME_TONE: Record<NonNullable<NightReadiness['outcome']>, Tone> = {
+  ready: 'good',
+  ready_with_warnings: 'warn',
+  not_ready: 'bad',
+  unknown: 'unknown',
+}
+
+/** The result of a finished run-readiness, stated as its verdict rather than as an accepted command. */
+export function readinessOutcome(readiness: NightReadiness): NightCommandOutcome {
+  if (readiness.state !== 'recorded' || readiness.outcome === undefined) {
+    return { tone: 'unknown', label: 'Could not be determined', lines: [readiness.reason !== '' ? readiness.reason : READINESS_NOT_RUN], blocked: [] }
+  }
+  return {
+    tone: READINESS_OUTCOME_TONE[readiness.outcome] ?? 'unknown',
+    label: readiness.outcomeLabel ?? 'Could not be determined',
+    lines: ['Readiness finished. Each check is listed under Status.'],
+    blocked: [],
+  }
 }
