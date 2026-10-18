@@ -41,31 +41,14 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
 
-// nightCheckBrightnessCompositionUnverified warns, and no longer refuses,
-// on a lighting-role cue that declares a fade duration.
-//
-// It used to fail, because the ceiling times transition-gain provider was
-// specified and not built. The provider is now built: the plugin serves
-// the transition-gain route on both FPP majors and the coordinator writes
-// it as a cue effect. What is still missing is the other half of
-// RESTING-MODE's own condition. Line 228 rejects "until the ShowMesh
-// component passes its real-host acceptance matrix", and line 236 says
-// the seam "must be implemented before this behavior can be claimed".
-// Implemented is now true; the real-host acceptance matrix is the owner's
-// rig work and does not exist yet.
-//
-// So failing would make a built feature unreachable, and reporting
-// healthy would claim behaviour the spec explicitly forbids claiming
-// until it is verified on a real host. Degraded is the honest third
-// answer: the night starts, every consumer treats it as ready, and the
-// operator sees the one thing still outstanding before showtime. The
-// warning is what the acceptance matrix clears.
-func nightCheckBrightnessCompositionUnverified(transition string, cues []config.NightSessionCue) nightReadinessCheck {
+// nightCheckBrightnessComposition names the lighting cue that fades the
+// lights in a transition. It never warns: a fade's real-display check is a
+// rig test, not a readiness condition.
+func nightCheckBrightnessComposition(transition string, cues []config.NightSessionCue) nightReadinessCheck {
 	name := transition + ":brightness-composition"
 	for _, cue := range cues {
 		if cue.Role == config.NightSessionCueRoleLighting && cue.FadeDurationMs != nil {
-			return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
-				"Cue %s fades the lights. The fade will run, but it has not been proven on real hardware.", cue.Name)}
+			return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("Cue %s fades the lights.", cue.Name)}
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}

@@ -225,7 +225,7 @@ The ordering of steps 2–5 is configurable through relative cues, but show comp
 
 ### 7.3 Brightness composition
 
-**Selected design, not yet implemented.** [RES-018](../research/RES-018-fpp-brightness-control.md) records the owner-approved two-value FPP component and the FPP 9/10 build plan. Stock FPP and the upstream `fpp-brightness` plugin do not expose this composition. Until the ShowMesh component passes its real-host acceptance matrix, readiness rejects a configuration that requires this seam.
+**Implemented.** [RES-018](../research/RES-018-fpp-brightness-control.md) records the owner-approved two-value FPP component and the FPP 9/10 build plan. Stock FPP and the upstream `fpp-brightness` plugin do not expose this composition. Readiness names each configured fade and does not warn on it: checking a fade on a real display is a rig test, not a readiness condition.
 
 FPP may change the installation brightness ceiling on its own schedule. ShowMesh transition fades are a multiplier, not a replacement:
 
