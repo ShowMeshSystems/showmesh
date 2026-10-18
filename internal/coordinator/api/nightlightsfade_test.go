@@ -873,7 +873,7 @@ func TestLightsFade_ReadinessNamesEachFadeAndWarnsWhenTheyDoNotFit(t *testing.T)
 		LightsFadeOutMs: nightFadeMs(20000),
 	}
 	checks := n.h.nightCheckLightsFades(context.Background(), p)
-	if len(checks) != 1 || checks[0].name != "lights:fade-out" ||
+	if len(checks) != 1 || checks[0].name != "lights:fade-out" || checks[0].health != nightHealthHealthy() ||
 		!strings.Contains(checks[0].reason, "20 seconds") || !strings.Contains(checks[0].reason, "rest-fpp, remote-fpp and show-fpp") ||
 		!strings.Contains(checks[0].reason, "before each show.") {
 		t.Fatalf("readiness must name the fade, its length and both instances: %+v", checks)

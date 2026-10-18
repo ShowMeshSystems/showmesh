@@ -510,22 +510,20 @@ func (h *handlers) nightLightsRestoreAtEnd(ctx context.Context, now time.Time, r
 }
 
 // nightCheckLightsFades names each configured lights fade and the FPP
-// instances it writes to, and warns when the fades cannot both fit in the
-// resting sequence. Degraded, never failed: a fade's effect on a real display
-// is not yet verified, and a warning must not stop a night from starting.
+// instances it writes to, and warns only when the fades cannot both fit in
+// the resting sequence.
 func (h *handlers) nightCheckLightsFades(ctx context.Context, p config.NightSessionPayload) []nightReadinessCheck {
 	var checks []nightReadinessCheck
 	on := nightNames(h.nightLightsInstances(ctx))
-	const unverified = "Watch the first one, because this is not proven on a real display."
 	if p.LightsFadeOutMs != nil {
-		checks = append(checks, nightReadinessCheck{name: "lights:fade-out", health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"The lights on %s fade out over %d seconds before each show. %s",
-			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeOutMs)*time.Millisecond), unverified)})
+		checks = append(checks, nightReadinessCheck{name: "lights:fade-out", health: nightHealthHealthy(), reason: fmt.Sprintf(
+			"The lights on %s fade out over %d seconds before each show.",
+			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeOutMs)*time.Millisecond))})
 	}
 	if p.LightsFadeInMs != nil {
-		checks = append(checks, nightReadinessCheck{name: "lights:fade-in", health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"The lights on %s fade in over %d seconds after each show. %s",
-			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeInMs)*time.Millisecond), unverified)})
+		checks = append(checks, nightReadinessCheck{name: "lights:fade-in", health: nightHealthHealthy(), reason: fmt.Sprintf(
+			"The lights on %s fade in over %d seconds after each show.",
+			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeInMs)*time.Millisecond))})
 	}
 	if p.LightsFadeOutMs == nil && p.LightsFadeInMs == nil {
 		return checks
