@@ -147,6 +147,16 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 				continue
 			}
 			if run.Freshness.State != string(observation.StateCurrent) {
+				// The plugin reports only on playback changes, so between
+				// shows its reading always goes stale. FPP's own polled
+				// status, read now, still settles whether anything plays.
+				switch fppPolledStatus(run.Playback.Evidence) {
+				case fppPolledIdle:
+					continue
+				case fppPolledBusy:
+					return cueCatalogAutoDeployHoldResult{Hold: true,
+						Reason: fmt.Sprintf("fpp run %q's player reports it is not idle", run.ID)}
+				}
 				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
 					Reason: fmt.Sprintf("fpp run %q's playback reading is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
 			}
@@ -189,4 +199,29 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 		}
 	}
 	return cueCatalogAutoDeployHoldResult{}
+}
+
+type fppPolledState int
+
+const (
+	fppPolledUnknown fppPolledState = iota
+	fppPolledIdle
+	fppPolledBusy
+)
+
+// fppPolledStatus reads the player's own current fpp.status readings from
+// evidence. Any current reading other than idle means busy; only current
+// readings that all say idle mean idle.
+func fppPolledStatus(evidence []currentrun.Evidence) fppPolledState {
+	state := fppPolledUnknown
+	for _, e := range evidence {
+		if e.Signal != fppStatusSignal || e.State != string(observation.StateCurrent) {
+			continue
+		}
+		if v, ok := e.Value.(string); !ok || v != fppStatusValueIdle {
+			return fppPolledBusy
+		}
+		state = fppPolledIdle
+	}
+	return state
 }
