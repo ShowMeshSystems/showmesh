@@ -407,13 +407,16 @@ func (h *handlers) nightReportLights(ctx context.Context, rec store.NightSession
 	}
 }
 
-// nightAdvanceLightsFadeOut starts the fade-out so it finishes as the resting
-// sequence ends at boundaryE. The first show after pre-show has no such end.
+// nightAdvanceLightsFadeOut starts the fade-out so it finishes at boundaryE:
+// as the resting sequence ends, or for the first show as start-night's lead
+// ends over pre-show's resting playback.
 func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, boundaryE time.Time) {
 	if payload.LightsFadeOutMs == nil {
 		return
 	}
-	if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); !has || anchor.Purpose != nightAnchorPurposeRestingOneShot {
+	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	firstShow := !has && rec.Cycle == 1
+	if !firstShow && (!has || anchor.Purpose != nightAnchorPurposeRestingOneShot) {
 		return
 	}
 	fadeOut := time.Duration(*payload.LightsFadeOutMs) * time.Millisecond
@@ -516,7 +519,7 @@ func (h *handlers) nightCheckLightsFades(ctx context.Context, p config.NightSess
 	const unverified = "Watch the first one, because this is not proven on a real display."
 	if p.LightsFadeOutMs != nil {
 		checks = append(checks, nightReadinessCheck{name: "lights:fade-out", health: nightHealthDegraded(), reason: fmt.Sprintf(
-			"The lights on %s fade out over %d seconds before each show after the first. %s",
+			"The lights on %s fade out over %d seconds before each show. %s",
 			on, nightLightsFadeSeconds(time.Duration(*p.LightsFadeOutMs)*time.Millisecond), unverified)})
 	}
 	if p.LightsFadeInMs != nil {

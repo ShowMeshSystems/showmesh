@@ -419,6 +419,51 @@ func TestLightsFade_FadeOutFinishesWhenRestingEnds(t *testing.T) {
 	}
 }
 
+// Pre-show plays the resting sequence, so the first show fades out of it like
+// every later show, with start-night waiting out the fade.
+func TestLightsFade_FirstShowFadesOutOfPreshow(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 2000, `)
+	n.awaitShowGain = false
+	n.prepareAndStartPreshow()
+	before := len(n.events())
+
+	mustNightCommand(t, n.api, n.token, "start-night")
+	if got, want := n.restingEnd(), n.now.Add(2*time.Second); !got.Equal(want) {
+		t.Fatalf("start-night show start = %s, want %s: the first show must wait out the fade", got, want)
+	}
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.mustState("inside the fade", nightStateTransitionToShow)
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:2s" {
+		t.Fatalf("start-night must fade the pre-show resting look out over 2s; got %v", got)
+	}
+
+	n.advance(2 * time.Second)
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.mustState("first show launch", nightStateLive)
+	want := "gain:player-01:0:2s,start:halloween-show,gain:player-01:100:0s"
+	if got := joined(n.events()[before:]); got != want {
+		t.Fatalf("events around the first show = %v, want %v", got, want)
+	}
+}
+
+func TestLightsFade_SkippingTheLeadSkipsTheFirstShowFade(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 2000, `)
+	n.prepareAndStartPreshow()
+	before := len(n.events())
+
+	mustNightCommandBody(t, n.api, n.token, "start-night", `{"skipEnterShowLead": true}`)
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.mustState("launch with the lead skipped", nightStateLive)
+	for _, e := range n.events()[before:] {
+		if strings.HasPrefix(e, "gain:") && e != "gain:player-01:100:0s" {
+			t.Fatalf("a skipped lead must launch with no fade-out; got %q in %v", e, n.events()[before:])
+		}
+	}
+}
+
 // A cue that fires ahead of the fade window commits the show early; the fade
 // must still run.
 func TestLightsFade_FadeOutRunsWhenAnEnterShowCueFiresAheadOfTheWindow(t *testing.T) {
@@ -830,7 +875,7 @@ func TestLightsFade_ReadinessNamesEachFadeAndWarnsWhenTheyDoNotFit(t *testing.T)
 	checks := n.h.nightCheckLightsFades(context.Background(), p)
 	if len(checks) != 1 || checks[0].name != "lights:fade-out" ||
 		!strings.Contains(checks[0].reason, "20 seconds") || !strings.Contains(checks[0].reason, "rest-fpp, remote-fpp and show-fpp") ||
-		!strings.Contains(checks[0].reason, "each show after the first") {
+		!strings.Contains(checks[0].reason, "before each show.") {
 		t.Fatalf("readiness must name the fade, its length and both instances: %+v", checks)
 	}
 	p.LightsFadeInMs = nightFadeMs(86_400_000)

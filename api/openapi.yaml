@@ -9092,9 +9092,10 @@ paths:
         by `start-night`, for the operator starting a night later than
         planned: the first show of the night otherwise leads its own
         launch by the largest negative `offsetMs` among its `enterShow`
-        cues (RESTING-MODE.md §7.1), the same lead every later cycle
-        already holds for. Setting it true launches immediately instead,
-        skipping that wait; an `enterShow` announcement cue still
+        cues (RESTING-MODE.md §7.1) or by `lightsFadeOutMs`, whichever
+        is longer, the same lead every later cycle already holds for.
+        Setting it true launches immediately instead, skipping that wait
+        and the lights fade-out; an `enterShow` announcement cue still
         dispatches. Every other command ignores the field.
 
 
@@ -22650,9 +22651,10 @@ components:
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade out, finishing as
-            the resting sequence ends before a show. Left out means no
-            fade. Needs no cue or action: the coordinator writes the
-            transition gain on the resting and show FPP instances.
+            each show starts, the first show after pre-show included.
+            Left out means no fade. Needs no cue or action: the
+            coordinator writes the transition gain on the resting and
+            show FPP instances.
         lightsFadeInMs:
           type: integer
           minimum: 1000
@@ -22718,9 +22720,10 @@ components:
           maximum: 86400000
           description: >-
             Optional. How long the lights take to fade out, finishing as
-            the resting sequence ends before a show. Left out means no
-            fade. Needs no cue or action: the coordinator writes the
-            transition gain on the resting and show FPP instances.
+            each show starts, the first show after pre-show included.
+            Left out means no fade. Needs no cue or action: the
+            coordinator writes the transition gain on the resting and
+            show FPP instances.
         lightsFadeInMs:
           type: integer
           minimum: 1000
