@@ -1095,14 +1095,12 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		next.ShowCommitted = false
 		next.Cycle = current.Cycle + 1
 		next.ContentAnchorJSON = ""
-		// The first show of the night has no resting playback to lead
-		// from, so E is placed its own enterShow lead ahead of this
-		// transition's start (RESTING-MODE.md section 7.1's own rule,
-		// [nightEnterShowLeadMs]), never left at now itself - a night
-		// with no negatively offset enterShow cues still gets lead 0
-		// and launches immediately, unchanged. skipEnterShowLead is the
+		// Pre-show's resting playback has no end to lead from, so E is
+		// placed the transition lead ahead of now: the largest enterShow
+		// cue lead or the lights fade-out ([nightTransitionLeadMs]). With
+		// neither the show launches immediately. skipEnterShowLead is the
 		// operator's own request to skip that wait for a late start.
-		lead := time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond
+		lead := time.Duration(nightTransitionLeadMs(payload)) * time.Millisecond
 		if skipEnterShowLead {
 			lead = 0
 		}

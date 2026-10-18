@@ -3127,7 +3127,7 @@ export interface paths {
          *
          *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
          *
-         *     `skipEnterShowLead` (optional request body field) is honored only by `start-night`, for the operator starting a night later than planned: the first show of the night otherwise leads its own launch by the largest negative `offsetMs` among its `enterShow` cues (RESTING-MODE.md §7.1), the same lead every later cycle already holds for. Setting it true launches immediately instead, skipping that wait; an `enterShow` announcement cue still dispatches. Every other command ignores the field.
+         *     `skipEnterShowLead` (optional request body field) is honored only by `start-night`, for the operator starting a night later than planned: the first show of the night otherwise leads its own launch by the largest negative `offsetMs` among its `enterShow` cues (RESTING-MODE.md §7.1) or by `lightsFadeOutMs`, whichever is longer, the same lead every later cycle already holds for. Setting it true launches immediately instead, skipping that wait and the lights fade-out; an `enterShow` announcement cue still dispatches. Every other command ignores the field.
          *
          *     `interlockOverrides` (optional request body field, Track F seam F6) names configured "block" interlock rules to override for THIS command. `night:command` alone never authorizes an override: a rule is bypassed only when it declares `overridePolicy: authorized-operator` AND the caller separately holds `night:override` (RESTING-MODE.md §10.1; IDENTIFIER-REGISTER.md: starting a night must not, by itself, authorize bypassing a blocking interlock).
          *
@@ -8140,7 +8140,7 @@ export interface components {
             announcementDefaultPolicy?: "duck" | "mix" | "interrupt";
             siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
-            /** @description Optional. How long the lights take to fade out, finishing as the resting sequence ends before a show. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
+            /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
@@ -8157,7 +8157,7 @@ export interface components {
             announcementDefaultPolicy: "duck" | "mix" | "interrupt";
             siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
-            /** @description Optional. How long the lights take to fade out, finishing as the resting sequence ends before a show. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
+            /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
