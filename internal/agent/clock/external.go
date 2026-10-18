@@ -232,7 +232,9 @@ func pollViaUDS(ctx context.Context, uds string, domain int, owner string, socke
 	if ts.GMIdentityKnown {
 		raw.GrandmasterIdentity, raw.GMKnown = ts.GMIdentity, true
 	}
-	if ts.MasterOffsetKnown {
+	// ptp4l keeps its last measured master_offset after the port becomes
+	// MASTER, so only a following port's offset describes the clock now.
+	if ts.MasterOffsetKnown && port.PortState == "SLAVE" {
 		raw.OffsetNs, raw.OffsetKnown = ts.MasterOffsetNs, true
 	}
 	if props.PTPTimescaleKnown {

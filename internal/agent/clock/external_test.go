@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,53 @@ func TestExternalProviderFrequencyPPMOpenFailureIncludesOSError(t *testing.T) {
 	}
 	if !strings.Contains(reason, "permission denied") {
 		t.Errorf("reason = %q, want the OS error text surfaced", reason)
+	}
+}
+
+// scriptedPMC stands in for pmcBinary, answering each GET with the named
+// fixture from testdata/pmc, with master_offset rewritten to offset.
+func scriptedPMC(t *testing.T, portFixture, timeStatusFixture, offset string) {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+	port := write("port.txt", readFixture(t, portFixture))
+	ts := write("ts.txt", regexp.MustCompile(`master_offset\s+-?\d+`).ReplaceAllString(readFixture(t, timeStatusFixture), "master_offset              "+offset))
+	script := write("fake-pmc.sh", "#!/bin/sh\ncase \"$*\" in\n*PORT_DATA_SET*) cat "+port+" ;;\n*TIME_STATUS_NP*) cat "+ts+" ;;\nesac\n")
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatalf("chmod fake pmc: %v", err)
+	}
+	orig := pmcBinary
+	pmcBinary = script
+	t.Cleanup(func() { pmcBinary = orig })
+}
+
+// A port that is MASTER still carries the master_offset ptp4l last measured
+// while it followed another clock. That number describes nothing now.
+func TestPollViaUDSGrandmasterReportsNoOffset(t *testing.T) {
+	scriptedPMC(t, "port_data_set.master.txt", "time_status_np.master.txt", "86169617")
+
+	raw := pollViaUDS(context.Background(), "/var/run/ptp4l", 1, "external (unidentified)", "")
+
+	if !raw.Locked || raw.Role != RoleGrandmaster {
+		t.Fatalf("raw = %+v, want a locked grandmaster reading", raw)
+	}
+	if raw.OffsetKnown {
+		t.Fatalf("raw offset = %d known, want no offset on a grandmaster", raw.OffsetNs)
+	}
+}
+
+func TestPollViaUDSFollowerReportsItsOffset(t *testing.T) {
+	scriptedPMC(t, "port_data_set.slave.txt", "time_status_np.slave.txt", "-412")
+
+	raw := pollViaUDS(context.Background(), "/var/run/ptp4l", 1, "external (unidentified)", "")
+
+	if raw.Role != RoleFollower || !raw.OffsetKnown || raw.OffsetNs != -412 {
+		t.Fatalf("raw = %+v, want a follower reading with offset -412", raw)
 	}
 }
