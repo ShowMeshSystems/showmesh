@@ -446,6 +446,30 @@ describe('Show Night', () => {
     expect(screen.queryByText(/refused/)).not.toBeInTheDocument()
   })
 
+  it('shows Sent while a night command is on its way, before the coordinator answers', () => {
+    stubs.dispatchNightCommand = () => new Promise(() => {})
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Run readiness' }))
+    expect(screen.getByText('Sent')).toBeInTheDocument()
+    expect(screen.getByText(/Readiness is running/)).toBeInTheDocument()
+    expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
+  })
+
+  it('replaces Sent with the readiness verdict once run-readiness finishes', async () => {
+    let finish: (value: unknown) => void = () => {}
+    stubs.dispatchNightCommand = () => new Promise((resolve) => { finish = resolve })
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Run readiness' }))
+    expect(screen.getByText('Sent')).toBeInTheDocument()
+    finish({
+      ...commandResponse('run-readiness', 'applied'),
+      session: session({ readiness: { state: 'recorded', reason: '', outcome: 'ready_with_warnings', outcomeLabel: 'Passed with a warning', completedAt: '2026-08-28T21:07:00Z', sameEpoch: true, fresh: true, checks: [] } }),
+    })
+    expect(await screen.findByText('Passed with a warning')).toBeInTheDocument()
+    expect(screen.queryByText('Sent')).not.toBeInTheDocument()
+    expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
+  })
+
   it('renders the three previously missing lifecycle commands, in the contract’s order', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const names = ['Prepare site', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
