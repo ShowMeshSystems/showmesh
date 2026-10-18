@@ -152,3 +152,34 @@ func TestNightCatalogLTCWithoutAudio(t *testing.T) {
 		t.Fatalf("nightCatalogLTCWithoutAudio = %v, want [ltc-only]", got)
 	}
 }
+
+func TestNightShowCueStartTriggers_WarnsUntilFPPPlaylistNamesTheSequence(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putAudioNodeForTest(t, st, "node-a")
+	mustDeclareNode(t, st, "node-a")
+	putConfigForTest(t, st, config.ShowCueConfigKind, "time-warp",
+		`{"show":"`+movedAudioShow+`","name":"Time Warp","outputs":{"audio":{"asset":"time-warp-audio","startOffsetMillis":0}}}`)
+	putConfigForTest(t, st, config.ShowPlaylistConfigKind, "main",
+		`{"show":"`+movedAudioShow+`","name":"main","runner":"fpp","mismatchPolicy":"hold","fpp":{"instanceUuid":"11111111-1111-1111-1111-111111111111","playlistName":"main","playlistHash":"`+playlistHash64+`"},"entries":[{"id":"e1","cue":"time-warp","fpp":{"section":"mainPlaylist","position":0}}]}`)
+	putConfigForTest(t, st, config.ShowActiveConfigKind, "active", `{"show":"`+movedAudioShow+`"}`)
+
+	checks := h.nightCheckShowCueStartTriggers(context.Background(), movedAudioShow)
+	check, ok := findNightCheck(checks, nightShowCueStartTriggersPrefix+"main")
+	if !ok || check.health != nightHealthDegraded() || !containsAllSubstrings(strings.Join(check.reasons, " "), "time-warp", "no FPP sequence") {
+		t.Fatalf("check = %+v (found %v), want a warning naming time-warp; checks = %+v", check, ok, checks)
+	}
+
+	if _, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: "11111111-1111-1111-1111-111111111111", PlaylistHash: playlistHash64, PlaylistName: "main",
+		DefinitionJSON: `{"name":"main","mainPlaylist":[{"type":"sequence","sequenceName":"Time Warp 2026.fseq"}]}`,
+		CapturedAt:     testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("PutFPPPlaylistDefinition: %v", err)
+	}
+
+	checks = h.nightCheckShowCueStartTriggers(context.Background(), movedAudioShow)
+	check, ok = findNightCheck(checks, nightShowCueStartTriggersPrefix+"main")
+	if !ok || check.health != nightHealthHealthy() {
+		t.Fatalf("check = %+v (found %v), want healthy once FPP's playlist names the sequence", check, ok)
+	}
+}

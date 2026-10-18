@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -977,6 +978,73 @@ func TestCueCatalogTriggersCombinePlaylistEntriesAndRenderOutput(t *testing.T) {
 	if !reflect.DeepEqual(entry.Triggers, want) {
 		t.Fatalf("thriller entry Triggers = %+v, want %+v (playlist filename de-duplicated, plus the render output's own filename)", entry.Triggers, want)
 	}
+}
+
+// TestCueCatalogTriggersOnAnAudioOnlyNodeComeFromTheBoundFPPPlaylist proves
+// a node that plays a Cue's audio but renders none of it still gets the
+// sequence filename FPP plays at each position-bound entry, read from the
+// stored copy of the FPP playlist, so it can start on MultiSync START.
+func TestCueCatalogTriggersOnAnAudioOnlyNodeComeFromTheBoundFPPPlaylist(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "render-01")
+	declareNode(t, st, "audio-01")
+	putAudioNode(t, st, "audio-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putSurface(t, st, "garage", "halloween-2026", "render-01")
+	for _, id := range []string{"kpop", "time-warp"} {
+		putCue(t, st, id, "halloween-2026", config.ShowCuePayload{
+			Name: id,
+			Outputs: config.ShowCueOutputs{
+				Render: &config.ShowCueRenderOutput{Sequence: id},
+				Audio:  &config.ShowCueAudioOutput{Asset: id + "-audio"},
+			},
+		})
+	}
+
+	instance, hash := "M1-00000000c8398879", strings.Repeat("b", 64)
+	if _, err := st.PutFPPPlaylistDefinition(ctx, store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: instance, PlaylistHash: hash, PlaylistName: "halloween 2026",
+		DefinitionJSON: `{"name":"halloween 2026","mainPlaylist":[{"type":"sequence","sequenceName":"Kpop Demon Hunters 2026.fseq"}]}`,
+		CapturedAt:     time.UnixMilli(1792126251299).UTC(), ReceivedAt: time.UnixMilli(1792126251299).UTC(),
+	}); err != nil {
+		t.Fatalf("PutFPPPlaylistDefinition: %v", err)
+	}
+	putPlaylist(t, st, "main", config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "halloween 2026", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instance, PlaylistName: "halloween 2026", PlaylistHash: hash},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "e1", Cue: "kpop", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			// No slot 1 in the stored copy: nothing to name, so no trigger.
+			{ID: "e2", Cue: "time-warp", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := ResolveCueCatalog(ctx, st, active, "audio-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	got := map[string][]string{}
+	for _, e := range catalog.Entries {
+		if e.Outputs.Render != nil {
+			t.Fatalf("audio-01 entry %q has a render output, want audio only", e.CueID)
+		}
+		if e.Outputs.Audio == nil {
+			t.Fatalf("audio-01 entry %q has no audio output", e.CueID)
+		}
+		got[e.CueID] = e.Triggers
+	}
+	want := map[string][]string{"kpop": {"Kpop Demon Hunters 2026.fseq"}, "time-warp": {}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("audio-01 triggers = %+v, want %+v", got, want)
+	}
+	assertRoundTripRevisionAgrees(t, catalog)
 }
 
 // TestCueCatalogRevisionChangesWhenATriggerChanges proves Triggers is

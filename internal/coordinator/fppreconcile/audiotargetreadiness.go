@@ -495,3 +495,9 @@ func nodeClockProblem(clock ClockObservationsLister, liveness map[string]nodeLiv
 // package must not import a collector (TestPackageNeverImportsACollector's
 // rule, stated for the api package and followed here identically).
 const nodeClockStateSignal observation.SignalID = "node.clock.ptp.state"
+
+// CueMultisyncTriggerReadiness is condition 13 on its own, for the night
+// readiness check, which reads it per show playlist rather than from a full report.
+func CueMultisyncTriggerReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	return cueMultisyncTriggerReadiness(ctx, st, p)
+}

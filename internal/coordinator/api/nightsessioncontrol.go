@@ -1747,6 +1747,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	}
 	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckShowCueAudioTargets(ctx, payload.Show)...)
+	checks = append(checks, h.nightCheckShowCueStartTriggers(ctx, payload.Show)...)
 	checks = append(checks, h.nightCheckRestingRender(ctx, payload)...)
 	checks = append(checks, h.nightCheckShowInstanceParticipation(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))

@@ -33,6 +33,7 @@ var nightCheckLabelPrefixes = []struct{ prefix, label string }{
 	{"resting:background-audio-output-capabilities:", "Background audio output on "},
 	{nightBackgroundAudioNodeSetupPrefix, "Background audio settings on "},
 	{nightShowCueAudioTargetsPrefix, "Cue audio nodes in playlist "},
+	{nightShowCueStartTriggersPrefix, "Cue audio start in playlist "},
 	{"audio:alignment:", "Audio alignment on "},
 	{nightAudioClockCheckPrefix, "Audio clock on "},
 	{nightCatalogCurrentCheckPrefix + ":", "Cue list on "},
