@@ -17,6 +17,7 @@ import (
 
 const (
 	nightShowCueAudioTargetsPrefix      = "show:cue-audio-targets:"
+	nightShowCueStartTriggersPrefix     = "show:cue-start-triggers:"
 	nightBackgroundAudioNodeSetupPrefix = "resting:background-audio-node-setup:"
 	nightBackgroundAudioItemTargetsName = "resting:background-audio-item-targets"
 )
@@ -48,6 +49,38 @@ func (h *handlers) nightCheckShowCueAudioTargets(ctx context.Context, show strin
 			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthFailed(), reason: reason})
 		case len(warnings) > 0:
 			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthDegraded(), reasons: warnings})
+		default:
+			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthHealthy()})
+		}
+	}
+	return checks
+}
+
+// nightCheckShowCueStartTriggers warns for each of show's playlists when a
+// cue's audio has no FPP sequence to start on, so it starts late from the
+// coordinator instead of with the lights.
+func (h *handlers) nightCheckShowCueStartTriggers(ctx context.Context, show string) []nightReadinessCheck {
+	if h.deps.AssetManifests == nil {
+		return nil
+	}
+	playlists, err := readCurrentPlaylists(ctx, h.deps.Config)
+	if err != nil {
+		return []nightReadinessCheck{{name: nightShowCueStartTriggersPrefix + show, health: nightHealthUnknown(), cause: err,
+			reason: "The coordinator could not read the show playlists. Run readiness again."}}
+	}
+	var checks []nightReadinessCheck
+	for _, p := range playlists {
+		if p.Payload.Show != show {
+			continue
+		}
+		name := nightShowCueStartTriggersPrefix + p.ID
+		warning, err := fppreconcile.CueMultisyncTriggerReadiness(ctx, h.deps.AssetManifests, p.Payload)
+		switch {
+		case err != nil:
+			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthUnknown(), cause: err, reason: fmt.Sprintf(
+				"The coordinator could not check how the cues in playlist %s start their audio. Run readiness again.", p.ID)})
+		case warning != "":
+			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthDegraded(), reasons: []string{warning}})
 		default:
 			checks = append(checks, nightReadinessCheck{name: name, health: nightHealthHealthy()})
 		}

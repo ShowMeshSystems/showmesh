@@ -22882,7 +22882,10 @@ components:
         Each show playlist of this session's show gets
         `show:cue-audio-targets:<playlistId>`, the same audio routing
         rule as the playlist readiness conditions `audio-target-unbound`,
-        `audio-target-unresolved` and `audio-ltc-emitter-ambiguous`.
+        `audio-target-unresolved` and `audio-ltc-emitter-ambiguous`,
+        and `show:cue-start-triggers:<playlistId>`, which warns, never
+        fails, when a cue's audio has no FPP sequence to start on, the
+        playlist readiness condition `cue-multisync-trigger-missing`.
         `catalog:node-catalog-stale:<node>` also fails when a node's
         resolved cue list gives a cue timecode without its audio, since
         the node refuses every such activation.
@@ -24129,9 +24132,13 @@ components:
         start this Cue's audio (ADR-051 decision 2): a node starts a
         Cue's audio when it receives a MultiSync START packet naming one
         of these filenames. Resolved from every bound fpp-runner
-        show.playlist entry naming this Cue whose
-        fpp.expectedSequenceFilename is set, plus this Cue's own resolved
-        render output filename when it has one. Always present, an empty
+        show.playlist entry naming this Cue: its
+        fpp.expectedSequenceFilename when set, otherwise the sequence
+        filename at the entry's section and position in the stored copy
+        of the FPP playlist it is bound to, plus this Cue's own resolved
+        render output filename when it has one. A node that plays only a
+        Cue's audio therefore gets the same filenames as the node that
+        renders it. Always present, an empty
         array when there is no trigger yet. A render node that holds the
         active night session's resting sequence also has one entry whose
         cueId is "resting:" followed by the sequence id (ADR-061). It is

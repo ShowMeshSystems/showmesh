@@ -10,6 +10,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
+	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 )
 
 // This file is TRACK-H-H3-SPEC.md section 3's own resolver, beside the
@@ -573,8 +574,9 @@ func cueReferencingPlaylistIDs(ctx context.Context, st *store.Store, showID stri
 }
 
 // cueSequenceFilenameTriggerSeeds returns, for every Cue any fpp-runner
-// show.playlist in showID references with an entry naming an
-// fpp.expectedSequenceFilename, that Cue's own set of declared filenames —
+// show.playlist in showID references, the sequence filename of each entry
+// naming it: fpp.expectedSequenceFilename when set, otherwise the one the
+// bound FPP playlist holds at that entry's slot. This is
 // [cuecatalog.Entry.Triggers]' playlist-derived half. A "showmesh-audio"
 // runner playlist never carries an fpp binding on its entries
 // (decodeShowPlaylistEntryFPP's own required-iff-fpp-runner rule), so it
@@ -600,11 +602,55 @@ func cueSequenceFilenameTriggerSeeds(ctx context.Context, st *store.Store, showI
 		if payload.Show != showID || payload.Runner != config.ShowPlaylistRunnerFPP {
 			continue
 		}
+		boundSequences, err := boundDefinitionSequenceNames(ctx, st, payload)
+		if err != nil {
+			return nil, fmt.Errorf("show.playlist %q: %w", obj.ID, err)
+		}
 		for _, entry := range payload.Entries {
-			if entry.FPP == nil || entry.FPP.ExpectedSequenceFilename == "" {
+			if entry.FPP == nil {
 				continue
 			}
-			out[entry.Cue] = append(out[entry.Cue], entry.FPP.ExpectedSequenceFilename)
+			filename := entry.FPP.ExpectedSequenceFilename
+			if filename == "" {
+				filename = boundSequences[definitionSlot{entry.FPP.Section, entry.FPP.Position}]
+			}
+			if filename == "" {
+				continue
+			}
+			out[entry.Cue] = append(out[entry.Cue], filename)
+		}
+	}
+	return out, nil
+}
+
+type definitionSlot struct {
+	section  string
+	position int
+}
+
+// boundDefinitionSequenceNames maps each slot of the stored FPP playlist
+// copy payload is bound to onto the sequence filename FPP plays there, so
+// an entry bound by position alone still names the file FPP's MultiSync
+// START carries. A copy the coordinator does not hold yet yields no names.
+func boundDefinitionSequenceNames(ctx context.Context, st *store.Store, payload config.ShowPlaylistPayload) (map[definitionSlot]string, error) {
+	if payload.FPP == nil || payload.FPP.PlaylistHash == "" {
+		return nil, nil
+	}
+	def, err := st.GetFPPPlaylistDefinition(ctx, payload.FPP.InstanceUUID, payload.FPP.PlaylistHash)
+	if errors.Is(err, store.ErrFPPPlaylistDefinitionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get fpp playlist definition: %w", err)
+	}
+	entries, err := fppidentity.ParseDefinitionEntries(def.DefinitionJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse fpp playlist definition: %w", err)
+	}
+	out := make(map[definitionSlot]string, len(entries))
+	for _, e := range entries {
+		if e.SequenceName != "" {
+			out[definitionSlot{e.Section, e.Position}] = e.SequenceName
 		}
 	}
 	return out, nil
